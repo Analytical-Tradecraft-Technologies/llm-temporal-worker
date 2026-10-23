@@ -313,7 +313,10 @@ The series are:
 - `llmtw_activity_total{status,error_class}`;
 - `llmtw_activity_failure_total{origin}` where Activity classification emits
   `worker`, `provider`, `caller`, or `budget`; `other` is a bounded defensive
-  fallback for invalid direct recorder calls only;
+  fallback for invalid direct recorder calls only. A `permission_denied` the
+  worker raises before dispatch, such as a tenant/project outside
+  `authorization.allowed_scopes`, counts as `caller`; a provider's own
+  permission or credit denial counts as `provider`;
 - `llmtw_activity_duration_seconds{phase}`;
 - `llmtw_provider_attempt_total{endpoint,model,class,outcome}`;
 - `llmtw_provider_duration_seconds{endpoint,model,class}`;

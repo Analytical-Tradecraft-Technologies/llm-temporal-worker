@@ -14,10 +14,12 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
+	temporalactivity "go.temporal.io/sdk/activity"
 )
 
 // Gate both initial compilation and reload before resolving any secret. The
@@ -173,14 +175,19 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 	return CloudV1RuntimeOptions{
 		ResolveScope: func(ctx context.Context, caller llm.RequestContext) (string, error) {
 			if ctx == nil {
-				return "", executionError(provider.CodePermissionDenied)
+				return "", scopeDeniedError()
 			}
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
 			scope, ok := allowed[config.AuthorizedScope{Tenant: caller.Tenant, Project: caller.Project}]
 			if !ok {
-				return "", executionError(provider.CodePermissionDenied)
+				activityName := ""
+				if temporalactivity.IsActivity(ctx) {
+					activityName = temporalactivity.GetInfo(ctx).ActivityType.Name
+				}
+				observability.LoggerFromContext(ctx).ScopeAccessDenied(ctx, caller.Tenant, caller.Project, activityName)
+				return "", scopeDeniedError()
 			}
 			return scope, nil
 		},
@@ -189,4 +196,11 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 		// bound keeps a continuation_depth above the 512-row default effective.
 		Limits: state.MaterializeLimits{MaxDepth: int32(value.Limits.ContinuationDepth), MaxRows: value.Limits.ContinuationDepth + 1},
 	}, nil
+}
+
+// scopeDeniedError is a caller-scope denial. Nothing was planned, reserved or
+// sent, so it is not dispatched and never retried, and failure metrics count
+// it against the caller rather than the provider (#1535).
+func scopeDeniedError() error {
+	return provider.NewError(provider.CodePermissionDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "caller scope is not permitted")
 }

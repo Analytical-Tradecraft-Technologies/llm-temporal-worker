@@ -44,9 +44,10 @@ Redis owns budgets, throttles, provider status and inventory. Budget policy come
 from worker settings. The cloud execution path records provider availability
 into Redis but not yet credit/billing evidence (see
 [provider control](provider-control.md)).
-Content-free access audit events are not yet emitted for Generate/Compact
-access or scope denials. Query authorization decisions (allowed and denied),
-completed queries and configuration reloads do reach structured logs. Temporal's own storage
+Content-free access audit events are not yet emitted for allowed
+Generate/Compact access (#1541). Request-scope denials, query authorization
+decisions (allowed and denied), completed queries and configuration reloads do
+reach structured logs. Temporal's own storage
 is independently operated. See [storage responsibilities](../architecture/state-and-storage.md).
 
 The production CLI requires explicit trusted-Temporal authorization policy and

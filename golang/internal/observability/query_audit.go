@@ -39,6 +39,27 @@ func (logger *Logger) QueryAudit(ctx context.Context, record control.QueryAuditR
 	return nil
 }
 
+// ScopeAccessDenied logs a request-scope denial: a Generate, Compact or
+// execution-reference load for a tenant and project outside the worker's
+// authorization policy (#1535). Like QueryAuthorization it logs at warn with
+// only truncated hashes of the tenant and project and the closed-vocabulary
+// activity name; the actor, request body and authorizer error are never
+// included. It is an ordinary best-effort log, not a durable audit store.
+func (logger *Logger) ScopeAccessDenied(ctx context.Context, tenant, project, activity string) {
+	if !logger.Enabled(ctx, slog.LevelWarn) {
+		return
+	}
+	attrs := []slog.Attr{
+		slog.String("outcome", "denied"),
+		slog.String("tenant_hash", hashIdentifier(tenant)),
+		slog.String("project_hash", hashIdentifier(project)),
+	}
+	if activity != "" {
+		attrs = append(attrs, slog.String("activity", activity))
+	}
+	logger.log(ctx, slog.LevelWarn, "request scope access decision", attrs...)
+}
+
 // QueryAuthorization logs one control-query authorization decision, which the
 // query service makes before any storage read. Only the query kind, the
 // outcome ("allowed" or "denied") and truncated hashes of the tenant and

@@ -150,7 +150,7 @@ func activityFailureOrigin(err error) (origin string, failed bool) {
 		if providerErr.Code == provider.CodeCanceled && !errors.Is(providerErr, provider.ErrProviderPreDispatch) {
 			return "", false
 		}
-		return activityFailureOriginDetails(SafeErrorDetails{Code: string(providerErr.Code), Phase: string(providerErr.Phase)})
+		return activityFailureOriginDetails(SafeErrorDetails{Code: string(providerErr.Code), Phase: string(providerErr.Phase), Dispatch: string(providerErr.Dispatch)})
 	}
 	var applicationErr *temporal.ApplicationError
 	if !errors.As(err, &applicationErr) {
@@ -172,7 +172,14 @@ func activityFailureOriginDetails(details SafeErrorDetails) (origin string, fail
 			return "worker", true
 		}
 		return "caller", true
-	case provider.CodeAuthentication, provider.CodePermissionDenied,
+	case provider.CodePermissionDenied:
+		// A provider denial comes with its response. One raised before
+		// dispatch is the worker refusing the caller's scope (#1535).
+		if provider.DispatchCertainty(details.Dispatch) == provider.DispatchNotDispatched {
+			return "caller", true
+		}
+		return "provider", true
+	case provider.CodeAuthentication,
 		provider.CodeProviderRateLimited, provider.CodeProviderUnavailable,
 		provider.CodeProviderInvalidResponse, provider.CodeDeadlineExceeded,
 		provider.CodeAmbiguousDispatch:
