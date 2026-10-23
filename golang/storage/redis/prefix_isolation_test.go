@@ -48,6 +48,7 @@ func TestConfiguredHashTagCoversEveryWorkerKeyFamily(t *testing.T) {
 		space.continuationOperationKey("tenant", "parent", "operation"),
 		space.throttleKey(string(ThrottleRequests), "tenant"),
 		space.throttleReservationKey("reservation"),
+		space.responseResultKey("tenant", "project", "operation"),
 		budget.ActiveGenerationKey(),
 		budget.EventsKey(),
 		budget.WorkersKey(),

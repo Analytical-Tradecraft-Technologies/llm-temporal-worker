@@ -134,6 +134,10 @@ func (space keySpace) operationKey(scope, id string) string {
 	return space.admissionKey("operation", scope, id)
 }
 
+func (space keySpace) responseResultKey(tenant, project, operation string) string {
+	return space.admissionKey("response-result", tenant, project, operation)
+}
+
 func (space keySpace) continuationIndexKey(handle string) string {
 	// Continuation writes can atomically update the handle index, immutable
 	// record, and (for child writes) the admission operation index. Keep all

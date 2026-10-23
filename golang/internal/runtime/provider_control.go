@@ -151,6 +151,9 @@ type V1RuntimeCapabilities struct {
 	Responses cache.ResponseRepository
 	// ResponseFills fences cache fill dispatch across workers without blocking.
 	ResponseFills cache.FillRepository
+	// ResponseResults is the snapshot-owned Redis copy of terminal Generate
+	// results that Responses API polls read before the durable record.
+	ResponseResults ResponseResultIndex
 	// ConfigDigest identifies the immutable configuration snapshot that owns
 	// this capability bundle. The automatic production factory provides it both
 	// to preflight composition and to the later complete builder, which validates

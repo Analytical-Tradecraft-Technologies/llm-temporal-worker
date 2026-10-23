@@ -599,6 +599,11 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		initialization = &receipt
 		redisProbe = withBudgetAuthorityProbe(redisProbe, initializer, receipt)
 	}
+	responseResults, err := responseResultIndex(value, repository, redisClient, keyOptions)
+	if err != nil {
+		closeAll()
+		return nil, nil, err
+	}
 	probes := []DependencyProbe{redisProbe, blobProbe}
 	// Stable identities across configuration reloads: Redis is authoritative.
 	// Policy limits change without replacing the accounting namespace.
@@ -663,6 +668,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		budgets:            budgets,
 		v1Capabilities: V1RuntimeCapabilities{
 			Requests:                  repository,
+			ResponseResults:           responseResults,
 			Langfuse:                  langfuseClient,
 			LangfuseEndpoints:         value.Endpoints,
 			ConfigDigest:              snapshot.Digest(),
@@ -921,6 +927,21 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 		},
 		close: func(context.Context) error { return nil },
 	}, nil
+}
+
+// responseResultIndex builds the Redis copy of terminal Generate results when
+// this snapshot serves the Responses API from cloud request storage. Only that
+// API reads the copy, so a worker that does not serve it spends no Redis
+// memory on results.
+func responseResultIndex(value config.Config, repository CloudRequestRepository, client redis.UniversalClient, keys redisstore.KeyOptions) (ResponseResultIndex, error) {
+	if repository == nil || value.Server.ResponsesAPIListenAddress == "" {
+		return nil, nil
+	}
+	store, err := redisstore.NewResponseResultStore(redisstore.ResponseResultOptions{Client: client, Keys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("construct Redis response result index: %w", err)
+	}
+	return store, nil
 }
 
 func redisKeyOptions(value config.Config, keySecret []byte) (redisstore.KeyOptions, error) {
