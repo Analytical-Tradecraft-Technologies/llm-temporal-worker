@@ -14,7 +14,7 @@ make fmt-check
 go vet ./...
 go test -race ./...
 go build ./...
-docker build --tag llm-temporal-worker:local .
+docker buildx build --load --no-cache-filter ca-certificates --tag llm-temporal-worker:local .
 ```
 
 `make fmt-check` delegates to `golang/scripts/check-go-format.sh`. The helper passes
@@ -607,3 +607,21 @@ scanning; this job is not a pre-publication vulnerability gate. Intermediate
 summaries are retained for one day and the final bundle for fourteen days.
 Reruns can reuse successful jobs from the same run; after intermediate artifacts
 expire, rerun all producer jobs as well.
+
+### Fresh container trust roots
+
+The worker uses OS trust roots for HTTPS model providers. Its final filesystem
+layer copies a freshly regenerated Debian 13 CA bundle from the `ca-certificates`
+stage. Go's `SSL_CERT_FILE` and `SSL_CERT_DIR` point exclusively to this fresh
+bundle so old roots in the distroless base cannot remain trusted.
+
+CI and the direct build command above use `--no-cache-filter ca-certificates`;
+Go build layers remain cached. The Makefile exports a fresh
+`CA_CERTIFICATES_REFRESH` nonce for each invocation. For direct Compose builds,
+set a new nonce each time (the `manual` fallback permits dependency-only Compose
+commands but does not guarantee fresh roots):
+
+```sh
+export CA_CERTIFICATES_REFRESH="$(date -u +%Y%m%dT%H%M%S)-$(uuidgen)"
+docker compose --profile worker build worker
+```

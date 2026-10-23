@@ -44,6 +44,7 @@ architectures=(amd64 arm64)
 for arch in "${architectures[@]}"; do
   docker buildx build \
     --builder "$BUILDX_BUILDER" \
+    --no-cache-filter ca-certificates \
     --file "$repository_root/golang/Dockerfile" \
     --platform "linux/$arch" \
     --pull --provenance=mode=max --sbom=true \

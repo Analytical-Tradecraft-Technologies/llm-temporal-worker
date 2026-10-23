@@ -53,6 +53,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -X github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo.GoVersion=${go_version}" \
       -o /out/llm-temporal-worker ./cmd/llm-temporal-worker
 
+# Refresh from the same Debian release as the runtime. CI bypasses only this
+# stage; Compose passes a fresh nonce without invalidating Go compilation.
+FROM debian:trixie-slim AS ca-certificates
+ARG CA_CERTIFICATES_REFRESH=manual
+RUN : "${CA_CERTIFICATES_REFRESH}" && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates --fresh \
+    && rm -rf /var/lib/apt/lists/*
+
 # Distroless static includes CA roots, time-zone data, and uid 65532, but no
 # shell or package manager. Keep the tag mutable so builds pull the current
 # image for this supported Debian 13 variant.
@@ -94,6 +103,12 @@ COPY --from=build /out/llm-temporal-worker /usr/local/bin/llm-temporal-worker
 
 USER 65532:65532
 WORKDIR /home/nonroot
+
+# Go must only scan the fresh roots, never the base image's older hash files.
+ENV SSL_CERT_FILE=/etc/ssl/certs/current/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs/current
+# Keep refreshed OS roots as the final filesystem layer.
+COPY --from=ca-certificates /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/current/ca-certificates.crt
 
 # Health is provided by the orchestrator. Distroless intentionally has no
 # shell/curl healthcheck and the root filesystem is expected to be read-only.

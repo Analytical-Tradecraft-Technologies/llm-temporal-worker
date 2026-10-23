@@ -8,6 +8,8 @@ CLOUD_WORKFLOW_TEST_FILTER ?= ^TestCloudWorkflowLive
 # baseline and reintroduce fixed standard-library vulnerabilities.
 SECURITY_GO_TOOLCHAIN ?= go1.26.10
 SECURITY_BASE_DIR ?=
+# One fresh nonce per make invocation also covers Compose image builds.
+export CA_CERTIFICATES_REFRESH := $(shell date -u +%Y%m%dT%H%M%S)-$(shell uuidgen)
 COMPOSE ?= docker compose
 KUBECTL ?= kubectl
 READINESS_REDIS_IMAGE ?= redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
@@ -204,6 +206,7 @@ image-verify:
 			trap cleanup_archive EXIT; \
 			trap 'exit 1' HUP INT TERM; \
 			docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+				--no-cache-filter ca-certificates \
 				--tag "$(IMAGE_VERIFY_TAG)" \
 				--output "type=oci,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)" \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
@@ -221,6 +224,7 @@ image-verify:
 			docker image inspect "$(IMAGE_VERIFY_TAG)" >/dev/null; \
 		else \
 			docker build --tag "$(IMAGE_VERIFY_TAG)" \
+				--build-arg CA_CERTIFICATES_REFRESH="$(CA_CERTIFICATES_REFRESH)" \
 				--build-arg VERSION="$(IMAGE_VERIFY_VERSION)" \
 				--build-arg REVISION="$$revision" \
 				--build-arg BUILD_TIME="$$build_time" \
