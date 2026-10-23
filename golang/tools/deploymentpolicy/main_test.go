@@ -534,3 +534,36 @@ func TestVerifyRenderedRequiresContentHashedImmutableConfigMap(t *testing.T) {
 		})
 	}
 }
+
+// More than one replica must be spread across nodes (#1515).
+func TestVerifyRenderedRequiresReplicaSpread(t *testing.T) {
+	withReplicas := strings.Replace(validRenderedWorkload, "  namespace: llmtw-system\nspec:\n  selector:", "  namespace: llmtw-system\nspec:\n  replicas: 2\n  selector:", 1)
+	if withReplicas == validRenderedWorkload {
+		t.Fatal("fixture no longer has the expected deployment spec")
+	}
+	const anchor = "      terminationGracePeriodSeconds: 120\n"
+	spread := func(rule string) string {
+		return strings.Replace(withReplicas, anchor, anchor+rule, 1)
+	}
+	const workerLabels = "              app.kubernetes.io/name: llm-temporal-worker\n              app.kubernetes.io/component: worker\n"
+	for name, test := range map[string]struct {
+		workload string
+		ok       bool
+	}{
+		"no spread":                   {workload: withReplicas},
+		"hostname spread":             {workload: spread("      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: kubernetes.io/hostname\n          whenUnsatisfiable: ScheduleAnyway\n          labelSelector:\n            matchLabels:\n" + workerLabels), ok: true},
+		"zone spread only":            {workload: spread("      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: topology.kubernetes.io/zone\n          whenUnsatisfiable: ScheduleAnyway\n          labelSelector:\n            matchLabels:\n" + workerLabels)},
+		"spread selecting other pods": {workload: spread("      topologySpreadConstraints:\n        - maxSkew: 1\n          topologyKey: kubernetes.io/hostname\n          whenUnsatisfiable: ScheduleAnyway\n          labelSelector:\n            matchLabels:\n              app.kubernetes.io/name: something-else\n")},
+		"preferred anti-affinity":     {workload: spread("      affinity:\n        podAntiAffinity:\n          preferredDuringSchedulingIgnoredDuringExecution:\n            - weight: 100\n              podAffinityTerm:\n                topologyKey: kubernetes.io/hostname\n                labelSelector:\n                  matchLabels:\n                    app.kubernetes.io/name: llm-temporal-worker\n                    app.kubernetes.io/component: worker\n"), ok: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := verifyRendered("base", []byte(test.workload))
+			if test.ok && err != nil {
+				t.Fatalf("verify rendered = %v", err)
+			}
+			if !test.ok && (err == nil || !strings.Contains(err.Error(), "spread them across nodes")) {
+				t.Fatalf("verify rendered = %v, want a replica spread error", err)
+			}
+		})
+	}
+}

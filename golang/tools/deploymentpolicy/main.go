@@ -441,6 +441,9 @@ func verifyWorkload(overlay string, deployment, serviceAccount, configMap map[st
 	if err := verifyShutdownGrace(podSpec, configMap); err != nil {
 		return err
 	}
+	if err := verifyReplicaSpread(deployment, podSpec); err != nil {
+		return err
+	}
 	if initContainers, exists := podSpec["initContainers"]; exists {
 		entries, ok := initContainers.([]any)
 		if !ok || len(entries) != 0 {
@@ -466,6 +469,60 @@ func verifyWorkload(overlay string, deployment, serviceAccount, configMap map[st
 		return err
 	}
 	return nil
+}
+
+// verifyReplicaSpread requires a deployment of more than one replica to
+// spread its pods across nodes, through a hostname topology spread
+// constraint or pod anti-affinity that selects the worker's own pods.
+// Otherwise every replica can land on one node, and a node failure, which a
+// PodDisruptionBudget does not cover, stops all polling at once.
+func verifyReplicaSpread(deployment, podSpec map[string]any) error {
+	spec, _ := mapAt(deployment, "spec")
+	replicas, ok := integerValue(valueAt(spec, "replicas"))
+	if !ok || replicas <= 1 {
+		return nil
+	}
+	selector, _ := mapAt(spec, "selector")
+	workerLabels, ok := exactMatchLabels(selector)
+	if !ok {
+		return errors.New("deployment selector must use matchLabels")
+	}
+	selectsWorkers := func(term map[string]any) bool {
+		if stringAt(term, "topologyKey") != "kubernetes.io/hostname" {
+			return false
+		}
+		labelSelector, ok := mapAt(term, "labelSelector")
+		if !ok {
+			return false
+		}
+		labels, ok := mapAt(labelSelector, "matchLabels")
+		return ok && containsStringLabels(labels, workerLabels)
+	}
+	constraints, _ := listAt(podSpec, "topologySpreadConstraints")
+	for _, entry := range constraints {
+		if constraint, ok := asMap(entry); ok && selectsWorkers(constraint) && positiveInteger(valueAt(constraint, "maxSkew")) {
+			return nil
+		}
+	}
+	affinity, _ := mapAt(podSpec, "affinity")
+	antiAffinity, _ := mapAt(affinity, "podAntiAffinity")
+	required, _ := listAt(antiAffinity, "requiredDuringSchedulingIgnoredDuringExecution")
+	for _, entry := range required {
+		if term, ok := asMap(entry); ok && selectsWorkers(term) {
+			return nil
+		}
+	}
+	preferred, _ := listAt(antiAffinity, "preferredDuringSchedulingIgnoredDuringExecution")
+	for _, entry := range preferred {
+		weighted, ok := asMap(entry)
+		if !ok {
+			continue
+		}
+		if term, ok := mapAt(weighted, "podAffinityTerm"); ok && selectsWorkers(term) {
+			return nil
+		}
+	}
+	return fmt.Errorf("a deployment of %d replicas must spread them across nodes with a kubernetes.io/hostname topologySpreadConstraint or pod anti-affinity selecting the worker pods", replicas)
 }
 
 // verifyShutdownGrace binds the rendered Kubernetes grace period to the
