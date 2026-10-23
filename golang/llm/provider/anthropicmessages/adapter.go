@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 )
 
@@ -126,7 +127,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if set.Version == "" {
 		set.Version = adapter.profile.capabilityVersion()
 	}
-	for _, feature := range requiredFeatures(normalized) {
+	for _, feature := range anthropicwire.RequiredFeatures(normalized) {
 		capability, resolveErr := set.Resolve(feature, input.Strict)
 		if resolveErr != nil {
 			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, resolveErr.Error())

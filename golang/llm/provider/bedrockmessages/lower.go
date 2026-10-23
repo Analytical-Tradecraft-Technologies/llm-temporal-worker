@@ -12,7 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
@@ -32,7 +32,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	if strict && len(request.Extensions) > 0 {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("extensions are not supported by the Bedrock Messages adapter in strict portability mode")
 	}
-	if strict && hasMixedInstructionLevels(request.Instructions) {
+	if strict && anthropicwire.HasMixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
 	}
 	messages := make([]any, 0, len(request.Input))
@@ -50,7 +50,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		if emptyModelMessage(item) {
+		if anthropicwire.EmptyModelMessage(item) {
 			continue
 		}
 		messages = append(messages, message)
@@ -67,7 +67,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 			}
 			target["max_tokens"] = *request.Output.MaxTokens
 		}
-		if err := lowerOutput(*request.Output, target, strict); err != nil {
+		if err := wire.LowerOutput(*request.Output, target, strict); err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
 	}
@@ -95,19 +95,19 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 		target["system"] = system
 	}
 	if request.Sampling != nil {
-		if err := lowerSampling(*request.Sampling, target); err != nil {
+		if err := wire.LowerSampling(*request.Sampling, target); err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
 	}
 	if request.Reasoning != nil {
-		thinking, err := lowerReasoning(*request.Reasoning, strict)
+		thinking, err := wire.LowerReasoning(*request.Reasoning, strict)
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
 		if thinking != nil {
 			target["thinking"] = thinking
 		}
-		if effort := reasoningOutputEffort(request.Reasoning.Effort); effort != "" {
+		if effort := anthropicwire.ReasoningOutputEffort(request.Reasoning.Effort); effort != "" {
 			outputConfig, _ := target["output_config"].(map[string]any)
 			if outputConfig == nil {
 				outputConfig = map[string]any{}
@@ -122,7 +122,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 			return anthropic.MessageNewParams{}, err
 		}
 		target["tools"] = tools
-		choice, err := lowerToolPolicy(request.ToolPolicy)
+		choice, err := anthropicwire.LowerToolPolicy(request.ToolPolicy)
 		if err != nil {
 			return anthropic.MessageNewParams{}, err
 		}
@@ -145,27 +145,6 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	}
 	param.SetJSON(encoded, &params)
 	return params, nil
-}
-
-func hasMixedInstructionLevels(instructions []llm.Instruction) bool {
-	application := false
-	policy := false
-	for _, instruction := range instructions {
-		if instruction.Level == llm.InstructionLevelPolicy {
-			policy = true
-		} else {
-			application = true
-		}
-	}
-	return application && policy
-}
-
-// emptyModelMessage reports a replayed model turn with no parts (for example a
-// lifted content_filter or empty stop reply). Bedrock Messages rejects an assistant message
-// without content, and it carries no history to preserve.
-func emptyModelMessage(item llm.Item) bool {
-	message, ok := item.(llm.Message)
-	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {
@@ -206,40 +185,6 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 		return nil, fmt.Errorf("reference input is not accepted by Bedrock Messages")
 	default:
 		return nil, fmt.Errorf("unsupported input item %T", item)
-	}
-}
-
-func lowerParts(parts []llm.Part) ([]any, error) {
-	content := make([]any, 0, len(parts))
-	for index, part := range parts {
-		value, err := lowerPart(part)
-		if err != nil {
-			return nil, fmt.Errorf("part %d: %w", index, err)
-		}
-		content = append(content, value)
-	}
-	return content, nil
-}
-
-func lowerPart(part llm.Part) (any, error) {
-	switch value := part.(type) {
-	case llm.TextPart:
-		return map[string]any{"type": "text", "text": value.Text}, nil
-	case llm.JSONPart:
-		if !json.Valid(value.Value) {
-			return nil, fmt.Errorf("JSON part is invalid")
-		}
-		return map[string]any{"type": "text", "text": string(value.Value)}, nil
-	case llm.ImagePart:
-		return lowerImage(value)
-	case llm.DocumentPart:
-		return lowerDocument(value)
-	case llm.ProviderStatePart:
-		return providerStatePartRaw(value)
-	case llm.RefusalPart:
-		return nil, fmt.Errorf("refusal part is not accepted as Bedrock input")
-	default:
-		return nil, fmt.Errorf("part kind %q is not supported by Bedrock Messages", part.PartKind())
 	}
 }
 
@@ -318,156 +263,6 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 	return result, nil
 }
 
-func lowerToolPolicy(policy llm.ToolPolicy) (map[string]any, error) {
-	mode := policy.Mode
-	if mode == "" {
-		mode = llm.ToolChoiceAuto
-	}
-	choice := map[string]any{}
-	switch mode {
-	case llm.ToolChoiceNone:
-		choice["type"] = "none"
-	case llm.ToolChoiceAuto:
-		choice["type"] = "auto"
-	case llm.ToolChoiceRequired:
-		choice["type"] = "any"
-	case llm.ToolChoiceNamed:
-		if policy.Name == "" {
-			return nil, fmt.Errorf("named tool policy requires a name")
-		}
-		choice["type"], choice["name"] = "tool", policy.Name
-	default:
-		return nil, fmt.Errorf("tool policy mode %q is invalid", mode)
-	}
-	if mode != llm.ToolChoiceNone {
-		choice["disable_parallel_tool_use"] = !policy.Parallel
-	}
-	return choice, nil
-}
-
-func lowerOutput(output llm.OutputSpec, target map[string]any, strict bool) error {
-	switch output.Format.Kind {
-	case "", llm.OutputKindText:
-		return nil
-	case llm.OutputKindJSON:
-		// Structured output requires a closed schema; a bare object schema is
-		// not valid and would otherwise constrain the answer to {}.
-		return fmt.Errorf("output format %q without a schema is not supported by Bedrock Messages", output.Format.Kind)
-	case llm.OutputKindJSONSchema:
-		// Structured output returns a 400 for keywords outside its subset, so
-		// the wire carries a lowered schema; the lift validates the final
-		// JSON against the caller's original.
-		schema, err := anthropicschema.Lower(output.Format.Schema, strict)
-		if err != nil {
-			return err
-		}
-		target["output_config"] = map[string]any{"format": map[string]any{"type": "json_schema", "schema": schema}}
-		return nil
-	default:
-		return fmt.Errorf("output format %q is not supported by Bedrock Messages", output.Format.Kind)
-	}
-}
-
-func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
-	if sampling.Seed != nil || sampling.PresencePenalty != nil || sampling.FrequencyPenalty != nil {
-		return fmt.Errorf("sampling field is not supported by Bedrock Messages")
-	}
-	if sampling.Temperature != nil {
-		if *sampling.Temperature < 0 || *sampling.Temperature > 1 {
-			return fmt.Errorf("temperature %v is outside the Bedrock Messages range 0 to 1", *sampling.Temperature)
-		}
-		target["temperature"] = *sampling.Temperature
-	}
-	if sampling.TopP != nil {
-		target["top_p"] = *sampling.TopP
-	}
-	if sampling.TopK != nil {
-		target["top_k"] = *sampling.TopK
-	}
-	if sampling.StopSequences != nil {
-		target["stop_sequences"] = sampling.StopSequences
-	}
-	return nil
-}
-
-// lowerReasoning returns the Messages thinking object, or nil when the request
-// leaves thinking to the model default. Effort is lowered separately to
-// output_config.effort, which the API accepts independently of thinking, so an
-// effort or summary preference alone never turns thinking on.
-func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
-	if reasoning.Effort == llm.ReasoningEffortExtraHigh {
-		return nil, provider.NewUnsupportedFeatureError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by bedrockmessages")
-	}
-	mode := reasoning.Mode
-	if mode == "" {
-		mode = llm.ReasoningModeProviderDefault
-	}
-	// The only display controls are "summarized" (the provider default) and
-	// "omitted"; a summary detail level cannot be expressed.
-	display := ""
-	switch reasoning.Summary {
-	case "", llm.ReasoningSummaryProviderDefault:
-	case llm.ReasoningSummaryNone:
-		display = "omitted"
-	case llm.ReasoningSummaryAuto:
-		display = "summarized"
-	case llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed:
-		if strict {
-			return nil, provider.NewStrictPortabilityError(fmt.Sprintf("reasoning summary %q is not supported by Bedrock Messages", reasoning.Summary))
-		}
-		display = "summarized"
-	default:
-		return nil, fmt.Errorf("reasoning summary %q is not supported by Bedrock Messages", reasoning.Summary)
-	}
-	if mode == llm.ReasoningModeProviderDefault {
-		if reasoning.TokenBudget == nil {
-			// Thinking is opt-in: with no thinking object the response has no
-			// thinking blocks, so there is nothing to summarize or omit and
-			// dropping the summary preference loses nothing, even in strict
-			// mode. display has no wire form outside that object.
-			return nil, nil
-		}
-		mode = llm.ReasoningModeEnabled
-	}
-	if reasoning.Effort != "" && reasoning.Effort != llm.ReasoningEffortProviderDefault && mode != llm.ReasoningModeAdaptive {
-		return nil, fmt.Errorf("reasoning effort %q requires adaptive Bedrock thinking", reasoning.Effort)
-	}
-	result := map[string]any{}
-	switch mode {
-	case llm.ReasoningModeDisabled:
-		return map[string]any{"type": "disabled"}, nil
-	case llm.ReasoningModeAdaptive:
-		result["type"] = "adaptive"
-	case llm.ReasoningModeEnabled:
-		if reasoning.TokenBudget == nil || *reasoning.TokenBudget < 1024 {
-			return nil, fmt.Errorf("Bedrock thinking token_budget must be at least 1024")
-		}
-		result["type"] = "enabled"
-		result["budget_tokens"] = *reasoning.TokenBudget
-	default:
-		return nil, fmt.Errorf("reasoning mode %q is not supported by Bedrock Messages", reasoning.Mode)
-	}
-	if display != "" {
-		result["display"] = display
-	}
-	return result, nil
-}
-
-func reasoningOutputEffort(effort llm.ReasoningEffort) string {
-	switch effort {
-	case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow:
-		return "low"
-	case llm.ReasoningEffortMedium:
-		return "medium"
-	case llm.ReasoningEffortHigh:
-		return "high"
-	case llm.ReasoningEffortMaximum:
-		return "max"
-	default:
-		return ""
-	}
-}
-
 func appendContinuationStates(messages *[]any, continuation *llm.Continuation, profile Profile) error {
 	if continuation == nil {
 		return nil
@@ -517,4 +312,20 @@ func rawContentBlock(raw []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("provider state content block type %q is not replayable", kind)
 	}
 	return append(json.RawMessage(nil), raw...), nil
+}
+
+// wire names this endpoint in the shared Anthropic Messages lowering errors.
+var wire = anthropicwire.Bedrock
+
+func lowerParts(parts []llm.Part) ([]any, error) {
+	return wire.LowerParts(parts, partLowering())
+}
+
+func lowerPart(part llm.Part) (any, error) {
+	return wire.LowerPart(part, partLowering())
+}
+
+// partLowering supplies this endpoint's media and provider-state lowering.
+func partLowering() anthropicwire.PartLowering {
+	return anthropicwire.PartLowering{Image: lowerImage, Document: lowerDocument, ProviderState: providerStatePartRaw}
 }
