@@ -65,12 +65,18 @@ type Route struct {
 	// candidate ID; zero means unknown, and an unknown account is never
 	// treated as matching a pin.
 	EndpointAccountDigest [32]byte
-	// EndpointDigest identifies the endpoint's own non-secret configuration.
-	// It lets paid work be recovered after an unrelated configuration change.
-	// It is not part of the candidate ID; zero means unknown.
+	// EndpointDigest identifies the endpoint's recovery-relevant non-secret
+	// configuration. It lets paid work be recovered after an unrelated
+	// configuration change, including a change to the endpoint's timeout,
+	// Langfuse export, optional flag or outbound hosts. It is not part of the
+	// candidate ID; zero means unknown.
 	EndpointDigest [32]byte
-	Model          string
-	ModelLineage   string
+	// LegacyEndpointDigest is the earlier digest of the endpoint's whole
+	// configuration, still accepted from plans saved before EndpointDigest
+	// excluded those fields. Zero means unknown.
+	LegacyEndpointDigest [32]byte
+	Model                string
+	ModelLineage         string
 	// ModelRevision identifies the provider model revision used to establish a
 	// prompt-cache prefix. Empty revisions are normalized to Model when the
 	// catalog is compiled.
@@ -116,20 +122,22 @@ type Candidate struct {
 	Region              string
 	EndpointAccountHMAC [32]byte
 	EndpointDigest      [32]byte
-	Model               string
-	ModelLineage        string
-	ModelRevision       string
-	PriceAvailable      bool
-	RequestedClass      llm.ServiceClass
-	AttemptedClass      llm.ServiceClass
-	FallbackIndex       int
-	RouteIndex          int
-	ContextTokens       int64
-	ProviderTier        string
-	CapabilityVersion   string
-	PriceVersion        string
-	ExtensionDigest     string
-	Pinning             state.Pinning
+	// LegacyEndpointDigest is the route's; see Route.
+	LegacyEndpointDigest [32]byte
+	Model                string
+	ModelLineage         string
+	ModelRevision        string
+	PriceAvailable       bool
+	RequestedClass       llm.ServiceClass
+	AttemptedClass       llm.ServiceClass
+	FallbackIndex        int
+	RouteIndex           int
+	ContextTokens        int64
+	ProviderTier         string
+	CapabilityVersion    string
+	PriceVersion         string
+	ExtensionDigest      string
+	Pinning              state.Pinning
 	// EndpointAccountDigest is copied from the route; see Route.
 	EndpointAccountDigest [32]byte
 }

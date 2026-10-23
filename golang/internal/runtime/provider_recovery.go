@@ -147,7 +147,7 @@ func (recovery *ProviderRecovery) recoverBound(ctx context.Context, request llm.
 			candidate.Provider != binding.Route.Provider || candidate.Model != binding.Route.Model || providerCacheIdentity(candidate) != binding.Route.CacheIdentity ||
 			candidate.Family != binding.Family || candidate.CapabilityVersion != binding.CapabilityVersion || candidate.ProviderTier != binding.ProviderTier ||
 			candidate.RequestedClass != binding.RequestedClass || candidate.AttemptedClass != binding.AttemptedClass ||
-			(reloaded && candidate.EndpointDigest != binding.EndpointDigest) ||
+			(reloaded && !endpointDigestMatches(candidate, binding.EndpointDigest)) ||
 			(candidate.PriceVersion != "" && candidate.PriceVersion != binding.Route.PriceVersion) {
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 		}
@@ -227,4 +227,14 @@ func planEndpointDigest(plan cloudstate.BudgetPlan) [32]byte {
 // input. It is separate from the semantic/cache digest and is not an auth token.
 func ProviderRecoveryOperationKeyDigest(key string) [32]byte {
 	return sha256.Sum256([]byte("llmtw/cloud-provider-recovery/operation-key/v1\x00" + key))
+}
+
+// endpointDigestMatches reports whether a recorded endpoint digest names the
+// candidate's endpoint: its recovery identity, or for plans saved before that
+// identity existed, the legacy digest of its whole configuration (#1530).
+func endpointDigestMatches(candidate routing.Candidate, recorded [32]byte) bool {
+	if recorded == ([32]byte{}) {
+		return false
+	}
+	return recorded == candidate.EndpointDigest || recorded == candidate.LegacyEndpointDigest
 }

@@ -195,3 +195,49 @@ func TestCloudReloadWaitsWhenBoundRouteIsRemoved(t *testing.T) {
 		t.Fatal("reload dispatched on a changed route")
 	}
 }
+
+// Editing an endpoint's timeout, Langfuse export or outbound hosts cannot
+// change a call already sent, so a pending paid job is still polled after a
+// rollout that only edited them (#1530).
+func TestCloudReloadPollsPendingPaidWorkAfterBenignEndpointEdits(t *testing.T) {
+	base := syncedEndpointDigest(t, nil)
+	edited := syncedEndpointDigest(t, func(endpoint *config.EndpointConfig) {
+		endpoint.Timeout = config.Duration(17 * time.Second)
+		enabled := false
+		endpoint.Langfuse = &config.LangfuseEndpointConfig{Enabled: &enabled}
+		endpoint.OutboundHosts = append(append([]string(nil), endpoint.OutboundHosts...), "mirror.example")
+	})
+	if edited != base {
+		t.Fatal("a timeout, Langfuse or outbound-hosts edit changed the endpoint's recovery identity")
+	}
+	reloadPollsPendingPaidWork(t, base, edited, false)
+}
+
+// A plan saved before the recovery identity carries the legacy digest of the
+// whole endpoint configuration; a new worker with an unchanged endpoint still
+// recognises it and polls the paid job.
+func TestCloudReloadPollsPendingPaidWorkRecordedWithLegacyEndpointDigest(t *testing.T) {
+	ctx := context.Background()
+	legacy, recovery := [32]byte{41}, [32]byte{42}
+	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, legacy) })
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	f.cap.ConfigDigest[0]++
+	source := f.cap.Snapshot.(*planningSource)
+	source.value.ConfigDigest = f.cap.ConfigDigest
+	for _, model := range source.value.Routes.Models {
+		for index := range model.Routes {
+			model.Routes[index].EndpointDigest, model.Routes[index].LegacyEndpointDigest = recovery, legacy
+		}
+	}
+	f.restart(t)
+	f.now = f.now.Add(2 * time.Second)
+	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if f.submits.Load() != 1 || f.polls.Load() != 1 {
+		t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
+	}
+}

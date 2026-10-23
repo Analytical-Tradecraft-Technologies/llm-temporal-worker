@@ -60,9 +60,16 @@ local service gates distinguish real Temporal/Redis from in-memory cloud stores.
 Configuration reloads do not prevent finalization of a saved terminal provider
 result. An attempt that has already reached its provider is also polled or
 recovered under a different configuration digest when its route and its
-endpoint's own configuration are unchanged; it is never submitted again. If
+endpoint's recovery identity are unchanged; it is never submitted again. If
 either changed, an incompatible worker returns a retryable state-unavailable
-error until compatible settings return. Work that still needs planning, budget
+error until compatible settings return. An endpoint's `timeout`, `langfuse`,
+`optional` and `outbound_hosts` are not part of its recovery identity, so they
+are safe to change with paid work in flight. Every other endpoint field
+(family, base URL, region, account region, AWS workspace, auth reference,
+service classes and tiers, capability profile, price catalog, provider storage
+and extensions) is, and changing it makes in-flight attempts wait. Plans saved
+before this rule carry a digest of the whole endpoint configuration, which is
+still honoured while the endpoint is entirely unchanged. Work that still needs planning, budget
 admission or a new attempt (including after a retryable provider failure) has
 nothing unfinished paid. Each preparation records when the preparing worker's
 configuration started serving. A worker whose configuration started serving

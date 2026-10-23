@@ -144,6 +144,10 @@ func modelSyncSource(value config.Config, bundle catalog.Bundle, endpointID, rul
 	if err != nil {
 		return modelsync.Source{}, fmt.Errorf("model_sync: %w", err)
 	}
+	legacyEndpointDigest, err := legacyEndpointConfigDigest(endpointID, endpoint)
+	if err != nil {
+		return modelsync.Source{}, fmt.Errorf("model_sync: %w", err)
+	}
 	return modelsync.Source{
 		EndpointID:            endpointID,
 		RulesProvider:         rulesProvider,
@@ -153,6 +157,7 @@ func modelSyncSource(value config.Config, bundle catalog.Bundle, endpointID, rul
 		EndpointAccountHMAC:   routing.DeriveEndpointAccountHMAC(providerName, endpointID, endpoint.AccountRegion, region, value.Version),
 		EndpointAccountDigest: endpointAccountDigest(providerName, endpoint),
 		EndpointDigest:        endpointDigest,
+		LegacyEndpointDigest:  legacyEndpointDigest,
 		Tiers:                 tiers,
 		Capabilities:          routingCapabilities(profile.Set),
 		ProviderFeatures:      adapterCapabilities(profile.Set),
