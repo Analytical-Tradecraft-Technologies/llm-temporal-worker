@@ -1430,3 +1430,38 @@ func TestCloudExecutionRuntimeDefaultFallsBackAndSurvivesContinuation(t *testing
 		})
 	}
 }
+
+// cache.max_age_seconds bounds Compact reuse as it bounds Generate (#1508).
+func TestCloudExecutionRuntimeCompactHonorsCacheMaxAge(t *testing.T) {
+	f := boundedCloud(t, false)
+	policy := json.RawMessage(`{"recent_turns":0}`)
+	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	parent := f.finish(t)
+	ctx := context.Background()
+	compact := func(key string, cachePolicy *llm.CachePolicyV1) llm.CompactResponseV1 {
+		t.Helper()
+		f.now = f.now.Add(time.Second)
+		request := llm.CompactRequestV1{OperationKey: key, Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: cachePolicy}
+		v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
+		if err == nil && v.State == llm.ExecutionCompleted {
+			return *v.Compact // a cache hit completes at Prepare
+		}
+		boundedState(t, v, err, llm.ExecutionBudgetRequired)
+		ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
+		v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+		boundedState(t, v, err, llm.ExecutionAcquired)
+		v, err = f.runtime.CompactStepV1(ctx, request)
+		boundedState(t, v, err, llm.ExecutionProviderCompleted)
+		v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+		return *boundedState(t, v, err, llm.ExecutionCompleted).Compact
+	}
+	compact("first", &llm.CachePolicyV1{})
+	submits := f.submits.Load()
+	f.now = f.now.Add(2 * time.Minute)
+	if fresh := compact("bounded", &llm.CachePolicyV1{MaxAgeSeconds: 60}); fresh.Cache.Disposition == "hit" || f.submits.Load() != submits+1 {
+		t.Fatalf("a 60-second bound reused a two-minute-old summary: disposition=%s submits=%d", fresh.Cache.Disposition, f.submits.Load())
+	}
+	if hit := compact("unbounded", &llm.CachePolicyV1{MaxAgeSeconds: 3600}); hit.Cache.Disposition != "hit" || f.submits.Load() != submits+1 {
+		t.Fatalf("an hour bound did not reuse a fresh summary: disposition=%s submits=%d", hit.Cache.Disposition, f.submits.Load())
+	}
+}
