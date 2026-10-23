@@ -269,7 +269,7 @@ func TestWorkflowOCamlSandboxPrerequisitesPrecedeSetup(t *testing.T) {
 		readWorkflow(t, "pull-request.yml"),
 		readWorkflow(t, "master.yml"),
 	} {
-		assertJobRunPrecedesRunContains(t, workflow, "ocaml", "sudo apt-get install --yes protobuf-compiler bubblewrap", "bash scripts/ci/setup-opam.sh")
+		assertJobRunPrecedesRunContains(t, workflow, "ocaml", ocamlAptInstallScript, "bash scripts/ci/setup-opam.sh")
 	}
 }
 
