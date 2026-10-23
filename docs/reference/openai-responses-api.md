@@ -72,7 +72,20 @@ workers.
 
 ### Polling
 
-`GET /v1/responses/{id}` reads the durable operation record first (the cloud
+`GET /v1/responses/{id}` first reads a Redis copy of terminal results. When a
+Generate operation completes or fails permanently, the worker that ran it
+copies the result to Redis after the durable record commits. A poll for a
+recently finished request is then answered from Redis alone, without durable
+storage or Temporal. The copy expires after an hour, and results larger than
+1 MiB are not copied. Values are AES-GCM encrypted under a key derived from
+the Redis key secret and bound to their scope-keyed name, so Redis holds no
+readable output. Only workers with `server.responses_api_listen_address` set
+write the copy. It is never authoritative: if it is missing, expired or
+unreadable, the poll falls through to the durable record. A terminal durable
+answer is copied back so later polls skip durable storage. Non-terminal states
+are never copied.
+
+On a Redis miss the poll reads the durable operation record (the cloud
 request repository, `state.requests`). A completed or failed record answers
 the poll without a Temporal call. Temporal's `DescribeWorkflowExecution` is
 consulted only when the record cannot answer:

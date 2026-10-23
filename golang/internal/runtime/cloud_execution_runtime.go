@@ -17,6 +17,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
+	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 )
 
 type cloudExecutionStore interface {
@@ -172,6 +173,7 @@ func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.Prepa
 	}
 	r.captureLangfuseOperation(ctx, prepared)
 	result, err := r.advance(ctx, prepared, step)
+	r.indexResponseResult(ctx, prepared, result, err)
 	return r.preparation.withCapability(result, err, prepared.Record)
 }
 func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.ExecutionReferenceV1, step cloudStep) (llm.ExecutionResultV1, error) {
@@ -184,7 +186,38 @@ func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.Execu
 		return llm.ExecutionResultV1{}, err
 	}
 	result, err := r.advance(ctx, prepared, step)
+	r.indexResponseResult(ctx, prepared, result, err)
 	return r.preparation.withCapability(result, err, prepared.Record)
+}
+
+// responseResultIndexTimeout bounds the Redis copy so a slow Redis cannot hold
+// an Activity that has already committed its result.
+const responseResultIndexTimeout = 2 * time.Second
+
+// indexResponseResult copies a terminal Generate result into the Redis index
+// that Responses API polls read first. advance returns a completed result or a
+// permanent failure only after the durable record holds it, so the copy never
+// reports an outcome durable storage lacks. The copy is best effort: without
+// it a poll reads the durable record as before.
+func (r *CloudExecutionRuntime) indexResponseResult(ctx context.Context, p PreparedCloudRequest, result llm.ExecutionResultV1, err error) {
+	index := r.capabilities.ResponseResults
+	if err != nil || isNilCapability(index) || p.Generate == nil || p.Record.Request.Kind != "generate" {
+		return
+	}
+	entry := redisstore.ResponseResult{CreatedAt: p.Record.Request.CreatedAt}
+	switch {
+	case result.State == llm.ExecutionCompleted && result.Generate != nil:
+		entry.Response = result.Generate
+	case result.State == llm.ExecutionFailed && !result.Retryable:
+		failure := result
+		entry.Failure = &failure
+	default:
+		return
+	}
+	put, cancel := context.WithTimeout(context.WithoutCancel(ctx), responseResultIndexTimeout)
+	defer cancel()
+	scope := p.Record.Request.Scope
+	_ = index.PutResponseResult(put, scope.Tenant, scope.Project, p.Generate.OperationKey, entry)
 }
 
 func (r *CloudExecutionRuntime) advance(ctx context.Context, p PreparedCloudRequest, step cloudStep) (llm.ExecutionResultV1, error) {
