@@ -40,6 +40,10 @@ func TestParseRejectsExponentialFanout(t *testing.T) {
 		"anchor recursion":        `{"$anchor":"top","additionalProperties":{"allOf":[{"$ref":"#top"},{"$ref":"#top"}]}}`,
 		"in-place self ref":       `{"allOf":[{"$ref":"#"}]}`,
 		"recursive tuple fan-out": `{"prefixItems":[{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}`,
+		// An empty $id keeps the enclosing resource, so #/$defs/n is the
+		// root's fanning definition, as the validator resolves it.
+		"empty $id":           `{"properties":{"x":{"$id":"","$ref":"#/$defs/n","$defs":{"n":{}}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
+		"fan-out in a branch": `{"if":{"type":"object"},"then":{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			started := time.Now()
@@ -72,6 +76,8 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		// name a boolean schema.
 		"unused dangling definition": `{"type":"string","$defs":{"unused":{"$ref":"#/$defs/missing"},"also":{"$ref":"#nowhere"}}}`,
 		"reference to boolean":       `{"$ref":"#/additionalProperties","additionalProperties":true}`,
+		// The validator ignores then and else without if.
+		"branches without if": `{"then":{"allOf":[{"$ref":"#"},{"$ref":"#"}]},"else":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}`,
 		// Tuple positions and trailing items are disjoint array indices.
 		"recursive tuple":       `{"type":"array","prefixItems":[{"$ref":"#"},{"$ref":"#"}]}`,
 		"recursive tuple items": `{"type":"array","prefixItems":[{"$ref":"#"},{"type":"string"}],"items":{"$ref":"#"}}`,

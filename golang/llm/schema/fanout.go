@@ -42,10 +42,9 @@ type fanoutNode struct {
 	prefix []*fanoutNode
 	items  *fanoutNode
 	names  []*fanoutNode
-	// apps counts the in-place paths from this node, itself included,
-	// saturating above MaxSchemaApplications.
-	state uint8
-	apps  int
+	// branches holds then and else, which apply as alternatives and only
+	// when the schema has an if.
+	branches []*fanoutNode
 	// unresolved records a $ref this analysis cannot follow. It matters
 	// only if validation can reach the node.
 	unresolved bool
@@ -71,28 +70,30 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 	}
 	limit := MaxSchemaApplications
 	worst := 0
+	closures := &inPlaceClosures{memo: map[*fanoutNode]*inPlaceClosure{}, visiting: map[*fanoutNode]bool{}}
 	level := []fanoutBucket{{key: "", nodes: map[*fanoutNode]int{rootNode: 1}}}
 	for depth := 0; depth <= maxDepth && len(level) > 0; depth++ {
 		next := map[string]fanoutBucket{}
 		for _, bucket := range level {
 			apps := 0
+			reached := map[*fanoutNode]int{}
 			for node, count := range bucket.nodes {
-				if err := closeInPlace(node); err != nil {
+				result, err := closures.of(node)
+				if err != nil {
 					return 0, err
 				}
-				apps = saturate(apps + saturate(count*node.apps))
+				apps = saturate(apps + saturate(count*result.apps))
+				if result.saturated() {
+					break
+				}
+				for target, multiplicity := range result.counts {
+					reached[target] = saturate(reached[target] + saturate(count*multiplicity))
+				}
 			}
 			if apps > limit {
 				return 0, &FanoutError{Path: bucket.key, Reason: fmt.Sprintf("can apply more than %d subschemas to one instance value", limit)}
 			}
 			worst = max(worst, apps)
-			// Within the bound, the in-place paths are few: walk them rather
-			// than keep every node's closure, which a long $ref chain would
-			// make quadratic.
-			reached := map[*fanoutNode]int{}
-			for node, count := range bucket.nodes {
-				walkInPlace(node, count, reached)
-			}
 			for _, child := range childBuckets(bucket.key, reached) {
 				signature := child.signature()
 				if existing, ok := next[signature]; ok && existing.key <= child.key {
@@ -208,38 +209,95 @@ func saturate(value int) int {
 	return value
 }
 
-// closeInPlace counts the in-place paths from node: the subschemas applied at
-// its own instance location, with repeats. It rejects an in-place cycle.
-func closeInPlace(node *fanoutNode) error {
-	switch node.state {
-	case 2:
-		return nil
-	case 1:
-		return &FanoutError{Path: node.path, Reason: "references itself without consuming instance data"}
+// maxClosureEntries bounds the memoized in-place closures of one schema, so
+// the analysis stays linear in practice on hostile reference graphs.
+const maxClosureEntries = 1 << 18
+
+// inPlaceClosure is the multiset of subschemas applied at one node's own
+// instance location, the node itself included, and their total. A closure
+// above MaxSchemaApplications keeps only its total.
+type inPlaceClosure struct {
+	counts map[*fanoutNode]int
+	apps   int
+}
+
+func (closure *inPlaceClosure) saturated() bool { return closure.apps > MaxSchemaApplications }
+
+type inPlaceClosures struct {
+	memo     map[*fanoutNode]*inPlaceClosure
+	visiting map[*fanoutNode]bool
+	entries  int
+}
+
+// of returns node's in-place closure. allOf, anyOf, oneOf, not, if and $ref
+// all apply, so their closures add; then and else are alternatives, so they
+// contribute the element-wise maximum of their closures, which bounds either
+// choice. Their subschemas are distinct, so the child locations both reach
+// still add: a schema that recurses through both then and else is bounded as
+// if both ran, an overstatement that exact per-choice analysis would avoid
+// only at exponential cost. An in-place cycle or an unresolvable reachable
+// $ref is rejected.
+func (closures *inPlaceClosures) of(node *fanoutNode) (*inPlaceClosure, error) {
+	if closure, ok := closures.memo[node]; ok {
+		return closure, nil
+	}
+	if closures.visiting[node] {
+		return nil, &FanoutError{Path: node.path, Reason: "references itself without consuming instance data"}
 	}
 	if node.unresolved {
 		// The compiler resolved it, so the analysis cannot bound its target.
-		return &FanoutError{Path: node.path, Reason: "has a $ref that does not resolve within the schema"}
+		return nil, &FanoutError{Path: node.path, Reason: "has a $ref that does not resolve within the schema"}
 	}
-	node.state = 1
-	node.apps = 1
-	for _, child := range node.inPlace {
-		if err := closeInPlace(child); err != nil {
-			return err
+	closures.visiting[node] = true
+	defer delete(closures.visiting, node)
+	counts := map[*fanoutNode]int{node: 1}
+	saturated := false
+	add := func(closure *inPlaceClosure, weight func(*fanoutNode, int) int) {
+		if closure.saturated() {
+			saturated = true
+			return
 		}
-		node.apps = saturate(node.apps + child.apps)
+		for target, count := range closure.counts {
+			counts[target] = saturate(weight(target, count))
+		}
 	}
-	node.state = 2
-	return nil
-}
-
-// walkInPlace adds count to every node on an in-place path from node. The
-// caller has checked that those paths number at most MaxSchemaApplications.
-func walkInPlace(node *fanoutNode, count int, reached map[*fanoutNode]int) {
-	reached[node] = saturate(reached[node] + count)
 	for _, child := range node.inPlace {
-		walkInPlace(child, count, reached)
+		closure, err := closures.of(child)
+		if err != nil {
+			return nil, err
+		}
+		add(closure, func(target *fanoutNode, count int) int { return counts[target] + count })
 	}
+	if len(node.branches) > 0 {
+		alternatives := map[*fanoutNode]int{}
+		for _, branch := range node.branches {
+			closure, err := closures.of(branch)
+			if err != nil {
+				return nil, err
+			}
+			add(closure, func(target *fanoutNode, count int) int {
+				alternatives[target] = max(alternatives[target], count)
+				return counts[target]
+			})
+		}
+		for target, count := range alternatives {
+			counts[target] = saturate(counts[target] + count)
+		}
+	}
+	apps := 0
+	for _, count := range counts {
+		apps = saturate(apps + count)
+	}
+	closure := &inPlaceClosure{counts: counts, apps: apps}
+	if saturated || closure.saturated() {
+		closure = &inPlaceClosure{apps: MaxSchemaApplications + 1}
+	}
+	closures.entries += len(closure.counts)
+	if closures.entries > maxClosureEntries {
+		return nil, &FanoutError{Path: node.path, Reason: "is too complex to bound its validation work"}
+	}
+	closures.memo[node] = closure
+	return closure, nil
 }
 
 func (graph *fanoutGraph) node(path string) *fanoutNode {
@@ -249,7 +307,8 @@ func (graph *fanoutGraph) node(path string) *fanoutNode {
 // index records every schema object reachable through schema keywords, the
 // resource (nearest $id) each belongs to, and each resource's anchors.
 func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
-	if _, ok := value["$id"].(string); ok {
+	// An empty $id keeps the enclosing resource, as the compiler does.
+	if id, ok := value["$id"].(string); ok && id != "" {
 		resource = path
 	}
 	graph.nodes[path] = &fanoutNode{path: path, value: value}
@@ -308,9 +367,17 @@ func (graph *fanoutGraph) link(node *fanoutNode) {
 	for _, key := range []string{"allOf", "anyOf", "oneOf"} {
 		node.inPlace = append(node.inPlace, indexed(key)...)
 	}
-	for _, key := range []string{"not", "if", "then", "else"} {
+	for _, key := range []string{"not", "if"} {
 		if target := child(key); target != nil {
 			node.inPlace = append(node.inPlace, target)
+		}
+	}
+	// The validator ignores then and else without if.
+	if _, conditional := node.value["if"]; conditional {
+		for _, key := range []string{"then", "else"} {
+			if target := child(key); target != nil {
+				node.branches = append(node.branches, target)
+			}
 		}
 	}
 	if ref, ok := node.value["$ref"].(string); ok {
