@@ -55,7 +55,7 @@ func (logger *Logger) ScopeAccessDenied(ctx context.Context, tenant, project, ac
 		slog.String("project_hash", hashIdentifier(project)),
 	}
 	if activity != "" {
-		attrs = append(attrs, slog.String("activity", activity))
+		attrs = append(attrs, slog.String("activity_type", activity))
 	}
 	logger.log(ctx, slog.LevelWarn, "request scope access decision", attrs...)
 }

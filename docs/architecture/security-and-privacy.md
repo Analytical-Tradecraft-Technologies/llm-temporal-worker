@@ -168,7 +168,7 @@ provider state are sensitive by default. The worker:
   these are not yet emitted for allowed Generate/Compact access (#1541). A
   request-scope denial logs one warn line, `request scope access decision`,
   with `outcome=denied`, truncated hashes of the tenant and project and the
-  Activity name; query audit, configuration reloads and route rejections
+  Activity type (`activity_type`); query audit, configuration reloads and route rejections
   during provider planning (route ID and a bounded cause) are logged too.
 
 The cloud Generate contract stores bounded content-free metadata and references
