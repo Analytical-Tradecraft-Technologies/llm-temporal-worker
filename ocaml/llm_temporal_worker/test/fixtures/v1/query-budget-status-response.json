@@ -1,0 +1,20 @@
+{
+  "api_version": "llm.temporal/query/v1",
+  "operation_key": "query-budget",
+  "query_execution_id": "qry-budget",
+  "kind": "budget_status",
+  "observed_at": "2026-07-18T03:14:15.926535Z",
+  "source": "redis_budget_generation",
+  "freshness": "current",
+  "complete": true,
+  "result": {
+    "active_at": "2026-07-18T03:14:15.926535Z",
+    "generation_id": "generation-1",
+    "manifest_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "stream_high_water_mark": "1-0",
+    "windows": []
+  },
+  "cost_status": "exact",
+  "actual_cost_usd": "0",
+  "cost_method": "control_query_zero"
+}

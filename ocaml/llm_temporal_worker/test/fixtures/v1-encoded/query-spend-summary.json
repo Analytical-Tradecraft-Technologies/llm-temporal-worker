@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/query/v1","operation_key":"query-spend","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"kind":"spend_summary","query":{"start_time":"2026-07-18T00:00:00.000000000-00:00","end_time":"2026-07-19T00:00:00.000000000-00:00","group_by":["provider","model"],"operation_kinds":["generate","compact","query"]}}

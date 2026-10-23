@@ -1,0 +1,7 @@
+{
+  "api_version": "llm.temporal/query/v1",
+  "operation_key": "query-models",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "kind": "model_inventory",
+  "query": {"provider": "openai", "lifecycle": "available", "page_size": 50}
+}
