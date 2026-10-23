@@ -59,7 +59,11 @@ has never seen. For those values:
 
 - `state.redis.tls.enabled` must be `true`, unless `state.redis.service_mesh`
   is `true` (the only exemption; see below);
-- `telemetry.content_logging` must be `disabled`;
+- `telemetry.content_logging` must be `disabled`. The field accepts `disabled`
+  and `redacted`; the worker never writes prompts, outputs or other content to
+  its logs, metrics or traces, so both values currently behave the same and
+  `redacted` is reserved for development. It does not govern the
+  [Langfuse content export](#optional-langfuse-content-export);
 - `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
 - startup requires the durable v1 runtime, the cloud budget initialization
   receipt and the Redis budget authority probe.
@@ -308,9 +312,9 @@ state:
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_6acf3b8360e2991e
-    admission_version: admission_6acf3b8360e2991e
-    admission_digest: 1f9f296749b021ca89352a00ad4ad3997652602ed855b27037e5ec6e4a9daeb5
+    function_library: llmtw_admission_a45dc50e0f9c0ff3
+    admission_version: admission_a45dc50e0f9c0ff3
+    admission_digest: a44180c66040b7100f8bd1b10e666924867f7b5f07d0130c467affa4b7db3f69
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96

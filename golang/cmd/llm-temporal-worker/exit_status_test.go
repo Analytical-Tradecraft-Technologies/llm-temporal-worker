@@ -32,7 +32,7 @@ func TestInvalidInvocationsExplainExitStatusTwo(t *testing.T) {
 		var stderr bytes.Buffer
 		code := Execute(context.Background(), args, CommandOptions{
 			ErrOut: &stderr,
-			RunBudgetInitialize: func(context.Context, []byte, bool, io.Writer) error {
+			RunBudgetInitialize: func(context.Context, []byte, bool, bool, io.Writer) error {
 				t.Fatalf("%v reached the runtime", args)
 				return nil
 			},

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"os"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -50,23 +52,53 @@ func withBudgetAuthorityProbe(base DependencyProbe, initializer budgetAuthorityI
 }
 
 type budgetInitializationReport struct {
-	Status  string `json:"status"`
-	Applied bool   `json:"applied"`
+	Status    string `json:"status"`
+	Applied   bool   `json:"applied"`
+	Recovered bool   `json:"recovered,omitempty"`
 }
 
 // No path resets a receipt, a marker, or a balance. A lost cloud/Redis reply is
 // resolved by another invocation, which has no permission to recreate a marker.
 func initializeBudgetAuthority(ctx context.Context, store budget.InitializationStore, initializer budgetAuthorityInitializer, apply bool, now time.Time) (budgetInitializationReport, error) {
+	return establishBudgetAuthority(ctx, store, initializer, budgetRecovery{}, apply, func() time.Time { return now })
+}
+
+// establishBudgetAuthority also recovers a Ready receipt whose Redis authority
+// was lost, rebuilding accounting from durable records. A missing marker is
+// never permission to initialize: recovery restores every recorded charge
+// behind a fence before it publishes readiness again.
+func establishBudgetAuthority(ctx context.Context, store budget.InitializationStore, initializer budgetAuthorityInitializer, recovery budgetRecovery, apply bool, clock func() time.Time) (budgetInitializationReport, error) {
+	now := clock()
 	value, err := readBudgetInitialization(ctx, store, initializer.Identity())
 	fresh := errors.Is(err, contracts.ErrNotFound)
 	if err != nil && !fresh {
 		return budgetInitializationReport{}, err
 	}
 	if !fresh && value.Ready {
+		checkErr := initializer.Check(ctx, value)
+		if checkErr != nil && !errors.Is(checkErr, redisstore.ErrBudgetAuthorityUnavailable) {
+			return budgetInitializationReport{}, checkErr
+		}
+		recoverable := recovery.Recoverer != nil && recovery.Source != nil
+		if checkErr == nil && (!recovery.Force || !recoverable) {
+			return budgetInitializationReport{Status: "ready"}, nil
+		}
+		if !recoverable {
+			return budgetInitializationReport{}, checkErr
+		}
+		if !apply {
+			if checkErr == nil {
+				return budgetInitializationReport{Status: "ready"}, nil
+			}
+			return budgetInitializationReport{Status: "recovery_required"}, nil
+		}
+		if err := recoverBudgetAuthority(ctx, value, recovery, clock); err != nil {
+			return budgetInitializationReport{}, err
+		}
 		if err := initializer.Check(ctx, value); err != nil {
 			return budgetInitializationReport{}, err
 		}
-		return budgetInitializationReport{Status: "ready"}, nil
+		return budgetInitializationReport{Status: "ready", Applied: true, Recovered: true}, nil
 	}
 	if !apply {
 		status := "incomplete"
@@ -102,9 +134,14 @@ func initializeBudgetAuthority(ctx context.Context, store budget.InitializationS
 }
 
 // RunBudgetInitialize is the explicit installation command. Without --apply it
-// performs reads only. It resolves only Redis/cloud storage references, using
+// performs reads only. With --apply it also recovers a ready receipt whose
+// Redis authority marker was lost; --recover additionally fences and
+// reconciles a surviving marker after a suspected partial loss or failover. It resolves only Redis/cloud storage references, using
 // the worker's existing file/environment SecretRef and verified TLS support.
-func RunBudgetInitialize(ctx context.Context, data []byte, apply bool, output io.Writer) error {
+func RunBudgetInitialize(ctx context.Context, data []byte, apply, recover bool, output io.Writer) error {
+	if recover && !apply {
+		return errors.New("budget-initialize --recover requires --apply")
+	}
 	snapshot, err := config.Compile(ctx, data, nil)
 	if err != nil {
 		return err
@@ -155,10 +192,16 @@ func RunBudgetInitialize(ctx context.Context, data []byte, apply bool, output io
 	if !ok || isNilCapability(store) {
 		return ErrBudgetInitializationRequired
 	}
-	report, err := initializeBudgetAuthority(ctx, store, initializer, apply, time.Now().UTC())
+	recovery := budgetRecovery{Recoverer: initializer, Force: recover, Horizon: budgetRecoveryHorizon(value), Logger: slog.New(slog.NewJSONHandler(os.Stderr, nil))}
+	if source, ok := repository.(budgetRecoverySource); ok && !isNilCapability(source) {
+		recovery.Source = source
+	} else if recover {
+		return errors.New("budget-initialize --recover requires durable cloud request storage")
+	}
+	report, err := establishBudgetAuthority(ctx, store, initializer, recovery, apply, func() time.Time { return time.Now().UTC() })
 	if err != nil {
 		// Never expose SDK errors or connection details through the CLI.
-		return errors.New("budget initialization could not establish authority; inspect the receipt and Redis before retrying, never clear them to reset budgets")
+		return errors.New("budget initialization could not establish authority; see the recovery log, inspect the receipt and Redis before retrying, never clear them to reset budgets")
 	}
 	if report.Status == "ready" {
 		// A receipt/marker alone does not prove an enabled Stream is healthy.

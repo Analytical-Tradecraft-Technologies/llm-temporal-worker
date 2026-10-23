@@ -55,12 +55,99 @@ normal readiness and Function/Lua execution permissions. Scans use bounded pages
 and the command deadline; Redis Cluster scans all primaries. No table, bucket,
 Redis code, or SQL schema is created by this command.
 
-This receipt detects marker loss; it is not a recovery journal or proof that
-every accounting key survived. Restoring an older Redis snapshot, or losing
-individual budget keys while preserving the marker, requires separate recovery
-validation. Full recovery after data loss remains tracked in
-[#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856).
-Never delete receipts or manually reset markers to reopen spending.
+This receipt detects marker loss; it does not by itself prove that every
+accounting key survived. See
+[recovery after Redis data loss](#recovery-after-redis-data-loss) for how a lost
+marker, a failover, or a restored older snapshot is reconciled. Never delete
+receipts or manually reset markers to reopen spending.
+
+## Recovery after Redis data loss
+
+The cloud request records are the durable source for recovery. Each paid
+attempt saves its immutable budget plan (the reservation request) before Redis
+acceptance, its accepted reservation before any claim, and its exact settlement
+event batch before Redis settlement. Every claim that could dispatch paid work
+is therefore preceded by a durable execution record, and every settlement
+Redis applied is preceded by a durable copy of the same events.
+
+`budget-initialize --apply`, which the deployment runs before each worker
+starts, recovers when the cloud receipt is ready and the Redis marker is not:
+
+1. A Function call sets a persistent `recovering:<marker>` value. Reserve,
+   claim and settlement still require `ready:<marker>`, so normal budget
+   operations fail closed against the partially restored state. Readiness
+   reports the namespace as unavailable.
+2. One process holds a disposable lease key
+   (`<prefix>:{<tag>}:budget:recovery-lease`, PX expiry, renewed per page).
+   Others wait for it; an expired lease is taken over.
+3. The holder pages through all eight request discovery shards, including
+   finished requests whose settled spend can still count. A finished request
+   last updated before the recovery horizon (the longest configured window
+   plus its bucket, start lease and clock skew, and at least 31 days) is
+   skipped without reading its payload.
+4. For each paid execution, one atomic Function call merges the durable state
+   into Redis: the operation record with its original request fingerprint and
+   reservation event IDs, the claim, the settled amounts, revisions and
+   settlement event fingerprints, and the matching bucket aggregate and expiry
+   members. A surviving record at the same or later progress is left
+   unchanged; a record behind the durable state is advanced and only the
+   difference is applied to the aggregate. A record that disagrees with its
+   durable identity stops recovery with a `conflict` reason.
+5. A surviving operation record does not prove its bucket hash or expiry
+   member survived. Each merge re-adds a missing live expiry member and records
+   the reservation's live aggregate in a floor ledger
+   (`budget:recovery-floor`, one-day expiry). After the last shard, every
+   bucket field below the sum of its recorded live charges is raised to that
+   sum. Floors only add spend: charges Redis holds without a durable record
+   are kept.
+6. A cursor (`budget:recovery-progress`, one-day expiry) is stored after each
+   page so an interrupted run resumes. Merges are idempotent, so losing the
+   cursor, the floor ledger or the lease only repeats work.
+7. Only after every shard is merged and every floor applied does one Function
+   call publish an `initialize` hint and set `ready:<marker>`. The cursor and
+   floor ledger are deleted.
+
+Recovery is conservative where the durable record cannot prove less spend:
+
+- An attempt without a durable claim is restored as claimed unless its record
+  proves the claim never applied (a failed, not-dispatched attempt). An attempt
+  still in `claiming` therefore keeps its full reservation and settles as an
+  unknown outcome after its recovery window, rather than risk a lost charge.
+- Unclaimed reservations are restored with a start deadline no earlier than
+  the one Redis set.
+- Spend window expiries come from Redis acceptance time. New acceptances save
+  that expiry with the reservation result. Results saved by earlier versions
+  lack it, so recovery uses the execution start plus five minutes of clock
+  skew as the latest possible acceptance; spend may count slightly longer,
+  never shorter.
+- Spend whose retention already ended is not re-added, matching what Redis
+  would have expired.
+
+Acceptances that Redis granted but no execution record saved (a crash between
+acceptance and the record) are not restored. None of them could have been
+claimed, so no paid work used them; a retry of the same operation reserves
+again.
+
+`--recover` fences and merges even while the marker survives. Use it after a
+failover that may have dropped acknowledged writes, or after restoring an
+older snapshot. Without it, a surviving marker hides that loss: recovery cannot
+detect missing keys behind a ready marker.
+
+### Recovery boundary for existing deployments
+
+- Recovery needs the admission Function from this release. Provision it before
+  running `budget-initialize`; an older library rejects the recovery actions.
+- Durable records exist only for the durable v1 cloud budget path. Legacy
+  admission keys and unpriced or free attempts hold no recoverable budget.
+- The horizon follows the configured windows. If a window longer than 31 days
+  was removed before the loss, finished requests older than the horizon are
+  not restored into it; keep that identity removed until its own duration has
+  elapsed.
+- Coordination streams, budget generation manifests and status caches are not
+  rebuilt; they are disposable hints and regenerate under normal operation.
+- Exact-cost corrections applied directly through the unknown-cost boundary
+  have no durable record and are not recovered. Production settles through the
+  provider execution record only.
 
 ## Acquisition and paid work
 
@@ -124,9 +211,9 @@ instead of being held forever. A later exact cost is a `resolve_unknown_exact`
 correction, never a second settlement. Automatic cleanup of
 these records is a future task: Redis memory capacity must include their growth.
 This prevents old activity retries from reacquiring or refunding a paid attempt.
-There is no SQL journal from which to rebuild lost budget state. Redis
-persistence and HA protect this authority; a dataset loss needs an explicit
-recovery policy rather than treating missing reservations as unused budget.
+There is no SQL journal; lost Redis budget state is rebuilt from the durable
+cloud execution records, never by treating missing reservations as unused
+budget. See [recovery after Redis data loss](#recovery-after-redis-data-loss).
 
 ## Configuration and worker coordination
 

@@ -89,8 +89,13 @@ The reported `p99_ms/op` is a measurement to retain with the deployment,
 region, Redis configuration, sample count, and run timestamp. The benchmark
 does not itself assert that a p99 or error-rate objective has been met.
 Both CI workflows run `make redis-benchmark-compile`, which compiles the
-build-tagged code with tests and benchmarks disabled; it has no Redis address,
-operator gate, provider call, or Docker dependency.
+build-tagged code and runs its `TestRedisBenchmark*` safety tests (CI refusal
+and operator gates, the exact preloaded Function check, unique bounded key
+options and disabled retries) with the benchmark itself disabled; it has no
+Redis address, operator gate, provider call, or Docker dependency.
+`make compose-live-integration` runs every `composeliveintegration` test in
+`integration/compose`, including the Docker-free healthcheck, readiness-timing
+and metrics-scrape contract tests beside the live lifecycle test.
 
 Use the [redacted SLO evidence contract](../release/slo-evidence.md) to retain a
 passing admission-and-compilation measurement. It accepts only the typed,
@@ -461,7 +466,12 @@ Temporal/Compose gate adds the real worker and task-queue boundary.
 - strict configuration schema/golden effective config;
 - Docker non-root/read-only execution and health probes;
 - Kubernetes Kustomize build and policy assertions;
-- Compose one- and two-replica smoke;
+- Compose single-worker lifecycle smoke (`make compose-live-integration`:
+  worker readiness tracking a Redis stop and restart);
+- two workers sharing real Temporal and Redis: concurrent replay of one
+  operation (`make cloud-workflow-integration`) and worker-loss recovery
+  (the Temporal recovery suite in `make compose-live-integration`); a
+  two-pod Compose or Kubernetes deployment run is not yet checked in;
 - Redis restart/failover and persistence configuration;
 - signal/reload behavior with valid and invalid snapshots;
 - log/trace/heartbeat deny-field assertions;

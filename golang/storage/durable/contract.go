@@ -132,6 +132,11 @@ type ReserveResult struct {
 	RetryAfter    time.Duration
 	Denial        *admission.Denial
 	Events        []budget.ReservationEvent
+	// WindowExpiries maps each reservation event ID to the time Redis set for
+	// its spend to leave the window, which depends on Redis TIME at acceptance.
+	// Persisting it lets recovery after Redis data loss restore the exact
+	// expiry. Results saved before it existed leave it empty.
+	WindowExpiries map[string]time.Time `json:"window_expiries,omitempty"`
 	// Replayed reports that the leaser returned an earlier acceptance for
 	// this operation instead of making a new decision. It is never persisted.
 	Replayed bool `json:"-"`
@@ -165,6 +170,15 @@ func (result ReserveResult) Validate(request ReserveRequest) error {
 		}
 	} else if len(result.Events) != 0 {
 		return errors.New("denied reservation must not produce reservation events")
+	}
+	for id, expiry := range result.WindowExpiries {
+		found := false
+		for _, event := range result.Events {
+			found = found || event.EventID == id
+		}
+		if !found || expiry.IsZero() {
+			return errors.New("reservation window expiry does not match a reservation event")
+		}
 	}
 	for _, event := range result.Events {
 		if err := event.Validate(); err != nil {

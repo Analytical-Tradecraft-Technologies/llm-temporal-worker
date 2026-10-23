@@ -171,6 +171,29 @@ provider state are sensitive by default. The worker:
   Activity type (`activity_type`); query audit, configuration reloads and route rejections
   during provider planning (route ID and a bounded cause) are logged too.
 
+### Langfuse content export
+
+A configured `langfuse` block is an explicit, opt-in content sink and the one
+exception to keeping content inside the worker, its state stores and the model
+provider. For every cloud-backed Generate and Compact on an eligible endpoint,
+the worker exports to the configured Langfuse project over HTTPS: the semantic
+request and response content (instructions, message text, tool definitions,
+tool-call arguments and results, reasoning and outputs; inline images and
+documents appear only as their digest, size and media type, while URL
+references are exported as given), the raw caller-supplied `tenant`, `project` and `actor` (the actor is
+the Langfuse user ID), and usage, cost, pricing and route metadata. Operation
+keys and checkpoint IDs are exported only as keyed hashes.
+
+The only controls are omitting the `langfuse` block, which disables the sink,
+and per-endpoint `langfuse: {enabled: false}`; OpenRouter endpoints default to
+disabled. `telemetry.content_logging` does not govern Langfuse: production's
+`content_logging: disabled` requirement constrains the worker's own logs, not
+this export. Review a `langfuse` block, and the Langfuse project's own
+retention and access, as a data-processing decision for every environment it
+reaches. Export failures are counted in
+`llmtw_langfuse_export_failures_total{reason}`; see the
+[configuration reference](../reference/configuration.md#optional-langfuse-content-export).
+
 The cloud Generate contract stores bounded content-free metadata and references
 for recovery and cache verification. Prompt, tool, output and provider-state
 payloads use immutable encrypted blobs, with digest and key provenance in cloud
