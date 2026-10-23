@@ -435,6 +435,15 @@ Adapters translate provider errors into the common error model with:
 - whether any usage/cost was reported;
 - redacted raw metadata allowed by configuration.
 
+An SDK error raised before the request reaches the transport is a definite
+pre-dispatch failure that may move to another route, never an ambiguous
+outcome. This covers AWS credential resolution while signing (Anthropic on AWS
+and both Bedrock adapters), an Azure token-credential failure on an Azure
+OpenAI Responses route, and any other error the OpenAI Chat and Responses SDK
+raises before the dispatch probe. A credential failure has the
+`authentication` code. Azure's token middleware runs inside the probe, so its
+failures are recognised by the credential marker instead of by the probe.
+
 The adapter supplies facts. The engine combines those facts with ledger state,
 route policy, and caller deadline to choose the next action.
 

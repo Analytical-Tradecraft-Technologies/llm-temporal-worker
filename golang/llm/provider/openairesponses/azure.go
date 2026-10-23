@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/azurecredentials"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
 
@@ -77,7 +78,9 @@ func NewAzureTokenClient(config AzureTokenClientConfig) (*Client, error) {
 	}
 	options := []option.RequestOption{
 		azure.WithEndpoint(endpoint, config.APIVersion),
-		azure.WithTokenCredential(config.TokenCredential),
+		// Marked so a token failure, raised before the request is sent, is
+		// not mistaken for an ambiguous, possibly paid outcome (#1495).
+		azure.WithTokenCredential(azurecredentials.Wrap(config.TokenCredential)),
 		option.WithHTTPClient(config.HTTPClient),
 		option.WithMaxRetries(0),
 		option.WithMiddleware(azureResponsesPathMiddleware),

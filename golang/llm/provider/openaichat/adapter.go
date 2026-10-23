@@ -273,6 +273,13 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
 			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
 		}
+		// Nothing reached the transport when the error came before the
+		// probe, or from a credential middleware the SDK runs inside the
+		// probe but before it sends the request (#1495).
+		if mapped := provider.ClassifyUnsentError(err); mapped != nil && (!probe.Sent() || errors.Is(err, provider.ErrProviderCredentials)) {
+			mapped.SafeDetails = map[string]string{"provider": adapter.Name()}
+			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
+		}
 		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
