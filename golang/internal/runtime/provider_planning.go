@@ -140,6 +140,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	if err := ctx.Err(); err != nil {
 		return PlannedProviderCall{}, err
 	}
+	defaulted := planning.outputDefaulted(request)
 	semantic, err := planning.normalizeRequest(request)
 	if err != nil || semantic.Continuation != nil {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
@@ -147,6 +148,9 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 	// Give even a custom planner its own maps and request. It cannot change the
 	// captured snapshot or the semantic input used for provider compilation.
 	catalog, _ := copyProviderCatalog(planning.catalog)
+	if defaulted {
+		catalog = withoutOutputCeilings(catalog)
+	}
 	plannerRequest, _ := llm.NormalizeRequest(semantic)
 	plan, err := planning.planner.Plan(ctx, routing.Input{Request: plannerRequest, Catalog: catalog, Health: copyProviderHealth(planning.health)})
 	if ctx.Err() != nil {
@@ -182,6 +186,7 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectContinuation})
 			continue
 		}
+		semantic := planning.candidateSemantic(semantic, candidate, defaulted)
 		if !planning.catalog.Models[semantic.Model].Routes[candidate.RouteIndex].SupportsOutputLimit(semantic) {
 			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectCapability})
 			continue
@@ -545,6 +550,46 @@ func copyProviderHealth(source routing.HealthView) routing.HealthView {
 		result.Routes[key] = value
 	}
 	return result
+}
+
+// outputDefaulted reports whether normalizeRequest inserts the configured
+// output limit because the caller set none.
+func (planning *ProviderPlanning) outputDefaulted(request llm.Request) bool {
+	return planning.outputLimit > 0 && (request.Output == nil || request.Output.MaxTokens == nil)
+}
+
+// candidateSemantic is the semantic request a candidate compiles and prices.
+// A worker-inserted output limit above the candidate route's output ceiling is
+// lowered to that ceiling, so the default never makes a route unusable (#1523).
+// A caller's own limit is kept, and above the ceiling still rejects the route.
+// A default within the ceiling is unchanged, so its digest is too.
+func (planning *ProviderPlanning) candidateSemantic(semantic llm.Request, candidate routing.Candidate, defaulted bool) llm.Request {
+	routes := planning.catalog.Models[semantic.Model].Routes
+	if !defaulted || candidate.RouteIndex < 0 || candidate.RouteIndex >= len(routes) {
+		return semantic
+	}
+	ceiling := routes[candidate.RouteIndex].OutputTokens
+	if ceiling <= 0 || semantic.Output == nil || semantic.Output.MaxTokens == nil || int64(*semantic.Output.MaxTokens) <= ceiling {
+		return semantic
+	}
+	output, limit := *semantic.Output, int(ceiling)
+	output.MaxTokens = &limit
+	semantic.Output = &output
+	return semantic
+}
+
+// withoutOutputCeilings removes every route's output ceiling from a detached
+// catalog copy. A planner given a defaulted request must not reject a route
+// over a limit candidateSemantic lowers for it.
+func withoutOutputCeilings(catalog routing.Catalog) routing.Catalog {
+	for name, model := range catalog.Models {
+		model.Routes = append([]routing.Route(nil), model.Routes...)
+		for index := range model.Routes {
+			model.Routes[index].OutputTokens = 0
+		}
+		catalog.Models[name] = model
+	}
+	return catalog
 }
 
 // Budgeted planning and recovery must use the same explicit provider limit.

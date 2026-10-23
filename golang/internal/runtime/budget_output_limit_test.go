@@ -123,3 +123,64 @@ func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 		t.Fatal("changed output limit reused an old reservation")
 	}
 }
+
+// A default above the route's output ceiling is capped at the ceiling for
+// the compiled call, the reservation and exact-route recovery alike (#1523).
+func TestBudgetDefaultOutputLimitIsCappedAtRouteCeilingThroughRecovery(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		name := "generate"
+		if compact {
+			name = "compact"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newBudgetPlanningFixture(t)
+			f.source.value.Routes.Models["alias"].Routes[0].OutputTokens = 8
+			request := &f.generate.Request
+			if compact {
+				request = f.summary.Request
+			}
+			request.Output.MaxTokens = nil
+			planning := f.planning(t)
+			var planned PlannedBudgetCall
+			var err error
+			if compact {
+				planned, err = planning.Compact(context.Background(), f.summary, f.attempt)
+			} else {
+				planned, err = planning.Generate(context.Background(), f.generate, f.attempt)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if planned.Estimate.OutputTokens != 8 {
+				t.Fatalf("reserved %d output tokens, want the route ceiling 8", planned.Estimate.OutputTokens)
+			}
+			check := func(request llm.Request) {
+				t.Helper()
+				if request.Output == nil || request.Output.MaxTokens == nil || *request.Output.MaxTokens != 8 {
+					t.Fatalf("compiled output limit = %#v, want 8", request.Output)
+				}
+			}
+			check(f.adapter.inputs[len(f.adapter.inputs)-1].Request)
+			binding, err := planned.Provider.RecoveryBinding(planned.Route)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovery, err := f.cap.NewProviderRecovery(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if compact {
+				_, err = recovery.Compact(context.Background(), f.summary, binding)
+			} else {
+				_, err = recovery.Generate(context.Background(), f.generate, binding)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(f.adapter.inputs[len(f.adapter.inputs)-1].Request)
+			if request.Output.MaxTokens != nil {
+				t.Fatal("caller request mutated")
+			}
+		})
+	}
+}

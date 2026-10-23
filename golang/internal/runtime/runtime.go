@@ -769,10 +769,20 @@ func RunWorker(ctx context.Context, data []byte, _ io.Writer) error {
 // replacement triggers. It begins from the already validated bytes supplied by
 // the command boundary; subsequent reloads always read the same file path.
 func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) error {
+	return runWorkerFile(ctx, path, data, newProductionRuntime)
+}
+
+func runWorkerFile(ctx context.Context, path string, data []byte, build func(context.Context, []byte) (*Runtime, error)) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	runtime, err := newProductionRuntime(ctx, data)
+	// Take SIGHUP before the slow startup dials: its default disposition
+	// terminates the process. The buffer holds one early signal, which
+	// becomes the first reload once the worker runs (#1532).
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	runtime, err := build(ctx, data)
 	if err != nil {
 		return err
 	}
@@ -782,10 +792,6 @@ func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) e
 		return errors.New("watch configuration file failed")
 	}
 	defer watcher.Close()
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGHUP)
-	defer signal.Stop(signals)
 	return runtime.runWatchedFile(ctx, path, watcher, signals)
 }
 

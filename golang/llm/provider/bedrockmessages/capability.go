@@ -1,21 +1,9 @@
 package bedrockmessages
 
 import (
-	"fmt"
-
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
-
-func validateQuery(query provider.CapabilityQuery, endpointID string) error {
-	if query.Family != "" && query.Family != provider.FamilyBedrockMessages {
-		return fmt.Errorf("bedrock messages: capability family %q does not match %q", query.Family, provider.FamilyBedrockMessages)
-	}
-	if query.EndpointID != "" && query.EndpointID != endpointID {
-		return fmt.Errorf("bedrock messages: capability endpoint %q does not match %q", query.EndpointID, endpointID)
-	}
-	return nil
-}
 
 func requiredFeatures(request llm.Request) []provider.Feature {
 	features := []provider.Feature{provider.FeatureText, provider.FeatureUsage}
@@ -48,7 +36,7 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 	if request.Continuation != nil {
 		features = append(features, provider.FeatureContinuation)
 	}
-	return uniqueFeatures(features)
+	return provider.UniqueFeatures(features)
 }
 
 func partFeature(part llm.Part) provider.Feature {
@@ -62,20 +50,4 @@ func partFeature(part llm.Part) provider.Feature {
 	default:
 		return provider.FeatureText
 	}
-}
-
-func uniqueFeatures(features []provider.Feature) []provider.Feature {
-	seen := make(map[provider.Feature]struct{}, len(features))
-	result := make([]provider.Feature, 0, len(features))
-	for _, feature := range features {
-		if feature == "" {
-			continue
-		}
-		if _, ok := seen[feature]; ok {
-			continue
-		}
-		seen[feature] = struct{}{}
-		result = append(result, feature)
-	}
-	return result
 }

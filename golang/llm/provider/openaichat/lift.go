@@ -305,7 +305,7 @@ func withLiftCause(cause string, err error) error {
 // details name the cause and the provider's finish reason when that is a
 // short token, so a rejected response is diagnosable without its content.
 func liftFailure(call provider.Call, requestID, responseID, finishReason string, err error) *provider.Error {
-	mapped := invalidResponseError(call, requestID, err.Error())
+	mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 	mapped.Provider.ResponseID = responseID
 	cause := "response_invalid"
 	var tagged liftCauseError

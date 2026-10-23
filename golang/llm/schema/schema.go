@@ -41,21 +41,39 @@ func ParseWithLimits(data []byte, limits Limits) (*Schema, error) {
 	if err := validateSubset(document); err != nil {
 		return nil, err
 	}
-
-	compiler := jsonschema.NewCompiler()
-	compiler.UseLoader(noRemoteLoader{})
-	if err := compiler.AddResource(schemaResourceURL, document); err != nil {
-		return nil, fmt.Errorf("schema resource: %w", err)
+	// An unbounded numeric keyword would otherwise compile with the
+	// constraint silently dropped, or panic in the meta-schema check.
+	if err := checkNumbers(document, ""); err != nil {
+		return nil, fmt.Errorf("schema document: %w", err)
 	}
-	compiled, err := compiler.Compile(schemaResourceURL)
+
+	compiled, err := compileDocument(document)
 	if err != nil {
-		return nil, fmt.Errorf("schema compile: %w", err)
+		return nil, err
 	}
 	digest := sha256.Sum256(canonical)
 	return &Schema{canonical: append([]byte(nil), canonical...), digest: digest, compiled: compiled, limits: limits}, nil
 }
 
 const schemaResourceURL = "urn:llmtw/schema/v1/root"
+
+func compileDocument(document any) (compiled *jsonschema.Schema, err error) {
+	defer func() {
+		if recover() != nil {
+			compiled, err = nil, fmt.Errorf("schema compile failed")
+		}
+	}()
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(noRemoteLoader{})
+	if err := compiler.AddResource(schemaResourceURL, document); err != nil {
+		return nil, fmt.Errorf("schema resource: %w", err)
+	}
+	compiled, err = compiler.Compile(schemaResourceURL)
+	if err != nil {
+		return nil, fmt.Errorf("schema compile: %w", err)
+	}
+	return compiled, nil
+}
 
 type noRemoteLoader struct{}
 
@@ -105,6 +123,21 @@ func (schema *Schema) Validate(instance []byte) error {
 	if err != nil {
 		return fmt.Errorf("instance JSON: %w", err)
 	}
+	if err := checkNumbers(value, ""); err != nil {
+		return fmt.Errorf("instance JSON: %w", err)
+	}
+	return schema.validateValue(value)
+}
+
+// validateValue runs the third-party validator. Instances come from untrusted
+// providers, so a validator panic becomes an ordinary validation failure
+// rather than crashing the caller after payment (#1522).
+func (schema *Schema) validateValue(value any) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = &ValidationError{Message: "schema validator failed on this instance"}
+		}
+	}()
 	if err := schema.compiled.Validate(value); err != nil {
 		return normalizeValidationError(err)
 	}

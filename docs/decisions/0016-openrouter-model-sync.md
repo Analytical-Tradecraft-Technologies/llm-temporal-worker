@@ -110,3 +110,8 @@ prices.
   component and are not reserved; such calls rely on reported cost.
 - Recovery of a request whose synced route disappeared in a refresh fails as
   for a removed configured route.
+- A request that omits `output.max_tokens` gets `limits.max_output_tokens`,
+  lowered to each route's output ceiling (`max_completion_tokens` or the rules'
+  `output_tokens`). A refresh that changes that ceiling while such a request
+  is in flight changes its lowered limit, so its exact-route recovery fails in
+  the same way.
