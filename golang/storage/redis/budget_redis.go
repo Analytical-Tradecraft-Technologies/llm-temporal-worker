@@ -192,11 +192,27 @@ func decodeActiveBudgetGeneration(raw string) (ActiveBudgetGeneration, error) {
 	return pointer, nil
 }
 
+// Keep retention identical to publish_budget_hint in admission.lua. Expiry is
+// atomic with publication so a crash cannot leave an unbounded persistent key.
+const budgetHintAppendScript = `
+if not redis.acl_check_cmd('XADD', KEYS[1], 'MAXLEN', '~', 10000, '*', 'event', ARGV[1]) or
+   not redis.acl_check_cmd('EXPIRE', KEYS[1], 86400) then
+  return redis.error_reply('budget hint retention permission denied')
+end
+local id = redis.call('XADD', KEYS[1], 'MAXLEN', '~', 10000, '*', 'event', ARGV[1])
+redis.call('EXPIRE', KEYS[1], 86400)
+return id
+`
+
+func budgetStreamMissing(err error) bool {
+	return errors.Is(err, redisclient.Nil) || (err != nil && err.Error() == "ERR no such key")
+}
+
 // BudgetEventRedisClient is the minimal Redis command seam required by
 // RedisBudgetEventPort. The port deliberately does not expose consumer groups
 // or blocking reads: every worker independently tails the broadcast Stream.
 type BudgetEventRedisClient interface {
-	XAdd(context.Context, *redisclient.XAddArgs) *redisclient.StringCmd
+	Eval(context.Context, string, []string, ...interface{}) *redisclient.Cmd
 	XInfoStream(context.Context, string) *redisclient.XInfoStreamCmd
 	XRead(context.Context, *redisclient.XReadArgs) *redisclient.XStreamSliceCmd
 }
@@ -223,17 +239,29 @@ func NewRedisBudgetEventPort(client BudgetEventRedisClient, keys BudgetKeySpace)
 
 // CurrentCursor returns the latest retained Stream ID. Tailer recovery reads
 // this before reloading the manifest so records appended during the reload
-// remain visible to the next XREAD rather than being skipped.
+// remain visible to the next XREAD rather than being skipped. A confirmed
+// absent/new empty Stream returns 0-0. An emptied Stream retains its generated
+// high-water mark, so recovery can advance past history already discarded.
 func (port *RedisBudgetEventPort) CurrentCursor(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	info, err := port.client.XInfoStream(ctx, port.keys.EventsKey()).Result()
-	if errors.Is(err, redisclient.Nil) {
-		return "", ErrBudgetStreamCursorUnavailable
+	if budgetStreamMissing(err) {
+		return "0-0", nil // Confirmed absent: replay every event created during reload.
 	}
 	if err != nil {
 		return "", fmt.Errorf("inspect budget stream cursor: %w", err)
+	}
+	if info != nil && info.Length == 0 && info.LastEntry.ID == "" {
+		cursor := info.LastGeneratedID
+		if cursor == "" && info.EntriesAdded == 0 {
+			cursor = "0-0"
+		}
+		if _, _, err := parseRedisStreamID(cursor); err != nil || len(cursor) > MaxBudgetStreamIDBytes {
+			return "", ErrBudgetStreamCursorUnavailable
+		}
+		return cursor, nil
 	}
 	if info == nil || info.LastEntry.ID == "" || len(info.LastEntry.ID) > MaxBudgetStreamIDBytes {
 		return "", ErrBudgetStreamCursorUnavailable
@@ -252,11 +280,7 @@ func (port *RedisBudgetEventPort) Append(ctx context.Context, event BudgetStream
 	if err != nil {
 		return "", err
 	}
-	id, err := port.client.XAdd(ctx, &redisclient.XAddArgs{
-		Stream: port.keys.EventsKey(),
-		ID:     "*",
-		Values: map[string]interface{}{budgetStreamEventField: string(payload)},
-	}).Result()
+	id, err := port.client.Eval(ctx, budgetHintAppendScript, []string{port.keys.EventsKey()}, string(payload)).Text()
 	if err != nil {
 		return "", fmt.Errorf("append budget stream event: %w", err)
 	}
@@ -281,20 +305,44 @@ func (port *RedisBudgetEventPort) Read(ctx context.Context, cursor string, limit
 			return nil, err
 		}
 		info, err := port.client.XInfoStream(ctx, port.keys.EventsKey()).Result()
-		if errors.Is(err, redisclient.Nil) {
+		if budgetStreamMissing(err) {
+			if cursor == "0-0" {
+				return []BudgetStreamRecord{}, nil
+			}
 			return nil, ErrBudgetStreamGap
 		}
 		if err != nil {
 			return nil, fmt.Errorf("inspect budget stream: %w", err)
 		}
-		if info == nil || info.FirstEntry.ID == "" {
+		if info == nil {
+			return nil, ErrBudgetStreamGap
+		}
+		if cursor == "0-0" {
+			// A recreated stream may already have lost hints published after
+			// the authoritative reload. Zero is safe only with full history.
+			if info.EntriesAdded > info.Length || (info.MaxDeletedEntryID != "" && info.MaxDeletedEntryID != "0-0") {
+				return nil, ErrBudgetStreamGap
+			}
+		}
+		if info.FirstEntry.ID == "" {
+			// After recovery, an empty stream's generated high-water mark
+			// prevents an endless gap/reload loop when all entries were trimmed.
+			if info.Length == 0 {
+				if cursor == "0-0" && info.EntriesAdded == 0 {
+					return []BudgetStreamRecord{}, nil
+				}
+				major, minor, err := parseRedisStreamID(info.LastGeneratedID)
+				if err == nil && (major < afterMajor || (major == afterMajor && minor <= afterMinor)) {
+					return []BudgetStreamRecord{}, nil
+				}
+			}
 			return nil, ErrBudgetStreamGap
 		}
 		firstMajor, firstMinor, err := parseRedisStreamID(info.FirstEntry.ID)
 		if err != nil || len(info.FirstEntry.ID) > MaxBudgetStreamIDBytes {
 			return nil, fmt.Errorf("%w: invalid Redis stream first ID", ErrBudgetStreamInvalid)
 		}
-		if firstMajor > afterMajor || (firstMajor == afterMajor && firstMinor > afterMinor) {
+		if cursor != "0-0" && (firstMajor > afterMajor || (firstMajor == afterMajor && firstMinor > afterMinor)) {
 			return nil, ErrBudgetStreamGap
 		}
 	}

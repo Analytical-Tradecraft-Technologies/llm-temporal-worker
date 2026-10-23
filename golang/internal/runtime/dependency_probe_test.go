@@ -105,16 +105,11 @@ func TestRedisDependencyProbeRejectsInvalidCoordinationStream(t *testing.T) {
 		client func(*fakeRedisProbeClient)
 	}{
 		{name: "wrong type", client: func(client *fakeRedisProbeClient) { client.streamType = "hash" }},
-		{name: "missing stream", client: func(client *fakeRedisProbeClient) { client.streamInfoErr = redisclient.Nil }},
 		{name: "consumer groups", client: func(client *fakeRedisProbeClient) {
 			client.streamInfo.Groups = 1
 		}},
 		{name: "malformed id", client: func(client *fakeRedisProbeClient) {
 			client.streamInfo.LastEntry.ID = "invalid"
-		}},
-		{name: "recent trim", client: func(client *fakeRedisProbeClient) {
-			client.streamInfo.MaxDeletedEntryID = "9999999999999-0"
-			client.streamInfo.LastGeneratedID = "9999999999999-0"
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -955,5 +950,34 @@ func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testi
 	}
 	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, cloudBaseTestProbes()); err == nil {
 		t.Fatal("durable mode accepted incomplete cloud configuration")
+	}
+}
+
+func TestRedisDependencyProbeAcceptsDiscardedCoordinationHints(t *testing.T) {
+	for _, state := range []string{"absent", "evicted-during-probe", "trimmed"} {
+		t.Run(state, func(t *testing.T) {
+			value := testRedisProbeConfig()
+			enabled := true
+			value.CoordinationStreamEnabled = &enabled
+			value.StreamTrimSafety = config.Duration(time.Minute)
+			client := healthyRedisProbeClient()
+			client.streamType = "stream"
+			client.streamInfo = &redisclient.XInfoStream{Length: 1, EntriesAdded: 10000,
+				FirstEntry: redisclient.XMessage{ID: "42-0"}, LastEntry: redisclient.XMessage{ID: "42-0"},
+				LastGeneratedID: "42-0", MaxDeletedEntryID: "41-0"}
+			switch state {
+			case "absent":
+				client.streamType = "none"
+			case "evicted-during-probe":
+				client.streamInfoErr = errors.New("ERR no such key")
+			}
+			probe, err := NewRedisDependencyProbeWithStream(client, value, "llm:events")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady {
+				t.Fatalf("discarded hints blocked readiness: %#v", result)
+			}
+		})
 	}
 }

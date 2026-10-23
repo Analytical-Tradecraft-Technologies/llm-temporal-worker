@@ -596,6 +596,14 @@ end
 -- A cloud receipt fences reinitialization after loss; these operations alone
 -- cannot establish that a dataset is new. The explicit initializer owns that
 -- proof and scans the unused namespace while the preparing marker blocks work.
+-- Coordination hints are disposable, unlike balances and idempotency records.
+-- Approximate MAXLEN bounds a continuously active stream; the refreshed idle
+-- TTL also makes the whole stream eligible for volatile-lru eviction.
+local function publish_budget_hint(key, event)
+    redis.call('XADD', key, 'MAXLEN', '~', 10000, '*', 'event', event)
+    redis.call('EXPIRE', key, 86400)
+end
+
 if ACTION == 'durable_authority_prepare' or ACTION == 'durable_authority_commit' or ACTION == 'durable_authority_check' then
     local arguments = ACTION == 'durable_authority_check' and 2 or 3
     if not valid_invocation(2, 2, arguments) then return {'invalid_request', ''} end
@@ -622,13 +630,14 @@ if ACTION == 'durable_authority_prepare' or ACTION == 'durable_authority_commit'
     end
     if not current or redis.call('TYPE', KEYS[2]).ok ~= 'none' or
         not bounded_string(ARGV[3], 8192, true) or
-        not redis.acl_check_cmd('XADD', KEYS[2], '*', 'event', ARGV[3]) or
+        not redis.acl_check_cmd('XADD', KEYS[2], 'MAXLEN', '~', 10000, '*', 'event', ARGV[3]) or
+        not redis.acl_check_cmd('EXPIRE', KEYS[2], 86400) or
         not redis.acl_check_cmd('SET', KEYS[1], 'ready:' .. marker) then
         return {'authority_unavailable', ''}
     end
     -- Validate every fallible precondition before the first write. No budget
     -- balances are written during initialization, even on an interrupted run.
-    redis.call('XADD', KEYS[2], '*', 'event', ARGV[3])
+    publish_budget_hint(KEYS[2], ARGV[3])
     redis.call('SET', KEYS[1], 'ready:' .. marker)
     return {'ready', ''}
 end
@@ -679,7 +688,8 @@ if ACTION == 'durable_reserve' or ACTION == 'durable_claim' or ACTION == 'durabl
         end
         local stream_type = redis.call('TYPE', durable_stream_key).ok
         if (stream_type ~= 'none' and stream_type ~= 'stream') or
-            not redis.acl_check_cmd('XADD', durable_stream_key, '*', 'event', '{}') then
+            not redis.acl_check_cmd('XADD', durable_stream_key, 'MAXLEN', '~', 10000, '*', 'event', '{}') or
+            not redis.acl_check_cmd('EXPIRE', durable_stream_key, 86400) then
             return {'state_unavailable', ''}
         end
         if stream_type == 'stream' then
@@ -707,7 +717,7 @@ local function durable_publish(kind, operation_hash, bucket_key, revision, delta
         ',"revision":' .. string.format('%.0f', revision) ..
         ',"nano_delta":' .. string.format('%.0f', delta) ..
         ',"occurred_at":' .. cjson.encode(durable_stream_time) .. '}'
-    redis.call('XADD', durable_stream_key, '*', 'event', event)
+    publish_budget_hint(durable_stream_key, event)
 end
 
 local function durable_operation_hash()

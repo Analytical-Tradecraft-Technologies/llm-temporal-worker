@@ -82,13 +82,23 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 		t.Fatalf("pending reservation = %#v, %v", result, err)
 	}
 	// Snapshot every accounting key, including authority, operation tombstone,
-	// budget hash, logical-expiry index and coordination Stream.
+	// budget hash and logical-expiry index. Coordination hints are disposable.
 	accounting, err := client.Keys(ctx, keys.Prefix+":*").Result()
 	if err != nil || len(accounting) < 5 {
 		t.Fatalf("accounting fixture: %d keys, %v", len(accounting), err)
 	}
 	before := make(map[string]string, len(accounting))
+	space, err := NewBudgetKeySpace(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, key := range accounting {
+		if key == space.EventsKey() {
+			if ttl := client.TTL(ctx, key).Val(); ttl <= 0 || ttl > 24*time.Hour {
+				t.Fatalf("coordination stream must be evictable: %v", ttl)
+			}
+			continue
+		}
 		if ttl := client.PTTL(ctx, key).Val(); ttl != -1 {
 			t.Fatalf("accounting key can expire/evict: %s (%v)", key, ttl)
 		}

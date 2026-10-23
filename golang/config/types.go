@@ -259,9 +259,9 @@ type RedisConfig struct {
 	// stream. A nil value is normalized by config.Load: durable deployments
 	// default to enabled while memory/Redis fixtures remain unchanged.
 	CoordinationStreamEnabled *bool `yaml:"coordination_stream_enabled" json:"coordination_stream_enabled"`
-	// StreamTrimSafety is the minimum age that a deleted Stream entry must
-	// have before readiness accepts the stream's retention state. It is only
-	// used when CoordinationStreamEnabled is true.
+	// StreamTrimSafety is retained for configuration compatibility. Disposable
+	// hints can now be trimmed or evicted at any age; readers reload the
+	// authoritative Redis generation on a retained-prefix gap.
 	StreamTrimSafety Duration `yaml:"stream_trim_safety" json:"stream_trim_safety"`
 }
 

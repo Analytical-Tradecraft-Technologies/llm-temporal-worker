@@ -40,20 +40,23 @@ func (fake *fakeBudgetGenerationRedis) Eval(_ context.Context, script string, ke
 }
 
 type fakeBudgetEventRedis struct {
-	appendArgs *redisclient.XAddArgs
-	appendID   string
-	appendErr  error
-	infoValue  *redisclient.XInfoStream
-	infoErr    error
-	readArgs   *redisclient.XReadArgs
-	readValue  []redisclient.XStream
-	readErr    error
+	appendArgs   []interface{}
+	appendKeys   []string
+	appendScript string
+	appendID     string
+	appendErr    error
+	infoValue    *redisclient.XInfoStream
+	infoErr      error
+	readArgs     *redisclient.XReadArgs
+	readValue    []redisclient.XStream
+	readErr      error
 }
 
-func (fake *fakeBudgetEventRedis) XAdd(_ context.Context, args *redisclient.XAddArgs) *redisclient.StringCmd {
-	copyArgs := *args
-	fake.appendArgs = &copyArgs
-	return redisclient.NewStringResult(fake.appendID, fake.appendErr)
+func (fake *fakeBudgetEventRedis) Eval(_ context.Context, script string, keys []string, args ...interface{}) *redisclient.Cmd {
+	fake.appendArgs = args
+	fake.appendKeys = keys
+	fake.appendScript = script
+	return redisclient.NewCmdResult(fake.appendID, fake.appendErr)
 }
 
 func (fake *fakeBudgetEventRedis) XInfoStream(_ context.Context, _ string) *redisclient.XInfoStreamCmd {
@@ -160,16 +163,12 @@ func TestRedisBudgetEventPortAppendsAndReadsBroadcastCursor(t *testing.T) {
 	if err != nil || id != "42-7" {
 		t.Fatalf("Append = %q, %v", id, err)
 	}
-	if fake.appendArgs == nil || fake.appendArgs.Stream != keys.EventsKey() || fake.appendArgs.ID != "*" {
-		t.Fatalf("XADD args = %#v", fake.appendArgs)
+	if len(fake.appendKeys) != 1 || fake.appendKeys[0] != keys.EventsKey() || fake.appendScript != budgetHintAppendScript || len(fake.appendArgs) != 1 {
+		t.Fatalf("atomic hint publication = %#v, %#v", fake.appendKeys, fake.appendArgs)
 	}
-	values, ok := fake.appendArgs.Values.(map[string]interface{})
-	if !ok {
-		t.Fatalf("XADD values type = %T", fake.appendArgs.Values)
-	}
-	payload, ok := values[budgetStreamEventField].(string)
+	payload, ok := fake.appendArgs[0].(string)
 	if !ok || !strings.Contains(payload, `"generation_id":"generation"`) {
-		t.Fatalf("XADD payload = %#v", fake.appendArgs.Values)
+		t.Fatalf("hint payload = %#v", fake.appendArgs)
 	}
 
 	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "42-7"}, LastEntry: redisclient.XMessage{ID: "42-8"}}
@@ -223,5 +222,84 @@ func TestRedisBudgetEventPortHandlesEmptyAndCorruptStreamsFailClosed(t *testing.
 	}}}
 	if _, err := port.Read(context.Background(), "", 10); !errors.Is(err, ErrBudgetStreamInvalid) {
 		t.Fatalf("non-monotonic event error = %v", err)
+	}
+}
+
+func TestRedisBudgetEventPortRecoversAfterEviction(t *testing.T) {
+	fake := &fakeBudgetEventRedis{infoErr: errors.New("ERR no such key"), readErr: redisclient.Nil}
+	port, err := NewRedisBudgetEventPort(fake, testBudgetKeySpaceForAdapter(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.Read(context.Background(), "42-7", 10); !errors.Is(err, ErrBudgetStreamGap) {
+		t.Fatalf("eviction must trigger authoritative reload: %v", err)
+	}
+	if cursor, err := port.CurrentCursor(context.Background()); err != nil || cursor != "0-0" {
+		t.Fatalf("absent stream checkpoint = %q, %v", cursor, err)
+	}
+	if rows, err := port.Read(context.Background(), "0-0", 10); err != nil || len(rows) != 0 {
+		t.Fatalf("poll after reload = %#v, %v", rows, err)
+	}
+	fake.infoErr = errors.New("connection reset")
+	if _, err := port.Read(context.Background(), "0-0", 10); err == nil {
+		t.Fatal("zero cursor ignored transport failure")
+	}
+	if _, err := port.CurrentCursor(context.Background()); err == nil {
+		t.Fatal("transport error accepted as eviction")
+	}
+}
+
+func TestRedisBudgetEventPortZeroCursorDetectsDiscardedHistory(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		added, length int64
+		deleted       string
+		gap           bool
+	}{
+		{"untrimmed", 1, 1, "0-0", false},
+		{"new empty", 0, 0, "0-0", false},
+		{"trimmed prefix", 12000, 10000, "0-0", true},
+		{"deleted entry", 2, 1, "42-0", true},
+		{"all trimmed", 1, 0, "0-0", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeBudgetEventRedis{infoValue: &redisclient.XInfoStream{
+				Length: test.length, EntriesAdded: test.added, MaxDeletedEntryID: test.deleted,
+				FirstEntry: redisclient.XMessage{ID: "42-1"}, LastEntry: redisclient.XMessage{ID: "42-1"},
+			}, readErr: redisclient.Nil}
+			if test.length == 0 {
+				fake.infoValue.FirstEntry = redisclient.XMessage{}
+				fake.infoValue.LastEntry = redisclient.XMessage{}
+			}
+			port, err := NewRedisBudgetEventPort(fake, testBudgetKeySpaceForAdapter(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = port.Read(context.Background(), "0-0", 10)
+			if errors.Is(err, ErrBudgetStreamGap) != test.gap || (err != nil && !test.gap) {
+				t.Fatalf("Read zero cursor = %v; want gap=%v", err, test.gap)
+			}
+			if test.gap && fake.readArgs != nil {
+				t.Fatal("discarded history was read without reloading")
+			}
+		})
+	}
+}
+
+func TestRedisBudgetEventPortRecoversEmptyTrimmedStream(t *testing.T) {
+	fake := &fakeBudgetEventRedis{infoValue: &redisclient.XInfoStream{EntriesAdded: 10, LastGeneratedID: "42-7"}}
+	port, err := NewRedisBudgetEventPort(fake, testBudgetKeySpaceForAdapter(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.Read(context.Background(), "0-0", 10); !errors.Is(err, ErrBudgetStreamGap) {
+		t.Fatalf("missing hints did not reload: %v", err)
+	}
+	cursor, err := port.CurrentCursor(context.Background())
+	if err != nil || cursor != "42-7" {
+		t.Fatalf("empty stream cursor = %q, %v", cursor, err)
+	}
+	if rows, err := port.Read(context.Background(), cursor, 10); err != nil || len(rows) != 0 {
+		t.Fatalf("recovery repeated the gap: %#v, %v", rows, err)
 	}
 }

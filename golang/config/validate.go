@@ -462,9 +462,8 @@ func (redis RedisConfig) validate(environment string) error {
 		default:
 			return fmt.Errorf("state.redis.maxmemory_policy %q is unsupported; accounting keys must not be evictable", redis.MaxMemoryPolicy)
 		}
-		// A disabled coordination stream is a supported Redis-only fixture
-		// mode. Enabled streams require a bounded trim-safety margin so the
-		// readiness probe can reject recent destructive trimming.
+		// Preserve validation of the historical trim-safety setting for config
+		// compatibility. Bounded hints may now be discarded at any age.
 		if redis.CoordinationStreamEnabled != nil && *redis.CoordinationStreamEnabled {
 			if err := validatePositiveDuration(redis.StreamTrimSafety, "state.redis.stream_trim_safety"); err != nil {
 				return err

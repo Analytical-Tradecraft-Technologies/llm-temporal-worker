@@ -356,7 +356,7 @@ func NewRedisDependencyProbeWithBudgetGeneration(client redisProbeClient, value 
 }
 
 // NewRedisDependencyProbeWithStream extends Redis readiness with the
-// read-only coordination-stream contract. The stream key must already be
+// read-only coordination-stream contract. The stream key may be evicted; it is
 // fully namespaced by the caller; this probe never creates or mutates it.
 func NewRedisDependencyProbeWithStream(client redisProbeClient, value config.RedisConfig, streamKey string) (DependencyProbe, error) {
 	return newRedisDependencyProbe(client, value, nil, streamKey)
@@ -535,15 +535,24 @@ func coordinationStreamEnabled(value config.RedisConfig) bool {
 	return value.CoordinationStreamEnabled != nil && *value.CoordinationStreamEnabled
 }
 
-func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context, serverTime time.Time) ProbeResult {
+func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context, _ time.Time) ProbeResult {
 	streamType, err := probe.client.Type(ctx, probe.streamKey).Result()
 	if err != nil {
 		return redisProbeFailure(ctx, err)
+	}
+	// A hint stream may expire or be evicted. Accounting authority is checked
+	// separately; losing wake-up hints must not take healthy workers offline.
+	if strings.EqualFold(strings.TrimSpace(streamType), "none") {
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
 	}
 	if !strings.EqualFold(strings.TrimSpace(streamType), "stream") {
 		return redisPolicyMismatch()
 	}
 	info, err := probe.client.XInfoStream(ctx, probe.streamKey).Result()
+	if errors.Is(err, redisclient.Nil) || (err != nil && err.Error() == "ERR no such key") {
+		// Eviction can race TYPE and XINFO.
+		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+	}
 	if err != nil {
 		return redisProbeFailure(ctx, err)
 	}
@@ -580,9 +589,6 @@ func (probe *redisDependencyProbe) verifyCoordinationStream(ctx context.Context,
 			if !valid || deleted.compare(generated) > 0 {
 				return redisPolicyMismatch()
 			}
-		}
-		if deleted.compare(redisStreamID(serverTime.Add(-time.Duration(probe.config.StreamTrimSafety)).UnixMilli(), 0)) > 0 {
-			return redisPolicyMismatch()
 		}
 	}
 	return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
