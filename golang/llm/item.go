@@ -615,71 +615,15 @@ func (ImagePart) part()              {}
 func (ImagePart) PartKind() PartKind { return PartKindImage }
 
 func (part ImagePart) MarshalJSON() ([]byte, error) {
-	if err := validateMediaSource(part.URL, part.Bytes, part.Blob, part.MediaType, "image"); err != nil {
-		return nil, err
-	}
-	fields := map[string]any{"kind": PartKindImage, "media_type": part.MediaType}
-	if part.URL != "" {
-		fields["url"] = part.URL
-	}
-	if part.Bytes != nil {
-		fields["bytes"] = copyBytes(part.Bytes)
-	}
-	if part.Blob != nil {
-		fields["blob"] = part.Blob
-	}
-	if part.Detail != "" {
-		fields["detail"] = part.Detail
-	}
-	return marshalObject(fields)
+	return marshalMediaPart(PartKindImage, "image", mediaSource{URL: part.URL, Bytes: part.Bytes, Blob: part.Blob, MediaType: part.MediaType}, "detail", part.Detail)
 }
 
 func decodeImagePart(data []byte) (ImagePart, error) {
-	fields, err := decodeVerifiedObject(data)
+	source, detail, err := decodeMediaPart(data, PartKindImage, "image", "detail")
 	if err != nil {
 		return ImagePart{}, err
 	}
-	if err := checkUnknownFields(fields, "kind", "url", "bytes", "blob", "media_type", "detail"); err != nil {
-		return ImagePart{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return ImagePart{}, err
-	}
-	if PartKind(kind) != PartKindImage {
-		return ImagePart{}, fmt.Errorf("part kind %q is not %q", kind, PartKindImage)
-	}
-	urlValue, _, err := optionalString(fields, "url")
-	if err != nil {
-		return ImagePart{}, err
-	}
-	var bytesValue []byte
-	if raw, ok := fields["bytes"]; ok {
-		bytesValue, err = decodeBytesJSON(raw)
-		if err != nil {
-			return ImagePart{}, fmt.Errorf("image bytes: %w", err)
-		}
-	}
-	var blob *BlobRef
-	if raw, ok := fields["blob"]; ok {
-		blob, err = decodeBlobRef(raw)
-		if err != nil {
-			return ImagePart{}, fmt.Errorf("image blob: %w", err)
-		}
-	}
-	mediaType, err := requiredString(fields, "media_type")
-	if err != nil {
-		return ImagePart{}, err
-	}
-	detail, _, err := optionalString(fields, "detail")
-	if err != nil {
-		return ImagePart{}, err
-	}
-	part := ImagePart{URL: urlValue, Bytes: copyBytes(bytesValue), Blob: blob, MediaType: mediaType, Detail: detail}
-	if err := validateMediaSource(part.URL, part.Bytes, part.Blob, part.MediaType, "image"); err != nil {
-		return ImagePart{}, err
-	}
-	return part, nil
+	return ImagePart{URL: source.URL, Bytes: source.Bytes, Blob: source.Blob, MediaType: source.MediaType, Detail: detail}, nil
 }
 
 type DocumentPart struct {
@@ -694,71 +638,96 @@ func (DocumentPart) part()              {}
 func (DocumentPart) PartKind() PartKind { return PartKindDocument }
 
 func (part DocumentPart) MarshalJSON() ([]byte, error) {
-	if err := validateMediaSource(part.URL, part.Bytes, part.Blob, part.MediaType, "document"); err != nil {
+	return marshalMediaPart(PartKindDocument, "document", mediaSource{URL: part.URL, Bytes: part.Bytes, Blob: part.Blob, MediaType: part.MediaType}, "title", part.Title)
+}
+
+func decodeDocumentPart(data []byte) (DocumentPart, error) {
+	source, title, err := decodeMediaPart(data, PartKindDocument, "document", "title")
+	if err != nil {
+		return DocumentPart{}, err
+	}
+	return DocumentPart{URL: source.URL, Bytes: source.Bytes, Blob: source.Blob, MediaType: source.MediaType, Title: title}, nil
+}
+
+// mediaSource is the payload image and document parts share: exactly one of
+// URL, Bytes and Blob, plus the media type.
+type mediaSource struct {
+	URL       string
+	Bytes     []byte
+	Blob      *BlobRef
+	MediaType string
+}
+
+// marshalMediaPart encodes a media part. extraField names the one optional
+// string field each kind adds (detail for images, title for documents).
+func marshalMediaPart(kind PartKind, label string, source mediaSource, extraField, extraValue string) ([]byte, error) {
+	if err := validateMediaSource(source.URL, source.Bytes, source.Blob, source.MediaType, label); err != nil {
 		return nil, err
 	}
-	fields := map[string]any{"kind": PartKindDocument, "media_type": part.MediaType}
-	if part.URL != "" {
-		fields["url"] = part.URL
+	fields := map[string]any{"kind": kind, "media_type": source.MediaType}
+	if source.URL != "" {
+		fields["url"] = source.URL
 	}
-	if part.Bytes != nil {
-		fields["bytes"] = copyBytes(part.Bytes)
+	if source.Bytes != nil {
+		fields["bytes"] = copyBytes(source.Bytes)
 	}
-	if part.Blob != nil {
-		fields["blob"] = part.Blob
+	if source.Blob != nil {
+		fields["blob"] = source.Blob
 	}
-	if part.Title != "" {
-		fields["title"] = part.Title
+	if extraValue != "" {
+		fields[extraField] = extraValue
 	}
 	return marshalObject(fields)
 }
 
-func decodeDocumentPart(data []byte) (DocumentPart, error) {
+// decodeMediaPart decodes and validates a media part, returning its source
+// and the value of extraField.
+func decodeMediaPart(data []byte, kind PartKind, label, extraField string) (mediaSource, string, error) {
 	fields, err := decodeVerifiedObject(data)
 	if err != nil {
-		return DocumentPart{}, err
+		return mediaSource{}, "", err
 	}
-	if err := checkUnknownFields(fields, "kind", "url", "bytes", "blob", "media_type", "title"); err != nil {
-		return DocumentPart{}, err
+	if err := checkUnknownFields(fields, "kind", "url", "bytes", "blob", "media_type", extraField); err != nil {
+		return mediaSource{}, "", err
 	}
-	kind, err := requiredString(fields, "kind")
+	kindValue, err := requiredString(fields, "kind")
 	if err != nil {
-		return DocumentPart{}, err
+		return mediaSource{}, "", err
 	}
-	if PartKind(kind) != PartKindDocument {
-		return DocumentPart{}, fmt.Errorf("part kind %q is not %q", kind, PartKindDocument)
+	if PartKind(kindValue) != kind {
+		return mediaSource{}, "", fmt.Errorf("part kind %q is not %q", kindValue, kind)
 	}
 	urlValue, _, err := optionalString(fields, "url")
 	if err != nil {
-		return DocumentPart{}, err
+		return mediaSource{}, "", err
 	}
 	var bytesValue []byte
 	if raw, ok := fields["bytes"]; ok {
 		bytesValue, err = decodeBytesJSON(raw)
 		if err != nil {
-			return DocumentPart{}, fmt.Errorf("document bytes: %w", err)
+			return mediaSource{}, "", fmt.Errorf("%s bytes: %w", label, err)
 		}
 	}
 	var blob *BlobRef
 	if raw, ok := fields["blob"]; ok {
 		blob, err = decodeBlobRef(raw)
 		if err != nil {
-			return DocumentPart{}, fmt.Errorf("document blob: %w", err)
+			return mediaSource{}, "", fmt.Errorf("%s blob: %w", label, err)
 		}
 	}
 	mediaType, err := requiredString(fields, "media_type")
 	if err != nil {
-		return DocumentPart{}, err
+		return mediaSource{}, "", err
 	}
-	title, _, err := optionalString(fields, "title")
+	extraValue, _, err := optionalString(fields, extraField)
 	if err != nil {
-		return DocumentPart{}, err
+		return mediaSource{}, "", err
 	}
-	part := DocumentPart{URL: urlValue, Bytes: copyBytes(bytesValue), Blob: blob, MediaType: mediaType, Title: title}
-	if err := validateMediaSource(part.URL, part.Bytes, part.Blob, part.MediaType, "document"); err != nil {
-		return DocumentPart{}, err
+	source := mediaSource{URL: urlValue, Bytes: copyBytes(bytesValue), Blob: blob, MediaType: mediaType}
+	if err := validateMediaSource(source.URL, source.Bytes, source.Blob, source.MediaType, label); err != nil {
+		return mediaSource{}, "", err
 	}
-	return part, nil
+	return source, extraValue, nil
 }
 
 type JSONPart struct {
