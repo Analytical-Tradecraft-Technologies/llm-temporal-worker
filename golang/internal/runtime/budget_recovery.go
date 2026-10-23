@@ -23,6 +23,7 @@ type budgetAuthorityRecoverer interface {
 	HoldRecoveryLease(context.Context, budget.Initialization, string, time.Duration, string) (string, bool, error)
 	ReleaseRecoveryLease(context.Context, budget.Initialization, string) error
 	RecoverOperation(context.Context, budget.Initialization, string, redisstore.BudgetRecoveryOperation) (bool, error)
+	ApplyRecoveryFloors(context.Context, budget.Initialization, string) (int, error)
 	CommitRecovery(context.Context, budget.Initialization, time.Time) error
 }
 
@@ -212,6 +213,17 @@ func (recovery budgetRecovery) run(ctx context.Context, receipt budget.Initializ
 			}
 			return err
 		}
+	}
+	raised, err := recovery.Recoverer.ApplyRecoveryFloors(ctx, receipt, token)
+	if err != nil {
+		if !errors.Is(err, redisstore.ErrBudgetRecoveryBusy) {
+			log.Error("budget recovery could not verify bucket balances", slog.String("reason", budgetRecoveryReason(err)))
+		}
+		return err
+	}
+	if raised > 0 {
+		log.Warn("budget recovery raised bucket balances that held less than their recorded charges; Redis lost accounting keys behind surviving records",
+			slog.Int("raised_buckets", raised))
 	}
 	if err := recovery.Recoverer.CommitRecovery(ctx, receipt, now()); err != nil {
 		log.Error("budget recovery could not publish readiness", slog.String("reason", budgetRecoveryReason(err)))

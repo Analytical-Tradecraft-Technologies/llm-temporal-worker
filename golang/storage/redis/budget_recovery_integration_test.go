@@ -129,6 +129,9 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 						restored++
 					}
 				}
+				if _, err := f.initializer.ApplyRecoveryFloors(ctx, f.receipt, "token-a"); err != nil {
+					t.Fatal(err)
+				}
 				if err := f.initializer.CommitRecovery(ctx, f.receipt, time.Now()); err != nil {
 					t.Fatal(err)
 				}
@@ -233,6 +236,47 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 				requireRemaining(t, f, "failover")
 			})
 
+			t.Run("lost bucket hash behind surviving operation records is raised", func(t *testing.T) {
+				f := setup(t)
+				populate(t, f)
+				if err := client.Del(ctx, f.m.space.durableBudgetKey("tenant", "hour")).Err(); err != nil {
+					t.Fatal(err)
+				}
+				if fits, err := f.m.Accept(ctx, request("lost-hash-probe", "0.9")); err != nil || !fits.Accepted {
+					t.Fatalf("setup: lost hash should hide spend: %#v, %v", fits, err)
+				}
+				// The probe's own acceptance survives in the hash; recovery must
+				// still restore the 0.6 of durable spend beneath it.
+				if err := client.Del(ctx, f.m.space.durableBudgetKey("tenant", "hour"), f.m.space.durableBudgetOperationKey("recovery-gen", "lost-hash-probe")).Err(); err != nil {
+					t.Fatal(err)
+				}
+				if err := client.ZRemRangeByScore(ctx, f.m.space.durableBudgetExpiryKey("tenant", "hour"), "-inf", "+inf").Err(); err != nil {
+					t.Fatal(err)
+				}
+				restored := recoverAll(t, f, true)
+				if restored != 2 { // settled and open: their expiry members were re-added
+					t.Fatalf("repaired %d operations", restored)
+				}
+				requireRemaining(t, f, "lost-hash")
+				// A second forced pass finds nothing left to repair or raise.
+				if again := recoverAll(t, f, true); again != 0 {
+					t.Fatalf("repeated repair: %d", again)
+				}
+			})
+
+			t.Run("raising a bucket never lowers spend it does not know about", func(t *testing.T) {
+				f := setup(t)
+				populate(t, f)
+				// An acceptance Redis granted that no durable record holds yet.
+				if fits, err := f.m.Accept(ctx, request("unrecorded", "0.3")); err != nil || !fits.Accepted {
+					t.Fatalf("unrecorded = %#v, %v", fits, err)
+				}
+				recoverAll(t, f, true)
+				if denied, err := f.m.Accept(ctx, request("over", "0.11")); err != nil || denied.Accepted {
+					t.Fatalf("recovery dropped unrecorded spend: %#v, %v", denied, err)
+				}
+			})
+
 			t.Run("interrupted recovery resumes behind the fence", func(t *testing.T) {
 				f := setup(t)
 				populate(t, f)
@@ -310,6 +354,10 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 								t.Error(err)
 								return
 							}
+						}
+						if _, err := f.initializer.ApplyRecoveryFloors(ctx, f.receipt, token); err != nil {
+							t.Error(err)
+							return
 						}
 						if err := f.initializer.CommitRecovery(ctx, f.receipt, time.Now()); err != nil {
 							t.Error(err)

@@ -93,11 +93,19 @@ starts, recovers when the cloud receipt is ready and the Redis marker is not:
    unchanged; a record behind the durable state is advanced and only the
    difference is applied to the aggregate. A record that disagrees with its
    durable identity stops recovery with a `conflict` reason.
-5. A cursor (`budget:recovery-progress`, one-day expiry) is stored after each
+5. A surviving operation record does not prove its bucket hash or expiry
+   member survived. Each merge re-adds a missing live expiry member and records
+   the reservation's live aggregate in a floor ledger
+   (`budget:recovery-floor`, one-day expiry). After the last shard, every
+   bucket field below the sum of its recorded live charges is raised to that
+   sum. Floors only add spend: charges Redis holds without a durable record
+   are kept.
+6. A cursor (`budget:recovery-progress`, one-day expiry) is stored after each
    page so an interrupted run resumes. Merges are idempotent, so losing the
-   cursor or the lease only repeats work.
-6. Only after every shard is merged does one Function call publish an
-   `initialize` hint and set `ready:<marker>`. The cursor is deleted.
+   cursor, the floor ledger or the lease only repeats work.
+7. Only after every shard is merged and every floor applied does one Function
+   call publish an `initialize` hint and set `ready:<marker>`. The cursor and
+   floor ledger are deleted.
 
 Recovery is conservative where the durable record cannot prove less spend:
 

@@ -1130,6 +1130,11 @@ end
 -- is never read as unused budget, and a surviving record is never rolled back.
 local RECOVERY_LEASE_SUFFIX = 'budget:recovery-lease'
 local RECOVERY_PROGRESS_SUFFIX = 'budget:recovery-progress'
+-- The floor ledger records each restored reservation's live aggregate. A
+-- surviving operation record does not prove its bucket hash or expiry member
+-- survived, so before readiness every bucket is raised to at least the sum of
+-- its durably known live charges. It is never lowered.
+local RECOVERY_FLOOR_SUFFIX = 'budget:recovery-floor'
 
 local function recovery_namespace(authority_key)
     return string.match(authority_key or '', '^(.*:{[^{}]+}:)budget:authority$')
@@ -1149,11 +1154,11 @@ local function recovery_authority(key)
 end
 
 if ACTION == 'durable_authority_recover_begin' or ACTION == 'durable_authority_recover_commit' then
-    if not valid_invocation(3, 3, 3) then return {'invalid_request', ''} end
+    if not valid_invocation(4, 4, 3) then return {'invalid_request', ''} end
     local namespace = recovery_namespace(KEYS[1])
     local marker = ARGV[2]
     if not namespace or KEYS[2] ~= namespace .. 'budget:events' or KEYS[3] ~= namespace .. RECOVERY_PROGRESS_SUFFIX or
-        not valid_recovery_marker(marker) then
+        KEYS[4] ~= namespace .. RECOVERY_FLOOR_SUFFIX or not valid_recovery_marker(marker) then
         return {'invalid_request', ''}
     end
     local current, failure = recovery_authority(KEYS[1])
@@ -1166,8 +1171,8 @@ if ACTION == 'durable_authority_recover_begin' or ACTION == 'durable_authority_r
         if current and current ~= 'ready:' .. marker then return {'authority_unavailable', ''} end
         if not redis.acl_check_cmd('SET', KEYS[1], 'recovering:' .. marker) then return {'authority_unavailable', ''} end
         redis.call('SET', KEYS[1], 'recovering:' .. marker)
-        -- Progress belongs to the interrupted attempt it was written by.
-        redis.call('DEL', KEYS[3])
+        -- Progress and floors belong to the interrupted attempt that wrote them.
+        redis.call('DEL', KEYS[3], KEYS[4])
         return {'recovering', ''}
     end
     if current == 'ready:' .. marker then return {'ready', ''} end
@@ -1181,7 +1186,7 @@ if ACTION == 'durable_authority_recover_begin' or ACTION == 'durable_authority_r
     end
     publish_budget_hint(KEYS[2], ARGV[3])
     redis.call('SET', KEYS[1], 'ready:' .. marker)
-    redis.call('DEL', KEYS[3])
+    redis.call('DEL', KEYS[3], KEYS[4])
     return {'ready', ''}
 end
 
@@ -1258,10 +1263,19 @@ local function recovery_target(claimed, reservation, start_by, now_millis)
     return total, score
 end
 
+local function recovery_floor_value(bucket_key, reservation, total)
+    return bucket_key .. '|' .. reservation.bucket .. '|' .. decimal(total) .. '|' .. reservation.limit_nano
+end
+
+-- KEYS: authority, lease, operation, (bucket hash, expiry index) per
+-- reservation, floor ledger. A surviving record at the same or later progress
+-- is kept, but its live expiry member is re-added when missing and its live
+-- aggregate is recorded in the floor ledger like every restored one.
 if ACTION == 'durable_recover_operation' then
-    if not valid_invocation(5, 3 + 2 * MAX_DURABLE_RESERVATIONS, 4) or #KEYS % 2 ~= 1 then return {'invalid_request', ''} end
+    if not valid_invocation(6, 4 + 2 * MAX_DURABLE_RESERVATIONS, 4) or #KEYS % 2 ~= 0 then return {'invalid_request', ''} end
     local namespace = recovery_namespace(KEYS[1])
-    if not namespace or KEYS[2] ~= namespace .. RECOVERY_LEASE_SUFFIX or
+    local floor_key = KEYS[#KEYS]
+    if not namespace or KEYS[2] ~= namespace .. RECOVERY_LEASE_SUFFIX or floor_key ~= namespace .. RECOVERY_FLOOR_SUFFIX or
         not string.match(KEYS[3], '^' .. string.gsub(namespace, '%p', '%%%0') .. 'durable%-budget%-operation:[a-f0-9]+$') or
         not valid_recovery_marker(ARGV[2]) or not bounded_string(ARGV[3], 64, true) then
         return {'invalid_request', ''}
@@ -1269,7 +1283,7 @@ if ACTION == 'durable_recover_operation' then
     local fenced = recovery_fence(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
     if fenced then return {fenced, ''} end
     for index = 3, #KEYS do
-        local expected = index == 3 and 'string' or (index % 2 == 0 and 'hash' or 'zset')
+        local expected = (index == 3 and 'string') or (index == #KEYS and 'hash') or (index % 2 == 0 and 'hash' or 'zset')
         local kind = redis.call('TYPE', KEYS[index]).ok
         if kind ~= 'none' and kind ~= expected then return {'state_unavailable', ''} end
     end
@@ -1279,13 +1293,14 @@ if ACTION == 'durable_recover_operation' then
         not bounded_string(desired.incarnation_id, 128, true) or not bounded_string(desired.fingerprint, 64, true) or
         #desired.fingerprint ~= 64 or type(desired.claimed) ~= 'boolean' or not durable_int(desired.start_by_millis) or
         type(desired.reservations) ~= 'table' or #desired.reservations == 0 or
-        #desired.reservations > MAX_DURABLE_RESERVATIONS or #KEYS ~= 3 + 2 * #desired.reservations then
+        #desired.reservations > MAX_DURABLE_RESERVATIONS or #KEYS ~= 4 + 2 * #desired.reservations then
         return {'invalid_request', ''}
     end
     if desired.events ~= nil and type(desired.events) ~= 'table' then return {'invalid_request', ''} end
     for _, reservation in ipairs(desired.reservations) do
         if type(reservation) ~= 'table' or not bounded_string(reservation.bucket, 64, true) or
-            not bounded_string(reservation.limit_nano, 64, true) or not durable_int(reservation.window_expires_millis) or
+            not string.match(reservation.bucket, '^%d+$') or not bounded_string(reservation.limit_nano, 64, true) or
+            not durable_int(reservation.limit_nano) or not durable_int(reservation.window_expires_millis) or
             not durable_int(reservation.reservation_revision) or not recovery_reservation_amounts(reservation) or
             (reservation.status ~= 'reserved' and reservation.status ~= 'ambiguous' and reservation.status ~= 'finalized') then
             return {'invalid_request', ''}
@@ -1318,6 +1333,8 @@ if ACTION == 'durable_recover_operation' then
     -- earlier script writes after a later failure.
     local claimed = desired.claimed or (existing ~= nil and existing.claimed == true)
     local staged = {}
+    local repairs = {}
+    local floors = {}
     for index, target in ipairs(desired.reservations) do
         local bucket_key = KEYS[3 + (index - 1) * 2 + 1]
         local expiry_key = KEYS[3 + (index - 1) * 2 + 2]
@@ -1334,7 +1351,18 @@ if ACTION == 'durable_recover_operation' then
             if not surviving_revision then return {'state_unavailable', ''} end
             keep = surviving_revision > target_revision or
                 (surviving_revision == target_revision and (existing.claimed == true or not desired.claimed))
-            if not keep then
+            if keep then
+                local live_total, score = recovery_target(existing.claimed == true, surviving,
+                    durable_int(existing.start_by_millis) or start_by, now_millis)
+                if not live_total then return {'state_unavailable', ''} end
+                if score then
+                    local member = durable_expiry_member(existing.fingerprint, surviving.bucket, decimal(live_total))
+                    if not redis.call('ZSCORE', expiry_key, member) then
+                        repairs[#repairs + 1] = {expiry_key = expiry_key, score = score, member = member}
+                    end
+                end
+                floors['|' .. index] = live_total > 0 and recovery_floor_value(bucket_key, target, live_total) or false
+            else
                 current_total, current_member = recovery_current(existing, surviving, expiry_key)
                 if not current_total then return {'state_unavailable', ''} end
             end
@@ -1343,22 +1371,32 @@ if ACTION == 'durable_recover_operation' then
             local target_total, score = recovery_target(claimed, target, start_by, now_millis)
             if not target_total then return {'invalid_request', ''} end
             local sum = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(target.bucket)) or '0')
-            if not sum or sum < current_total or sum - current_total > MAX_SAFE - target_total then
-                return {'state_unavailable', ''}
-            end
+            if not sum then return {'state_unavailable', ''} end
+            -- A lost bucket hash cannot give back more than it still holds;
+            -- the floor ledger restores what the loss removed.
+            if current_total > sum then current_total = sum end
+            if sum - current_total > MAX_SAFE - target_total then return {'state_unavailable', ''} end
             staged[#staged + 1] = {
                 index = index, bucket_key = bucket_key, expiry_key = expiry_key, target = target,
                 current_total = current_total, current_member = current_member, target_total = target_total, score = score,
             }
+            floors['|' .. index] = target_total > 0 and recovery_floor_value(bucket_key, target, target_total) or false
         end
     end
-    if existing and #staged == 0 and claimed == (existing.claimed == true) then
-        local missing_event = false
+    local changed = #staged > 0 or #repairs > 0 or (existing ~= nil and claimed ~= (existing.claimed == true))
+    if existing and not changed then
         for event_id in pairs(desired.events or {}) do
-            if not existing.events or not existing.events[event_id] then missing_event = true end
+            if not existing.events or not existing.events[event_id] then changed = true end
         end
-        if not missing_event then return {'unchanged', ''} end
     end
+    for field, value in pairs(floors) do
+        if value then redis.call('HSET', floor_key, KEYS[3] .. field, value) else redis.call('HDEL', floor_key, KEYS[3] .. field) end
+    end
+    redis.call('PEXPIRE', floor_key, '86400000')
+    for _, repair in ipairs(repairs) do
+        redis.call('ZADD', repair.expiry_key, decimal(repair.score), repair.member)
+    end
+    if existing and not changed then return {'unchanged', ''} end
     for _, item in ipairs(staged) do
         local field = durable_bucket_field(item.target.bucket)
         if item.current_member then redis.call('ZREM', item.expiry_key, item.current_member) end
@@ -1385,6 +1423,43 @@ if ACTION == 'durable_recover_operation' then
     -- Persistent, like every operation record: it is the duplicate-charge fence.
     redis.call('SET', KEYS[3], durable_encode(record))
     return {'restored', ''}
+end
+
+-- Raises one bucket hash to the floor the ledger proves for each bucket field.
+-- ARGV[4] is a JSON array of {bucket, floor_nano, limit_nano}. Raising only
+-- ever adds spend, so a sum that already exceeds the floor is left alone.
+if ACTION == 'durable_recover_floor' then
+    if not valid_invocation(3, 3, 4) then return {'invalid_request', ''} end
+    local namespace = recovery_namespace(KEYS[1])
+    if not namespace or KEYS[2] ~= namespace .. RECOVERY_LEASE_SUFFIX or
+        not string.match(KEYS[3], '^' .. string.gsub(namespace, '%p', '%%%0') .. 'durable%-budget:[a-f0-9]+$') or
+        not valid_recovery_marker(ARGV[2]) or not bounded_string(ARGV[3], 64, true) then
+        return {'invalid_request', ''}
+    end
+    local fenced = recovery_fence(KEYS[1], KEYS[2], ARGV[2], ARGV[3])
+    if fenced then return {fenced, ''} end
+    local kind = redis.call('TYPE', KEYS[3]).ok
+    if kind ~= 'none' and kind ~= 'hash' then return {'state_unavailable', ''} end
+    local ok, floors = pcall(cjson.decode, ARGV[4])
+    if not ok or type(floors) ~= 'table' or #floors == 0 or #floors > 4096 then return {'invalid_request', ''} end
+    local staged = {}
+    for _, floor in ipairs(floors) do
+        local minimum = type(floor) == 'table' and durable_int(floor.floor_nano)
+        if not minimum or not bounded_string(floor.bucket, 64, true) or not string.match(floor.bucket, '^%d+$') or
+            not bounded_string(floor.limit_nano, 64, true) or not durable_int(floor.limit_nano) then
+            return {'invalid_request', ''}
+        end
+        local sum = durable_int(redis.call('HGET', KEYS[3], durable_bucket_field(floor.bucket)) or '0')
+        if not sum then return {'state_unavailable', ''} end
+        if sum < minimum then staged[#staged + 1] = {bucket = floor.bucket, deficit = minimum - sum, limit = floor.limit_nano} end
+    end
+    for _, item in ipairs(staged) do
+        redis.call('HINCRBY', KEYS[3], durable_bucket_field(item.bucket), decimal(item.deficit))
+        if not redis.call('HGET', KEYS[3], durable_limit_field(item.bucket)) then
+            redis.call('HSET', KEYS[3], durable_limit_field(item.bucket), item.limit)
+        end
+    end
+    return {'raised', decimal(#staged)}
 end
 
 return {'invalid_request', ''}

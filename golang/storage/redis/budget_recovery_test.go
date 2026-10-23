@@ -109,3 +109,17 @@ func TestRecoveredRecordAppliesDurableSettlement(t *testing.T) {
 		t.Fatalf("unclaimed settlement = %v", err)
 	}
 }
+
+func TestRecoveredWindowExpiryRejectsUnrepresentableBounds(t *testing.T) {
+	value := durableReservation{BucketNanos: "3600000000000", DurationNanos: "86400000000000", WindowExpiresMillis: 1}
+	if _, err := recoveredWindowExpiry(value, time.Time{}, time.Unix(1<<50, 0)); !errors.Is(err, ErrBudgetRecoveryConflict) {
+		t.Fatalf("overflowing start = %v", err)
+	}
+	value.BucketNanos = "1"
+	if _, err := recoveredWindowExpiry(value, time.Time{}, time.Unix(1700000000, 0)); !errors.Is(err, ErrBudgetRecoveryConflict) {
+		t.Fatalf("sub-millisecond bucket = %v", err)
+	}
+	if _, err := recoveredWindowExpiry(durableReservation{WindowExpiresMillis: 1}, time.UnixMilli(maxRecoveryInteger+1), time.Now()); !errors.Is(err, ErrBudgetRecoveryConflict) {
+		t.Fatalf("unrepresentable recorded expiry = %v", err)
+	}
+}

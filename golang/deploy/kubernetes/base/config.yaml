@@ -67,9 +67,9 @@ state:
       ca_file: /var/run/secrets/llmtw/redis-ca.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_3040a32c88aed58c
-    admission_version: admission_3040a32c88aed58c
-    admission_digest: 78df1943081a990023c8f128666e1e77d1622796b4bafc8f0a86b28e0bd62b6c
+    function_library: llmtw_admission_f172942024ab388a
+    admission_version: admission_f172942024ab388a
+    admission_digest: e9ba1ff29d941d47f1ded3b21e32ebf5183685547e5e0465e404f30766ca2056
     max_connections: 96
     dial_timeout: 2s
     operation_timeout: 3s

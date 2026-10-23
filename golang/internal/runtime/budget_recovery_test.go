@@ -30,6 +30,8 @@ type recoveryTestRedis struct {
 	conflicts map[durable.OperationID]bool
 	holders   map[string]bool
 	commits   int
+	floors    int
+	raise     int
 }
 
 func newRecoveryTestRedis(identity budget.InitializationIdentity) *recoveryTestRedis {
@@ -112,13 +114,24 @@ func (r *recoveryTestRedis) RecoverOperation(_ context.Context, value budget.Ini
 	r.merged[id]++
 	return r.merged[id] == 1, nil
 }
+func (r *recoveryTestRedis) ApplyRecoveryFloors(_ context.Context, value budget.Initialization, token string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ready, err := r.fence(value, token); err != nil {
+		return 0, err
+	} else if ready {
+		return 0, redisstore.ErrBudgetAuthorityUnavailable
+	}
+	r.floors++
+	return r.raise, nil
+}
 func (r *recoveryTestRedis) CommitRecovery(_ context.Context, value budget.Initialization, _ time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.marker == "ready:"+value.Marker() {
 		return nil
 	}
-	if r.marker != "recovering:"+value.Marker() {
+	if r.marker != "recovering:"+value.Marker() || r.floors == 0 {
 		return redisstore.ErrBudgetAuthorityUnavailable
 	}
 	r.marker, r.progress = "ready:"+value.Marker(), ""
@@ -162,6 +175,7 @@ func recoveryTestReceipt(t *testing.T) (budget.Initialization, *initializationTe
 func TestBudgetRecoveryRestoresCompletelyLostAuthority(t *testing.T) {
 	receipt, store := recoveryTestReceipt(t)
 	redis := newRecoveryTestRedis(receipt.Identity)
+	redis.raise = 2
 	source := &recoveryTestSource{}
 	var logs bytes.Buffer
 	recovery := budgetRecovery{Recoverer: redis, Source: source, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
@@ -177,7 +191,8 @@ func TestBudgetRecoveryRestoresCompletelyLostAuthority(t *testing.T) {
 	if len(redis.merged) != cloudstate.PendingShards || redis.commits != 1 || store.value != receipt {
 		t.Fatalf("merged %d operations, %d commits, receipt %#v", len(redis.merged), redis.commits, store.value)
 	}
-	if strings.Contains(logs.String(), "secret-operation") || !strings.Contains(logs.String(), "budget recovery completed") {
+	if strings.Contains(logs.String(), "secret-operation") || !strings.Contains(logs.String(), "budget recovery completed") ||
+		!strings.Contains(logs.String(), `"raised_buckets":2`) {
 		t.Fatalf("recovery logs = %s", logs.String())
 	}
 	// A later startup finds a ready marker and does no work.

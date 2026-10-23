@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
@@ -23,6 +24,10 @@ var ErrBudgetRecoveryConflict = errors.New("Redis budget recovery found a confli
 const (
 	budgetRecoveryLeaseSuffix    = "budget:recovery-lease"
 	budgetRecoveryProgressSuffix = "budget:recovery-progress"
+	budgetRecoveryFloorSuffix    = "budget:recovery-floor"
+	// maxRecoveryInteger is the largest integer (milliseconds or nano-USD) the
+	// Function accepts exactly.
+	maxRecoveryInteger = 1<<53 - 1
 
 	// BudgetRecoveryClockSkew bounds how far Redis TIME at acceptance may run
 	// ahead of the worker clock that recorded the execution start. Only
@@ -36,6 +41,12 @@ func (keys BudgetKeySpace) RecoveryLeaseKey() string {
 
 func (keys BudgetKeySpace) RecoveryProgressKey() string {
 	return keys.space.admissionPrefix() + budgetRecoveryProgressSuffix
+}
+
+// RecoveryFloorKey is a disposable ledger of each restored reservation's live
+// aggregate, used to raise bucket hashes that lost part of their spend.
+func (keys BudgetKeySpace) RecoveryFloorKey() string {
+	return keys.space.admissionPrefix() + budgetRecoveryFloorSuffix
 }
 
 // BudgetRecoveryOperation is one durably recorded Redis acceptance and its
@@ -127,7 +138,10 @@ func (keys BudgetKeySpace) recoveredRecord(operation BudgetRecoveryOperation) (r
 		if record.OccurredAt.IsZero() || reserved.OccurredAt.Before(record.OccurredAt) {
 			record.OccurredAt = reserved.OccurredAt
 		}
-		value.WindowExpiresMillis = recoveredWindowExpiry(value, result.WindowExpiries[value.EventID], operation.StartedAt)
+		value.WindowExpiresMillis, err = recoveredWindowExpiry(value, result.WindowExpiries[value.EventID], operation.StartedAt)
+		if err != nil {
+			return recoveredOperation{}, nil, err
+		}
 		value.ExpiresMillis = operation.StartBy.UnixMilli()
 		restored := recoveredReservation{durableReservation: value, ReservedNano: value.AmountNano, AccountedNano: "0", ReservationRevision: 1, Status: "reserved"}
 		if event, ok := settled[value.WindowID+"\x00"+value.BucketStart]; ok {
@@ -158,30 +172,37 @@ func (keys BudgetKeySpace) recoveredRecord(operation BudgetRecoveryOperation) (r
 
 // recoveredWindowExpiry mirrors durable_reserve: spend counts until the end of
 // the acceptance bucket plus the window. Without a recorded expiry, acceptance
-// is bounded by the execution start plus the permitted clock skew.
-func recoveredWindowExpiry(value durableReservation, recorded time.Time, startedAt time.Time) int64 {
+// is bounded by the execution start plus the permitted clock skew. A bound the
+// Function cannot represent exactly fails recovery rather than wrap.
+func recoveredWindowExpiry(value durableReservation, recorded time.Time, startedAt time.Time) (int64, error) {
 	floor := value.WindowExpiresMillis
+	invalid := fmt.Errorf("%w: reservation window expiry is out of range", ErrBudgetRecoveryConflict)
+	if floor <= 0 || floor > maxRecoveryInteger {
+		return 0, invalid
+	}
 	if !recorded.IsZero() {
-		if recorded.UnixMilli() > floor {
-			return recorded.UnixMilli()
+		millis := recorded.UnixMilli()
+		if millis > maxRecoveryInteger {
+			return 0, invalid
 		}
-		return floor
+		return max(floor, millis), nil
 	}
 	bucket, errBucket := strconv.ParseInt(value.BucketNanos, 10, 64)
 	duration, errDuration := strconv.ParseInt(value.DurationNanos, 10, 64)
-	if errBucket != nil || errDuration != nil || bucket <= 0 {
-		return floor
+	if errBucket != nil || errDuration != nil || bucket < int64(time.Millisecond) || duration < bucket {
+		return 0, invalid
 	}
 	bucketMillis, durationMillis := bucket/int64(time.Millisecond), duration/int64(time.Millisecond)
-	if bucketMillis <= 0 {
-		return floor
-	}
 	accepted := startedAt.Add(BudgetRecoveryClockSkew).UnixMilli()
-	bound := (accepted/bucketMillis+1)*bucketMillis + durationMillis
-	if bound > floor {
-		return bound
+	if accepted < 0 || accepted > maxRecoveryInteger || durationMillis > maxRecoveryInteger {
+		return 0, invalid
 	}
-	return floor
+	// Both operands are at most 2^53, so neither step can overflow int64.
+	end := (accepted/bucketMillis + 1) * bucketMillis
+	if end > maxRecoveryInteger-durationMillis {
+		return 0, invalid
+	}
+	return max(floor, end+durationMillis), nil
 }
 
 func (initializer *RedisBudgetInitializer) recoveryRun(ctx context.Context, keys []string, args ...string) (string, string, error) {
@@ -217,7 +238,7 @@ func (initializer *RedisBudgetInitializer) BeginRecovery(ctx context.Context, va
 	if force {
 		mode = "force"
 	}
-	status, _, err := initializer.recoveryRun(ctx, []string{initializer.keys.AuthorityKey(), initializer.keys.EventsKey(), initializer.keys.RecoveryProgressKey()},
+	status, _, err := initializer.recoveryRun(ctx, []string{initializer.keys.AuthorityKey(), initializer.keys.EventsKey(), initializer.keys.RecoveryProgressKey(), initializer.keys.RecoveryFloorKey()},
 		"durable_authority_recover_begin", value.Marker(), mode)
 	if err != nil {
 		return false, err
@@ -282,7 +303,7 @@ func (initializer *RedisBudgetInitializer) RecoverOperation(ctx context.Context,
 	if err != nil {
 		return false, err
 	}
-	keys = append([]string{initializer.keys.AuthorityKey(), initializer.keys.RecoveryLeaseKey()}, keys...)
+	keys = append(append([]string{initializer.keys.AuthorityKey(), initializer.keys.RecoveryLeaseKey()}, keys...), initializer.keys.RecoveryFloorKey())
 	status, _, err := initializer.recoveryRun(ctx, keys, "durable_recover_operation", value.Marker(), token, string(payload))
 	if err != nil {
 		return false, err
@@ -303,6 +324,98 @@ func (initializer *RedisBudgetInitializer) RecoverOperation(ctx context.Context,
 	}
 }
 
+type recoveryFloor struct {
+	Bucket    string `json:"bucket"`
+	FloorNano string `json:"floor_nano"`
+	LimitNano string `json:"limit_nano"`
+}
+
+// ApplyRecoveryFloors raises every bucket hash to at least the sum of the
+// live charges recovery restored or verified in it. A surviving operation
+// record does not prove its bucket hash survived; this closes that gap before
+// readiness. It only adds spend and is idempotent. It returns how many bucket
+// fields were raised.
+func (initializer *RedisBudgetInitializer) ApplyRecoveryFloors(ctx context.Context, value budget.Initialization, token string) (int, error) {
+	if err := initializer.validReceipt(value); err != nil {
+		return 0, err
+	}
+	type field struct{ total, limit int64 }
+	buckets := map[string]map[string]*field{}
+	prefix := initializer.keys.space.admissionPrefix() + "durable-budget:"
+	var cursor uint64
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		entries, next, err := initializer.client.HScan(ctx, initializer.keys.RecoveryFloorKey(), cursor, "*", 512).Result()
+		if err != nil {
+			return 0, err
+		}
+		for index := 0; index+1 < len(entries); index += 2 {
+			parts := strings.Split(entries[index+1], "|")
+			if len(parts) != 4 || !strings.HasPrefix(parts[0], prefix) {
+				return 0, fmt.Errorf("%w: malformed recovery floor", ErrBudgetRecoveryConflict)
+			}
+			total, errTotal := strconv.ParseInt(parts[2], 10, 64)
+			limit, errLimit := strconv.ParseInt(parts[3], 10, 64)
+			if _, errBucket := strconv.ParseUint(parts[1], 10, 63); errBucket != nil || errTotal != nil || errLimit != nil || total <= 0 || limit <= 0 {
+				return 0, fmt.Errorf("%w: malformed recovery floor", ErrBudgetRecoveryConflict)
+			}
+			fields := buckets[parts[0]]
+			if fields == nil {
+				fields = map[string]*field{}
+				buckets[parts[0]] = fields
+			}
+			current := fields[parts[1]]
+			if current == nil {
+				current = &field{}
+				fields[parts[1]] = current
+			}
+			if current.total > maxRecoveryInteger-total {
+				return 0, fmt.Errorf("%w: recovery floor overflows", ErrBudgetRecoveryConflict)
+			}
+			current.total += total
+			current.limit = max(current.limit, limit)
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+	raised := 0
+	for bucketKey, fields := range buckets {
+		floors := make([]recoveryFloor, 0, len(fields))
+		for bucket, value := range fields {
+			floors = append(floors, recoveryFloor{Bucket: bucket, FloorNano: strconv.FormatInt(value.total, 10), LimitNano: strconv.FormatInt(value.limit, 10)})
+		}
+		for len(floors) > 0 {
+			chunk := floors[:min(len(floors), 4096)]
+			floors = floors[len(chunk):]
+			payload, err := json.Marshal(chunk)
+			if err != nil {
+				return 0, err
+			}
+			status, count, err := initializer.recoveryRun(ctx, []string{initializer.keys.AuthorityKey(), initializer.keys.RecoveryLeaseKey(), bucketKey},
+				"durable_recover_floor", value.Marker(), token, string(payload))
+			if err != nil {
+				return 0, err
+			}
+			switch status {
+			case "raised":
+				n, _ := strconv.Atoi(count)
+				raised += n
+			case "busy":
+				return 0, ErrBudgetRecoveryBusy
+			case "ready":
+				return 0, ErrBudgetAuthorityUnavailable
+			default:
+				return 0, mapDurableStatus(status)
+			}
+		}
+	}
+	return raised, nil
+}
+
 // CommitRecovery publishes readiness only after every durable record merged.
 // It is idempotent: a ready marker for the same receipt reports success.
 func (initializer *RedisBudgetInitializer) CommitRecovery(ctx context.Context, value budget.Initialization, now time.Time) error {
@@ -313,7 +426,7 @@ func (initializer *RedisBudgetInitializer) CommitRecovery(ctx context.Context, v
 	if err != nil {
 		return err
 	}
-	status, _, err := initializer.recoveryRun(ctx, []string{initializer.keys.AuthorityKey(), initializer.keys.EventsKey(), initializer.keys.RecoveryProgressKey()},
+	status, _, err := initializer.recoveryRun(ctx, []string{initializer.keys.AuthorityKey(), initializer.keys.EventsKey(), initializer.keys.RecoveryProgressKey(), initializer.keys.RecoveryFloorKey()},
 		"durable_authority_recover_commit", value.Marker(), string(event))
 	if err != nil {
 		return err
