@@ -107,26 +107,19 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		if err != nil {
 			continue
 		}
-		query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
+		query := capabilityQuery(candidate.candidate)
 		capability, err := adapter.Capabilities(ctx, query)
 		if err != nil {
 			continue
 		}
-		call, err := adapter.Compile(ctx, provider.CompileInput{
-			Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
-			Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
-				PriceCeiling: PriceCeiling(candidate.entry)},
-		})
+		call, err := adapter.Compile(ctx, candidateCompileInput(request, providerRequest, candidate, query, capability))
 		if err != nil {
 			if mapped, ok := err.(*provider.Error); ok && mapped.Dispatch != provider.DispatchNotDispatched {
 				return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 			}
 			continue
 		}
-		lease := snapshot.ReservationLease
-		if lease <= 0 {
-			lease = defaultLease
-		}
+		lease := reservationLease(snapshot)
 		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease)}
 		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
 		attemptStarted := time.Now()
@@ -202,10 +195,7 @@ func (engine *Engine) continueAfterDefiniteFailure(ctx context.Context, operatio
 			quoted.maximumUSD = value.estimate.CostUSD
 		}
 	}
-	lease := snapshot.ReservationLease
-	if lease <= 0 {
-		lease = defaultLease
-	}
+	lease := reservationLease(snapshot)
 	request := admission.ContinueRequest{
 		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
 		Outcome:   admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, ResolvedModel: candidate.Model, ServiceClass: string(candidate.AttemptedClass), Dispatch: admission.Rejected}},
@@ -359,4 +349,29 @@ func candidateProviderRequest(request llm.Request, candidate routing.Candidate) 
 	request.ServiceClass = candidate.AttemptedClass
 	request.ServiceClassFallbacks = nil
 	return request
+}
+
+// capabilityQuery is the capability query the route plan pins for candidate.
+func capabilityQuery(candidate routing.Candidate) provider.CapabilityQuery {
+	return provider.CapabilityQuery{EndpointID: candidate.EndpointID, Family: provider.Family(candidate.Family), Model: candidate.Model, ServiceClass: candidate.AttemptedClass}
+}
+
+// candidateCompileInput builds the adapter compile input for one planned
+// candidate. Strictness follows the request's portability mode.
+func candidateCompileInput(request, providerRequest llm.Request, candidate quotedCandidate, query provider.CapabilityQuery, capability provider.CapabilitySet) provider.CompileInput {
+	return provider.CompileInput{
+		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
+		Strict: request.Portability != llm.PortabilityBestEffort,
+		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
+			PriceCeiling: PriceCeiling(candidate.entry)},
+	}
+}
+
+// reservationLease is the snapshot's reservation lease, or the default when
+// the snapshot leaves it unset.
+func reservationLease(snapshot Snapshot) time.Duration {
+	if snapshot.ReservationLease <= 0 {
+		return defaultLease
+	}
+	return snapshot.ReservationLease
 }
