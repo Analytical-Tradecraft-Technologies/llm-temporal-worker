@@ -493,16 +493,17 @@ func verifyReplicaSpread(deployment, podSpec map[string]any) error {
 	// The selector must be plain matchLabels, every one of which the pod
 	// template carries, and must include the deployment's own selector, so it
 	// matches exactly the worker pods; matchExpressions cannot be checked here.
-	// A term that names namespaces or a namespaceSelector may exclude the
-	// worker's own namespace, so only the default (the pod's namespace) counts.
-	selectsWorkers := func(term map[string]any) bool {
+	// Only fields whose effect is known may appear: namespaces or a
+	// namespaceSelector may exclude the worker's own namespace, and
+	// mismatchLabelKeys (pod-template-hash) would exclude the replicas of the
+	// same revision, so a term carrying them does not count.
+	selectsWorkers := func(term map[string]any, allowed map[string]bool) bool {
+		for key := range term {
+			if !allowed[key] {
+				return false
+			}
+		}
 		if stringAt(term, "topologyKey") != "kubernetes.io/hostname" {
-			return false
-		}
-		if _, scoped := term["namespaces"]; scoped {
-			return false
-		}
-		if _, scoped := term["namespaceSelector"]; scoped {
 			return false
 		}
 		labelSelector, _ := mapAt(term, "labelSelector")
@@ -524,7 +525,7 @@ func verifyReplicaSpread(deployment, podSpec map[string]any) error {
 	}
 	constraints, _ := listAt(podSpec, "topologySpreadConstraints")
 	for _, entry := range constraints {
-		if constraint, ok := asMap(entry); ok && selectsWorkers(constraint) && positiveInteger(valueAt(constraint, "maxSkew")) {
+		if constraint, ok := asMap(entry); ok && selectsWorkers(constraint, spreadConstraintFields) && positiveInteger(valueAt(constraint, "maxSkew")) {
 			return nil
 		}
 	}
@@ -532,7 +533,7 @@ func verifyReplicaSpread(deployment, podSpec map[string]any) error {
 	antiAffinity, _ := mapAt(affinity, "podAntiAffinity")
 	required, _ := listAt(antiAffinity, "requiredDuringSchedulingIgnoredDuringExecution")
 	for _, entry := range required {
-		if term, ok := asMap(entry); ok && selectsWorkers(term) {
+		if term, ok := asMap(entry); ok && selectsWorkers(term, affinityTermFields) {
 			return nil
 		}
 	}
@@ -542,12 +543,24 @@ func verifyReplicaSpread(deployment, podSpec map[string]any) error {
 		if !ok {
 			continue
 		}
-		if term, ok := mapAt(weighted, "podAffinityTerm"); ok && selectsWorkers(term) {
+		if term, ok := mapAt(weighted, "podAffinityTerm"); ok && selectsWorkers(term, affinityTermFields) {
 			return nil
 		}
 	}
 	return fmt.Errorf("a deployment of %d replicas must spread them across nodes with a kubernetes.io/hostname topologySpreadConstraint or pod anti-affinity selecting the worker pods", replicas)
 }
+
+// spreadConstraintFields are the topology spread constraint fields that keep
+// a constraint applying to every replica of a revision; matchLabelKeys only
+// narrows it to the pods of one revision during a rollout.
+var spreadConstraintFields = map[string]bool{
+	"maxSkew": true, "topologyKey": true, "whenUnsatisfiable": true, "labelSelector": true,
+	"minDomains": true, "nodeAffinityPolicy": true, "nodeTaintsPolicy": true, "matchLabelKeys": true,
+}
+
+// affinityTermFields are the pod anti-affinity term fields whose effect the
+// check can verify.
+var affinityTermFields = map[string]bool{"topologyKey": true, "labelSelector": true}
 
 // verifyShutdownGrace binds the rendered Kubernetes grace period to the
 // process shutdown budget mounted in the same ConfigMap. A positive grace
