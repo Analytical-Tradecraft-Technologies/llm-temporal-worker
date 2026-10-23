@@ -32,6 +32,9 @@ func (err *FanoutError) Error() string {
 }
 
 type fanoutNode struct {
+	// id is the node's index in the graph; bucket signatures use it because
+	// paths are caller-controlled text.
+	id        int
 	path      string
 	value     map[string]any
 	inPlace   []*fanoutNode
@@ -160,13 +163,23 @@ type fanoutBucket struct {
 	nodes map[*fanoutNode]int
 }
 
+// signature identifies the bucket's multiset by node ID and count, so two
+// different multisets never share one, whatever text the schema's property
+// names hold.
 func (bucket fanoutBucket) signature() string {
-	parts := make([]string, 0, len(bucket.nodes))
+	entries := make([][2]int, 0, len(bucket.nodes))
 	for node, count := range bucket.nodes {
-		parts = append(parts, node.path+"\x00"+strconv.Itoa(count))
+		entries = append(entries, [2]int{node.id, count})
 	}
-	sort.Strings(parts)
-	return strings.Join(parts, "\x01")
+	sort.Slice(entries, func(i, j int) bool { return entries[i][0] < entries[j][0] })
+	var builder strings.Builder
+	for _, entry := range entries {
+		builder.WriteString(strconv.Itoa(entry[0]))
+		builder.WriteByte(':')
+		builder.WriteString(strconv.Itoa(entry[1]))
+		builder.WriteByte(',')
+	}
+	return builder.String()
 }
 
 // childBuckets adds to next the subschemas applied to each child location of
@@ -343,7 +356,7 @@ func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
 	if id, ok := value["$id"].(string); ok && id != "" {
 		resource = path
 	}
-	graph.nodes[path] = &fanoutNode{path: path, value: value}
+	graph.nodes[path] = &fanoutNode{id: len(graph.nodes), path: path, value: value}
 	graph.resources[path] = resource
 	graph.pending = append(graph.pending, graph.nodes[path])
 	if anchor, ok := value["$anchor"].(string); ok {
@@ -368,7 +381,7 @@ func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
 			} else if _, ok := child.(bool); ok {
 				// A boolean schema applies once and has no subschemas, but a
 				// $ref may still name it.
-				graph.nodes[childPath] = &fanoutNode{path: childPath}
+				graph.nodes[childPath] = &fanoutNode{id: len(graph.nodes), path: childPath}
 				graph.resources[childPath] = resource
 			}
 		case "prefixItems", "allOf", "anyOf", "oneOf":
