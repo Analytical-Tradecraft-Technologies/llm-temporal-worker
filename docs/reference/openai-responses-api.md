@@ -132,7 +132,7 @@ which applies them per request rather than carrying them across
 | `tool_choice`, `parallel_tool_calls` | `settings_patch.tool_policy` |
 | `temperature`, `top_p` | Exact decimal settings |
 | `max_output_tokens`, `text.format` | `settings_patch.output` |
-| `reasoning.effort` | `reasoning_effort`; `none` sets `reasoning_mode: disabled` |
+| `reasoning.effort` | `reasoning_effort`; `none` sets `reasoning_mode: disabled` and clears an inherited `reasoning_effort`, and any other effort clears an inherited `reasoning_mode`, so on a continuation each request's effort applies as OpenAI applies it, per request |
 | `reasoning.summary` | `reasoning_summary` |
 | `service_tier` | `settings_patch.service_class`, as below |
 
