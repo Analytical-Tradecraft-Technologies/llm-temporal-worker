@@ -59,7 +59,11 @@ has never seen. For those values:
 
 - `state.redis.tls.enabled` must be `true`, unless `state.redis.service_mesh`
   is `true` (the only exemption; see below);
-- `telemetry.content_logging` must be `disabled`;
+- `telemetry.content_logging` must be `disabled`. The field accepts `disabled`
+  and `redacted`; the worker never writes prompts, outputs or other content to
+  its logs, metrics or traces, so both values currently behave the same and
+  `redacted` is reserved for development. It does not govern the
+  [Langfuse content export](#optional-langfuse-content-export);
 - `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
 - startup requires the durable v1 runtime, the cloud budget initialization
   receipt and the Redis budget authority probe.
