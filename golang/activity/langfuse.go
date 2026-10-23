@@ -46,6 +46,10 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 			a.Metrics.RecordLangfuseExportFailure("unavailable")
 			return temporal.NewNonRetryableApplicationError("Langfuse export unavailable", "langfuse_export_unavailable", nil)
 		}
+		if errors.Is(err, langfuse.ErrOversized) {
+			a.Metrics.RecordLangfuseExportFailure("oversized")
+			return temporal.NewNonRetryableApplicationError("Langfuse export oversized", "langfuse_export_oversized", nil)
+		}
 		if errors.Is(err, langfuse.ErrRejected) {
 			a.Metrics.RecordLangfuseExportFailure("rejected")
 			return temporal.NewNonRetryableApplicationError("Langfuse export rejected", "langfuse_export_rejected", nil)

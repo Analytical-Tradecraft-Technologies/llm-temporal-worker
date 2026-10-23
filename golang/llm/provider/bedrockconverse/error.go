@@ -1,11 +1,9 @@
 package bedrockconverse
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
@@ -20,24 +18,7 @@ func mapError(err error, profileName string) *provider.Error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, provider.ErrProviderEgressDenied) {
-		mapped := provider.NewEgressDeniedError(err)
-		mapped.SafeDetails = map[string]string{"provider": profileName}
-		return mapped
-	}
-	if errors.Is(err, provider.ErrProviderPreDispatch) {
-		mapped := provider.NewPreDispatchUnavailableError(err)
-		mapped.SafeDetails = map[string]string{"provider": profileName}
-		return mapped
-	}
-	if errors.Is(err, context.Canceled) {
-		mapped := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request canceled")
-		mapped.Cause = err
-		return mapped
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		mapped := provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request deadline exceeded")
-		mapped.Cause = err
+	if mapped := provider.MapTransportError(err, profileName); mapped != nil {
 		return mapped
 	}
 	var modelTimeout *types.ModelTimeoutException
@@ -52,50 +33,22 @@ func mapError(err error, profileName string) *provider.Error {
 	if errors.As(err, &statusErr) {
 		mapped := mapHTTPError(statusErr.HTTPStatusCode(), err, profileName)
 		var responseErr interface{ HTTPResponse() *smithyhttp.Response }
-		if mapped.Retry == provider.RetryAfter && errors.As(err, &responseErr) {
+		if errors.As(err, &responseErr) {
 			if response := responseErr.HTTPResponse(); response != nil && response.Response != nil {
-				if retryAfter := response.Header.Get("retry-after"); retryAfter != "" {
-					mapped.SafeDetails["retry_after"] = retryAfter
-					if retryDelay, ok := provider.ParseRetryAfter(retryAfter, time.Now()); ok {
-						mapped.RetryAfter = retryDelay
-					}
-				}
+				provider.ApplyRetryAfter(mapped, response.Header)
 			}
 		}
 		return mapped
 	}
-	return &provider.Error{
-		Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch,
-		Dispatch: provider.DispatchAmbiguous, Retry: provider.RetrySameOperation,
-		SafeMessage: "provider request failed before a response was classified",
-		SafeDetails: map[string]string{"provider": profileName}, Cause: err,
-	}
+	return provider.NewUnclassifiedDispatchError(err, profileName)
 }
 
 func mapHTTPError(status int, cause error, profileName string) *provider.Error {
-	code, retry, dispatch, safe := provider.CodeProviderUnavailable, provider.RetrySameOperation, provider.DispatchRejected, "provider rejected the request"
-	switch {
-	case status >= http.StatusMultipleChoices && status < http.StatusBadRequest:
-		dispatch, retry, safe = provider.DispatchAmbiguous, provider.RetryNever, "provider redirect response is ambiguous"
-	case status == http.StatusRequestTimeout || status == http.StatusFailedDependency:
+	code, retry, dispatch, safe := provider.ClassifyHTTPStatus(status)
+	if status == http.StatusRequestTimeout || status == http.StatusFailedDependency {
 		// Bedrock reports model processing failures with these 4xx statuses.
 		// They do not prove rejection or zero usage: a new attempt needs budget.
-		dispatch, safe = provider.DispatchAmbiguous, "provider model processing failed"
-	case provider.IsGatewayTimeoutStatus(status):
-		// The gateway timed out; the request may have been billed.
-		dispatch, safe = provider.DispatchAmbiguous, "provider request timed out"
-	case status == http.StatusUnauthorized:
-		code, retry, safe = provider.CodeAuthentication, provider.RetryNever, "provider authentication failed"
-	case status == http.StatusForbidden:
-		code, retry, safe = provider.CodePermissionDenied, provider.RetryNever, "provider permission was denied"
-	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity:
-		code, retry, safe = provider.CodeInvalidArgument, provider.RetryNever, "provider rejected request parameters"
-	case status == http.StatusTooManyRequests:
-		code, retry, safe = provider.CodeProviderRateLimited, provider.RetryAfter, "provider rate limited the request"
-	case status >= http.StatusInternalServerError:
-		code, retry, safe = provider.CodeProviderUnavailable, provider.RetrySameOperation, "provider is unavailable"
-	case status >= 400:
-		code, retry, safe = provider.CodeInvalidArgument, provider.RetryNever, "provider rejected the request"
+		code, retry, dispatch, safe = provider.CodeProviderUnavailable, provider.RetrySameOperation, provider.DispatchAmbiguous, "provider model processing failed"
 	}
 	mapped := provider.NewError(code, provider.PhaseDispatch, dispatch, retry, safe)
 	mapped.Cause = cause

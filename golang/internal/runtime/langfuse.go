@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
@@ -31,9 +33,11 @@ type operationCapture struct {
 	Input           json.RawMessage    `json:"input"`
 	Session         string             `json:"session"`
 	Metadata        map[string]any     `json:"metadata"`
+	Oversized       bool               `json:"oversized,omitempty"`
 }
 type generationCapture struct {
 	Disabled     bool                  `json:"disabled,omitempty"`
+	Oversized    bool                  `json:"oversized,omitempty"`
 	Input        json.RawMessage       `json:"input"`
 	Provider     string                `json:"provider"`
 	LogicalModel string                `json:"logical_model"`
@@ -71,6 +75,7 @@ func langfuseContent(value any) json.RawMessage {
 				if m["kind"] == "provider_state" {
 					continue
 				}
+				replaceInlineMedia(m)
 				if content, ok := m["content"].([]any); ok {
 					m["content"] = scrubItems(content)
 				}
@@ -91,6 +96,43 @@ func langfuseContent(value any) json.RawMessage {
 
 	data, _ = json.Marshal(tree)
 	return data
+}
+
+// replaceInlineMedia swaps a media part's base64 bytes for their digest. The
+// operation and every attempt capture repeat the input, so inline media would
+// otherwise hit the capture and OTLP body limits (#1536).
+func replaceInlineMedia(part map[string]any) {
+	switch part["kind"] {
+	case "image", "document", "audio":
+	default:
+		return
+	}
+	encoded, ok := part["bytes"].(string)
+	if !ok {
+		return
+	}
+	delete(part, "bytes")
+	media, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(media)
+	part["inline"] = map[string]any{"digest": "sha256:" + hex.EncodeToString(sum[:]), "byte_length": len(media), "media_type": part["media_type"]}
+}
+
+// saveLangfuseCapture stores data, or the capture without its content when it
+// exceeds the capture cap, so export reports a bounded, non-retryable reason
+// instead of a missing capture that retries as a Langfuse failure.
+func saveLangfuseCapture(ctx context.Context, store langfuseRepository, scope cloudstate.Scope, id cloudstate.RequestID, attempt string, data json.RawMessage, oversized func() any) error {
+	err := store.SaveLangfuseCapture(ctx, scope, id, attempt, data)
+	if !errors.Is(err, cloudstate.ErrPayloadTooLarge) {
+		return err
+	}
+	marker, markerErr := json.Marshal(oversized())
+	if markerErr != nil {
+		return err
+	}
+	return store.SaveLangfuseCapture(ctx, scope, id, attempt, marker)
 }
 func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p PreparedCloudRequest) {
 	if r.capabilities.Langfuse == nil || p.Preparation.Version == 0 {
@@ -154,7 +196,7 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 	}
 	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := store.SaveLangfuseCapture(bounded, scope, p.Record.Request.ID, "operation", data); err != nil {
+	if err := saveLangfuseCapture(bounded, store, scope, p.Record.Request.ID, "operation", data, func() any { value.Input, value.Oversized = nil, true; return value }); err != nil {
 		observability.LoggerFromContext(ctx).Warn(ctx, "Langfuse operation capture failed", slog.String("request_id", string(p.Record.Request.ID)))
 	}
 }
@@ -193,7 +235,7 @@ func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *Clou
 	if err != nil {
 		return
 	}
-	if err := store.SaveLangfuseCapture(bounded, call.scope, attempt.RootID, string(call.id), data); err != nil {
+	if err := saveLangfuseCapture(bounded, store, call.scope, attempt.RootID, string(call.id), data, func() any { value.Input, value.Oversized = nil, true; return value }); err != nil {
 		observability.LoggerFromContext(ctx).Warn(ctx, "Langfuse generation capture failed", slog.String("request_id", string(attempt.RootID)))
 	}
 }
@@ -226,6 +268,7 @@ func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.Ex
 		o.Metadata = map[string]any{}
 	}
 	eligible := captured.Metadata["no_work"] == true
+	oversized := captured.Oversized
 	// Detect lost eligible paid captures before acknowledging a partial export.
 	paid, lastAttempt, err := store.LangfusePaidAttempts(ctx, scope, id)
 	if err != nil {
@@ -265,6 +308,10 @@ func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.Ex
 		}
 		endpoint, found := r.capabilities.LangfuseEndpoints[saved.Plan.Route.EndpointID]
 		if !found || !endpoint.LangfuseEnabled() {
+			continue
+		}
+		if capture.Oversized && (!unused || cloudstate.RequestID(key) == lastAttempt) {
+			eligible, oversized = true, true
 			continue
 		}
 		if unused {
@@ -317,6 +364,11 @@ func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.Ex
 			o.Output = g.Output
 		}
 		o.Generations = append(o.Generations, g)
+	}
+	// Retrying cannot shrink a capture past its cap, so drop the trace before
+	// replay reads content that was never captured.
+	if eligible && oversized {
+		return langfuse.ErrOversized
 	}
 	if p.Record.Status == cloudstate.StatusCompleted {
 		result, found, replayErr := r.replay(ctx, p)

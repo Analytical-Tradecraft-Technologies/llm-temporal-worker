@@ -1695,7 +1695,8 @@ export logs a safe warning, preserving the operation's original result or
 error. Each failed export Activity attempt increments the worker's
 `llmtw_langfuse_export_failures_total{reason}` counter on `/metrics`, where
 `reason` is `rejected` (Langfuse refused the batch, such as bad credentials),
-`saturated` (the in-flight limit was reached; nothing was sent and the attempt
+`oversized` (the trace exceeds a size limit below; nothing was sent and the
+export is dropped without retry), `saturated` (the in-flight limit was reached; nothing was sent and the attempt
 is retried), `unavailable` (breaker open; nothing was sent and the export is
 dropped) or `failed` (any other failure, retried within the attempt bounds).
 A steadily rising `saturated` count means `max_in_flight` is too low for the
@@ -1705,6 +1706,18 @@ captures prevent acknowledgement of an incomplete trace. Content stays in the
 existing encrypted blob store before export. No credentials or opaque provider
 continuation state are exported, and caller-owned tools are represented in I/O
 rather than invented execution spans.
+
+Exported content never carries inline media. Image, document and audio parts
+sent as inline `bytes` are exported as `inline: {digest, byte_length,
+media_type}`, where `digest` is `sha256:` and the hex SHA-256 of the bytes;
+URL and blob references are kept as sent. The operation and each provider
+attempt store their own capture of the input, so this keeps a request's
+captures from repeating its media once per attempt. Two fixed limits still
+apply: each capture is at most 8 MiB in the encrypted blob store, and each
+encoded OTLP request body is at most 16 MiB. A trace past either limit is
+dropped with reason `oversized` and is not retried, and it neither counts
+towards nor resets the breaker. Other content, such as long text or tool
+arguments, is not truncated.
 
 Acknowledgement suppresses ordinary replay exports. If a server accepts a batch
 but its response or the durable acknowledgement is lost, retry may produce a

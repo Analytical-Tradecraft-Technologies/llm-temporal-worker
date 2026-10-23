@@ -846,7 +846,7 @@ func newPreflightScanFixture(t *testing.T, tagGoVersion, verifier string) prefli
 	runGuardGit(t, fixture.root, "commit", "--quiet", "-m", "release tag")
 	fixture.tagCommit = guardGitCommitID(t, runGuardGit(t, fixture.root, "rev-parse", "HEAD"))
 	// Master moves past the tag, so the scan must read the tag's own pin.
-	writeFixtureFile(t, filepath.Join(fixture.root, "golang", ".go-version"), "1.26.9\n")
+	writeFixtureFile(t, filepath.Join(fixture.root, "golang", ".go-version"), "1.26.10\n")
 	runGuardGit(t, fixture.root, "commit", "--quiet", "-am", "later master")
 
 	writeFixtureExecutable(t, filepath.Join(fixture.bin, "go"), fmt.Sprintf(`#!/usr/bin/env bash

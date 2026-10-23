@@ -87,6 +87,7 @@ var activityFailureOrigins = map[string]struct{}{
 
 var langfuseExportFailureReasons = map[string]struct{}{
 	"failed":      {},
+	"oversized":   {},
 	"rejected":    {},
 	"saturated":   {},
 	"unavailable": {},

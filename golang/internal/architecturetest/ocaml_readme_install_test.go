@@ -9,7 +9,11 @@ import (
 	"testing"
 )
 
-const ocamlReadmeInstallScript = "bash scripts/ci/run-ocaml-readme-install.sh"
+const (
+	ocamlReadmeInstallScript = "bash scripts/ci/run-ocaml-readme-install.sh"
+	ocamlAptInstallScript    = "bash scripts/ci/install-ocaml-apt-packages.sh"
+	ocamlAptArchiveCachePath = "${{ runner.temp }}/llmtw-apt-archives"
+)
 
 // TestWorkflowOCamlReadmeInstallRunsUncachedWithoutPrefetch covers both the
 // pull-request lane and its master counterpart, which reruns the documented
@@ -42,7 +46,7 @@ func TestWorkflowMasterOCamlReadmeInstallRunsOnEveryMasterEvent(t *testing.T) {
 
 func assertOCamlReadmeInstallJobRunsUncachedWithoutPrefetch(t *testing.T, workflow workflowDocument) {
 	t.Helper()
-	assertJobRunPrecedesRunContains(t, workflow, "ocaml-readme-install", "sudo apt-get install --yes protobuf-compiler bubblewrap", "bash scripts/ci/setup-opam.sh")
+	assertJobRunPrecedesRunContains(t, workflow, "ocaml-readme-install", ocamlAptInstallScript, "bash scripts/ci/setup-opam.sh")
 	assertJobRunPrecedesRunContains(t, workflow, "ocaml-readme-install", "bash scripts/ci/setup-opam.sh", ocamlReadmeInstallScript)
 	job := workflowJob(t, workflow, "ocaml-readme-install")
 	steps, ok := job["steps"].([]any)
@@ -54,7 +58,9 @@ func assertOCamlReadmeInstallJobRunsUncachedWithoutPrefetch(t *testing.T, workfl
 		if !ok {
 			continue
 		}
-		if actionName(step["uses"]) == cacheAction {
+		// Cached apt .debs only spare the Ubuntu mirror; they do not touch the
+		// opam switch or CARGO_HOME the README install starts from.
+		if actionName(step["uses"]) == cacheAction && !isOCamlAptArchiveCache(step) {
 			t.Fatalf("%s OCaml README install job restores a cache; it must start from a clean switch", workflow.name)
 		}
 		run, _ := step["run"].(string)
@@ -62,6 +68,63 @@ func assertOCamlReadmeInstallJobRunsUncachedWithoutPrefetch(t *testing.T, workfl
 			if strings.Contains(run, forbidden) {
 				t.Fatalf("%s OCaml README install job configures %q outside the README commands:\n%s", workflow.name, forbidden, run)
 			}
+		}
+	}
+}
+
+func isOCamlAptArchiveCache(step map[string]any) bool {
+	with, _ := step["with"].(map[string]any)
+	path, _ := with["path"].(string)
+	return strings.TrimSpace(path) == ocamlAptArchiveCachePath
+}
+
+// TestWorkflowOCamlAptPackagesComeFromCacheAndRetryStalledFetches keeps the
+// cargo .debs off the Ubuntu mirror on most runs: a slow mirror once took 26
+// minutes to serve them and cancelled the 30-minute OCaml jobs.
+func TestWorkflowOCamlAptPackagesComeFromCacheAndRetryStalledFetches(t *testing.T) {
+	for _, workflow := range []workflowDocument{
+		readWorkflow(t, "pull-request.yml"),
+		readWorkflow(t, "master.yml"),
+	} {
+		for _, jobName := range []string{"ocaml", "ocaml-readme-install"} {
+			job := workflowJob(t, workflow, jobName)
+			steps, _ := job["steps"].([]any)
+			cacheIndex, installIndex := -1, -1
+			for index, rawStep := range steps {
+				step, ok := rawStep.(map[string]any)
+				if !ok {
+					continue
+				}
+				if actionName(step["uses"]) == cacheAction && isOCamlAptArchiveCache(step) && cacheIndex == -1 {
+					cacheIndex = index
+				}
+				if run, _ := step["run"].(string); strings.Contains(run, "apt-get") {
+					t.Fatalf("%s job %q runs apt-get outside %s:\n%s", workflow.name, jobName, ocamlAptInstallScript, run)
+				}
+				if run, _ := step["run"].(string); strings.TrimSpace(run) == ocamlAptInstallScript {
+					installIndex = index
+				}
+			}
+			if cacheIndex == -1 || installIndex == -1 || cacheIndex > installIndex {
+				t.Fatalf("%s job %q must restore %s before running %s (cache=%d install=%d)", workflow.name, jobName, ocamlAptArchiveCachePath, ocamlAptInstallScript, cacheIndex, installIndex)
+			}
+		}
+	}
+
+	script := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "install-ocaml-apt-packages.sh")
+	for _, want := range []string{
+		`archives="${RUNNER_TEMP}/llmtw-apt-archives"`,
+		`"Dir::Cache::Archives=${archives}/"`,
+		"APT::Keep-Downloaded-Packages=true",
+		"Acquire::Retries=",
+		"Acquire::http::Timeout=",
+		"Acquire::https::Timeout=",
+		"install --yes protobuf-compiler bubblewrap",
+		"install --yes cargo",
+		`sudo chown -R -- "$(id -u):$(id -g)" "${archives}"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("OCaml apt install script does not retain %q", want)
 		}
 	}
 }
