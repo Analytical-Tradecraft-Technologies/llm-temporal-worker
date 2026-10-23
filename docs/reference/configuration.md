@@ -1405,6 +1405,8 @@ prices OpenRouter publishes with `go run ./tools/modelsyncdefaults` (from
 `golang/`) and review the diff; the Exa section is maintained by hand.
 
 Files in `model_sync.rules` are layered over the built-in rules at runtime.
+The [catalog loader reference](catalog-loaders.md#model-sync-rules-documents)
+specifies the document schema, merge order and validation rules.
 Model fields override field by field, prices merge per tier, and exclusions
 accumulate, so an override only states what it changes. A model's
 `exclude: true` stays in force through later layers that omit `exclude`; only
