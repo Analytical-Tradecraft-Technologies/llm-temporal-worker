@@ -1376,7 +1376,11 @@ model_sync:
   a time, holding a Redis lease, fetches OpenRouter's lists and publishes them
   to Redis; every worker installs the published catalog within a minute. With
   `state.kind: memory` each process fetches its own. A failed fetch keeps the
-  last published catalog.
+  last published catalog. Readiness never waits for the first fetch: a worker
+  starts with configured and rules-direct models, and fetches at once when
+  nothing is published yet. Until a catalog is installed, a failed fetch is
+  retried after 30 seconds, doubling to at most 5 minutes (and never beyond
+  `refresh_interval_min`), rather than after the full interval.
 - **Credentials.** `optional: true` disables an endpoint whose environment
   credential is unset instead of failing startup, so a deployment can supply
   only the keys it wants. Only an endpoint that model sync uses and no
