@@ -146,12 +146,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
+      # The runner image version keys the apt archive cache so it rolls
+      # forward with the image's package lists.
+      - name: Identify runner image
+        id: runner-image
+        run: printf 'version=%s-%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt package archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/llmtw-apt-archives
+          key: ocaml-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('scripts/ci/install-ocaml-apt-packages.sh') }}
+          restore-keys: |
+            ocaml-apt-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Install Protocol Buffers compiler
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes protobuf-compiler bubblewrap
-          sudo apt-get install --yes cargo
+        run: bash scripts/ci/install-ocaml-apt-packages.sh
 
       - name: Enable unprivileged user namespaces for OPAM sandboxing
         if: ${{ runner.environment == 'github-hosted' }}
@@ -241,12 +251,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
+      # The runner image version keys the apt archive cache so it rolls
+      # forward with the image's package lists.
+      - name: Identify runner image
+        id: runner-image
+        run: printf 'version=%s-%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apt package archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/llmtw-apt-archives
+          key: ocaml-apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.version }}-${{ hashFiles('scripts/ci/install-ocaml-apt-packages.sh') }}
+          restore-keys: |
+            ocaml-apt-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Install Protocol Buffers compiler
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes protobuf-compiler bubblewrap
-          sudo apt-get install --yes cargo
+        run: bash scripts/ci/install-ocaml-apt-packages.sh
 
       - name: Enable unprivileged user namespaces for OPAM sandboxing
         if: ${{ runner.environment == 'github-hosted' }}
