@@ -55,6 +55,33 @@ type checkpointBlobEnvelope struct {
 }
 
 // encode wraps one canonical payload in a closed, versioned envelope.
+// encodeItems writes an item-list blob; a nil list is stored as empty.
+func (codec CheckpointBlobCodec) encodeItems(kind CheckpointBlobKind, items []llm.Item) ([]byte, error) {
+	if items == nil {
+		items = []llm.Item{}
+	}
+	if err := validateItemEncoding(items); err != nil {
+		return nil, err
+	}
+	return codec.encode(kind, items)
+}
+
+// decodeItems reads an item-list blob; label names the blob in errors.
+func (codec CheckpointBlobCodec) decodeItems(kind CheckpointBlobKind, label string, data []byte) ([]llm.Item, error) {
+	var payload json.RawMessage
+	if err := codec.decode(kind, data, &payload); err != nil {
+		return nil, err
+	}
+	items, err := llm.DecodeItems(payload)
+	if err != nil {
+		return nil, fmt.Errorf("decode %s items: %w", label, err)
+	}
+	if err := validateItemEncoding(items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 func (codec CheckpointBlobCodec) encode(kind CheckpointBlobKind, payload any) ([]byte, error) {
 	codec = codec.withDefaults()
 	encodedPayload, err := json.Marshal(payload)
@@ -152,53 +179,19 @@ func (codec CheckpointBlobCodec) decode(kind CheckpointBlobKind, data []byte, ta
 }
 
 func (codec CheckpointBlobCodec) EncodeDelta(items []llm.Item) ([]byte, error) {
-	if items == nil {
-		items = []llm.Item{}
-	}
-	if err := validateItemEncoding(items); err != nil {
-		return nil, err
-	}
-	return codec.encode(CheckpointDeltaBlob, items)
+	return codec.encodeItems(CheckpointDeltaBlob, items)
 }
 
 func (codec CheckpointBlobCodec) DecodeDelta(data []byte) ([]llm.Item, error) {
-	var payload json.RawMessage
-	if err := codec.decode(CheckpointDeltaBlob, data, &payload); err != nil {
-		return nil, err
-	}
-	items, err := llm.DecodeItems(payload)
-	if err != nil {
-		return nil, fmt.Errorf("decode delta items: %w", err)
-	}
-	if err := validateItemEncoding(items); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return codec.decodeItems(CheckpointDeltaBlob, "delta", data)
 }
 
 func (codec CheckpointBlobCodec) EncodeResponse(items []llm.Item) ([]byte, error) {
-	if items == nil {
-		items = []llm.Item{}
-	}
-	if err := validateItemEncoding(items); err != nil {
-		return nil, err
-	}
-	return codec.encode(CheckpointResponseBlob, items)
+	return codec.encodeItems(CheckpointResponseBlob, items)
 }
 
 func (codec CheckpointBlobCodec) DecodeResponse(data []byte) ([]llm.Item, error) {
-	var payload json.RawMessage
-	if err := codec.decode(CheckpointResponseBlob, data, &payload); err != nil {
-		return nil, err
-	}
-	items, err := llm.DecodeItems(payload)
-	if err != nil {
-		return nil, fmt.Errorf("decode response items: %w", err)
-	}
-	if err := validateItemEncoding(items); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return codec.decodeItems(CheckpointResponseBlob, "response", data)
 }
 
 func (codec CheckpointBlobCodec) EncodeSettingsPatch(patch SettingsPatch) ([]byte, error) {
