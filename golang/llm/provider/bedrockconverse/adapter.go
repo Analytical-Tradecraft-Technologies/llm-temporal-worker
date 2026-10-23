@@ -78,44 +78,21 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if input.Query.Family != "" && input.Query.Family != provider.FamilyBedrockConverse {
 		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("capability family %q does not match %q", input.Query.Family, provider.FamilyBedrockConverse))
 	}
-	normalized, err := llm.NormalizeRequest(input.Request)
+	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, adapter.profile.ExpectedModel)
 	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
-	}
-	if adapter.profile.ExpectedModel != "" && adapter.profile.ExpectedModel != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
+		return provider.Call{}, err
 	}
 	if normalized.Continuation != nil {
 		return provider.Call{}, provider.NewUnsupportedFeatureError(provider.FeatureContinuation, "Bedrock Converse has no provider-hosted continuation handle")
 	}
-	capabilities := input.Capability
-	if capabilities.Version == "" && len(capabilities.Features) == 0 {
-		capabilities, err = adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
-		if err != nil {
-			return provider.Call{}, provider.NewCompileError(err.Error())
-		}
+	capabilities, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
+		return adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
+	}, adapter.profile.CapabilityVersion)
+	if err != nil {
+		return provider.Call{}, err
 	}
-	if capabilities.Version == "" {
-		capabilities.Version = adapter.profile.CapabilityVersion
-	}
-	for _, feature := range requiredFeatures(normalized) {
-		capability, resolveErr := capabilities.Resolve(feature, input.Strict)
-		if resolveErr != nil {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, resolveErr.Error())
-		}
-		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
-		}
+	if err := provider.RequireFeatures(capabilities, requiredFeatures(normalized), input.Strict, nil); err != nil {
+		return provider.Call{}, err
 	}
 	tier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
