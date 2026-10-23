@@ -338,6 +338,10 @@ The series are:
   export Activity attempt, where `reason` is `rejected`, `oversized`,
   `saturated`, `unavailable` or `failed` (see the
   [configuration reference](../reference/configuration.md#optional-langfuse-content-export));
+- `llmtw_route_held_total{endpoint,reason}`, one per route candidate that
+  provider planning skipped because shared route health holds it, where
+  `reason` is `circuit_open`, `credit_exhausted` or `billing_issue`. It counts
+  even when another route serves the request;
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
@@ -445,6 +449,7 @@ worker or by Temporal:
 | No eligible routes | `llmtw_activity_failure_total{origin="caller"}` (planning) or `{origin="worker"}` (pricing), and the `requested model is not in the route catalog` warning (`cause=model_not_in_catalog`) |
 | Failed configuration reload | `llmtw_config_reload_total{outcome="failure"}` and its `config_field` log |
 | Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` |
+| Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` |
 | Stuck Activities | `llmtw_heartbeat_age_seconds` |
 | Task queue backlog | Temporal's task-queue backlog metrics for `temporal.task_queue` |
 | Continuation corruption or digest mismatch | `llmtw_activity_failure_total{origin="worker"}`, with the `llm_state_corrupt` Temporal failure type |
@@ -455,7 +460,9 @@ on them directly (#1538):
 - reservation underestimation (reservation versus settled cost);
 - provider authentication failures as distinct from other provider-origin
   failures (rate limits, 5xx);
-- route circuit opening or holds: route health is written to Redis only;
+- the moment a route circuit opens: `llmtw_route_held_total` counts the
+  requests a held route turns away, so a held route with no traffic shows
+  nothing;
 - a priced route approaching or passing its catalog `effective_until`; it
   surfaces only as `no_route` once it expires.
 
