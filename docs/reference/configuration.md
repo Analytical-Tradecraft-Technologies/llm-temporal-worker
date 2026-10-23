@@ -250,7 +250,8 @@ server:
   readiness_probe_interval: 5s
   readiness_probe_timeout: 2s
   inline_payload_bytes: 524288
-  # responses_api_listen_address: 0.0.0.0:8000   # opt-in OpenAI Responses API; see below
+  # responses_api_listen_address: 127.0.0.1:8000 # opt-in OpenAI Responses API; see below
+  # responses_api_private_network: true          # required to bind beyond loopback in production
 
 temporal:
   target: temporal.example.internal:7233
@@ -1835,6 +1836,13 @@ canonical configuration, so enabling the API is the only change that moves an
 existing digest.
 
 The listener has no TLS and no authentication: the API key names the tenant,
-project and actor. Bind it to a private interface or put it behind a network
-policy. See the [OpenAI Responses API reference](openai-responses-api.md) for
+project and actor, so anyone who can reach it can start paid work charged to
+any allowed scope. In production (any `environment` other than `development`)
+it must therefore bind a loopback or link-local address (`127.0.0.1`, `::1`,
+`localhost`, `169.254.0.0/16`, `fe80::/10`), for example for a sidecar in the
+same pod, unless `server.responses_api_private_network: true` acknowledges
+that a wider bind is reachable only from a private, policed network such as a
+Kubernetes NetworkPolicy. `0.0.0.0`, `::`, an empty host, any other address
+and any other host name need the acknowledgement. Setting the acknowledgement
+without a listener address is rejected. Development keeps the shape-only rule. See the [OpenAI Responses API reference](openai-responses-api.md) for
 the request mapping, polling and shutdown behaviour.

@@ -670,11 +670,11 @@ func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
 	withAddress := func(address string) []byte {
 		return []byte(strings.Replace(example, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:9090\n  responses_api_listen_address: "+address, 1))
 	}
-	enabled, err := config.Load(withAddress("0.0.0.0:8000"))
+	enabled, err := config.Load(withAddress("127.0.0.1:8000"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enabled.Server.ResponsesAPIListenAddress != "0.0.0.0:8000" {
+	if enabled.Server.ResponsesAPIListenAddress != "127.0.0.1:8000" {
 		t.Fatalf("address = %q", enabled.Server.ResponsesAPIListenAddress)
 	}
 	// Unset, the field is absent from the canonical JSON the digest covers.
@@ -743,5 +743,37 @@ func TestLoadRejectsFractionalMillisecondBudgetWindows(t *testing.T) {
 	}
 	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "whole milliseconds") {
 		t.Fatalf("Load() error = %v, want a whole-millisecond rejection", err)
+	}
+}
+
+// The unauthenticated listener binds only the host in production unless the
+// operator acknowledges a private network (#1514).
+func TestResponsesAPIListenerBindsTheHostInProduction(t *testing.T) {
+	example := string(exampleYAML(t))
+	with := func(environment, lines string) []byte {
+		data := strings.Replace(example, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:9090\n"+lines, 1)
+		return []byte(strings.Replace(data, "environment: production", "environment: "+environment, 1))
+	}
+	for _, address := range []string{"127.0.0.1:8000", "[::1]:8000", "localhost:8000", "169.254.10.1:8000", "[fe80::1%eth0]:8000"} {
+		if _, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"")); err != nil {
+			t.Fatalf("host-local %s rejected: %v", address, err)
+		}
+	}
+	const want = "must bind a loopback or link-local address in production unless server.responses_api_private_network is true"
+	for _, address := range []string{"0.0.0.0:8000", ":8000", "10.0.0.5:8000", "[::]:8000", "worker.internal:8000"} {
+		if _, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load(%s) error = %v, want %q", address, err, want)
+		}
+		acknowledged, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"\n  responses_api_private_network: true"))
+		if err != nil || !acknowledged.Server.ResponsesAPIPrivateNetwork {
+			t.Fatalf("acknowledged %s rejected: %v", address, err)
+		}
+	}
+	if _, err := config.Load(with("production", "  responses_api_private_network: true")); err == nil || !strings.Contains(err.Error(), "requires server.responses_api_listen_address") {
+		t.Fatalf("acknowledgement without a listener = %v", err)
+	}
+	// Development keeps the shape-only rule.
+	if _, err := config.Load(with("development", "  responses_api_listen_address: 0.0.0.0:8000")); err != nil && strings.Contains(err.Error(), "responses_api") {
+		t.Fatalf("development listener rejected: %v", err)
 	}
 }

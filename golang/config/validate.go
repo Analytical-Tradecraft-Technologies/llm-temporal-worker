@@ -50,7 +50,7 @@ func (config Config) Validate() error {
 	if err := validateIdentifier(config.Environment, "environment"); err != nil {
 		return err
 	}
-	if err := config.Server.validate(); err != nil {
+	if err := config.Server.validate(config.Environment); err != nil {
 		return err
 	}
 	if err := config.Temporal.validate(config.Environment); err != nil {
@@ -187,7 +187,7 @@ func validateOutputSizeBounds(server ServerConfig, limits LimitsConfig) error {
 	return nil
 }
 
-func (server ServerConfig) validate() error {
+func (server ServerConfig) validate(environment string) error {
 	if err := validateAddress(server.HealthAddress, "server.health_address"); err != nil {
 		return err
 	}
@@ -215,6 +215,14 @@ func (server ServerConfig) validate() error {
 		if apiPort != 0 && (apiPort == addressPort(server.HealthAddress) || apiPort == addressPort(server.MetricsAddress)) {
 			return fmt.Errorf("server.responses_api_listen_address must use a different port from server.health_address and server.metrics_address")
 		}
+		// The listener has no TLS or authentication: its API key only names a
+		// tenant, project and actor. In production it may listen beyond the
+		// host only when the operator acknowledges a private network (#1514).
+		if IsProductionEnvironment(environment) && !server.ResponsesAPIPrivateNetwork && !hostLocalAddress(server.ResponsesAPIListenAddress) {
+			return fmt.Errorf("server.responses_api_listen_address must bind a loopback or link-local address in production unless server.responses_api_private_network is true")
+		}
+	} else if server.ResponsesAPIPrivateNetwork {
+		return fmt.Errorf("server.responses_api_private_network requires server.responses_api_listen_address")
 	}
 	if err := validatePositiveDuration(server.ShutdownTimeout, "server.shutdown_timeout"); err != nil {
 		return err
@@ -997,6 +1005,21 @@ func addressPort(value string) int {
 	_, text, _ := net.SplitHostPort(value)
 	port, _ := strconv.Atoi(text)
 	return port
+}
+
+// hostLocalAddress reports whether a host:port binds only loopback or
+// link-local interfaces. An empty host or unspecified address binds every
+// interface, and any other name may resolve anywhere.
+func hostLocalAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Split(host, "%")[0])
+	return ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast())
 }
 
 func validateAddress(value, path string) error {
