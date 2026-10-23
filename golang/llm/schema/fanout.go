@@ -481,10 +481,13 @@ func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) *fanoutNode {
 func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 	var value any = graph.root
 	prefix := ""
-	// The target belongs to the nearest enclosing $id on its own path, which
-	// may lie below the referring node's resource.
+	// The target belongs to the nearest enclosing schema resource on its own
+	// path, which may lie below the referring node's resource. Only a $id in
+	// a schema position starts a resource; one inside an annotation value is
+	// plain data to the compiler.
+	position := pointerSchema
 	enclosing := func(value any) {
-		if object, ok := value.(map[string]any); ok {
+		if object, ok := value.(map[string]any); ok && position == pointerSchema {
 			if id, ok := object["$id"].(string); ok && id != "" {
 				resource = prefix
 			}
@@ -506,6 +509,7 @@ func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 		default:
 			return nil
 		}
+		position = position.next(token)
 		if prefix != path {
 			enclosing(value)
 		}
@@ -513,8 +517,10 @@ func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 	switch target := value.(type) {
 	case map[string]any:
 		// An annotation value escaped the subset check; the analysis counts
-		// only subset keywords, so anything else stays unresolved.
-		if walkSchema(target, path) != nil {
+		// only subset keywords, so anything else stays unresolved. A $id
+		// inside it might or might not start a resource for the compiler, so
+		// such a target is not bounded either.
+		if walkSchema(target, path) != nil || (position == pointerAnnotation && containsKey(target, "$id")) {
 			return nil
 		}
 		// Its nodes join the pending list that schemaFanout links.
@@ -526,6 +532,56 @@ func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 		return nil
 	}
 	return graph.node(path)
+}
+
+// pointerPosition classifies a JSON pointer step: a schema, a map or list of
+// schemas, or annotation data below a non-schema keyword.
+type pointerPosition int
+
+const (
+	pointerSchema pointerPosition = iota
+	pointerSchemaMap
+	pointerSchemaList
+	pointerAnnotation
+)
+
+func (position pointerPosition) next(token string) pointerPosition {
+	switch position {
+	case pointerSchemaMap, pointerSchemaList:
+		return pointerSchema
+	case pointerSchema:
+		switch token {
+		case "properties", "$defs":
+			return pointerSchemaMap
+		case "allOf", "anyOf", "oneOf", "prefixItems":
+			return pointerSchemaList
+		case "additionalProperties", "propertyNames", "items", "not", "if", "then", "else":
+			return pointerSchema
+		}
+	}
+	return pointerAnnotation
+}
+
+// containsKey reports whether key names a member of any object in value.
+func containsKey(value any, key string) bool {
+	switch value := value.(type) {
+	case map[string]any:
+		if _, ok := value[key]; ok {
+			return true
+		}
+		for _, child := range value {
+			if containsKey(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if containsKey(child, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // unescapeFragment percent-decodes a URI fragment JSON pointer. Its ~0 and ~1

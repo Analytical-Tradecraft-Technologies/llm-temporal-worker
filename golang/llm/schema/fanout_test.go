@@ -44,7 +44,10 @@ func TestParseRejectsExponentialFanout(t *testing.T) {
 		"annotation target fan-out":            `{"properties":{"x":{"$ref":"#/default"}},"default":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}`,
 		// An annotation reached across a nested $id resolves in that resource.
 		"annotation target in a nested resource": `{"$ref":"#/$defs/r/default","$defs":{"r":{"$id":"urn:r","properties":{"x":{"$ref":"#/$defs/n"}},"default":{"$ref":"#/$defs/n"},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}},"n":{}}}`,
-		"recursive tuple fan-out":                `{"prefixItems":[{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}`,
+		// A $id inside an annotation payload is data, not a schema resource.
+		"annotation payload $id":             `{"properties":{"x":{"$ref":"#/default/foo"}},"default":{"$id":"urn:fake","foo":{"$ref":"#/$defs/n"},"$defs":{"n":{}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
+		"annotation target with its own $id": `{"$ref":"#/default","default":{"$id":"urn:fake","$ref":"#/$defs/n","$defs":{"n":{}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
+		"recursive tuple fan-out":            `{"prefixItems":[{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}`,
 		// An empty $id keeps the enclosing resource, so #/$defs/n is the
 		// root's fanning definition, as the validator resolves it.
 		"empty $id":           `{"properties":{"x":{"$id":"","$ref":"#/$defs/n","$defs":{"n":{}}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
