@@ -786,18 +786,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       issues: write
     steps:
       - name: Open or update the scheduled failure issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
           title="Scheduled master build failed"
+          # Name the failing jobs, steps and Go tests so the cause is visible
+          # from the issue rather than only behind the run URL (#1524). Log
+          # lookups are best effort: a missing log still reports the job.
+          causes=""
+          while IFS=$'\t' read -r job_id job_name steps; do
+            [[ -n "$job_id" ]] || continue
+            causes+=$'\n'"- **${job_name}** (failed step: ${steps:-unknown})"
+            tests="$(gh api "repos/$GH_REPO/actions/jobs/$job_id/logs" 2>/dev/null \
+              | sed -nE 's/^[^ ]+ +(--- FAIL: .*|FAIL[[:space:]]+[^[:space:]]+.*)$/\1/p' \
+              | sed -E 's/[`|]/ /g' | awk '!seen[$0]++' | head -n 20 || true)"
+            while IFS= read -r line; do
+              if [[ -n "$line" ]]; then causes+=$'\n'"  - \`${line}\`"; fi
+            done <<< "$tests"
+          done < <(gh api --paginate "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure") | [(.id | tostring), .name, ([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))] | @tsv' || true)
           body="Scheduled master run $RUN_URL failed at commit $GITHUB_SHA."
+          if [[ -n "$causes" ]]; then
+            body+=$'\n\n'"Failed jobs:${causes}"
+          fi
           number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")"
           if [[ -n "$number" ]]; then
             gh issue comment "$number" --body "$body"

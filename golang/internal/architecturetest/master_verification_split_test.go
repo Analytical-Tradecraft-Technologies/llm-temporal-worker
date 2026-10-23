@@ -168,12 +168,15 @@ func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
 	if got, want := stringSequence(t, master.name, job, "needs"), []string{"verify", "ocaml", "ocaml-readme-install", "fuzz-shard", "container"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("report-scheduled-failure needs = %v, want %v", got, want)
 	}
+	// actions: read lets the reporter name the failing jobs and tests (#1524).
 	permissions := nestedMapping(t, master.name, job, "permissions")
-	if len(permissions) != 1 || scalarString(t, master.name, permissions, "issues") != "write" {
-		t.Fatalf("report-scheduled-failure permissions = %#v, want only issues: write", permissions)
+	if len(permissions) != 2 || scalarString(t, master.name, permissions, "issues") != "write" || scalarString(t, master.name, permissions, "actions") != "read" {
+		t.Fatalf("report-scheduled-failure permissions = %#v, want only actions: read and issues: write", permissions)
 	}
 	assertJobRunContains(t, master, "report-scheduled-failure", "gh issue create")
 	assertJobRunContains(t, master, "report-scheduled-failure", "gh issue comment")
+	assertJobRunContains(t, master, "report-scheduled-failure", "actions/runs/$RUN_ID/jobs")
+	assertJobRunContains(t, master, "report-scheduled-failure", "--- FAIL: ")
 }
 
 // TestWorkflowScheduledWorkflowsReportFailures requires every workflow with a
@@ -213,9 +216,16 @@ func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 			}
 			t.Fatalf("%s job %q can fail on a schedule without report-scheduled-failure depending on it", workflow.name, name)
 		}
+		// Besides issues: write, a reporter may only read the run's jobs and
+		// logs to name the failure.
 		permissions := nestedMapping(t, workflow.name, job, "permissions")
-		if len(permissions) != 1 || scalarString(t, workflow.name, permissions, "issues") != "write" {
-			t.Fatalf("%s report-scheduled-failure permissions = %#v, want only issues: write", workflow.name, permissions)
+		for scope, level := range permissions {
+			if !(scope == "issues" && level == "write") && !(scope == "actions" && level == "read") {
+				t.Fatalf("%s report-scheduled-failure permissions = %#v, want issues: write and at most actions: read", workflow.name, permissions)
+			}
+		}
+		if scalarString(t, workflow.name, permissions, "issues") != "write" {
+			t.Fatalf("%s report-scheduled-failure permissions = %#v, want issues: write", workflow.name, permissions)
 		}
 		assertJobRunContains(t, workflow, "report-scheduled-failure", "gh issue create")
 		assertJobRunContains(t, workflow, "report-scheduled-failure", "gh issue comment")
