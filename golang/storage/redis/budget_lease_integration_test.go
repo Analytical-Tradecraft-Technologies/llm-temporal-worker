@@ -296,23 +296,28 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				// deadline, so a lost claim reply stays provable, and expired
 				// proves the lease was never claimed.
 				m := newMaterializer(t)
-				short := func(req durable.ReserveRequest) durable.ReserveRequest {
+				short := func(req durable.ReserveRequest, now time.Time) durable.ReserveRequest {
 					req.Reservations[0].BucketNanos = int64(time.Second)
 					req.Reservations[0].DurationNanos = int64(2 * time.Second)
-					req.Reservations[0].Bucket = time.Now().Unix()
-					req.ExpiresAt = time.Now().Add(2 * time.Second)
+					req.Reservations[0].Bucket = now.Unix()
+					req.ExpiresAt = now.Add(2 * time.Second)
 					return req
 				}
-				lostReq := short(request("lost-claim", "0.6"))
+				// Both leases share one deadline so the sleep below cannot end
+				// before the later one expires, however slow the acquire round
+				// trips are (#1524).
+				now := time.Now()
+				lostReq := short(request("lost-claim", "0.6"), now)
+				unclaimedReq := short(request("unclaimed", "0.4"), now)
 				lost := acquire(t, m, lostReq)
-				unclaimed := acquire(t, m, short(request("unclaimed", "0.4")))
+				unclaimed := acquire(t, m, unclaimedReq)
 				invoke := m.invoke
 				m.invoke = &lostBudgetReply{delegate: invoke, action: "durable_claim"}
 				if _, err := m.Claim(ctx, claim(lost)); err == nil {
 					t.Fatal("expected lost claim reply")
 				}
 				m.invoke = invoke
-				time.Sleep(time.Until(lostReq.ExpiresAt) + 20*time.Millisecond)
+				time.Sleep(time.Until(unclaimedReq.ExpiresAt) + 250*time.Millisecond)
 				if _, err := m.Claim(ctx, claim(lost)); !errors.Is(err, durable.ErrAlreadyClaimed) {
 					t.Fatalf("replayed applied claim: %v", err)
 				}
@@ -323,7 +328,7 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				}
 				// The applied claim holds its reservation until it is settled;
 				// the expired, unclaimed lease does not.
-				held, err := m.Accept(ctx, short(request("held", "0.5")))
+				held, err := m.Accept(ctx, short(request("held", "0.5"), time.Now()))
 				if err != nil || held.Accepted {
 					t.Fatalf("lost claim released before settlement: %#v %v", held, err)
 				}
