@@ -190,8 +190,12 @@ llm-temporal-worker validate-config --config ./config.yaml
 On success it prints the effective configuration digest as a `config version`.
 In the production binary this command performs schema/default validation only;
 it does not read secret values, load catalog file contents, dial Temporal,
-connect to Redis or S3, or contact a provider. Use `worker` startup as the
-full dependency and reference-validation gate.
+connect to Redis or S3, or contact a provider. It does apply the checks the
+worker makes before resolving secrets: a production or `state.kind: durable`
+configuration must have an `authorization` policy and durable state, and the
+error names the missing field. `print-effective-config` applies the same
+checks. Use `worker` startup as the full dependency and reference-validation
+gate.
 
 ## `print-effective-config`
 
