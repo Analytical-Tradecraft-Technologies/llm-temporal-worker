@@ -363,6 +363,18 @@ lift, and any other validator panic is recovered into a validation failure. The
 same bound applies to every number in a caller's output schema, which is
 rejected rather than compiled with the constraint silently dropped.
 
+A caller's output schema must also be cheap to validate, since validation runs
+after payment. `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else` and `$ref`
+all apply at the same instance value, so their branch counts multiply, and a
+`$ref` that recurses into a child value repeats that product at every level.
+Compilation rejects a schema that could apply more than 1000 subschemas to any
+one value at any depth up to the depth limit
+(`schema.MaxSchemaApplications`), or that references itself without consuming
+instance data, as `invalid_argument` before admission. Validation then refuses
+an instance whose value count times that worst case exceeds 2,000,000
+(`schema.MaxValidationWork`) as a provider invalid-response error, which takes
+at most about a second.
+
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that
 takes no arguments; an empty or whitespace-only string lifts as the empty
