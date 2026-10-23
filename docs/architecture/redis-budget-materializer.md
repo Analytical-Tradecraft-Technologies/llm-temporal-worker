@@ -22,9 +22,17 @@ to `pricing.NanoUSDMaterializationVersion`.
 
 Each instance is bound to one immutable generation/incarnation. A snapshot
 swap, generation mismatch, event fingerprint conflict, missing operation, or
-uncertain Redis mutation fails closed. The adapter is not selected by the
-production runtime factory yet; full Generate/Compact composition still needs
-durable checkpoint, journal, result, provider, and operation ports.
+uncertain Redis mutation fails closed. The production runtime factory
+(`golang/internal/runtime/factory.go`) builds this adapter as the durable v1
+path's budget authority.
+
+`conformance.RunDurableRollingBudget` (`golang/storage/conformance/durable_budget.go`)
+is the suite this adapter and `durable.ReferenceBudgetMaterializer` share, run
+against live Redis in both Function and Lua modes. It covers reservation,
+accounting, multi-bucket batches, concurrent admission across buckets and
+across overlapping windows, policy and window isolation, reservation and claim
+expiry, unknown-cost finalization, and duplicate or replayed settlement. The
+legacy `admission/v1` suite in `conformance.go` covers only the legacy ledger.
 
 ## Verification
 
