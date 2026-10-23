@@ -328,6 +328,10 @@ The series are:
 - `llmtw_operation_state_total{state}`;
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
+- `llmtw_langfuse_export_failures_total{reason}`, one per failed Langfuse
+  export Activity attempt, where `reason` is `rejected`, `oversized`,
+  `saturated`, `unavailable` or `failed` (see the
+  [configuration reference](../reference/configuration.md#optional-langfuse-content-export));
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
