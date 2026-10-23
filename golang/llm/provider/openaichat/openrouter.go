@@ -462,7 +462,7 @@ func openRouterResponseError(call provider.Call, response *openai.ChatCompletion
 
 func openRouterBodyError(call provider.Call, requestID string, raw json.RawMessage, phase provider.Phase, accepted bool) *provider.Error {
 	status := openRouterErrorStatus(raw)
-	code, retry, dispatch, safe := classifyStatus(status)
+	code, retry, dispatch, safe := provider.ClassifyHTTPStatus(status)
 	if accepted {
 		dispatch, retry, safe = provider.DispatchAccepted, provider.RetryNever, "provider failed during generation"
 	}

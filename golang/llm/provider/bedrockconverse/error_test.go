@@ -84,3 +84,10 @@ func TestServerErrorsRemainRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestConversePaymentRequiredIsAccountDenial(t *testing.T) {
+	mapped := mapHTTPError(http.StatusPaymentRequired, errors.New("billing"), "converse")
+	if mapped.Code != provider.CodePermissionDenied || mapped.Retry != provider.RetryNever || mapped.Dispatch != provider.DispatchRejected {
+		t.Fatalf("402 = %#v, want the shared account-denial classification", mapped)
+	}
+}
