@@ -68,6 +68,10 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		"nested $id":         `{"properties":{"a":{"$id":"urn:example:a","$defs":{"x":{"type":"string"}},"$ref":"#/$defs/x"}}}`,
 		"anchor":             `{"properties":{"a":{"$ref":"#leaf"}},"$defs":{"leaf":{"$anchor":"leaf","type":"string"}}}`,
 		"conditional":        `{"if":{"properties":{"kind":{"const":"a"}}},"then":{"required":["a"]},"else":{"required":["b"]}}`,
+		// An unused definition cannot reject the schema, and a reference may
+		// name a boolean schema.
+		"unused dangling definition": `{"type":"string","$defs":{"unused":{"$ref":"#/$defs/missing"},"also":{"$ref":"#nowhere"}}}`,
+		"reference to boolean":       `{"$ref":"#/additionalProperties","additionalProperties":true}`,
 		// Tuple positions and trailing items are disjoint array indices.
 		"recursive tuple":       `{"type":"array","prefixItems":[{"$ref":"#"},{"$ref":"#"}]}`,
 		"recursive tuple items": `{"type":"array","prefixItems":[{"$ref":"#"},{"type":"string"}],"items":{"$ref":"#"}}`,

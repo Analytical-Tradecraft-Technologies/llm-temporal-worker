@@ -46,6 +46,9 @@ type fanoutNode struct {
 	// saturating above MaxSchemaApplications.
 	state uint8
 	apps  int
+	// unresolved records a $ref this analysis cannot follow. It matters
+	// only if validation can reach the node.
+	unresolved bool
 }
 
 type fanoutGraph struct {
@@ -64,9 +67,7 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 	for len(graph.pending) > 0 {
 		node := graph.pending[len(graph.pending)-1]
 		graph.pending = graph.pending[:len(graph.pending)-1]
-		if err := graph.link(node); err != nil {
-			return 0, err
-		}
+		graph.link(node)
 	}
 	limit := MaxSchemaApplications
 	worst := 0
@@ -216,6 +217,10 @@ func closeInPlace(node *fanoutNode) error {
 	case 1:
 		return &FanoutError{Path: node.path, Reason: "references itself without consuming instance data"}
 	}
+	if node.unresolved {
+		// The compiler resolved it, so the analysis cannot bound its target.
+		return &FanoutError{Path: node.path, Reason: "has a $ref that does not resolve within the schema"}
+	}
 	node.state = 1
 	node.apps = 1
 	for _, child := range node.inPlace {
@@ -269,6 +274,11 @@ func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
 		case "additionalProperties", "propertyNames", "items", "not", "if", "then", "else":
 			if object, ok := child.(map[string]any); ok {
 				graph.index(object, childPath, resource)
+			} else if _, ok := child.(bool); ok {
+				// A boolean schema applies once and has no subschemas, but a
+				// $ref may still name it.
+				graph.nodes[childPath] = &fanoutNode{path: childPath}
+				graph.resources[childPath] = resource
 			}
 		case "prefixItems", "allOf", "anyOf", "oneOf":
 			children, _ := child.([]any)
@@ -283,7 +293,7 @@ func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
 
 // link resolves node's edges. In-place keywords apply at the same instance
 // location; the others apply to its properties, items or property names.
-func (graph *fanoutGraph) link(node *fanoutNode) error {
+func (graph *fanoutGraph) link(node *fanoutNode) {
 	child := func(key string) *fanoutNode { return graph.node(pointerJoin(node.path, key)) }
 	indexed := func(key string) []*fanoutNode {
 		values, _ := node.value[key].([]any)
@@ -304,11 +314,11 @@ func (graph *fanoutGraph) link(node *fanoutNode) error {
 		}
 	}
 	if ref, ok := node.value["$ref"].(string); ok {
-		target, err := graph.resolve(node, ref)
-		if err != nil {
-			return err
+		if target := graph.resolve(node, ref); target != nil {
+			node.inPlace = append(node.inPlace, target)
+		} else {
+			node.unresolved = true
 		}
-		node.inPlace = append(node.inPlace, target)
 	}
 	if properties, ok := node.value["properties"].(map[string]any); ok {
 		node.props = make(map[string][]*fanoutNode, len(properties))
@@ -326,33 +336,27 @@ func (graph *fanoutGraph) link(node *fanoutNode) error {
 	if target := child("propertyNames"); target != nil {
 		node.names = append(node.names, target)
 	}
-	return nil
 }
 
 // resolve follows a same-resource reference: "#", "#/json/pointer" or
-// "#anchor", relative to the nearest enclosing $id.
-func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) (*fanoutNode, error) {
+// "#anchor", relative to the nearest enclosing $id. It returns nil when the
+// target is not a schema this analysis indexed.
+func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) *fanoutNode {
 	resource := graph.resources[node.path]
 	// A fragment is percent-decoded before it is read as a pointer or anchor.
 	fragment := unescapeFragment(strings.TrimPrefix(ref, "#"))
-	var path string
 	switch {
 	case fragment == "":
-		path = resource
+		return graph.node(resource)
 	case strings.HasPrefix(fragment, "/"):
-		path = resource + fragment
+		return graph.node(resource + fragment)
 	default:
 		target, ok := graph.anchors[resource][fragment]
 		if !ok {
-			return nil, &FanoutError{Path: node.path, Reason: "has a $ref that does not resolve within the schema"}
+			return nil
 		}
-		path = target
+		return graph.node(target)
 	}
-	target := graph.node(path)
-	if target == nil {
-		return nil, &FanoutError{Path: node.path, Reason: "has a $ref that does not resolve within the schema"}
-	}
-	return target, nil
 }
 
 // unescapeFragment percent-decodes a URI fragment JSON pointer. Its ~0 and ~1
