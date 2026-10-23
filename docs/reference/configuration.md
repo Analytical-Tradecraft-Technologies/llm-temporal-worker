@@ -26,7 +26,9 @@ runtime construction, while `validate-config` and
 `workload_identity` secret references and endpoint auth are available to
 embeddings that supply a workload identity provider; the worker binary does
 not, so its `validate-config`, `print-effective-config` and `worker` commands
-reject them.
+reject them. A `workload_identity` reference names the token's `audience` and
+no `name` or `path`; `env` references take only `name` and `file` references
+only an absolute `path`.
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 
@@ -55,7 +57,8 @@ the development composition. Every other value is treated as production,
 including `production`, `staging`, `prod`, `Production` and names the worker
 has never seen. For those values:
 
-- `state.redis.tls.enabled` must be `true`;
+- `state.redis.tls.enabled` must be `true`, unless `state.redis.service_mesh`
+  is `true` (the only exemption; see below);
 - `telemetry.content_logging` must be `disabled`;
 - `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
 - startup requires the durable v1 runtime, the cloud budget initialization
@@ -91,6 +94,20 @@ exception is `temporal.mesh_transport: true`, which declares that a service mesh
 supplies transport security and client identity. All of these fields are
 process-lifetime settings, read at startup; a reload that changes them is
 rejected. Redis TLS does not accept `cert_file` or `key_file`.
+
+`state.redis.service_mesh: true` is the Redis analogue. It declares that an
+externally enforced mTLS service mesh encrypts Redis traffic and authenticates
+the worker, so the worker opens plain Redis connections without `AUTH`. It is
+the only exemption from the production `state.redis.tls.enabled` requirement,
+and it requires `state.redis.tls` to be empty (TLS disabled) and
+`state.redis.username` and `state.redis.password` to be absent; the secret
+resolver then reads no Redis credentials. Validation and readiness cannot see
+the mesh: readiness still requires Redis to answer `PING` and `TIME` and to pass
+the persistence, eviction and admission-code checks, but nothing confirms that
+the traffic is protected. Enable it only where the mesh enforces strict mTLS
+and restricts Redis callers by workload identity. It is process-lifetime; a
+reload that changes it is rejected. `state.redis.key_secret` is still required
+and is unrelated to Redis authentication.
 
 ## Temporal payload encryption
 
@@ -678,6 +695,24 @@ for replica configuration and regional failover constraints.
 
 See [cloud request storage](cloud-request-repository.md#worker-integration)
 for IAM configuration, table/bucket aliases and the encryption secret.
+
+Optional `state.requests.provider.aws.temp_directory` names the directory for
+the private staging files the AWS provider writes while it validates blob
+lengths; empty uses the operating system's temporary directory. The AWS
+`failover` block takes `dynamodb_regions` (one or two fallback regions, distinct
+from the primary), `payload_replicas` (one or two `{region, bucket}` fallbacks
+for the payload store) and `attempt_timeout` (positive, at most 30s), and
+requires `allow_mrsc: true`; `blob_store.s3.failover` takes `replicas` and
+`attempt_timeout` with the same bounds. Profile, temp directory, failover and
+`allow_mrsc` are process-lifetime: a reload that changes them is rejected.
+
+Optional `state.requests.parent_snapshot_storage` (`inline`, the default, or
+`blob`) selects how new request preparations store their parent snapshot:
+inline in the request record or as a separate referenced blob (#1112). Every
+build that has the field reads both forms, but a build without it cannot read
+a referenced preparation, so set `blob` only after every worker in the fleet
+runs a build that has it. The default is normalized away and does not change
+`config_version`. See [cloud request storage](cloud-request-repository.md).
 
 On the durable v1 path, `state.continuation_retention` sets the checkpoint
 lifetime. The other `state` timing settings are validated and defaulted, but
