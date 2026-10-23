@@ -2,7 +2,6 @@ package openaichat
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -103,10 +102,10 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 		return err
 	}
 	if adapter == nil {
-		return compileError("adapter is nil")
+		return provider.NewCompileError("adapter is nil")
 	}
 	if err := lowerExtensions(adapter.profile, request.Extensions, make(map[string]any)); err != nil {
-		return compileError(err.Error())
+		return provider.NewCompileError(err.Error())
 	}
 	// Structured output the provider documents as an error is rejected here
 	// too; any other lowering failure is left for Compile to report.
@@ -122,43 +121,43 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 
 func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
 	if adapter == nil {
-		return provider.Call{}, compileError("adapter is nil")
+		return provider.Call{}, provider.NewCompileError("adapter is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return provider.Call{}, compileContextError(err)
+		return provider.Call{}, provider.NewCompileContextError(err)
 	}
-	if err := validateQuery(input.Query, adapter.endpointID); err != nil {
-		return provider.Call{}, compileError(err.Error())
+	if err := provider.ValidateCapabilityQuery(input.Query, "openai chat", provider.FamilyOpenAIChat, adapter.endpointID); err != nil {
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	normalized, err := llm.NormalizeRequest(input.Request)
 	input.Metadata.WebSearch = input.Request.WebSearch
 	input.Metadata.WebFetch = input.Request.WebFetch
 	input.Metadata.CodeExecution = input.Request.CodeExecution
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, compileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
+		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
 	}
 	if adapter.profile.ExpectedModel != "" && adapter.profile.ExpectedModel != normalized.Model {
-		return provider.Call{}, compileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
+		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
 	}
 	providerTier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
-		return provider.Call{}, unsupportedServiceError(err.Error())
+		return provider.Call{}, provider.NewUnsupportedCapabilityError(err.Error())
 	}
 	set := input.Capability
 	if set.Version == "" && len(set.Features) == 0 {
 		set, err = adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
 		if err != nil {
-			return provider.Call{}, compileError(err.Error())
+			return provider.Call{}, provider.NewCompileError(err.Error())
 		}
 	}
 	if set.Version == "" {
@@ -167,13 +166,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	for _, feature := range requiredFeatures(normalized) {
 		capability, resolveErr := set.Resolve(feature, input.Strict)
 		if resolveErr != nil {
-			return provider.Call{}, unsupportedError(feature, resolveErr.Error())
+			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, resolveErr.Error())
 		}
 		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
-			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
+			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
 		}
 		if capability.State == provider.CapabilityEmulated && feature == provider.FeatureStructuredOutput && adapter.profile.StructuredOutputTransform == "" {
-			return provider.Call{}, unsupportedError(feature, "emulated structured output requires a named profile transform")
+			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, "emulated structured output requires a named profile transform")
 		}
 	}
 	if input.Strict && adapter.profile.applicationInstructionRole() == "system" && mixedInstructionLevels(normalized.Instructions) {
@@ -184,7 +183,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	profile, err := adapter.profile.forRequest(normalized.Model, serviceClass, input.Metadata.PriceCeiling)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	params, err := lowerRequest(normalized, profile, providerTier)
 	if err != nil {
@@ -194,7 +193,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if digest == ([32]byte{}) {
 		digest, err = llm.RequestDigest(normalized)
 		if err != nil {
-			return provider.Call{}, compileError(err.Error())
+			return provider.Call{}, provider.NewCompileError(err.Error())
 		}
 	}
 	metadata := input.Metadata
@@ -203,9 +202,9 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	metadata.ProviderTier = providerTier
 	metadata.OpaqueStateRequired = normalized.Continuation != nil
 	if metadata.EstimatedBytes == 0 {
-		canonical, canonicalErr := canonicalRequestBytes(normalized)
+		canonical, canonicalErr := provider.CanonicalRequestBytes(normalized)
 		if canonicalErr != nil {
-			return provider.Call{}, compileError(canonicalErr.Error())
+			return provider.Call{}, provider.NewCompileError(canonicalErr.Error())
 		}
 		metadata.EstimatedBytes = len(canonical)
 	}
@@ -223,13 +222,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
 	if adapter == nil {
-		return provider.Result{}, dispatchError("adapter is nil", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
 	if err := ctx.Err(); err != nil {
-		return provider.Result{}, dispatchContextError(err)
+		return provider.Result{}, provider.NewDispatchContextError(err)
 	}
 	if call.Family != provider.FamilyOpenAIChat || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, dispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
 	}
 	params, ok := call.SDKParams.(openai.ChatCompletionNewParams)
 	if !ok {
@@ -239,20 +238,20 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		}
 	}
 	if !ok {
-		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
 	// Encode the ordered schemas before the possible-write boundary, so a
 	// failure here is a definite non-dispatch.
 	ordered, err := schemaOrderOptions(params)
 	if err != nil {
-		return provider.Result{}, dispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
 	}
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
 	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
 	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
 	requestOptions := adapter.client.options()
@@ -284,7 +283,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		metadata.RequestID = rawResponse.Header.Get("x-request-id")
 	}
 	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := dispatchObserverError(err, provider.DispatchAccepted)
+		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
 		mapped.Provider.ResponseID = response.ID
 		mapped.Provider.RequestID = metadata.RequestID
 		return provider.Result{}, mapped
@@ -295,16 +294,6 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, err
 	}
 	return provider.Result{Response: lifted}, nil
-}
-
-func validateQuery(query provider.CapabilityQuery, endpointID string) error {
-	if query.Family != "" && query.Family != provider.FamilyOpenAIChat {
-		return fmt.Errorf("openai chat: capability family %q does not match %q", query.Family, provider.FamilyOpenAIChat)
-	}
-	if query.EndpointID != "" && query.EndpointID != endpointID {
-		return fmt.Errorf("openai chat: capability endpoint %q does not match %q", query.EndpointID, endpointID)
-	}
-	return nil
 }
 
 func requiredFeatures(request llm.Request) []provider.Feature {
@@ -336,7 +325,7 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 	if request.Continuation != nil {
 		features = append(features, provider.FeatureContinuation)
 	}
-	return uniqueFeatures(features)
+	return provider.UniqueFeatures(features)
 }
 
 func partFeature(part llm.Part) provider.Feature {
@@ -350,81 +339,14 @@ func partFeature(part llm.Part) provider.Feature {
 	}
 }
 
-func uniqueFeatures(features []provider.Feature) []provider.Feature {
-	seen := make(map[provider.Feature]struct{}, len(features))
-	result := make([]provider.Feature, 0, len(features))
-	for _, feature := range features {
-		if feature == "" {
-			continue
-		}
-		if _, ok := seen[feature]; ok {
-			continue
-		}
-		seen[feature] = struct{}{}
-		result = append(result, feature)
-	}
-	return result
-}
-
-func canonicalRequestBytes(request llm.Request) ([]byte, error) {
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	return llm.CanonicalJSON(encoded)
-}
-
 // lowerError maps a lowering failure to the error contract. A request that
 // structured output cannot represent is unsupported, not malformed.
 func lowerError(err error) *provider.Error {
 	var unsupported *openaischema.UnsupportedError
 	if errors.As(err, &unsupported) {
-		return unsupportedError(provider.FeatureStructuredOutput, err.Error())
+		return provider.NewUnsupportedFeatureError(provider.FeatureStructuredOutput, err.Error())
 	}
-	return compileError(err.Error())
-}
-
-func compileError(message string) *provider.Error {
-	return provider.NewError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, message)
-}
-
-func unsupportedError(feature provider.Feature, message string) *provider.Error {
-	return provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, fmt.Sprintf("%s: %s", feature, message))
-}
-
-func unsupportedServiceError(message string) *provider.Error {
-	return provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, message)
-}
-
-func compileContextError(err error) *provider.Error {
-	if err == context.Canceled {
-		return provider.NewError(provider.CodeCanceled, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "compile canceled")
-	}
-	return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "compile deadline exceeded")
-}
-
-func dispatchError(message string, certainty provider.DispatchCertainty) *provider.Error {
-	return provider.NewError(provider.CodeInvalidArgument, provider.PhaseDispatch, certainty, provider.RetryNever, message)
-}
-
-func dispatchContextError(err error) *provider.Error {
-	if err == context.Canceled {
-		return provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "dispatch canceled")
-	}
-	return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "dispatch deadline exceeded")
-}
-
-func dispatchObserverError(err error, certainty provider.DispatchCertainty) *provider.Error {
-	mapped := provider.NewError(provider.CodeInternal, provider.PhaseDispatch, certainty, provider.RetryNever, "observer rejected provider response")
-	mapped.Cause = err
-	return mapped
-}
-
-func invalidResponseError(call provider.Call, requestID, message string) *provider.Error {
-	mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, message)
-	mapped.Provider.RequestID = requestID
-	mapped.OperationID = call.OperationKey
-	return mapped
+	return provider.NewCompileError(err.Error())
 }
 
 func mixedInstructionLevels(instructions []llm.Instruction) bool {

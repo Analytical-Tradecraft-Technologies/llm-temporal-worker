@@ -20,7 +20,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 // header; a tier in usage still wins when the body has one.
 func (profile Profile) liftResponseWithTier(call provider.Call, response *anthropic.Message, requestID, headerTier string) (llm.Response, error) {
 	if response == nil {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
+		return llm.Response{}, provider.NewInvalidResponseError(call, requestID, "provider returned an empty response")
 	}
 	providerTier := string(response.Usage.ServiceTier)
 	if providerTier == "" {
@@ -29,7 +29,7 @@ func (profile Profile) liftResponseWithTier(call provider.Call, response *anthro
 	actual := profile.actualClass(providerTier)
 	output, states, hasToolCalls, hasRefusal, err := liftContent(response.Content)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
@@ -38,12 +38,12 @@ func (profile Profile) liftResponseWithTier(call provider.Call, response *anthro
 	}
 	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
 	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
@@ -227,11 +227,4 @@ func continuationForResponse(call provider.Call, response *anthropic.Message, st
 		return nil
 	}
 	return &llm.Continuation{Handle: "bedrock-messages:" + response.ID, EndpointID: call.EndpointID, Model: string(response.Model), Pinned: true, ProviderStates: append([]llm.ProviderState(nil), states...)}
-}
-
-func invalidResponseError(call provider.Call, requestID, message string) *provider.Error {
-	mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, message)
-	mapped.Provider.RequestID = requestID
-	mapped.OperationID = call.OperationKey
-	return mapped
 }
