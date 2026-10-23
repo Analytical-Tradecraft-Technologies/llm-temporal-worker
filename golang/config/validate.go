@@ -304,29 +304,45 @@ func (codec PayloadCodecConfig) validate() error {
 	if codec.Kind != PayloadCodecAES256GCM {
 		return fmt.Errorf("temporal.payload_codec.kind must be %s", PayloadCodecAES256GCM)
 	}
-	if len(codec.Keys) == 0 {
-		return fmt.Errorf("temporal.payload_codec.keys must not be empty")
+	return validateKeyRing(codec.Keys, "temporal.payload_codec.keys", payloadCodecKeyIDPattern, "1-64 characters from [A-Za-z0-9._-]")
+}
+
+// keyRingKey is the shape shared by every rotating key list: an ID, a primary
+// flag and the secret holding the key material.
+type keyRingKey struct {
+	ID      string
+	Primary bool
+	Secret  SecretRef
+}
+
+// validateKeyRing checks a rotating key list: it must be non-empty, IDs must
+// match idPattern (described by idRule) and be unique, every secret must be
+// valid, and exactly one key must be primary.
+func validateKeyRing[K PayloadCodecKey | HandleKey](keys []K, path string, idPattern *regexp.Regexp, idRule string) error {
+	if len(keys) == 0 {
+		return fmt.Errorf("%s must not be empty", path)
 	}
 	primary := 0
-	seen := make(map[string]struct{}, len(codec.Keys))
-	for index, key := range codec.Keys {
-		path := fmt.Sprintf("temporal.payload_codec.keys[%d]", index)
-		if !payloadCodecKeyIDPattern.MatchString(key.ID) {
-			return fmt.Errorf("%s.id must be 1-64 characters from [A-Za-z0-9._-]", path)
+	seen := make(map[string]struct{}, len(keys))
+	for index, entry := range keys {
+		key := keyRingKey(entry)
+		keyPath := fmt.Sprintf("%s[%d]", path, index)
+		if !idPattern.MatchString(key.ID) {
+			return fmt.Errorf("%s.id must be %s", keyPath, idRule)
 		}
 		if _, exists := seen[key.ID]; exists {
-			return fmt.Errorf("%s duplicate key ID %q", path, key.ID)
+			return fmt.Errorf("%s duplicate key ID %q", keyPath, key.ID)
 		}
 		seen[key.ID] = struct{}{}
 		if key.Primary {
 			primary++
 		}
-		if err := key.Secret.Validate(path + ".secret"); err != nil {
+		if err := key.Secret.Validate(keyPath + ".secret"); err != nil {
 			return err
 		}
 	}
 	if primary != 1 {
-		return fmt.Errorf("temporal.payload_codec.keys must contain exactly one primary key")
+		return fmt.Errorf("%s must contain exactly one primary key", path)
 	}
 	return nil
 }
@@ -941,31 +957,7 @@ func (continuation ContinuationConfig) validate() error {
 	if continuation.RetainCanonicalTranscript != nil && !*continuation.RetainCanonicalTranscript {
 		return fmt.Errorf("continuation.retain_canonical_transcript must be true: checkpoints always retain the canonical transcript")
 	}
-	if len(continuation.HandleKeys) == 0 {
-		return fmt.Errorf("continuation.handle_keys must not be empty")
-	}
-	primary := 0
-	seen := make(map[string]struct{}, len(continuation.HandleKeys))
-	for index, key := range continuation.HandleKeys {
-		path := fmt.Sprintf("continuation.handle_keys[%d]", index)
-		if !continuationHandleKeyIDPattern.MatchString(key.ID) {
-			return fmt.Errorf("%s.id must be 1-32 characters from [A-Za-z0-9_-]", path)
-		}
-		if _, exists := seen[key.ID]; exists {
-			return fmt.Errorf("%s duplicate key ID %q", path, key.ID)
-		}
-		seen[key.ID] = struct{}{}
-		if key.Primary {
-			primary++
-		}
-		if err := key.Secret.Validate(path + ".secret"); err != nil {
-			return err
-		}
-	}
-	if primary != 1 {
-		return fmt.Errorf("continuation.handle_keys must contain exactly one primary key")
-	}
-	return nil
+	return validateKeyRing(continuation.HandleKeys, "continuation.handle_keys", continuationHandleKeyIDPattern, "1-32 characters from [A-Za-z0-9_-]")
 }
 
 func (telemetry TelemetryConfig) validate(environment string) error {
