@@ -37,8 +37,11 @@ type fanoutNode struct {
 	inPlace   []*fanoutNode
 	props     map[string][]*fanoutNode
 	wildProps []*fanoutNode
-	items     []*fanoutNode
-	names     []*fanoutNode
+	// prefix holds the prefixItems schemas by array index; items applies to
+	// every later index.
+	prefix []*fanoutNode
+	items  *fanoutNode
+	names  []*fanoutNode
 	// built while resolving the in-place closure
 	state   uint8
 	closure map[*fanoutNode]int
@@ -158,9 +161,30 @@ func childBuckets(key string, reached map[*fanoutNode]int) []fanoutBucket {
 		})
 	}
 	add(key+"/*", func(node *fanoutNode) []*fanoutNode { return node.wildProps })
-	add(key+"/[]", func(node *fanoutNode) []*fanoutNode { return node.items })
+	// prefixItems and items apply to disjoint array indices, so each tuple
+	// position is its own location and items covers the indices after it.
+	positions := 0
+	for node := range reached {
+		positions = max(positions, len(node.prefix))
+	}
+	for index := 0; index < positions; index++ {
+		add(key+"/"+strconv.Itoa(index), func(node *fanoutNode) []*fanoutNode {
+			if index < len(node.prefix) {
+				return node.prefix[index : index+1]
+			}
+			return optionalNode(node.items)
+		})
+	}
+	add(key+"/[]", func(node *fanoutNode) []*fanoutNode { return optionalNode(node.items) })
 	add(key+"/<name>", func(node *fanoutNode) []*fanoutNode { return node.names })
 	return buckets
+}
+
+func optionalNode(node *fanoutNode) []*fanoutNode {
+	if node == nil {
+		return nil
+	}
+	return []*fanoutNode{node}
 }
 
 func mergeBuckets(buckets []fanoutBucket) fanoutBucket {
@@ -289,10 +313,8 @@ func (graph *fanoutGraph) link(node *fanoutNode) error {
 	if target := child("additionalProperties"); target != nil {
 		node.wildProps = append(node.wildProps, target)
 	}
-	if target := child("items"); target != nil {
-		node.items = append(node.items, target)
-	}
-	node.items = append(node.items, indexed("prefixItems")...)
+	node.items = child("items")
+	node.prefix = indexed("prefixItems")
 	if target := child("propertyNames"); target != nil {
 		node.names = append(node.names, target)
 	}
@@ -313,7 +335,7 @@ func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) (*fanoutNode, er
 	default:
 		target, ok := graph.anchors[resource][fragment]
 		if !ok {
-			return nil, &FanoutError{Path: node.path, Reason: fmt.Sprintf("has a $ref that does not resolve within the schema")}
+			return nil, &FanoutError{Path: node.path, Reason: "has a $ref that does not resolve within the schema"}
 		}
 		path = target
 	}

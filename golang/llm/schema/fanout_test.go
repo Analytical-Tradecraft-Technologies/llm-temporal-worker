@@ -31,13 +31,14 @@ func dagFanoutDefs(width, levels int) string {
 
 func TestParseRejectsExponentialFanout(t *testing.T) {
 	for name, data := range map[string]string{
-		"recursive allOf":    `{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
-		"recursive via defs": `{"$ref":"#/$defs/n","$defs":{"n":{"properties":{"x":{"anyOf":[{"$ref":"#/$defs/n"},{"$ref":"#/$defs/n"}]}}}}}`,
-		"recursive items":    `{"items":{"oneOf":[{"$ref":"#"},{"$ref":"#"},{"$ref":"#"}]}}`,
-		"DAG fan-out":        dagFanoutSchema(40, 3),
-		"wide DAG":           dagFanoutSchema(1001, 1),
-		"anchor recursion":   `{"$anchor":"top","additionalProperties":{"allOf":[{"$ref":"#top"},{"$ref":"#top"}]}}`,
-		"in-place self ref":  `{"allOf":[{"$ref":"#"}]}`,
+		"recursive allOf":         `{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
+		"recursive via defs":      `{"$ref":"#/$defs/n","$defs":{"n":{"properties":{"x":{"anyOf":[{"$ref":"#/$defs/n"},{"$ref":"#/$defs/n"}]}}}}}`,
+		"recursive items":         `{"items":{"oneOf":[{"$ref":"#"},{"$ref":"#"},{"$ref":"#"}]}}`,
+		"DAG fan-out":             dagFanoutSchema(40, 3),
+		"wide DAG":                dagFanoutSchema(1001, 1),
+		"anchor recursion":        `{"$anchor":"top","additionalProperties":{"allOf":[{"$ref":"#top"},{"$ref":"#top"}]}}`,
+		"in-place self ref":       `{"allOf":[{"$ref":"#"}]}`,
+		"recursive tuple fan-out": `{"prefixItems":[{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			started := time.Now()
@@ -66,6 +67,9 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		"nested $id":         `{"properties":{"a":{"$id":"urn:example:a","$defs":{"x":{"type":"string"}},"$ref":"#/$defs/x"}}}`,
 		"anchor":             `{"properties":{"a":{"$ref":"#leaf"}},"$defs":{"leaf":{"$anchor":"leaf","type":"string"}}}`,
 		"conditional":        `{"if":{"properties":{"kind":{"const":"a"}}},"then":{"required":["a"]},"else":{"required":["b"]}}`,
+		// Tuple positions and trailing items are disjoint array indices.
+		"recursive tuple":       `{"type":"array","prefixItems":[{"$ref":"#"},{"$ref":"#"}]}`,
+		"recursive tuple items": `{"type":"array","prefixItems":[{"$ref":"#"},{"type":"string"}],"items":{"$ref":"#"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := schema.Parse([]byte(data)); err != nil {
