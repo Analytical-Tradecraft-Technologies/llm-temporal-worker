@@ -6,9 +6,10 @@ over historical implementation plans.
 
 ## Temporal entry points
 
-The worker registers four workflows and eight activities on its configured task
-queue. Public callers use `llm.generate.workflow.v1` or
-`llm.compact.workflow.v1`. Generation plans compaction first and calls the
+The worker registers six workflows and nine activities on its configured task
+queue (listed in the [Activity runtime](activity-runtime.md#worker-registration)).
+Public callers use `llm.generate.workflow.v1`, `llm.compact.workflow.v1` or
+`llm.query.workflow.v1`. Generation plans compaction first and calls the
 compaction workflow as a child when necessary. Both use `llm.request.execute.v1`
 for cached results, durable progress, provider execution and completion, and
 `llm.budget.wait.v1` for acquisition with Temporal timers.
