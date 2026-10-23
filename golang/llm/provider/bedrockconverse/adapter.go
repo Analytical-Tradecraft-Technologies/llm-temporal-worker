@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -362,6 +363,9 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	if call.Metadata.SequentialToolUseDropped {
 		diagnostics = append(diagnostics, sequentialToolUseDroppedDiagnostic())
 	}
+	if dropped := reasoningBlocks(response.Output); dropped > 0 {
+		diagnostics = append(diagnostics, reasoningDroppedDiagnostic(dropped))
+	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
 		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
 		Service: llm.ServiceFacts{Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual, ProviderValue: actualTier},
@@ -375,6 +379,30 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 func sequentialToolUseDroppedDiagnostic() llm.Diagnostic {
 	return llm.Diagnostic{Code: "tool_policy_parallel_dropped", Severity: llm.DiagnosticWarning, Path: "/tool_policy/parallel",
 		Message: "Bedrock Converse cannot restrict a turn to one tool call; parallel false was not sent to the provider"}
+}
+
+// reasoningDroppedDiagnostic tells the caller that the provider returned
+// reasoning the normalized output omits; its tokens are still in the usage.
+// Dropping with a diagnostic is the only permitted lossy lift (#1504).
+func reasoningDroppedDiagnostic(blocks int) llm.Diagnostic {
+	return llm.Diagnostic{Code: "reasoning_dropped", Severity: llm.DiagnosticWarning, Path: "/output",
+		Message: "Bedrock Converse returned reasoning content that the normalized output omits",
+		Details: map[string]string{"blocks": strconv.Itoa(blocks)}}
+}
+
+// reasoningBlocks counts the reasoning content blocks liftOutput omits.
+func reasoningBlocks(output types.ConverseOutput) int {
+	message, ok := output.(*types.ConverseOutputMemberMessage)
+	if !ok || message == nil {
+		return 0
+	}
+	count := 0
+	for _, block := range message.Value.Content {
+		if _, ok := block.(*types.ContentBlockMemberReasoningContent); ok {
+			count++
+		}
+	}
+	return count
 }
 
 func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.Item, bool, error) {
@@ -421,7 +449,8 @@ func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.It
 		case *types.ContentBlockMemberReasoningContent:
 			// Some Converse models always emit reasoning. The adapter does not
 			// replay provider reasoning, so it is omitted from the normalized
-			// output rather than failing an otherwise valid paid response.
+			// output rather than failing an otherwise valid paid response;
+			// liftResponse reports the omission as reasoning_dropped.
 			continue
 		default:
 			return nil, false, fmt.Errorf("content block %d has unsupported type %T", index, block)
