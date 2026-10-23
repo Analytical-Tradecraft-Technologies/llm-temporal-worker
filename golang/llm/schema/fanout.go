@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,13 +60,26 @@ type fanoutGraph struct {
 	resources map[string]string            // node path -> enclosing resource root path
 	anchors   map[string]map[string]string // resource root -> anchor -> node path
 	pending   []*fanoutNode
+	// nextID numbers nodes in creation order; a path is never indexed twice.
+	nextID int
+	// bases holds each resource root's base URI, joined from $id the way the
+	// compiler joins it, and uris the resource root path each URI names.
+	bases map[string]string
+	uris  map[string]string
+	// aliased is the first resource whose URI another resource already names.
+	// The compiler would resolve its references against that other resource,
+	// which this analysis does not model, so the schema is refused.
+	aliased string
 }
 
 // schemaFanout returns the worst-case number of subschema applications at
 // one instance location for an instance at most maxDepth deep.
 func schemaFanout(root map[string]any, maxDepth int) (int, error) {
-	graph := &fanoutGraph{root: root, nodes: map[string]*fanoutNode{}, resources: map[string]string{}, anchors: map[string]map[string]string{}}
-	graph.index(root, "", "")
+	graph := &fanoutGraph{root: root, nodes: map[string]*fanoutNode{}, resources: map[string]string{}, anchors: map[string]map[string]string{}, bases: map[string]string{}, uris: map[string]string{schemaResourceURL: ""}}
+	graph.index(root, "", "", schemaResourceURL)
+	if graph.aliased != "" {
+		return 0, &FanoutError{Path: graph.aliased, Reason: "declares a $id that names another schema resource"}
+	}
 	rootNode := graph.node("")
 	for len(graph.pending) > 0 {
 		node := graph.pending[len(graph.pending)-1]
@@ -350,15 +364,62 @@ func (graph *fanoutGraph) node(path string) *fanoutNode {
 	return graph.nodes[path]
 }
 
+// add creates the node for path unless one exists. A reference can index an
+// annotation's descendant before the annotation itself; keeping the first
+// node keeps every node's ID distinct.
+func (graph *fanoutGraph) add(path, resource string, value map[string]any) bool {
+	if _, exists := graph.nodes[path]; exists {
+		return false
+	}
+	graph.nodes[path] = &fanoutNode{id: graph.nextID, path: path, value: value}
+	graph.nextID++
+	graph.resources[path] = resource
+	return true
+}
+
+// joinBase resolves a $id against base as the compiler does, without the
+// fragment. ok is false when either does not parse.
+func joinBase(base, id string) (string, bool) {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return "", false
+	}
+	if index := strings.IndexByte(id, '#'); index >= 0 {
+		id = id[:index]
+	}
+	idURL, err := url.Parse(id)
+	if err != nil {
+		return "", false
+	}
+	resolved := baseURL.ResolveReference(idURL)
+	if !idURL.IsAbs() && baseURL.Opaque != "" {
+		resolved.Opaque = baseURL.Opaque
+	}
+	return resolved.String(), true
+}
+
 // index records every schema object reachable through schema keywords, the
-// resource (nearest $id) each belongs to, and each resource's anchors.
-func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
+// resource (nearest $id) each belongs to, and each resource's anchors. base
+// is the enclosing resource's base URI.
+func (graph *fanoutGraph) index(value map[string]any, path, resource, base string) {
 	// An empty $id keeps the enclosing resource, as the compiler does.
 	if id, ok := value["$id"].(string); ok && id != "" {
 		resource = path
+		joined, ok := joinBase(base, id)
+		if owner, taken := graph.uris[joined]; !ok || (taken && owner != path) {
+			if graph.aliased == "" {
+				graph.aliased = path
+			}
+		}
+		base = joined
+		graph.uris[joined] = path
 	}
-	graph.nodes[path] = &fanoutNode{id: len(graph.nodes), path: path, value: value}
-	graph.resources[path] = resource
+	if path == resource {
+		graph.bases[path] = base
+	}
+	if !graph.add(path, resource, value) {
+		return
+	}
 	graph.pending = append(graph.pending, graph.nodes[path])
 	if anchor, ok := value["$anchor"].(string); ok {
 		if graph.anchors[resource] == nil {
@@ -373,23 +434,22 @@ func (graph *fanoutGraph) index(value map[string]any, path, resource string) {
 			children, _ := child.(map[string]any)
 			for name, nested := range children {
 				if object, ok := nested.(map[string]any); ok {
-					graph.index(object, pointerJoin(childPath, name), resource)
+					graph.index(object, pointerJoin(childPath, name), resource, base)
 				}
 			}
 		case "additionalProperties", "propertyNames", "items", "not", "if", "then", "else":
 			if object, ok := child.(map[string]any); ok {
-				graph.index(object, childPath, resource)
+				graph.index(object, childPath, resource, base)
 			} else if _, ok := child.(bool); ok {
 				// A boolean schema applies once and has no subschemas, but a
 				// $ref may still name it.
-				graph.nodes[childPath] = &fanoutNode{id: len(graph.nodes), path: childPath}
-				graph.resources[childPath] = resource
+				graph.add(childPath, resource, nil)
 			}
 		case "prefixItems", "allOf", "anyOf", "oneOf":
 			children, _ := child.([]any)
 			for index, nested := range children {
 				if object, ok := nested.(map[string]any); ok {
-					graph.index(object, childPath+"/"+strconv.Itoa(index), resource)
+					graph.index(object, childPath+"/"+strconv.Itoa(index), resource, base)
 				}
 			}
 		}
@@ -524,10 +584,9 @@ func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 			return nil
 		}
 		// Its nodes join the pending list that schemaFanout links.
-		graph.index(target, path, resource)
+		graph.index(target, path, resource, graph.bases[resource])
 	case bool:
-		graph.nodes[path] = &fanoutNode{id: len(graph.nodes), path: path}
-		graph.resources[path] = resource
+		graph.add(path, resource, nil)
 	default:
 		return nil
 	}

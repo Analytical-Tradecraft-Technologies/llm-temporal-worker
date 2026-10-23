@@ -52,6 +52,13 @@ func TestParseRejectsExponentialFanout(t *testing.T) {
 		// root's fanning definition, as the validator resolves it.
 		"empty $id":           `{"properties":{"x":{"$id":"","$ref":"#/$defs/n","$defs":{"n":{}}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
 		"fan-out in a branch": `{"if":{"type":"object"},"then":{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}}`,
+		// A reference that indexes an annotation's descendant before the
+		// annotation must not give two nodes one ID.
+		"overlapping annotation targets": `{"allOf":[{"$ref":"#/default"},{"$ref":"#/default/prefixItems/0"}],"default":{"prefixItems":[{},{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}}`,
+		// The compiler resolves a resource that reuses the retrieval URI
+		// against the document root. (It refuses a duplicate declared $id
+		// itself.)
+		"nested $id naming the retrieval URI": `{"$id":"urn:outer","properties":{"x":{"$id":"urn:llmtw/schema/v1/root","$ref":"#/$defs/n","$defs":{"n":{}}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			started := time.Now()
@@ -73,13 +80,14 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		properties[i] = fmt.Sprintf(`"p%d":{"anyOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}`, i)
 	}
 	for name, data := range map[string]string{
-		"wide object":        `{"type":"object","properties":{` + strings.Join(properties, ",") + `},"additionalProperties":false}`,
-		"recursive tree":     `{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"$ref":"#"}}}}`,
-		"recursive via defs": `{"$ref":"#/$defs/node","$defs":{"node":{"type":"object","properties":{"next":{"anyOf":[{"$ref":"#/$defs/node"},{"type":"null"}]}}}}}`,
-		"bounded DAG":        dagFanoutSchema(20, 2),
-		"nested $id":         `{"properties":{"a":{"$id":"urn:example:a","$defs":{"x":{"type":"string"}},"$ref":"#/$defs/x"}}}`,
-		"anchor":             `{"properties":{"a":{"$ref":"#leaf"}},"$defs":{"leaf":{"$anchor":"leaf","type":"string"}}}`,
-		"conditional":        `{"if":{"properties":{"kind":{"const":"a"}}},"then":{"required":["a"]},"else":{"required":["b"]}}`,
+		"wide object":         `{"type":"object","properties":{` + strings.Join(properties, ",") + `},"additionalProperties":false}`,
+		"recursive tree":      `{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"$ref":"#"}}}}`,
+		"recursive via defs":  `{"$ref":"#/$defs/node","$defs":{"node":{"type":"object","properties":{"next":{"anyOf":[{"$ref":"#/$defs/node"},{"type":"null"}]}}}}}`,
+		"bounded DAG":         dagFanoutSchema(20, 2),
+		"nested $id":          `{"properties":{"a":{"$id":"urn:example:a","$defs":{"x":{"type":"string"}},"$ref":"#/$defs/x"}}}`,
+		"sibling nested $ids": `{"$id":"https://example.test/root.json","properties":{"a":{"$id":"a.json","type":"string"},"b":{"$id":"b.json","type":"number"}}}`,
+		"anchor":              `{"properties":{"a":{"$ref":"#leaf"}},"$defs":{"leaf":{"$anchor":"leaf","type":"string"}}}`,
+		"conditional":         `{"if":{"properties":{"kind":{"const":"a"}}},"then":{"required":["a"]},"else":{"required":["b"]}}`,
 		// An unused definition cannot reject the schema, and a reference may
 		// name a boolean schema.
 		"unused dangling definition": `{"type":"string","$defs":{"unused":{"$ref":"#/$defs/missing"},"also":{"$ref":"#nowhere"}}}`,
