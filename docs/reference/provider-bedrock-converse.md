@@ -73,6 +73,13 @@ mode as an unsupported capability before dispatch, for automatic, required, and
 named choices alike. Best-effort mode sends the request without the restriction
 and adds a `tool_policy_parallel_dropped` warning diagnostic to the response.
 
+Some Converse models return reasoning content blocks even when no reasoning
+was requested. The adapter cannot replay provider reasoning, so it omits those
+blocks from the normalized output rather than failing the paid response. The
+response then carries a `reasoning_dropped` warning diagnostic whose
+`details.blocks` counts the omitted blocks, and their tokens remain in
+`usage.output_tokens`.
+
 Requests are lowered to `ConverseInput` and responses are lifted to the
 provider-neutral response model. AWS SigV4 signing and the default credential
 chain remain inside the SDK client; credentials never enter the normalized

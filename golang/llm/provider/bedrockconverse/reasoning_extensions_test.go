@@ -12,17 +12,56 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
-func TestLiftOmitsReasoningContentWithoutFailingTheResponse(t *testing.T) {
+// Reasoning the adapter cannot replay is omitted from the output, but never
+// silently: the response carries a reasoning_dropped warning (#1504).
+func TestLiftOmitsReasoningContentWithADiagnostic(t *testing.T) {
 	text := "reasoning text"
-	items, hasTools, err := liftOutput(&types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{
-		&types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberReasoningText{Value: types.ReasoningTextBlock{Text: &text}}},
-		&types.ContentBlockMemberText{Value: "answer"},
-	}}}, nil)
-	if err != nil {
-		t.Fatalf("reasoning content failed the response: %v", err)
-	}
-	if hasTools || len(items) != 1 || items[0].(llm.Message).Content[0].(llm.TextPart).Text != "answer" {
-		t.Fatalf("lifted output = %#v", items)
+	adapter := &Adapter{endpointID: bedrockFixtureEndpoint, profile: mustBedrockConverseProfile(t)}
+	call := provider.Call{OperationKey: "op-reasoning", EndpointID: bedrockFixtureEndpoint, Model: bedrockFixtureModel, ServiceClass: llm.ServiceClassStandard}
+	for name, test := range map[string]struct {
+		content []types.ContentBlock
+		dropped string
+	}{
+		"reasoning then text": {content: []types.ContentBlock{
+			&types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberReasoningText{Value: types.ReasoningTextBlock{Text: &text}}},
+			&types.ContentBlockMemberText{Value: "answer"},
+		}, dropped: "1"},
+		"redacted and text reasoning": {content: []types.ContentBlock{
+			&types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberRedactedContent{Value: []byte("opaque")}},
+			&types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberReasoningText{Value: types.ReasoningTextBlock{Text: &text}}},
+			&types.ContentBlockMemberText{Value: "answer"},
+		}, dropped: "2"},
+		"no reasoning": {content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "answer"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := bedrockConverseResponse("unused", 3, 4)
+			response.Output = &types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: test.content}}
+			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
+			if err != nil {
+				t.Fatalf("reasoning content failed the response: %v", err)
+			}
+			if len(lifted.Output) != 1 || lifted.Output[0].(llm.Message).Content[0].(llm.TextPart).Text != "answer" || lifted.Usage.OutputTokens != 4 {
+				t.Fatalf("lifted output = %#v usage = %#v", lifted.Output, lifted.Usage)
+			}
+			var found []llm.Diagnostic
+			for _, diagnostic := range lifted.Diagnostics {
+				if diagnostic.Code == "reasoning_dropped" {
+					found = append(found, diagnostic)
+				}
+			}
+			if test.dropped == "" {
+				if len(found) != 0 {
+					t.Fatalf("diagnostics = %#v, want none", lifted.Diagnostics)
+				}
+				return
+			}
+			if len(found) != 1 || found[0].Severity != llm.DiagnosticWarning || found[0].Details["blocks"] != test.dropped {
+				t.Fatalf("diagnostics = %#v, want one reasoning_dropped warning for %s blocks", lifted.Diagnostics, test.dropped)
+			}
+			if _, err := json.Marshal(lifted); err != nil {
+				t.Fatalf("lifted response does not encode: %v", err)
+			}
+		})
 	}
 }
 
