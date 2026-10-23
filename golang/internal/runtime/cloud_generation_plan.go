@@ -121,6 +121,10 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 		return llm.GenerationPlanV1{}, nil
 	}
 	providers := r.execution.admission.planning.providers
+	// Selection below is given the caller's request, so it can still tell a
+	// worker-inserted output limit from the caller's own.
+	selection := input
+	defaulted := providers.outputDefaulted(input.Request)
 	input.Request, err = providers.normalizeRequest(input.Request)
 	if err != nil {
 		return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
@@ -140,6 +144,9 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 			model.Routes[i].ContextBytes = 0
 		}
 		catalog.Models[name] = model
+	}
+	if defaulted {
+		catalog = withoutOutputCeilings(catalog)
 	}
 	plan, err := providers.planner.Plan(ctx, routing.Input{Request: input.Request, Catalog: catalog, Health: copyProviderHealth(providers.health)})
 	if err != nil || len(plan.Candidates) == 0 {
@@ -184,7 +191,8 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 				route = configured
 			}
 		}
-		if !route.SupportsOutputLimit(input.Request) {
+		request := providers.candidateSemantic(input.Request, candidate, defaulted)
+		if !route.SupportsOutputLimit(request) {
 			continue
 		}
 		// Compacting cannot make a blocked route selectable. The read is best
@@ -192,7 +200,7 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 		if blocked, err := providers.routeBlocked(ctx, candidate); err == nil && blocked {
 			continue
 		}
-		err := r.capabilities.BudgetEstimator.ValidateContext(input.Request, candidate)
+		err := r.capabilities.BudgetEstimator.ValidateContext(request, candidate)
 		if err != nil && !errors.Is(err, budget.ErrContextLimit) {
 			return llm.GenerationPlanV1{}, executionError(provider.CodeInvalidArgument)
 		}
@@ -209,7 +217,7 @@ func (r *CloudExecutionRuntime) computeGenerationPlan(ctx context.Context, reque
 		// reserved or dispatched; any failure leaves compaction requested.
 		// A failure here is the expected reason to compact, so it is not logged.
 		now := r.now()
-		_, err := r.execution.admission.planning.Generate(observability.WithLogger(ctx, nil), input, BudgetAttempt{OperationID: "compaction-plan",
+		_, err := r.execution.admission.planning.Generate(observability.WithLogger(ctx, nil), selection, BudgetAttempt{OperationID: "compaction-plan",
 			GenerationID: r.options.BudgetGeneration, QuotedAt: now, ExpiresAt: now.Add(cache.MaxFillLease)})
 		if ctx.Err() != nil {
 			return llm.GenerationPlanV1{}, ctx.Err()

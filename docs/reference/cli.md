@@ -190,8 +190,12 @@ llm-temporal-worker validate-config --config ./config.yaml
 On success it prints the effective configuration digest as a `config version`.
 In the production binary this command performs schema/default validation only;
 it does not read secret values, load catalog file contents, dial Temporal,
-connect to Redis or S3, or contact a provider. Use `worker` startup as the
-full dependency and reference-validation gate.
+connect to Redis or S3, or contact a provider. It does apply the checks the
+worker makes before resolving secrets: a production or `state.kind: durable`
+configuration must have an `authorization` policy and durable state, and the
+error names the missing field. `print-effective-config` applies the same
+checks. Use `worker` startup as the full dependency and reference-validation
+gate.
 
 ## `print-effective-config`
 
@@ -223,7 +227,10 @@ content; the reload then publishes only that content. A file that is still
 being written in place is therefore not reloaded until the write has finished,
 and an atomic rename or ConfigMap symlink swap is reloaded about two seconds
 after it lands. `SIGHUP` is an explicit request and reloads the file as it is
-at that moment, without waiting for it to settle.
+at that moment, without waiting for it to settle. A `SIGHUP` that arrives
+while the worker is still starting (dialing Redis, storage or Temporal) does
+not stop the process: it is held and becomes the first reload once the worker
+runs. Further signals during startup coalesce into that one reload.
 
 An unreadable or invalid replacement leaves the active snapshot and readiness
 state unchanged. The worker records `llmtw_config_reload_total{outcome="failure"}`

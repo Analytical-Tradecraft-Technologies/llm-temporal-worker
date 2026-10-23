@@ -16,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
+	workerruntime "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime"
 )
 
 const (
@@ -95,7 +96,11 @@ func executeHealthServerCommand(ctx context.Context, args []string, options Comm
 	flags := flag.NewFlagSet("health-server", flag.ContinueOnError)
 	flags.SetOutput(options.ErrOut)
 	address := flags.String("address", defaultHealthAddress, "health listener address")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeCommandError(options.ErrOut, errors.New("health-server takes no positional arguments"))
 		return 2
 	}
 	state := httpserver.NewHealthState()
@@ -198,6 +203,10 @@ func executeConfigCommand(ctx context.Context, args []string, options CommandOpt
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}
+	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
 	if printEffective {
 		_, _ = options.Out.Write(snapshot.Canonical())
 		_, _ = io.WriteString(options.Out, "\n")
@@ -228,6 +237,10 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}
+	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
 	if options.RunWorkerFile == nil && options.RunWorker == nil {
 		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
 		return 1
@@ -251,7 +264,17 @@ func executeBudgetInitializeCommand(ctx context.Context, args []string, options 
 	path := flags.String("config", defaultConfigPath, "worker configuration YAML path")
 	apply := flags.Bool("apply", false, "initialize an unused budget namespace; never reset existing budgets")
 	timeout := flags.Duration("timeout", 30*time.Second, "overall timeout, at most 5m")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *timeout <= 0 || *timeout > 5*time.Minute {
+	// The flag package reports its own parse errors; every other invalid
+	// invocation names its reason too (#1533).
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeCommandError(options.ErrOut, errors.New("budget-initialize takes no positional arguments"))
+		return 2
+	}
+	if *timeout <= 0 || *timeout > 5*time.Minute {
+		writeCommandError(options.ErrOut, errors.New("budget-initialize --timeout must be greater than 0s and at most 5m"))
 		return 2
 	}
 	data, err := readConfig(*path)

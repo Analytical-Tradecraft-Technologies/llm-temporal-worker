@@ -15,23 +15,23 @@ import (
 
 func liftResponse(call provider.Call, response *responses.Response, requestID string) (llm.Response, error) {
 	if response == nil {
-		return llm.Response{}, invalidResponseError(call, requestID, "provider returned an empty response")
+		return llm.Response{}, provider.NewInvalidResponseError(call, requestID, "provider returned an empty response")
 	}
 	actual := serviceClassForTier(response.ServiceTier)
 	output, hasToolCalls, hasRefusal, err := liftOutput(response.Output, response.Status == responses.ResponseStatusIncomplete)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
 	status, err := liftStatus(response.Status, response.IncompleteDetails.Reason, hasToolCalls, hasRefusal)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
 	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
@@ -54,7 +54,7 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 	}
 	input, err := usageutil.OrdinaryInput(response.Usage.InputTokens, response.Usage.InputTokensDetails.CachedTokens, response.Usage.InputTokensDetails.CacheWriteTokens)
 	if err != nil {
-		mapped := invalidResponseError(call, requestID, err.Error())
+		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
 		mapped.Provider.ResponseID = response.ID
 		return llm.Response{}, mapped
 	}
@@ -391,11 +391,4 @@ func statefulContinuationEnabled(call provider.Call) bool {
 		return true
 	}
 	return !params.Store.Valid() || params.Store.Value
-}
-
-func invalidResponseError(call provider.Call, requestID, message string) *provider.Error {
-	mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, message)
-	mapped.Provider.RequestID = requestID
-	mapped.OperationID = call.OperationKey
-	return mapped
 }

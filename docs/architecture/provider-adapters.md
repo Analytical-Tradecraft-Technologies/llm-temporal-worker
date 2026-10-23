@@ -274,6 +274,11 @@ usage/cost lifter.
   does not accept URL sources and the worker does not fetch URLs, so a URL
   image or document is an `unsupported_capability` compile error in strict
   and best-effort mode alike. Bedrock Converse accepts text parts only.
+- Bedrock Converse lifts the `content_filtered` and `guardrail_intervened`
+  stop reasons as status `content_filtered`, as the Chat and Responses
+  adapters lift provider content filtering: a service filter or a configured
+  guardrail stopped the output, not the model. The raw stop reason stays in
+  the provider facts.
 - The service tier is a Bedrock InvokeModel parameter, not an Anthropic body
   field: the resolved tier (`flex`, `default` or `priority`) is sent as the
   `X-Amzn-Bedrock-Service-Tier` request header, which the AWS API model binds
@@ -352,6 +357,17 @@ response tier as optional evidence:
 Pricing and cost metrics use the attempted class whenever no actual class is
 reported, and the actual-class metric records `unknown`.
 
+Structured output is validated against the caller's JSON Schema only after
+its numbers are bounded: each JSON number may have at most 1000 integer and
+fraction digits and an explicit decimal exponent of at most ±1000
+(`schema.MaxNumberDigits` and `schema.MaxNumberExponent`). The third-party
+validator converts numbers to `big.Rat` and dereferences a failed conversion,
+so a model answer such as `1e3000000` would otherwise panic the Activity after
+payment. A number outside the bound is a provider invalid-response error at
+lift, and any other validator panic is recovered into a validation failure. The
+same bound applies to every number in a caller's output schema, which is
+rejected rather than compiled with the constraint silently dropped.
+
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that
 takes no arguments; an empty or whitespace-only string lifts as the empty
@@ -423,6 +439,15 @@ Adapters translate provider errors into the common error model with:
 - retry hint and provider retry-after;
 - whether any usage/cost was reported;
 - redacted raw metadata allowed by configuration.
+
+An SDK error raised before the request reaches the transport is a definite
+pre-dispatch failure that may move to another route, never an ambiguous
+outcome. This covers AWS credential resolution while signing (Anthropic on AWS
+and both Bedrock adapters), an Azure token-credential failure on an Azure
+OpenAI Responses route, and any other error the OpenAI Chat and Responses SDK
+raises before the dispatch probe. A credential failure has the
+`authentication` code. Azure's token middleware runs inside the probe, so its
+failures are recognised by the credential marker instead of by the probe.
 
 The adapter supplies facts. The engine combines those facts with ledger state,
 route policy, and caller deadline to choose the next action.

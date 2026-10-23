@@ -208,16 +208,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	if err := validateContinuationReservationEnvelope(len(operation.Reservations), len(request.Reservations)); err != nil {
 		return admission.ContinueResult{}, err
 	}
-	keys := make([]string, 2+len(operation.Reservations)+len(request.Reservations))
-	keys[0] = store.space.operationIndexKey(request.OperationID)
-	keys[1] = operationKey
-	for index, reservation := range operation.Reservations {
-		keys[index+2] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
-	}
-	base := 2 + len(operation.Reservations)
-	for index, reservation := range request.Reservations {
-		keys[base+index] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
-	}
+	keys := store.operationKeys(request.OperationID, operationKey, operation.Reservations, request.Reservations)
 	ttl := ttlSeconds(store.clock(), request.ExpiresAt)
 	result, err := store.invoke.Run(ctx, store.function, keys, "continue", request.DispatchToken, string(outcome), strconv.FormatInt(int64(request.Remaining), 10), string(reservations), request.LeaseUntil.Format(time.RFC3339Nano), request.ExpiresAt.Format(time.RFC3339Nano), strconv.FormatInt(int64(ttl), 10))
 	if err != nil {
@@ -270,29 +261,7 @@ func (store *AdmissionStore) Complete(ctx context.Context, request admission.Com
 	if err != nil {
 		return err
 	}
-	operationKey, err := store.operationKeyForID(ctx, request.OperationID)
-	if err != nil {
-		return err
-	}
-	operation, err := store.Get(ctx, request.OperationID)
-	if err != nil {
-		return err
-	}
-	keys := make([]string, 2+len(operation.Reservations))
-	keys[0] = store.space.operationIndexKey(request.OperationID)
-	keys[1] = operationKey
-	for index, reservation := range operation.Reservations {
-		keys[index+2] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
-	}
-	result, err := store.invoke.Run(ctx, store.function, keys, "complete", request.DispatchToken, strconv.FormatInt(int64(request.Actual), 10), string(resultRef), string(attempt), "0")
-	if err != nil {
-		return resolveMutationError(ctx, err)
-	}
-	status, _, _, err := parseFunctionResult(result)
-	if err != nil {
-		return err
-	}
-	return mapStatus(status)
+	return store.settle(ctx, request.OperationID, "complete", request.DispatchToken, strconv.FormatInt(int64(request.Actual), 10), string(resultRef), string(attempt), "0")
 }
 
 func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailRequest) error {
@@ -306,21 +275,23 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 	if err != nil {
 		return err
 	}
-	operationKey, err := store.operationKeyForID(ctx, request.OperationID)
+	return store.settle(ctx, request.OperationID, "fail", request.DispatchToken, string(request.Certainty), strconv.FormatInt(int64(request.Incurred), 10), string(attempt), "0", "0")
+}
+
+// settle runs a terminal Function action against an existing operation. The
+// operation is read first because its reservations name the budget keys the
+// action releases; the Function rechecks the token and state atomically.
+func (store *AdmissionStore) settle(ctx context.Context, operationID, action string, args ...string) error {
+	operationKey, err := store.operationKeyForID(ctx, operationID)
 	if err != nil {
 		return err
 	}
-	operation, err := store.Get(ctx, request.OperationID)
+	operation, err := store.Get(ctx, operationID)
 	if err != nil {
 		return err
 	}
-	keys := make([]string, 2+len(operation.Reservations))
-	keys[0] = store.space.operationIndexKey(request.OperationID)
-	keys[1] = operationKey
-	for index, reservation := range operation.Reservations {
-		keys[index+2] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
-	}
-	result, err := store.invoke.Run(ctx, store.function, keys, "fail", request.DispatchToken, string(request.Certainty), strconv.FormatInt(int64(request.Incurred), 10), string(attempt), strconv.FormatInt(int64(0), 10), "0")
+	keys := store.operationKeys(operationID, operationKey, operation.Reservations)
+	result, err := store.invoke.Run(ctx, store.function, keys, append([]string{action}, args...)...)
 	if err != nil {
 		return resolveMutationError(ctx, err)
 	}
@@ -329,6 +300,19 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 		return err
 	}
 	return mapStatus(status)
+}
+
+// operationKeys lays out the Function keys for a mutation of an existing
+// operation: its index key, its record key, then one budget key per
+// reservation, in order.
+func (store *AdmissionStore) operationKeys(operationID, operationKey string, reservationSets ...[]admission.WindowReservation) []string {
+	keys := []string{store.space.operationIndexKey(operationID), operationKey}
+	for _, reservations := range reservationSets {
+		for _, reservation := range reservations {
+			keys = append(keys, store.space.budgetKey(reservation.PolicyID, reservation.WindowID))
+		}
+	}
+	return keys
 }
 
 func (store *AdmissionStore) Get(ctx context.Context, id string) (admission.Operation, error) {

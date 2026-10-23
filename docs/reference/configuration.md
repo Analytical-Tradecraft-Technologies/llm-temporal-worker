@@ -178,7 +178,14 @@ at such a codec server. This repository does not ship a codec server.
 
 When a request omits `output.max_tokens`, budgeted execution inserts
 `limits.max_output_tokens` into the provider request before compiling it and
-estimating its cost. An explicit caller limit is preserved and reserved instead.
+estimating its cost. For each candidate route whose output ceiling (a
+capability catalog's output tokens, or a synced model's
+`max_completion_tokens` or rules `output_tokens`) is lower, the inserted limit
+is lowered to that ceiling, so the default never makes a route unusable. The
+compiled request, its digest and the reservation use the lowered value. An
+explicit caller limit is preserved and reserved instead, and a route whose
+ceiling is below it is rejected with `unsupported_capability`
+(`route_capability:output.max_tokens`).
 The effective limit is part of the compiled request digest and is reconstructed
 for retries; recovery refuses a different limit under an existing reservation.
 Limits must be positive and fit the providers' signed 32-bit SDK fields. Zero is

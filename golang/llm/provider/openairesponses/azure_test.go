@@ -375,3 +375,75 @@ func TestAzureResourceRootOnlyStripsPathSuffixes(t *testing.T) {
 		}
 	}
 }
+
+type failingAzureTokenCredential struct{ err error }
+
+func (credential failingAzureTokenCredential) GetToken(context.Context, policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	return azcore.AccessToken{}, credential.err
+}
+
+func invokeAzureTokenAdapter(t *testing.T, credential azcore.TokenCredential, transport roundTripFunc) (error, *recordingObserver) {
+	t.Helper()
+	client, err := NewAzureTokenClient(AzureTokenClientConfig{Endpoint: "https://resource.openai.azure.com", APIVersion: "v1",
+		TokenCredential: credential, HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "azure-token", Model: "gpt-contract"},
+		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := &recordingObserver{}
+	_, err = adapter.Invoke(context.Background(), call, observer)
+	return err, observer
+}
+
+// A token-credential failure happens before anything is sent, so it is a
+// pre-dispatch authentication failure that may move to another route, not
+// an ambiguous outcome charged at the full reservation (#1495).
+func TestAzureResponsesTokenCredentialFailureIsNotDispatched(t *testing.T) {
+	cause := errors.New("workload identity token expired")
+	sent := 0
+	err, observer := invokeAzureTokenAdapter(t, failingAzureTokenCredential{err: cause}, func(*http.Request) (*http.Response, error) {
+		sent++
+		return nil, errors.New("unexpected request")
+	})
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
+	}
+	if mapped.Code != provider.CodeAuthentication || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
+		t.Fatalf("mapped error = %#v, want a not-dispatched credential failure", mapped)
+	}
+	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, provider.ErrProviderCredentials) {
+		t.Fatalf("mapped error = %v, want certified pre-dispatch credential failure", mapped)
+	}
+	if sent != 0 || observer.before != 1 || observer.headers != 0 {
+		t.Fatalf("transport calls=%d observer=%#v", sent, observer)
+	}
+}
+
+// A transport failure after the token was attached may have reached the
+// provider, so it stays ambiguous.
+func TestAzureResponsesTokenTransportFailureStaysAmbiguous(t *testing.T) {
+	sent := 0
+	err, _ := invokeAzureTokenAdapter(t, &fakeAzureTokenCredential{}, func(request *http.Request) (*http.Response, error) {
+		sent++
+		if request.Header.Get("Authorization") != "Bearer azure-token" {
+			t.Errorf("Authorization = %q", request.Header.Get("Authorization"))
+		}
+		return nil, io.ErrUnexpectedEOF
+	})
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAmbiguous || errors.Is(mapped, provider.ErrProviderPreDispatch) || sent != 1 {
+		t.Fatalf("Invoke() error = %#v after %d sends, want an ambiguous dispatch", err, sent)
+	}
+}
