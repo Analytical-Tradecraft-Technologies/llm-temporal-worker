@@ -487,16 +487,32 @@ func verifyReplicaSpread(deployment, podSpec map[string]any) error {
 	if !ok {
 		return errors.New("deployment selector must use matchLabels")
 	}
+	template, _ := mapAt(spec, "template")
+	metadata, _ := mapAt(template, "metadata")
+	podLabels, _ := mapAt(metadata, "labels")
+	// The selector must be plain matchLabels, every one of which the pod
+	// template carries, and must include the deployment's own selector, so it
+	// matches exactly the worker pods; matchExpressions cannot be checked here.
 	selectsWorkers := func(term map[string]any) bool {
 		if stringAt(term, "topologyKey") != "kubernetes.io/hostname" {
 			return false
 		}
-		labelSelector, ok := mapAt(term, "labelSelector")
+		labelSelector, _ := mapAt(term, "labelSelector")
+		labels, ok := exactMatchLabels(labelSelector)
 		if !ok {
 			return false
 		}
-		labels, ok := mapAt(labelSelector, "matchLabels")
-		return ok && containsStringLabels(labels, workerLabels)
+		for key, value := range workerLabels {
+			if labels[key] != value {
+				return false
+			}
+		}
+		for key, value := range labels {
+			if podValue, ok := podLabels[key].(string); !ok || podValue != value {
+				return false
+			}
+		}
+		return true
 	}
 	constraints, _ := listAt(podSpec, "topologySpreadConstraints")
 	for _, entry := range constraints {
