@@ -564,10 +564,13 @@
         "golang/deploy/kubernetes/base/deployment.yaml",
         "golang/integration/compose/live_lifecycle_test.go",
         "golang/integration/kubernetes/manifests_test.go",
-        "golang/integration/readiness_integration_test.go"
+        "golang/integration/readiness_integration_test.go",
+        "golang/integration/temporal/live_recovery_test.go",
+        "golang/internal/runtime/cloud_workflow_concurrency_integration_test.go"
       ],
       "verification": {
         "make_targets": [
+          "cloud-workflow-integration",
           "compose-live-integration",
           "deployment-policy-verify",
           "image-verify",
@@ -577,6 +580,14 @@
           {
             "path": ".github/workflows/master.yml",
             "job": "verify"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify-cloud-workflow"
+          },
+          {
+            "path": ".github/workflows/master.yml",
+            "job": "verify-image"
           }
         ]
       },

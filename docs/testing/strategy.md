@@ -460,7 +460,12 @@ Temporal/Compose gate adds the real worker and task-queue boundary.
 - strict configuration schema/golden effective config;
 - Docker non-root/read-only execution and health probes;
 - Kubernetes Kustomize build and policy assertions;
-- Compose one- and two-replica smoke;
+- Compose single-worker lifecycle smoke (`make compose-live-integration`:
+  worker readiness tracking a Redis stop and restart);
+- two workers sharing real Temporal and Redis: concurrent replay of one
+  operation (`make cloud-workflow-integration`) and worker-loss recovery
+  (the Temporal recovery suite in `make compose-live-integration`); a
+  two-pod Compose or Kubernetes deployment run is not yet checked in;
 - Redis restart/failover and persistence configuration;
 - signal/reload behavior with valid and invalid snapshots;
 - log/trace/heartbeat deny-field assertions;
