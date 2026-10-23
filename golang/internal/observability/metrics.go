@@ -69,6 +69,7 @@ type Metrics struct {
 	pendingPolls         *prometheus.CounterVec
 	costStatus           *prometheus.CounterVec
 	langfuseExportFailed *prometheus.CounterVec
+	routeHeldTotal       *prometheus.CounterVec
 	workerPolling        prometheus.Gauge
 	heartbeatAge         prometheus.Gauge
 }
@@ -83,6 +84,19 @@ var activityFailureOrigins = map[string]struct{}{
 	"provider": {},
 	"caller":   {},
 	"budget":   {},
+}
+
+// RouteHeld reasons name why shared route health kept planning off a route.
+const (
+	RouteHeldCircuitOpen     = "circuit_open"
+	RouteHeldCreditExhausted = "credit_exhausted"
+	RouteHeldBillingIssue    = "billing_issue"
+)
+
+var routeHeldReasons = map[string]struct{}{
+	RouteHeldCircuitOpen:     {},
+	RouteHeldCreditExhausted: {},
+	RouteHeldBillingIssue:    {},
 }
 
 var langfuseExportFailureReasons = map[string]struct{}{
@@ -165,6 +179,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.pendingPolls = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_poll_total", Help: "Provider-owned operation poll outcomes."}, []string{"outcome"})
 	m.costStatus = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_status_total", Help: "Exact and unknown cost accounting events; amounts remain in the durable ledger."}, []string{"endpoint", "model", "class", "status", "method"})
 	m.langfuseExportFailed = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_langfuse_export_failures_total", Help: "Failed Langfuse export Activity attempts by bounded reason."}, []string{"reason"})
+	m.routeHeldTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_held_total", Help: "Route candidates provider planning skipped because shared route health holds them."}, []string{"endpoint", "reason"})
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	collectors := []prometheus.Collector{
@@ -173,7 +188,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
 		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration,
 		m.cacheEvents, m.pendingPolls, m.costStatus, m.langfuseExportFailed,
-		m.workerPolling, m.heartbeatAge,
+		m.routeHeldTotal, m.workerPolling, m.heartbeatAge,
 	}
 	for _, collector := range collectors {
 		if err := m.registry.Register(collector); err != nil {
@@ -434,6 +449,18 @@ func (metrics *Metrics) RecordLangfuseExportFailure(reason string) {
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
 	metrics.langfuseExportFailed.WithLabelValues(metrics.builtIn(reason, langfuseExportFailureReasons)).Inc()
+}
+
+// RecordRouteHeld counts one route candidate that provider planning skipped
+// because its shared health record holds it: an open circuit, exhausted
+// credit or a billing issue. Route health is otherwise visible only in Redis.
+func (metrics *Metrics) RecordRouteHeld(endpoint, reason string) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.routeHeldTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(reason, routeHeldReasons)).Inc()
 }
 
 func nonNegativeDuration(duration time.Duration) time.Duration {
