@@ -73,7 +73,7 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 	closures := &inPlaceClosures{memo: map[*fanoutNode]*inPlaceClosure{}, visiting: map[*fanoutNode]bool{}}
 	level := []fanoutBucket{{key: "", nodes: map[*fanoutNode]int{rootNode: 1}}}
 	for depth := 0; depth <= maxDepth && len(level) > 0; depth++ {
-		next := map[string]fanoutBucket{}
+		next := &levelBuilder{buckets: map[string]fanoutBucket{}}
 		for _, bucket := range level {
 			apps := 0
 			reached := map[*fanoutNode]int{}
@@ -94,21 +94,9 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 				return 0, &FanoutError{Path: bucket.key, Reason: fmt.Sprintf("can apply more than %d subschemas to one instance value", limit)}
 			}
 			worst = max(worst, apps)
-			for _, child := range childBuckets(bucket.key, reached) {
-				signature := child.signature()
-				if existing, ok := next[signature]; ok && existing.key <= child.key {
-					continue
-				}
-				next[signature] = child
-			}
+			childBuckets(bucket.key, reached, next)
 		}
-		level = level[:0]
-		for _, bucket := range next {
-			level = append(level, bucket)
-		}
-		if len(level) > maxFanoutBuckets {
-			level = []fanoutBucket{mergeBuckets(level)}
-		}
+		level = next.level()
 	}
 	return worst, nil
 }
@@ -116,6 +104,54 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 // maxFanoutBuckets bounds the distinct instance locations tracked per depth.
 // Beyond it the locations are merged, which can only overstate the work.
 const maxFanoutBuckets = 4096
+
+// levelBuilder collects one depth's child locations, deduplicated by the
+// subschemas applied to them. Once it holds maxFanoutBuckets locations it
+// folds them, and every later one, into a single merged location, so a
+// schema with many distinct combinations costs bounded memory.
+type levelBuilder struct {
+	buckets map[string]fanoutBucket
+	merged  *fanoutBucket
+}
+
+// add records one child location; fill reports its subschemas with counts.
+func (builder *levelBuilder) add(key string, fill func(func(*fanoutNode, int))) {
+	if builder.merged != nil {
+		fill(func(node *fanoutNode, count int) {
+			builder.merged.nodes[node] = saturate(builder.merged.nodes[node] + count)
+		})
+		return
+	}
+	bucket := fanoutBucket{key: key, nodes: map[*fanoutNode]int{}}
+	fill(func(node *fanoutNode, count int) { bucket.nodes[node] = saturate(bucket.nodes[node] + count) })
+	if len(bucket.nodes) == 0 {
+		return
+	}
+	signature := bucket.signature()
+	if existing, ok := builder.buckets[signature]; ok && existing.key <= bucket.key {
+		return
+	}
+	builder.buckets[signature] = bucket
+	if len(builder.buckets) > maxFanoutBuckets {
+		all := make([]fanoutBucket, 0, len(builder.buckets))
+		for _, bucket := range builder.buckets {
+			all = append(all, bucket)
+		}
+		merged := mergeBuckets(all)
+		builder.merged, builder.buckets = &merged, nil
+	}
+}
+
+func (builder *levelBuilder) level() []fanoutBucket {
+	if builder.merged != nil {
+		return []fanoutBucket{*builder.merged}
+	}
+	level := make([]fanoutBucket, 0, len(builder.buckets))
+	for _, bucket := range builder.buckets {
+		level = append(level, bucket)
+	}
+	return level
+}
 
 // fanoutBucket is the multiset of subschemas applied directly (before their
 // in-place closure) to one instance location, named by an example key path.
@@ -133,27 +169,24 @@ func (bucket fanoutBucket) signature() string {
 	return strings.Join(parts, "\x01")
 }
 
-// childBuckets returns the subschemas applied to each child location of an
-// instance value reached by the given subschemas: each named property, any
+// childBuckets adds to next the subschemas applied to each child location of
+// an instance value reached by the given subschemas: each named property, any
 // other property, array items, and property names.
-func childBuckets(key string, reached map[*fanoutNode]int) []fanoutBucket {
+func childBuckets(key string, reached map[*fanoutNode]int, next *levelBuilder) {
 	names := map[string]bool{}
 	for node := range reached {
 		for name := range node.props {
 			names[name] = true
 		}
 	}
-	var buckets []fanoutBucket
 	add := func(childKey string, pick func(*fanoutNode) []*fanoutNode) {
-		nodes := map[*fanoutNode]int{}
-		for node, count := range reached {
-			for _, child := range pick(node) {
-				nodes[child] = saturate(nodes[child] + count)
+		next.add(childKey, func(emit func(*fanoutNode, int)) {
+			for node, count := range reached {
+				for _, child := range pick(node) {
+					emit(child, count)
+				}
 			}
-		}
-		if len(nodes) > 0 {
-			buckets = append(buckets, fanoutBucket{key: childKey, nodes: nodes})
-		}
+		})
 	}
 	for name := range names {
 		// additionalProperties applies only where its schema lists no such
@@ -182,7 +215,6 @@ func childBuckets(key string, reached map[*fanoutNode]int) []fanoutBucket {
 	}
 	add(key+"/[]", func(node *fanoutNode) []*fanoutNode { return optionalNode(node.items) })
 	add(key+"/<name>", func(node *fanoutNode) []*fanoutNode { return node.names })
-	return buckets
 }
 
 func optionalNode(node *fanoutNode) []*fanoutNode {

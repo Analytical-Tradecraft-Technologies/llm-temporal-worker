@@ -163,3 +163,27 @@ func TestParseResolvesPercentEncodedReferences(t *testing.T) {
 		}
 	}
 }
+
+// Many distinct child-location combinations fold into one merged location
+// once maxFanoutBuckets is reached, instead of materializing them all.
+func TestParseBoundsDistinctChildLocations(t *testing.T) {
+	shared := make([]string, 500)
+	for i := range shared {
+		shared[i] = fmt.Sprintf(`"q%d":{}`, i)
+	}
+	root := make([]string, 500)
+	for i := range root {
+		root[i] = fmt.Sprintf(`"p%d":{"additionalProperties":{},"$ref":"#/$defs/s"}`, i)
+	}
+	data := `{"properties":{` + strings.Join(root, ",") + `},"$defs":{"s":{"properties":{` + strings.Join(shared, ",") + `}}}}`
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	started := time.Now()
+	_, _ = schema.Parse([]byte(data))
+	elapsed := time.Since(started)
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 96<<20 || elapsed > 3*time.Second {
+		t.Fatalf("analysing %d bytes allocated %d MiB in %v", len(data), allocated>>20, elapsed)
+	}
+}
