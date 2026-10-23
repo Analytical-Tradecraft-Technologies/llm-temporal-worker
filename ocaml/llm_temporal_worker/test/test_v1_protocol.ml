@@ -101,7 +101,20 @@ let () =
       { keep_patch with stop_sequences = Set [String.make 257 's'] };
       { keep_patch with seed = Set (-1L) };
       { keep_patch with seed = Set 9_007_199_254_740_992L };
-      { keep_patch with reasoning_token_budget = Set 0 } ];
+      { keep_patch with reasoning_token_budget = Set 0 };
+      (* The leaves the Go codec rejects and the OCaml encoder used to send
+         (#1516). *)
+      { keep_patch with service_class_fallbacks = Set [Standard; Standard] };
+      { keep_patch with tools = Set [{ kind = Function; name = Tool_name.of_string "look up"; description = ""; input_schema = `Assoc ["type", `String "object"]; output_schema = None }] };
+      { keep_patch with tool_policy = Set { choice = Named (Tool_name.of_string "look up"); parallel = false } };
+      { keep_patch with instructions = Set [Text_instruction { level = Application; text = "" }] };
+      { keep_patch with instructions = Set [Parts_instruction { level = Application; content = [] }] };
+      { keep_patch with instructions = Set [Parts_instruction { level = Application; content = [Text ""] }] } ];
+  error (V1_codec.encode_generate_request { request with append = [Message { actor = Human; content = [] }] });
+  error (V1_codec.encode_generate_request { request with append = [Message { actor = Human; content = [Text "a"; Text ""] }] });
+  (* Checkpoint handles are bounded in code points, not bytes. *)
+  ignore (checkpoint (String.concat "" (List.init 512 (fun _ -> "\xc3\xa9"))));
+  (match Checkpoint.of_string (String.make 513 'c') with Ok _ -> failwith "513-code-point checkpoint accepted" | Error _ -> ());
   (* A 256-character sequence counts characters, not bytes. *)
   ignore (ok (V1_codec.encode_generate_request
                 { request with settings_patch = { keep_patch with stop_sequences = Set [String.concat "" (List.init 256 (fun _ -> "\xc3\xa9"))] } }));
@@ -299,7 +312,14 @@ let negative_decoder = function
   | "negative-generate-empty-reasoning-patch.json"
   | "negative-generate-compaction-scalar.json"
   | "negative-generate-extensions-null.json"
-  | "negative-generate-output-name.json" -> fun bytes -> Result.is_ok (V1_codec.decode_generate_request bytes)
+  | "negative-generate-output-name.json"
+  | "negative-generate-duplicate-fallbacks.json"
+  | "negative-generate-tool-name.json"
+  | "negative-generate-policy-name.json"
+  | "negative-generate-empty-instruction.json"
+  | "negative-generate-empty-message.json"
+  | "negative-generate-empty-text-part.json"
+  | "negative-generate-long-parent.json" -> fun bytes -> Result.is_ok (V1_codec.decode_generate_request bytes)
   | "negative-query-mismatched-result.json" -> fun bytes -> Result.is_ok (V1_codec.decode_query_response bytes)
   | name when starts_with "negative-generate" name || starts_with "negative-currency" name || starts_with "negative-numeric" name ->
     fun bytes -> Result.is_ok (V1_codec.decode_generate_response bytes)
