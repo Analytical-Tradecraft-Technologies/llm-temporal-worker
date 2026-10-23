@@ -569,13 +569,19 @@ func mapReasoning(reasoning *reasoningConfig, settings *llm.SettingsPatchV1) *ap
 		return nil
 	}
 	if reasoning.Effort != nil {
+		// OpenAI applies reasoning per request, but settings patch an
+		// inherited checkpoint, so each effort also clears the other control:
+		// a later effort re-enables reasoning after none, and none drops an
+		// earlier effort that a disabled mode would reject (#1526).
 		switch effort := *reasoning.Effort; effort {
 		case "none":
 			mode := llm.ReasoningModeDisabled
 			settings.ReasoningMode.Set = &mode
+			settings.ReasoningEffort.Clear = true
 		case "minimal", "low", "medium", "high", "xhigh":
 			value := llm.ReasoningEffort(effort)
 			settings.ReasoningEffort.Set = &value
+			settings.ReasoningMode.Clear = true
 		default:
 			return invalidParam("reasoning.effort", "reasoning.effort must be none, minimal, low, medium, high or xhigh")
 		}
