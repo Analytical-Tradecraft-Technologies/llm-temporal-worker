@@ -267,9 +267,9 @@ state:
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_bba60419c1306b1f
-    admission_version: admission_bba60419c1306b1f
-    admission_digest: 9600ab0c0e48381c84527a4dd766d5842d1bd052308827c0c528b453f011b024
+    function_library: llmtw_admission_aabd4a3cbc2a51cc
+    admission_version: admission_aabd4a3cbc2a51cc
+    admission_digest: 51027a77cc4d5c1e6c051a7fa424e5f6c18404baa4d17d5919443d1474df1c7f
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -1011,11 +1011,15 @@ disabled (`appendonly no`, `save ""`). Any mismatch fails readiness closed.
 
 `maxmemory_policy` defaults to `noeviction`. Durable deployments can explicitly
 select `volatile-lru` to evict expiring operational keys while keeping budget
-hashes, operation/dispatch tombstones, logical-expiry indexes, authority markers
-and coordination Streams without TTLs. Redis-only legacy adapters use expiring
-budget keys and cannot select this policy. All `allkeys-*` policies are rejected.
-Expiring catalog and throttle records may disappear under memory pressure, so
-throttles remain operational backpressure rather than financial spend authority.
+hashes, operation/dispatch tombstones, logical-expiry indexes, and authority
+markers without TTLs. Coordination Streams are disposable hints: every append caps
+the history at approximately 10,000 entries and refreshes a 24-hour idle TTL,
+making the entire Stream eligible for eviction under memory pressure.
+Redis-only legacy adapters use expiring budget keys and cannot select this
+policy. All `allkeys-*` policies are rejected.
+Expiring operational views and throttle records may disappear under memory
+pressure, so throttles remain operational backpressure rather than financial
+spend authority.
 If non-expiring data alone fills memory, writes fail instead of deleting balances.
 
 Disabling persistence makes replication the only live copy protection. Planned
@@ -1029,14 +1033,26 @@ this setting nor response cache records provide recovery of lost budgets.
 mutations publish coordination hints in the same Redis invocation; see
 [Redis budget leases](redis-budget-leases.md#configuration-and-worker-coordination)
 for event and retry semantics. Runtime background consumption remains separate.
-`stream_trim_safety` defaults to
-`10m` when the Stream check is enabled and must be between one second and 30
-days. Readiness resolves the namespaced events key and performs `TYPE` and
-`XINFO STREAM` checks: the key must be a Stream with valid monotonic IDs, no
-consumer groups, and a deletion high-water mark older than the trim-safety
-window. These checks are read-only and fail closed; disabling the coordination
-Stream is an explicit fixture choice and does not change budget authority.
+`stream_trim_safety` remains accepted for configuration compatibility (default
+`10m`, validated between one second and 30 days); it no longer gates readiness
+on the age of discarded hints. Readiness accepts an absent/evicted Stream and
+checks any present Stream for valid monotonic IDs and no consumer groups.
+Missing history causes readers to reload authoritative state before resuming;
+transport errors and malformed records still fail closed. These checks remain
+read-only and do not change budget authority.
 Stream hints never authorize spending or reconstruct balances.
+
+When upgrading from a worker that wrote persistent, unbounded coordination
+Streams, apply capacity headroom first if Redis is already over `maxmemory`:
+Redis can reject FCALL before it can set a TTL. Provision this release's new
+immutable Function library and roll workers using its matching identity. The
+next successful hint publication trims existing history and sets the TTL on
+that same key; no accounting namespace reset or key deletion is required.
+During a mixed-version rollout, new writers bound the shared Stream while old
+writers may still append without trimming. Complete the rollout to make every
+publication enforce retention. Pricing catalogs and provider billing/credit
+incident records retain their existing non-expiring semantics: expiring them
+could discard last-good pricing or reopen a financially blocked provider.
 
 The current durable v1 leaser uses shared atomic Redis state, with a persistent
 initialization marker checked inside every mutation. It has no finite manifest

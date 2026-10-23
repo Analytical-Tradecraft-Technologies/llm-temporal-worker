@@ -153,9 +153,9 @@ its replicas, and the admission code on every primary. Provision the release's a
 on every primary before starting its workers; its digest-derived name and digest are pinned in
 the example and deployment settings, and it is loaded beside earlier releases'
 libraries (see [Readiness and Redis budget policy](configuration.md#readiness-and-redis-budget-policy)).
-Stream publication requires Redis 7 or later and permission for `XADD` and
+Stream publication requires Redis 7 or later and permission for `XADD`, `EXPIRE`, and
 `XINFO STREAM`, in addition to the existing accounting commands. A wrong key
-type, denied `XADD`, or exhausted Stream ID is rejected before accounting writes.
+type, denied `XADD` or `EXPIRE`, or exhausted Stream ID is rejected before accounting writes.
 
 Each affected budget member produces a `reserve`, `claim`, `reconcile`, or
 `release` hint. Idempotent acquisition and settlement replays do not republish;
@@ -175,8 +175,12 @@ Every reader uses its own cursor through `BudgetEventPort`, allowing each worker
 to see the same events. A shared consumer group would distribute events instead
 and is unsuitable here. Publication does not start a background tailer in the
 runtime; wiring adoption and wake-ups remains separate work. The Stream never
-authorizes provider dispatch. No automatic trimming is enabled, so retention
-must account for Stream growth until cursor-aware maintenance is implemented.
+authorizes provider dispatch. Every publication approximately caps history at 10,000 events and refreshes a
+24-hour idle TTL. Redis can evict the Stream under `volatile-lru`; balances,
+operation tombstones and authority markers keep their non-expiring protection.
+A retained-prefix gap triggers an authoritative reload. An absent Stream uses
+`0-0` as its pre-reload checkpoint so events created during reload remain
+replayable. Hints never authorize spending, even after a retention gap.
 
 The worker lease store atomically publishes a session's liveness and persistent
 roster. First registration succeeds only while its lease is still absent;

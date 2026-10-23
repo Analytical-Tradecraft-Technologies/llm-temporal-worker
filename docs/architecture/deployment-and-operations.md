@@ -155,10 +155,11 @@ keys or validate an older restored snapshot. Development and Redis-only fixtures
 continue to omit this production authority check. The default Function
 path is provisioned by deployment automation before the worker starts; the
 runtime only verifies and calls it. Durable deployments also use an enabled
-coordination Stream check: `TYPE`/`XINFO STREAM` must report valid
-monotonic IDs, no consumer groups, and a deletion high-water mark older than
-the configured `stream_trim_safety` window. This check is read-only; local
-fixtures can explicitly set `coordination_stream_enabled: false`.
+coordination Stream check: a present Stream must have valid monotonic IDs and
+no consumer groups. Hints are bounded to approximately 10,000 events and have a
+24-hour idle TTL; expiry, eviction, or trimming does not invalidate accounting
+authority. Readers reload authoritative state on gaps. This check is read-only;
+local fixtures can explicitly set `coordination_stream_enabled: false`.
 The explicit Lua compatibility mode similarly requires a preloaded script and
 never falls back to loading or replacing code. Cloud readiness checks the
 configured existing table and bucket through the provider's read-only probes;

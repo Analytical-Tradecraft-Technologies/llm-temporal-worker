@@ -192,11 +192,27 @@ func decodeActiveBudgetGeneration(raw string) (ActiveBudgetGeneration, error) {
 	return pointer, nil
 }
 
+// Keep retention identical to publish_budget_hint in admission.lua. Expiry is
+// atomic with publication so a crash cannot leave an unbounded persistent key.
+const budgetHintAppendScript = `
+if not redis.acl_check_cmd('XADD', KEYS[1], 'MAXLEN', '~', 10000, '*', 'event', ARGV[1]) or
+   not redis.acl_check_cmd('EXPIRE', KEYS[1], 86400) then
+  return redis.error_reply('budget hint retention permission denied')
+end
+local id = redis.call('XADD', KEYS[1], 'MAXLEN', '~', 10000, '*', 'event', ARGV[1])
+redis.call('EXPIRE', KEYS[1], 86400)
+return id
+`
+
+func budgetStreamMissing(err error) bool {
+	return errors.Is(err, redisclient.Nil) || (err != nil && err.Error() == "ERR no such key")
+}
+
 // BudgetEventRedisClient is the minimal Redis command seam required by
 // RedisBudgetEventPort. The port deliberately does not expose consumer groups
 // or blocking reads: every worker independently tails the broadcast Stream.
 type BudgetEventRedisClient interface {
-	XAdd(context.Context, *redisclient.XAddArgs) *redisclient.StringCmd
+	Eval(context.Context, string, []string, ...interface{}) *redisclient.Cmd
 	XInfoStream(context.Context, string) *redisclient.XInfoStreamCmd
 	XRead(context.Context, *redisclient.XReadArgs) *redisclient.XStreamSliceCmd
 }
@@ -223,17 +239,21 @@ func NewRedisBudgetEventPort(client BudgetEventRedisClient, keys BudgetKeySpace)
 
 // CurrentCursor returns the latest retained Stream ID. Tailer recovery reads
 // this before reloading the manifest so records appended during the reload
-// remain visible to the next XREAD rather than being skipped.
+// remain visible to the next XREAD rather than being skipped. A confirmed
+// absent/empty Stream returns 0-0, preserving events created during reload.
 func (port *RedisBudgetEventPort) CurrentCursor(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	info, err := port.client.XInfoStream(ctx, port.keys.EventsKey()).Result()
-	if errors.Is(err, redisclient.Nil) {
-		return "", ErrBudgetStreamCursorUnavailable
+	if budgetStreamMissing(err) {
+		return "0-0", nil // Confirmed absent: replay every event created during reload.
 	}
 	if err != nil {
 		return "", fmt.Errorf("inspect budget stream cursor: %w", err)
+	}
+	if info != nil && info.Length == 0 && info.LastEntry.ID == "" {
+		return "0-0", nil
 	}
 	if info == nil || info.LastEntry.ID == "" || len(info.LastEntry.ID) > MaxBudgetStreamIDBytes {
 		return "", ErrBudgetStreamCursorUnavailable
@@ -252,11 +272,7 @@ func (port *RedisBudgetEventPort) Append(ctx context.Context, event BudgetStream
 	if err != nil {
 		return "", err
 	}
-	id, err := port.client.XAdd(ctx, &redisclient.XAddArgs{
-		Stream: port.keys.EventsKey(),
-		ID:     "*",
-		Values: map[string]interface{}{budgetStreamEventField: string(payload)},
-	}).Result()
+	id, err := port.client.Eval(ctx, budgetHintAppendScript, []string{port.keys.EventsKey()}, string(payload)).Text()
 	if err != nil {
 		return "", fmt.Errorf("append budget stream event: %w", err)
 	}
@@ -274,14 +290,14 @@ func (port *RedisBudgetEventPort) Read(ctx context.Context, cursor string, limit
 		return nil, fmt.Errorf("stream read limit must be between 1 and 10000")
 	}
 	afterMajor, afterMinor := uint64(0), uint64(0)
-	if cursor != "" {
+	if cursor != "" && cursor != "0-0" {
 		var err error
 		afterMajor, afterMinor, err = parseRedisStreamID(cursor)
 		if err != nil {
 			return nil, err
 		}
 		info, err := port.client.XInfoStream(ctx, port.keys.EventsKey()).Result()
-		if errors.Is(err, redisclient.Nil) {
+		if budgetStreamMissing(err) {
 			return nil, ErrBudgetStreamGap
 		}
 		if err != nil {

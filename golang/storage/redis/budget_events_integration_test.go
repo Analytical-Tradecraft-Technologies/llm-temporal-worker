@@ -82,6 +82,58 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 					}},
 				}
 			}
+			t.Run("persistent history becomes bounded and evictable", func(t *testing.T) {
+				m, space, req := fixture(t)
+				pipe := client.Pipeline()
+				for range 12000 {
+					pipe.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), Values: map[string]any{"event": "old-hint"}})
+				}
+				if _, err := pipe.Exec(ctx); err != nil {
+					t.Fatal(err)
+				}
+				oldID := client.XInfoStream(ctx, space.EventsKey()).Val().FirstEntry.ID
+				r := acquire(t, m, req)
+				if n := client.XLen(ctx, space.EventsKey()).Val(); n > 10100 {
+					t.Fatalf("unbounded hints: %d", n)
+				}
+				if ttl := client.TTL(ctx, space.EventsKey()).Val(); ttl <= 0 || ttl > 24*time.Hour {
+					t.Fatalf("hint TTL = %v", ttl)
+				}
+				port, err := NewRedisBudgetEventPort(client, space)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := port.Read(ctx, oldID, 10); !errors.Is(err, ErrBudgetStreamGap) {
+					t.Fatalf("trim recovery: %v", err)
+				}
+				if err := client.PExpire(ctx, space.EventsKey(), time.Millisecond).Err(); err != nil {
+					t.Fatal(err)
+				}
+				deadline := time.Now().Add(time.Second)
+				for client.Exists(ctx, space.EventsKey()).Val() != 0 {
+					if time.Now().After(deadline) {
+						t.Fatal("stream did not expire")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				cursor, err := port.CurrentCursor(ctx)
+				if err != nil || cursor != "0-0" {
+					t.Fatalf("expired stream cursor: %q, %v", cursor, err)
+				}
+				if _, err := m.Claim(ctx, claim(r)); err != nil {
+					t.Fatalf("claim after hint expiry: %v", err)
+				}
+				if _, err := m.Claim(ctx, claim(r)); !errors.Is(err, durable.ErrAlreadyClaimed) {
+					t.Fatalf("hint expiry reopened dispatch: %v", err)
+				}
+				rows, err := port.Read(ctx, cursor, 10)
+				if err != nil || len(rows) != 1 || rows[0].Event.Kind != BudgetEventClaim {
+					t.Fatalf("recreated hints: %#v, %v", rows, err)
+				}
+				if client.TTL(ctx, space.EventsKey()).Val() <= 0 {
+					t.Fatal("recreated stream is persistent")
+				}
+			})
 			t.Run("lost replies and independent readers", func(t *testing.T) {
 				m, space, req := fixture(t)
 				m.invoke = &lostBudgetReply{delegate: m.invoke, action: "durable_reserve"}
@@ -226,7 +278,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				}
 			})
 			t.Run("stream failures precede accounting writes", func(t *testing.T) {
-				for _, failure := range []string{"wrong-type", "full-id", "acl"} {
+				for _, failure := range []string{"wrong-type", "full-id", "acl", "expire-acl"} {
 					t.Run(failure, func(t *testing.T) {
 						m, space, req := fixture(t)
 						switch failure {
@@ -238,10 +290,14 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 							if err := client.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), ID: "18446744073709551615-18446744073709551615", Values: map[string]any{"event": "{}"}}).Err(); err != nil {
 								t.Fatal(err)
 							}
-						case "acl":
+						case "acl", "expire-acl":
 							username := m.space.prefix
 							password := m.space.prefix
-							if err := client.Do(ctx, "ACL", "SETUSER", username, "on", ">"+password, "~"+m.space.prefix+":*", "+@all", "-xadd").Err(); err != nil {
+							denied := "-xadd"
+							if failure == "expire-acl" {
+								denied = "-expire"
+							}
+							if err := client.Do(ctx, "ACL", "SETUSER", username, "on", ">"+password, "~"+m.space.prefix+":*", "+@all", denied).Err(); err != nil {
 								t.Fatal(err)
 							}
 							t.Cleanup(func() { client.Do(ctx, "ACL", "DELUSER", username) })
@@ -300,5 +356,66 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestLiveRedisBudgetHintPortRetention(t *testing.T) {
+	client := openLiveRedis(t)
+	ctx := context.Background()
+	keys := liveKeyOptions("hint-port-retention")
+	cleanupLivePrefix(t, client, keys.Prefix)
+	space, err := NewBudgetKeySpace(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := NewRedisBudgetEventPort(client, space)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipe := client.Pipeline()
+	for range 12000 {
+		pipe.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), Values: map[string]any{"event": "old-hint"}})
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	event := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh,
+		GenerationID: "generation", Revision: 1, OccurredAt: time.Now().UTC()}
+	if _, err := port.Append(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	if n := client.XLen(ctx, space.EventsKey()).Val(); n > 10100 {
+		t.Fatalf("unbounded standalone hints: %d", n)
+	}
+	if ttl := client.TTL(ctx, space.EventsKey()).Val(); ttl <= 0 || ttl > 24*time.Hour {
+		t.Fatalf("standalone hint TTL = %v", ttl)
+	}
+	oldCursor, err := port.CurrentCursor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate losing the optional hint key while durable state survives.
+	if err := client.Del(ctx, space.EventsKey()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	tailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+		Port: port, Enabled: true, BatchSize: 10,
+		Initial: BudgetStreamCursorState{GenerationID: "generation", Cursor: oldCursor},
+		Reload: func(context.Context) (BudgetStreamCursorState, error) {
+			// A publication racing the authoritative reload must remain visible.
+			if _, err := port.Append(ctx, event); err != nil {
+				return BudgetStreamCursorState{}, err
+			}
+			return BudgetStreamCursorState{GenerationID: "generation", Cursor: oldCursor}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := tailer.Poll(ctx); err != nil || !result.Reloaded || result.State.Cursor != "0-0" {
+		t.Fatalf("reload after eviction = %#v, %v", result, err)
+	}
+	if result, err := tailer.Poll(ctx); err != nil || result.Records != 1 {
+		t.Fatalf("publication during reload lost = %#v, %v", result, err)
 	}
 }
