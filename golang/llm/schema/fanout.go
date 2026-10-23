@@ -400,6 +400,20 @@ func (graph *fanoutGraph) add(path, resource string, value map[string]any) bool 
 	return true
 }
 
+// resourceID returns the $id that starts a schema resource. Like the
+// compiler, it ignores the fragment, so an empty or fragment-only $id keeps
+// the enclosing resource.
+func resourceID(value map[string]any) (string, bool) {
+	id, ok := value["$id"].(string)
+	if !ok {
+		return "", false
+	}
+	if index := strings.IndexByte(id, '#'); index >= 0 {
+		id = id[:index]
+	}
+	return id, id != ""
+}
+
 // joinBase resolves a $id against base as the compiler does, without the
 // fragment. ok is false when either does not parse.
 func joinBase(base, id string) (string, bool) {
@@ -426,7 +440,7 @@ func joinBase(base, id string) (string, bool) {
 // is the enclosing resource's base URI.
 func (graph *fanoutGraph) index(value map[string]any, path, resource, base string) {
 	// An empty $id keeps the enclosing resource, as the compiler does.
-	if id, ok := value["$id"].(string); ok && id != "" {
+	if id, ok := resourceID(value); ok {
 		resource = path
 		joined, ok := joinBase(base, id)
 		if owner, taken := graph.uris[joined]; !ok || (taken && owner != path) {
@@ -571,7 +585,7 @@ func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
 	position := pointerSchema
 	enclosing := func(value any) {
 		if object, ok := value.(map[string]any); ok && position == pointerSchema {
-			if id, ok := object["$id"].(string); ok && id != "" {
+			if _, ok := resourceID(object); ok {
 				resource = prefix
 			}
 		}

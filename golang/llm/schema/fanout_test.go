@@ -99,6 +99,9 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		"reference into examples": `{"$ref":"#/examples/0","examples":[{"type":"string"}]}`,
 		// An anchor indexed through an annotation reference resolves for a
 		// node linked before it.
+		// A fragment-only $id keeps the enclosing resource, as the compiler
+		// does.
+		"fragment-only $id":                    `{"type":"object","properties":{"x":{"$id":"#","type":"string"}}}`,
 		"anchor reached through an annotation": `{"allOf":[{"$ref":"#/default"},{"properties":{"x":{"$ref":"#foo"}}}],"default":{"$anchor":"foo","type":"object"}}`,
 		// Tuple positions and trailing items are disjoint array indices.
 		"recursive tuple":       `{"type":"array","prefixItems":[{"$ref":"#"},{"$ref":"#"}]}`,
