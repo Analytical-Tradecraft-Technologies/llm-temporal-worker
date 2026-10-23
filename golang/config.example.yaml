@@ -9,7 +9,8 @@ server:
   readiness_probe_interval: 5s
   readiness_probe_timeout: 2s
   inline_payload_bytes: 524288
-  # responses_api_listen_address: 0.0.0.0:8000   # opt-in OpenAI Responses API listener (plain HTTP)
+  # responses_api_listen_address: 127.0.0.1:8000 # opt-in OpenAI Responses API listener (plain HTTP, no auth)
+  # responses_api_private_network: true          # required in production to bind beyond loopback or link-local
 
 temporal:
   target: temporal.example.internal:7233

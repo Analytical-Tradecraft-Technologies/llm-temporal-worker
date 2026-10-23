@@ -10,7 +10,9 @@ their base URL at the listener.
 Enable it with `server.responses_api_listen_address` (see
 [configuration](configuration.md#optional-openai-responses-api)). Every worker
 that sets the address serves the API; workflows run on the worker's own
-`temporal.task_queue`, so any worker on that queue may execute them.
+`temporal.task_queue`, so any worker on that queue may execute them. In production the address must be loopback or link-local unless
+`server.responses_api_private_network: true` acknowledges a private network,
+because the listener has no TLS and no authentication.
 
 ## Identity
 
