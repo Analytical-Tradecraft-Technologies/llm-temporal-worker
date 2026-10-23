@@ -32,14 +32,17 @@ func dagFanoutDefs(width, levels int) string {
 
 func TestParseRejectsExponentialFanout(t *testing.T) {
 	for name, data := range map[string]string{
-		"recursive allOf":         `{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
-		"recursive via defs":      `{"$ref":"#/$defs/n","$defs":{"n":{"properties":{"x":{"anyOf":[{"$ref":"#/$defs/n"},{"$ref":"#/$defs/n"}]}}}}}`,
-		"recursive items":         `{"items":{"oneOf":[{"$ref":"#"},{"$ref":"#"},{"$ref":"#"}]}}`,
-		"DAG fan-out":             dagFanoutSchema(40, 3),
-		"wide DAG":                dagFanoutSchema(1001, 1),
-		"anchor recursion":        `{"$anchor":"top","additionalProperties":{"allOf":[{"$ref":"#top"},{"$ref":"#top"}]}}`,
-		"in-place self ref":       `{"allOf":[{"$ref":"#"}]}`,
-		"recursive tuple fan-out": `{"prefixItems":[{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}`,
+		"recursive allOf":    `{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
+		"recursive via defs": `{"$ref":"#/$defs/n","$defs":{"n":{"properties":{"x":{"anyOf":[{"$ref":"#/$defs/n"},{"$ref":"#/$defs/n"}]}}}}}`,
+		"recursive items":    `{"items":{"oneOf":[{"$ref":"#"},{"$ref":"#"},{"$ref":"#"}]}}`,
+		"DAG fan-out":        dagFanoutSchema(40, 3),
+		"wide DAG":           dagFanoutSchema(1001, 1),
+		"anchor recursion":   `{"$anchor":"top","additionalProperties":{"allOf":[{"$ref":"#top"},{"$ref":"#top"}]}}`,
+		"in-place self ref":  `{"allOf":[{"$ref":"#"}]}`,
+		// An annotation target must stay inside the subset the analysis counts.
+		"annotation target outside the subset": `{"$ref":"#/default","default":{"patternProperties":{"x":{"type":"string"}}}}`,
+		"annotation target fan-out":            `{"properties":{"x":{"$ref":"#/default"}},"default":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}`,
+		"recursive tuple fan-out":              `{"prefixItems":[{"allOf":[{"$ref":"#"},{"$ref":"#"}]}]}`,
 		// An empty $id keeps the enclosing resource, so #/$defs/n is the
 		// root's fanning definition, as the validator resolves it.
 		"empty $id":           `{"properties":{"x":{"$id":"","$ref":"#/$defs/n","$defs":{"n":{}}}},"$defs":{"n":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
@@ -78,6 +81,9 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		"reference to boolean":       `{"$ref":"#/additionalProperties","additionalProperties":true}`,
 		// The validator ignores then and else without if.
 		"branches without if": `{"then":{"allOf":[{"$ref":"#"},{"$ref":"#"}]},"else":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}`,
+		// A $ref may name a schema inside an annotation value.
+		"reference into default":  `{"$ref":"#/default","default":{"type":"string"}}`,
+		"reference into examples": `{"$ref":"#/examples/0","examples":[{"type":"string"}]}`,
 		// Tuple positions and trailing items are disjoint array indices.
 		"recursive tuple":       `{"type":"array","prefixItems":[{"$ref":"#"},{"$ref":"#"}]}`,
 		"recursive tuple items": `{"type":"array","prefixItems":[{"$ref":"#"},{"type":"string"}],"items":{"$ref":"#"}}`,

@@ -54,6 +54,7 @@ type fanoutNode struct {
 }
 
 type fanoutGraph struct {
+	root      map[string]any
 	nodes     map[string]*fanoutNode
 	resources map[string]string            // node path -> enclosing resource root path
 	anchors   map[string]map[string]string // resource root -> anchor -> node path
@@ -63,7 +64,7 @@ type fanoutGraph struct {
 // schemaFanout returns the worst-case number of subschema applications at
 // one instance location for an instance at most maxDepth deep.
 func schemaFanout(root map[string]any, maxDepth int) (int, error) {
-	graph := &fanoutGraph{nodes: map[string]*fanoutNode{}, resources: map[string]string{}, anchors: map[string]map[string]string{}}
+	graph := &fanoutGraph{root: root, nodes: map[string]*fanoutNode{}, resources: map[string]string{}, anchors: map[string]map[string]string{}}
 	graph.index(root, "", "")
 	rootNode := graph.node("")
 	for len(graph.pending) > 0 {
@@ -461,7 +462,10 @@ func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) *fanoutNode {
 	case fragment == "":
 		return graph.node(resource)
 	case strings.HasPrefix(fragment, "/"):
-		return graph.node(resource + fragment)
+		if target := graph.node(resource + fragment); target != nil {
+			return target
+		}
+		return graph.indexReferenced(resource+fragment, resource)
 	default:
 		target, ok := graph.anchors[resource][fragment]
 		if !ok {
@@ -469,6 +473,44 @@ func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) *fanoutNode {
 		}
 		return graph.node(target)
 	}
+}
+
+// indexReferenced indexes a schema that only a $ref reaches, such as one
+// inside a default or examples annotation, which the compiler also accepts.
+// It returns nil when the pointer names no schema object or boolean.
+func (graph *fanoutGraph) indexReferenced(path, resource string) *fanoutNode {
+	var value any = graph.root
+	for _, token := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		token = strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")
+		switch current := value.(type) {
+		case map[string]any:
+			value = current[token]
+		case []any:
+			index, err := strconv.Atoi(token)
+			if err != nil || index < 0 || index >= len(current) {
+				return nil
+			}
+			value = current[index]
+		default:
+			return nil
+		}
+	}
+	switch target := value.(type) {
+	case map[string]any:
+		// An annotation value escaped the subset check; the analysis counts
+		// only subset keywords, so anything else stays unresolved.
+		if walkSchema(target, path) != nil {
+			return nil
+		}
+		// Its nodes join the pending list that schemaFanout links.
+		graph.index(target, path, resource)
+	case bool:
+		graph.nodes[path] = &fanoutNode{id: len(graph.nodes), path: path}
+		graph.resources[path] = resource
+	default:
+		return nil
+	}
+	return graph.node(path)
 }
 
 // unescapeFragment percent-decodes a URI fragment JSON pointer. Its ~0 and ~1
