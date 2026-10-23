@@ -65,10 +65,12 @@ live-contract-verify:
 build:
 	$(GO) build ./...
 
-# Compiles the opt-in Redis benchmark without running its tests or benchmark.
-# It has no operator gates and cannot connect to Redis or a provider.
+# Compiles the opt-in Redis benchmark and runs its safety tests (operator and
+# CI gates, exact preloaded Function, bounded keys, disabled retries) without
+# running the benchmark. It has no operator gates and cannot connect to Redis
+# or a provider.
 redis-benchmark-compile:
-	$(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^$$'
+	$(GO) test -tags=redisbenchmark ./engine -run '^TestRedisBenchmark' -bench '^$$'
 
 # Runs an opt-in local performance proxy. It has no Redis server or provider
 # network request, so its p99 output is not an SLO proof.
@@ -342,7 +344,7 @@ compose-live-integration:
 		echo "compose-live-integration could not find the isolated Redis container" >&2; \
 		exit 1; \
 	fi; \
-	if ! GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_WORKER_METRICS_ADDR="$$metrics_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose -run '^TestComposeWorkerReadinessTracksRedis$$'; then \
+	if ! GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_WORKER_METRICS_ADDR="$$metrics_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose; then \
 		echo "compose-live-integration Redis lifecycle test service logs (redacted; service output only; no environment inspection):" >&2; \
 		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
 			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
@@ -357,7 +359,7 @@ compose-live-integration:
 		echo "compose-live-integration could not rediscover the Redis host port after lifecycle recovery" >&2; \
 		exit 1; \
 	fi; \
-	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum|TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'; then \
+	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestLiveRedisKeyPrefixFollowsComposeNamespace|TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum|TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'; then \
 		echo "compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):" >&2; \
 		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
 			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
