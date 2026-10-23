@@ -833,7 +833,10 @@
       },
       "implementation_paths": [
         "golang/storage/conformance/conformance.go",
+        "golang/storage/conformance/durable_budget.go",
+        "golang/storage/durable/rolling_budget_test.go",
         "golang/storage/memory/conformance_test.go",
+        "golang/storage/redis/budget_materializer_integration_test.go",
         "golang/storage/redis/conformance_test.go",
         "golang/storage/redis/shared_state_conformance_integration_test.go"
       ],
