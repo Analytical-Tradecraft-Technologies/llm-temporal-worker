@@ -42,10 +42,10 @@ type fanoutNode struct {
 	prefix []*fanoutNode
 	items  *fanoutNode
 	names  []*fanoutNode
-	// built while resolving the in-place closure
-	state   uint8
-	closure map[*fanoutNode]int
-	apps    int
+	// apps counts the in-place paths from this node, itself included,
+	// saturating above MaxSchemaApplications.
+	state uint8
+	apps  int
 }
 
 type fanoutGraph struct {
@@ -75,20 +75,23 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 		next := map[string]fanoutBucket{}
 		for _, bucket := range level {
 			apps := 0
-			reached := map[*fanoutNode]int{}
 			for node, count := range bucket.nodes {
 				if err := closeInPlace(node); err != nil {
 					return 0, err
 				}
 				apps = saturate(apps + saturate(count*node.apps))
-				for target, multiplicity := range node.closure {
-					reached[target] = saturate(reached[target] + saturate(count*multiplicity))
-				}
 			}
 			if apps > limit {
 				return 0, &FanoutError{Path: bucket.key, Reason: fmt.Sprintf("can apply more than %d subschemas to one instance value", limit)}
 			}
 			worst = max(worst, apps)
+			// Within the bound, the in-place paths are few: walk them rather
+			// than keep every node's closure, which a long $ref chain would
+			// make quadratic.
+			reached := map[*fanoutNode]int{}
+			for node, count := range bucket.nodes {
+				walkInPlace(node, count, reached)
+			}
 			for _, child := range childBuckets(bucket.key, reached) {
 				signature := child.signature()
 				if existing, ok := next[signature]; ok && existing.key <= child.key {
@@ -204,8 +207,8 @@ func saturate(value int) int {
 	return value
 }
 
-// closeInPlace computes the subschemas applied at node's own instance
-// location, with the number of distinct paths reaching each, and their total.
+// closeInPlace counts the in-place paths from node: the subschemas applied at
+// its own instance location, with repeats. It rejects an in-place cycle.
 func closeInPlace(node *fanoutNode) error {
 	switch node.state {
 	case 2:
@@ -214,19 +217,24 @@ func closeInPlace(node *fanoutNode) error {
 		return &FanoutError{Path: node.path, Reason: "references itself without consuming instance data"}
 	}
 	node.state = 1
-	node.closure = map[*fanoutNode]int{node: 1}
 	node.apps = 1
 	for _, child := range node.inPlace {
 		if err := closeInPlace(child); err != nil {
 			return err
 		}
 		node.apps = saturate(node.apps + child.apps)
-		for reached, count := range child.closure {
-			node.closure[reached] = saturate(node.closure[reached] + count)
-		}
 	}
 	node.state = 2
 	return nil
+}
+
+// walkInPlace adds count to every node on an in-place path from node. The
+// caller has checked that those paths number at most MaxSchemaApplications.
+func walkInPlace(node *fanoutNode, count int, reached map[*fanoutNode]int) {
+	reached[node] = saturate(reached[node] + count)
+	for _, child := range node.inPlace {
+		walkInPlace(child, count, reached)
+	}
 }
 
 func (graph *fanoutGraph) node(path string) *fanoutNode {
@@ -325,13 +333,14 @@ func (graph *fanoutGraph) link(node *fanoutNode) error {
 // "#anchor", relative to the nearest enclosing $id.
 func (graph *fanoutGraph) resolve(node *fanoutNode, ref string) (*fanoutNode, error) {
 	resource := graph.resources[node.path]
-	fragment := strings.TrimPrefix(ref, "#")
+	// A fragment is percent-decoded before it is read as a pointer or anchor.
+	fragment := unescapeFragment(strings.TrimPrefix(ref, "#"))
 	var path string
 	switch {
 	case fragment == "":
 		path = resource
 	case strings.HasPrefix(fragment, "/"):
-		path = resource + unescapeFragment(fragment)
+		path = resource + fragment
 	default:
 		target, ok := graph.anchors[resource][fragment]
 		if !ok {

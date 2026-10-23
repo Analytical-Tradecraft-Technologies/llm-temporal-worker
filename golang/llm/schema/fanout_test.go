@@ -3,6 +3,7 @@ package schema_test
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -106,5 +107,49 @@ func TestValidateBoundsTotalWork(t *testing.T) {
 	}
 	if err := simple.Validate([]byte(large)); err != nil {
 		t.Fatalf("a cheap schema refused the same instance: %v", err)
+	}
+}
+
+// A long chain of in-place references is rejected in linear time and memory,
+// not by copying every descendant's closure into each ancestor.
+func TestParseRejectsALongReferenceChainCheaply(t *testing.T) {
+	const links = 4000
+	defs := make([]string, 0, links+1)
+	for i := 0; i < links; i++ {
+		defs = append(defs, fmt.Sprintf(`"d%d":{"$ref":"#/$defs/d%d"}`, i, i+1))
+	}
+	defs = append(defs, fmt.Sprintf(`"d%d":{"type":"string"}`, links))
+	data := `{"$ref":"#/$defs/d0","$defs":{` + strings.Join(defs, ",") + `}}`
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	started := time.Now()
+	_, err := schema.Parse([]byte(data))
+	elapsed := time.Since(started)
+	runtime.ReadMemStats(&after)
+	var fanout *schema.FanoutError
+	if !errors.As(err, &fanout) {
+		t.Fatalf("Parse = %T %v, want FanoutError", err, err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 64<<20 || elapsed > 2*time.Second {
+		t.Fatalf("rejecting the chain allocated %d MiB in %v", allocated>>20, elapsed)
+	}
+}
+
+// Fragments are percent-decoded before they are read as pointers or anchors,
+// as the validator reads them.
+func TestParseResolvesPercentEncodedReferences(t *testing.T) {
+	for _, data := range []string{
+		`{"$ref":"#fo%6F","$defs":{"x":{"$anchor":"foo","type":"string"}}}`,
+		`{"$ref":"#%2F$defs%2Fx","$defs":{"x":{"type":"string"}}}`,
+		`{"$ref":"#/%24defs/x","$defs":{"x":{"type":"string"}}}`,
+	} {
+		compiled, err := schema.Parse([]byte(data))
+		if err != nil {
+			t.Fatalf("Parse(%s) = %v", data, err)
+		}
+		if err := compiled.Validate([]byte(`"text"`)); err != nil {
+			t.Fatalf("Validate against %s = %v", data, err)
+		}
 	}
 }
