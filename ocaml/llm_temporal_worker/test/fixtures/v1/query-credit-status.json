@@ -1,0 +1,7 @@
+{
+  "api_version": "llm.temporal/query/v1",
+  "operation_key": "query-credit",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "kind": "credit_status",
+  "query": {"endpoint": "openai-primary", "include_ok": true, "page_size": 50}
+}

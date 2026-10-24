@@ -1,0 +1,23 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fork-set",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "parent": "ckp_v1.parent",
+  "append": [],
+  "settings_patch": {
+    "model": {"set": "gpt-example"},
+    "service_class": {"set": "priority"},
+    "service_class_fallbacks": {"set": ["priority", "standard"]},
+    "portability": {"set": "strict"},
+    "instructions": {"set": [{"kind": "text", "text": "Follow policy."}]},
+    "tools": {"set": [{"name": "lookup", "description": "Lookup", "input_schema": {"type": "object"}}]},
+    "tool_policy": {"set": {"mode": "named", "name": "lookup", "parallel": false}},
+    "output": {"set": {"max_tokens": 64, "format": {"kind": "text"}}},
+    "temperature": {"set": "0.700000000000000000"},
+    "reasoning_effort": {"set": "high"},
+    "reasoning_summary": {"set": "concise"},
+    "compaction_policy": {"set": {}},
+    "extensions": {"set": {"trace_mode": "safe"}}
+  },
+  "cache": {"max_age_seconds": 300, "variant": 2147483647}
+}

@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"response-depth","operation_id":"op-depth","status":"completed","output":[],"checkpoint":{"handle":"ckp_v1.depth","parent":null,"kind":"generation","depth":2147483648},"cache":{"disposition":"miss_populated","variant":0},"cost":{"status":"exact","actual_cost_usd":"0","method":"provider_reported"}}

@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"delta-1","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"append":[{"kind":"tool_result","call_id":"call-1","content":[{"kind":"json","value":{"approved":true}}],"is_error":false}],"parent":"ckp_v1.parent","settings_patch":{"tools":{"clear":true},"reasoning_effort":{"set":"high"}}}

@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/query/v1","operation_key":"query-1","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"kind":"provider_status","query":{"page_size":1001}}
