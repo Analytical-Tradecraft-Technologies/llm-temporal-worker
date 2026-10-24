@@ -12,7 +12,7 @@ var _ activity.ExecutionRuntime = (*snapshotV1Runtime)(nil)
 // can never close its Redis, storage or provider clients during dispatch.
 // method is a method expression on the optional runtime interface T; a
 // current runtime that does not implement T is unavailable.
-func callV1[T, Q, R any](runtime *snapshotV1Runtime, ctx context.Context, request Q, method func(T, context.Context, Q) (R, error)) (R, error) {
+func callV1[T, Q, R any](ctx context.Context, runtime *snapshotV1Runtime, request Q, method func(T, context.Context, Q) (R, error)) (R, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -30,31 +30,31 @@ func callV1[T, Q, R any](runtime *snapshotV1Runtime, ctx context.Context, reques
 }
 
 func (runtime *snapshotV1Runtime) PrepareExecutionV1(ctx context.Context, request llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
-	return callV1(runtime, ctx, request, activity.ExecutionRuntime.PrepareExecutionV1)
+	return callV1(ctx, runtime, request, activity.ExecutionRuntime.PrepareExecutionV1)
 }
 
 func (runtime *snapshotV1Runtime) AcquireBudgetV1(ctx context.Context, request llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	return callV1(runtime, ctx, request, activity.ExecutionRuntime.AcquireBudgetV1)
+	return callV1(ctx, runtime, request, activity.ExecutionRuntime.AcquireBudgetV1)
 }
 
 func (runtime *snapshotV1Runtime) GenerateStepV1(ctx context.Context, request llm.GenerateRequestV1) (llm.ExecutionResultV1, error) {
-	return callV1(runtime, ctx, request, activity.ExecutionRuntime.GenerateStepV1)
+	return callV1(ctx, runtime, request, activity.ExecutionRuntime.GenerateStepV1)
 }
 
 func (runtime *snapshotV1Runtime) CompactStepV1(ctx context.Context, request llm.CompactRequestV1) (llm.ExecutionResultV1, error) {
-	return callV1(runtime, ctx, request, activity.ExecutionRuntime.CompactStepV1)
+	return callV1(ctx, runtime, request, activity.ExecutionRuntime.CompactStepV1)
 }
 
 func (runtime *snapshotV1Runtime) PollExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	return callV1(runtime, ctx, request, activity.ExecutionRuntime.PollExecutionV1)
+	return callV1(ctx, runtime, request, activity.ExecutionRuntime.PollExecutionV1)
 }
 
 func (runtime *snapshotV1Runtime) CompleteExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	return callV1(runtime, ctx, request, activity.ExecutionRuntime.CompleteExecutionV1)
+	return callV1(ctx, runtime, request, activity.ExecutionRuntime.CompleteExecutionV1)
 }
 
 func (runtime *snapshotV1Runtime) PlanGenerationV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
-	return callV1(runtime, ctx, request, activity.GenerationPlanningRuntime.PlanGenerationV1)
+	return callV1(ctx, runtime, request, activity.GenerationPlanningRuntime.PlanGenerationV1)
 }
 
 func (runtime *snapshotV1Runtime) ExportLangfuseV1(ctx context.Context, ref llm.ExecutionReferenceV1) error {
