@@ -18,6 +18,9 @@ type Schema struct {
 	digest    [32]byte
 	compiled  *jsonschema.Schema
 	limits    Limits
+	// applications is the worst-case number of subschemas applied to one
+	// instance value; it bounds each validation's work.
+	applications int
 }
 
 // Parse parses, canonicalizes, checks the v1 subset, and compiles one schema.
@@ -51,8 +54,14 @@ func ParseWithLimits(data []byte, limits Limits) (*Schema, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Validation runs after the provider has been paid, so a schema whose
+	// worst case is exponential is refused here, before dispatch (#1521).
+	applications, err := schemaFanout(document.(map[string]any), limits.MaxDepth)
+	if err != nil {
+		return nil, err
+	}
 	digest := sha256.Sum256(canonical)
-	return &Schema{canonical: append([]byte(nil), canonical...), digest: digest, compiled: compiled, limits: limits}, nil
+	return &Schema{canonical: append([]byte(nil), canonical...), digest: digest, compiled: compiled, limits: limits, applications: applications}, nil
 }
 
 const schemaResourceURL = "urn:llmtw/schema/v1/root"
@@ -126,6 +135,9 @@ func (schema *Schema) Validate(instance []byte) error {
 	if err := checkNumbers(value, ""); err != nil {
 		return fmt.Errorf("instance JSON: %w", err)
 	}
+	if values := countValues(value); values > 0 && values > MaxValidationWork/max(schema.applications, 1) {
+		return &ValidationError{Message: fmt.Sprintf("instance has too many values to validate against this schema within %d subschema applications", MaxValidationWork)}
+	}
 	return schema.validateValue(value)
 }
 
@@ -151,4 +163,24 @@ func Validate(schemaData, instance []byte) error {
 		return err
 	}
 	return compiled.Validate(instance)
+}
+
+// countValues counts the JSON values in a decoded instance.
+func countValues(value any) int {
+	switch value := value.(type) {
+	case map[string]any:
+		count := 1
+		for _, child := range value {
+			count += countValues(child)
+		}
+		return count
+	case []any:
+		count := 1
+		for _, child := range value {
+			count += countValues(child)
+		}
+		return count
+	default:
+		return 1
+	}
 }

@@ -174,3 +174,19 @@ func TestCompileRejectsURLMediaAndKeepsInlineBytes(t *testing.T) {
 		t.Fatalf("inline image wire body = %s", wire)
 	}
 }
+
+// A schema that is not recursive but is exponential to validate after payment
+// is an invalid argument at compile, before anything is reserved or sent (#1521).
+func TestStructuredOutputRejectsExponentialSchemaAtCompile(t *testing.T) {
+	const dagSchema = `{"$ref":"#/$defs/l0","$defs":{"l0":{"allOf":[{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"}]},"l1":{"allOf":[{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"}]},"l2":{"type":"number"}}}`
+	var wire []byte
+	adapter := recordingBedrockAdapter(t, `{}`, &wire)
+	_, err := adapter.Compile(context.Background(), bedrockCompileInput(structuredOutputRequest(dagSchema), false))
+	var providerErr *provider.Error
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeInvalidArgument || providerErr.Phase != provider.PhaseCompile || providerErr.Dispatch != provider.DispatchNotDispatched {
+		t.Fatalf("compile error = %#v", err)
+	}
+	if wire != nil {
+		t.Fatalf("rejected schema reached the provider: %s", wire)
+	}
+}

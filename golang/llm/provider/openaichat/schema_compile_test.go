@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -21,6 +22,25 @@ func TestCompileRejectsAnUnsupportedOutputSchemaBeforeDispatch(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "output schema") {
 		t.Fatalf("compile = %v, want an output schema rejection", err)
+	}
+}
+
+// A schema whose validation would cost exponential time is refused before
+// dispatch, since the answer is validated only after it is paid for (#1521).
+func TestCompileRejectsAnExponentialOutputSchemaBeforeDispatch(t *testing.T) {
+	for name, schema := range map[string]string{
+		"recursive allOf": `{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
+		"DAG fan-out":     `{"$ref":"#/$defs/l0","$defs":{"l0":{"allOf":[{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"}]},"l1":{"allOf":[{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"}]},"l2":{"type":"number"}}}`,
+	} {
+		started := time.Now()
+		_, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "op-fanout", Model: "chat-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}},
+				Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Schema: json.RawMessage(schema)}}},
+			Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "output schema") || time.Since(started) > time.Second {
+			t.Fatalf("%s: compile = %v after %v, want a prompt output schema rejection", name, err, time.Since(started))
+		}
 	}
 }
 
