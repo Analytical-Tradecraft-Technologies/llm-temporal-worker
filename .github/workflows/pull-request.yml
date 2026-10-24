@@ -76,6 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx build \
+            --no-cache-filter ca-certificates \
             --file ./golang/Dockerfile \
             --tag llm-temporal-worker:pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_number }} \
             --cache-from type=gha,scope=llmtw-pr-${{ github.event.pull_request.number || github.run_id }},version=2 \

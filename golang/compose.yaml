@@ -167,6 +167,8 @@ services:
         VERSION: local
         REVISION: working-tree
         BUILD_TIME: reproducible-local
+        # Direct Compose builds must supply a new nonce (see testing strategy).
+        CA_CERTIFICATES_REFRESH: ${CA_CERTIFICATES_REFRESH:-manual}
     image: ${LLMTW_WORKER_IMAGE:-llmtw/worker:local}
     command: ["worker", "--config", "/etc/llmtw/config.yaml"]
     depends_on:
