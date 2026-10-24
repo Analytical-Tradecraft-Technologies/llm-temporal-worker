@@ -151,6 +151,8 @@ The **cache** object is opt-in:
 | **cache: {}** | Enable reuse without an age restriction |
 | **cache.max_age_seconds** present | Reuse a matching success within that positive age bound |
 
+The same rules apply to Generate and Compact.
+
 Age is measured from successful completion against the lookup's single supplied
 clock instant. Reading or using an entry never refreshes it; newer failures do
 not invalidate an older eligible success.
@@ -344,7 +346,9 @@ Do not merge these concepts:
 | Provider prompt/context cache | Reduce provider input cost/latency while still producing a new output | Provider-specific prefix identity and affinity |
 
 An operation replay is always allowed because the caller already requested that
-logical call. Exact-response cache reuse requires **max_age_seconds**. Provider
+logical call. Exact-response cache reuse requires a **cache** object, and its
+optional **max_age_seconds** bounds the reused entry's age, for Generate and
+Compact alike (see the table above). Provider
 prompt caching does not imply identical output and does not count as a worker
 cache hit.
 
@@ -444,7 +448,13 @@ fits the target, so a summary is never bought for a request it cannot bring
 below the trigger.
 
 The generation workflow's automatic compaction uses unrestricted-age summary
-caching with sample index zero. Explicit Compact requests can choose another
+caching with sample index zero, independent of the Generate's own `cache`: the
+compaction child reads and publishes the tenant/project compaction cache even
+when the Generate omitted `cache`, and it ignores the Generate's `variant` and
+`max_age_seconds`, which govern only the Generate's final response. A reused
+summary reports `provenance.source=worker_cache`. The summary stays inside the
+caller's scope and encryption, and reuse only avoids buying an identical
+summary again. Explicit Compact requests can choose another
 non-negative sample index. Final-answer freshness and sample indexes do not
 change automatic summary identity; source content and policy versions do.
 

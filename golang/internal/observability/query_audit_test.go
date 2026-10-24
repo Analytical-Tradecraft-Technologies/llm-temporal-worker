@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -87,4 +88,31 @@ func TestQueryAuditIgnoresLogWriteFailureAndRespectsLevel(t *testing.T) {
 	if err := logger.QueryAudit(context.Background(), control.QueryAuditRecord{}); err != nil || writer.calls != 1 {
 		t.Fatalf("filtered audit err=%v, writes=%d", err, writer.calls)
 	}
+}
+
+// A scope denial keeps its Activity type through the attribute allowlist and
+// never logs the raw tenant or project (#1535).
+func TestScopeAccessDeniedLogsActivityTypeAndHashesOnly(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.ScopeAccessDenied(context.Background(), "raw-tenant", "raw-project", "llm.PrepareExecution.v1")
+	var line map[string]any
+	if err := json.Unmarshal(output.Bytes(), &line); err != nil {
+		t.Fatalf("log %q: %v", output.String(), err)
+	}
+	if line["msg"] != "request scope access decision" || line["level"] != "WARN" || line["outcome"] != "denied" ||
+		line["activity_type"] != "llm.PrepareExecution.v1" || line["tenant_hash"] != scopeHash("raw-tenant") || line["project_hash"] != scopeHash("raw-project") {
+		t.Fatalf("log line = %v", line)
+	}
+	if strings.Contains(output.String(), "raw-tenant") || strings.Contains(output.String(), "raw-project") {
+		t.Fatalf("log %q leaks a raw identifier", output.String())
+	}
+}
+
+func scopeHash(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", digest[:8])
 }

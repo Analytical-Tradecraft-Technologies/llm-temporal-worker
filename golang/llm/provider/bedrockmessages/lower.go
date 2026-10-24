@@ -26,6 +26,12 @@ func lowerRequest(request llm.Request, profile Profile) (anthropic.MessageNewPar
 }
 
 func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (anthropic.MessageNewParams, error) {
+	// Anthropic's hosted tools are not offered on Amazon Bedrock, and an
+	// adapter never drops a request parameter it cannot honour; the planner
+	// also keeps such requests off Bedrock routes (#1506).
+	if hosted := hostedToolFlag(request); hosted != "" {
+		return anthropic.MessageNewParams{}, provider.NewUnsupportedCapabilityError(hosted + " is not supported by the Bedrock Messages adapter")
+	}
 	// The profile has no extension allowlist, so no namespace can be carried
 	// to the wire. Strict mode rejects them; best-effort mode leaves them out
 	// and Compile records the drop so the lift reports it as a diagnostic.
@@ -328,4 +334,17 @@ func lowerPart(part llm.Part) (any, error) {
 // partLowering supplies this endpoint's media and provider-state lowering.
 func partLowering() anthropicwire.PartLowering {
 	return anthropicwire.PartLowering{Image: lowerImage, Document: lowerDocument, ProviderState: providerStatePartRaw}
+}
+
+// hostedToolFlag names the first provider-hosted tool the request asks for.
+func hostedToolFlag(request llm.Request) string {
+	switch {
+	case request.WebSearch:
+		return "web_search"
+	case request.WebFetch:
+		return "web_fetch"
+	case request.CodeExecution:
+		return "code_execution"
+	}
+	return ""
 }

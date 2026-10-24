@@ -36,7 +36,7 @@ type CommandOptions struct {
 	// SIGHUP and atomic replacement reloads. RunWorker remains a compatibility
 	// seam for small embeddings that own their lifecycle trigger.
 	RunWorkerFile        func(context.Context, string, []byte, io.Writer) error
-	RunBudgetInitialize  func(context.Context, []byte, bool, io.Writer) error
+	RunBudgetInitialize  func(context.Context, []byte, bool, bool, io.Writer) error
 	RunGenerationRecover func(context.Context, []byte, string, string, bool, io.Writer) error
 }
 
@@ -262,7 +262,8 @@ func executeBudgetInitializeCommand(ctx context.Context, args []string, options 
 	flags := flag.NewFlagSet("budget-initialize", flag.ContinueOnError)
 	flags.SetOutput(options.ErrOut)
 	path := flags.String("config", defaultConfigPath, "worker configuration YAML path")
-	apply := flags.Bool("apply", false, "initialize an unused budget namespace; never reset existing budgets")
+	apply := flags.Bool("apply", false, "initialize an unused budget namespace or recover lost Redis budget authority; never reset existing budgets")
+	recover := flags.Bool("recover", false, "with --apply, fence and reconcile a ready Redis namespace after suspected partial data loss or failover")
 	timeout := flags.Duration("timeout", 30*time.Second, "overall timeout, at most 5m")
 	// The flag package reports its own parse errors; every other invalid
 	// invocation names its reason too (#1533).
@@ -271,6 +272,10 @@ func executeBudgetInitializeCommand(ctx context.Context, args []string, options 
 	}
 	if flags.NArg() != 0 {
 		writeCommandError(options.ErrOut, errors.New("budget-initialize takes no positional arguments"))
+		return 2
+	}
+	if *recover && !*apply {
+		writeCommandError(options.ErrOut, errors.New("budget-initialize --recover requires --apply"))
 		return 2
 	}
 	if *timeout <= 0 || *timeout > 5*time.Minute {
@@ -288,7 +293,7 @@ func executeBudgetInitializeCommand(ctx context.Context, args []string, options 
 	}
 	bounded, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
-	if err := options.RunBudgetInitialize(bounded, data, *apply, options.Out); err != nil {
+	if err := options.RunBudgetInitialize(bounded, data, *apply, *recover, options.Out); err != nil {
 		writeCommandError(options.ErrOut, err)
 		return 1
 	}

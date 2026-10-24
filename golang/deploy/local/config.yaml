@@ -49,9 +49,9 @@ state:
       ca_file: ""
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_aabd4a3cbc2a51cc
-    admission_version: admission_aabd4a3cbc2a51cc
-    admission_digest: 51027a77cc4d5c1e6c051a7fa424e5f6c18404baa4d17d5919443d1474df1c7f
+    function_library: llmtw_admission_f172942024ab388a
+    admission_version: admission_f172942024ab388a
+    admission_digest: e9ba1ff29d941d47f1ded3b21e32ebf5183685547e5e0465e404f30766ca2056
     max_connections: 16
     dial_timeout: 2s
     operation_timeout: 3s

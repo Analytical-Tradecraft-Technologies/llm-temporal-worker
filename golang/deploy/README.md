@@ -13,7 +13,8 @@ release automation must substitute the signed digest before applying it.
 
 Kubernetes manifests live under `kubernetes/base` and include:
 
-- two replicas, rolling-update safety, a disruption budget, resource bounds,
+- two replicas spread across nodes (a preferred hostname topology spread),
+  rolling-update safety, a disruption budget, resource bounds,
   dropped capabilities, RuntimeDefault seccomp, and read-only root storage;
 - fail-closed `/health/live` and `/health/ready` probes plus `/metrics`;
 - ConfigMap-mounted non-secret configuration/catalogs and externally provisioned

@@ -97,7 +97,8 @@ func TestRedisBenchmarkIsOperatorGatedAndExcludedFromCI(t *testing.T) {
 	}
 	compileTarget := redisBenchmarkCompileTarget(t, string(makefile))
 	for _, required := range []string{
-		"$(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^$$'",
+		// The safety tests run; the benchmark itself never does (#1534).
+		"$(GO) test -tags=redisbenchmark ./engine -run '^TestRedisBenchmark' -bench '^$$'",
 	} {
 		if !strings.Contains(compileTarget, required) {
 			t.Errorf("redis-benchmark-compile is missing %q", required)

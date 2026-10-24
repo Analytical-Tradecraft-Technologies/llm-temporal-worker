@@ -44,6 +44,8 @@ var allowedLogAttrs = map[string]struct{}{
 	// finish_reason is a provider's short finish token, such as stop or
 	// tool_calls, admitted only as a lowercase identifier.
 	"finish_reason": {},
+	// activity_type is the registered Temporal Activity type name.
+	"activity_type": {},
 }
 
 var unsafeMessageWords = []string{

@@ -68,7 +68,7 @@ func NewProfile(profile Profile) (Profile, error) {
 		return Profile{}, err
 	}
 	copy := profile
-	copy.Capabilities = cloneCapabilities(profile.Capabilities)
+	copy.Capabilities = profile.Capabilities.Clone()
 	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
 	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
 	if copy.ExpectedBaseURL != "" {
@@ -152,13 +152,10 @@ func (profile Profile) capabilities(ctx context.Context, query provider.Capabili
 	if err := ctx.Err(); err != nil {
 		return provider.CapabilitySet{}, err
 	}
-	if query.Family != "" && query.Family != provider.FamilyBedrockConverse {
-		return provider.CapabilitySet{}, fmt.Errorf("bedrock converse profile %q: capability family %q does not match %q", profile.ID, query.Family, provider.FamilyBedrockConverse)
+	if err := provider.ValidateCapabilityQuery(query, fmt.Sprintf("bedrock converse profile %q", profile.ID), provider.FamilyBedrockConverse, endpointID); err != nil {
+		return provider.CapabilitySet{}, err
 	}
-	if query.EndpointID != "" && query.EndpointID != endpointID {
-		return provider.CapabilitySet{}, fmt.Errorf("bedrock converse profile %q: capability endpoint %q does not match %q", profile.ID, query.EndpointID, endpointID)
-	}
-	return cloneCapabilities(profile.Capabilities), nil
+	return profile.Capabilities.Clone(), nil
 }
 
 func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
@@ -200,15 +197,6 @@ func validServiceTier(value string) bool {
 
 func allFeatures() []provider.Feature {
 	return []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage}
-}
-
-func cloneCapabilities(set provider.CapabilitySet) provider.CapabilitySet {
-	features := make(map[provider.Feature]provider.Capability, len(set.Features))
-	for feature, capability := range set.Features {
-		features[feature] = capability
-	}
-	set.Features = features
-	return set
 }
 
 func cloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {

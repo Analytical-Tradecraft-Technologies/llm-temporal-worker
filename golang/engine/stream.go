@@ -175,7 +175,7 @@ func (engine *Engine) preflightStreamingPlan(ctx context.Context, request llm.Re
 		if _, ok := adapter.(provider.StreamingAdapter); !ok {
 			continue
 		}
-		query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
+		query := capabilityQuery(candidate.candidate)
 		capability, err := adapter.Capabilities(ctx, query)
 		if err != nil {
 			if cause := ctx.Err(); cause != nil {
@@ -288,26 +288,19 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 		if !ok {
 			continue
 		}
-		query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
+		query := capabilityQuery(candidate.candidate)
 		capability, err := adapter.Capabilities(ctx, query)
 		if err != nil || !capability.Supports(provider.FeatureStreaming, request.Portability != llm.PortabilityBestEffort) {
 			continue
 		}
-		call, err := adapter.Compile(ctx, provider.CompileInput{
-			Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability, Strict: request.Portability != llm.PortabilityBestEffort,
-			Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
-				PriceCeiling: PriceCeiling(candidate.entry)},
-		})
+		call, err := adapter.Compile(ctx, candidateCompileInput(request, providerRequest, candidate, query, capability))
 		if err != nil {
 			if mapped, ok := err.(*provider.Error); ok && mapped.Dispatch != provider.DispatchNotDispatched {
 				return engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 			}
 			continue
 		}
-		lease := snapshot.ReservationLease
-		if lease <= 0 {
-			lease = defaultLease
-		}
+		lease := reservationLease(snapshot)
 		observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: index + 1, leaseUntil: engine.dependencies.Clock().Add(lease), streaming: true}
 		attemptCtx, attemptSpan := engine.startTrace(ctx, "llmtw.provider_attempt", operationTraceAttrs(operation.ID, candidate.candidate)...)
 		result, openErr := streaming.OpenStream(attemptCtx, call, observer)

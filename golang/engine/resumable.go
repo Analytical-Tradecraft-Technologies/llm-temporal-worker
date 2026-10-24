@@ -180,29 +180,10 @@ func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRe
 	if _, ok := adapter.(provider.IdempotencyRecovery); !ok {
 		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "dispatching resumable operation has no idempotency recovery", nil), 0)
 	}
-	query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
-	capability, err := adapter.Capabilities(ctx, query)
+	call, observer, err := engine.recompileRecorded(ctx, request, providerRequest, snapshot, operation, candidate, index, adapter, "dispatching")
 	if err != nil {
-		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching capabilities are unavailable", err)
+		return llm.Response{}, err
 	}
-	call, err := adapter.Compile(ctx, provider.CompileInput{
-		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
-		Strict: request.Portability != llm.PortabilityBestEffort,
-		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
-			PriceCeiling: PriceCeiling(candidate.entry)},
-	})
-	if err != nil {
-		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching call could not be compiled", err)
-	}
-	lease := snapshot.ReservationLease
-	if lease <= 0 {
-		lease = defaultLease
-	}
-	attempt := operation.Attempt.AttemptNumber
-	if attempt <= 0 {
-		attempt = index + 1
-	}
-	observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: attempt, leaseUntil: engine.dependencies.Clock().Add(lease), marked: true}
 	result, invokeErr, providerPending := engine.invokeAttempt(ctx, operation, candidate.candidate, resumable, call, observer)
 	if invokeErr != nil {
 		if providerPending {
@@ -250,29 +231,10 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	if !ok {
 		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "provider pending adapter is not resumable", nil)
 	}
-	query := provider.CapabilityQuery{EndpointID: candidate.candidate.EndpointID, Family: provider.Family(candidate.candidate.Family), Model: candidate.candidate.Model, ServiceClass: candidate.candidate.AttemptedClass}
-	capability, err := adapter.Capabilities(ctx, query)
+	call, observer, err := engine.recompileRecorded(ctx, request, providerRequest, snapshot, operation, candidate, index, adapter, "provider pending")
 	if err != nil {
-		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "provider pending capabilities are unavailable", err)
+		return llm.Response{}, err
 	}
-	call, err := adapter.Compile(ctx, provider.CompileInput{
-		Request: candidateProviderRequest(providerRequest, candidate.candidate), Query: query, Capability: capability,
-		Strict: request.Portability != llm.PortabilityBestEffort,
-		Metadata: provider.CallMetadata{SchemaDigest: mustRequestDigest(request), CapabilityVersion: candidate.candidate.CapabilityVersion, ProviderTier: candidate.candidate.ProviderTier, OpaqueStateRequired: request.Continuation != nil,
-			PriceCeiling: PriceCeiling(candidate.entry)},
-	})
-	if err != nil {
-		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "provider pending call could not be compiled", err)
-	}
-	lease := snapshot.ReservationLease
-	if lease <= 0 {
-		lease = defaultLease
-	}
-	attempt := operation.Attempt.AttemptNumber
-	if attempt <= 0 {
-		attempt = index + 1
-	}
-	observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: attempt, leaseUntil: engine.dependencies.Clock().Add(lease), marked: true}
 	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "provider_wait", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
 		return llm.Response{}, err
 	}
@@ -323,4 +285,25 @@ func pendingPollError(err error) *provider.Error {
 		return &copy
 	}
 	return engineError(provider.CodeStateUnavailable, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider poll failed", err)
+}
+
+// recompileRecorded rebuilds the call for a recorded attempt being resumed and
+// its marked observer. The recorded attempt number wins; older rows without one
+// fall back to the plan position. label names the resume path in errors.
+func (engine *Engine) recompileRecorded(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, operation admission.Operation, candidate quotedCandidate, index int, adapter provider.Adapter, label string) (provider.Call, *dispatchObserver, error) {
+	query := capabilityQuery(candidate.candidate)
+	capability, err := adapter.Capabilities(ctx, query)
+	if err != nil {
+		return provider.Call{}, nil, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, label+" capabilities are unavailable", err)
+	}
+	call, err := adapter.Compile(ctx, candidateCompileInput(request, providerRequest, candidate, query, capability))
+	if err != nil {
+		return provider.Call{}, nil, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, label+" call could not be compiled", err)
+	}
+	attempt := operation.Attempt.AttemptNumber
+	if attempt <= 0 {
+		attempt = index + 1
+	}
+	observer := &dispatchObserver{engine: engine, operation: operation, candidate: candidate.candidate, attempt: attempt, leaseUntil: engine.dependencies.Clock().Add(reservationLease(snapshot)), marked: true}
+	return call, observer, nil
 }

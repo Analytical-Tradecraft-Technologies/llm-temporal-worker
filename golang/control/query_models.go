@@ -8,6 +8,7 @@ package control
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
@@ -695,11 +696,9 @@ func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) 
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return nil, err
 		}
-		rows := make([]ProviderStatusRow, len(page.Routes))
-		for i, r := range page.Routes {
-			if err := json.Unmarshal(r, &rows[i]); err != nil {
-				return nil, fmt.Errorf("route %d: %w", i, err)
-			}
+		rows, err := decodeRows[ProviderStatusRow](page.Routes, "route")
+		if err != nil {
+			return nil, err
 		}
 		return ProviderStatusResult{Routes: rows}, nil
 	case llm.QueryModelInventory:
@@ -709,11 +708,9 @@ func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) 
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return nil, err
 		}
-		rows := make([]ModelInventoryRow, len(page.Models))
-		for i, r := range page.Models {
-			if err := json.Unmarshal(r, &rows[i]); err != nil {
-				return nil, fmt.Errorf("model %d: %w", i, err)
-			}
+		rows, err := decodeRows[ModelInventoryRow](page.Models, "model")
+		if err != nil {
+			return nil, err
 		}
 		return ModelInventoryResult{Models: rows}, nil
 	case llm.QueryCreditStatus:
@@ -723,11 +720,9 @@ func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) 
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return nil, err
 		}
-		rows := make([]CreditStatusRow, len(page.Endpoints))
-		for i, r := range page.Endpoints {
-			if err := json.Unmarshal(r, &rows[i]); err != nil {
-				return nil, fmt.Errorf("endpoint %d: %w", i, err)
-			}
+		rows, err := decodeRows[CreditStatusRow](page.Endpoints, "endpoint")
+		if err != nil {
+			return nil, err
 		}
 		return CreditStatusResult{Endpoints: rows}, nil
 	case llm.QueryBudgetStatus:
@@ -741,11 +736,9 @@ func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) 
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return nil, err
 		}
-		windows := make([]BudgetWindow, len(value.Windows))
-		for i, r := range value.Windows {
-			if err := json.Unmarshal(r, &windows[i]); err != nil {
-				return nil, fmt.Errorf("window %d: %w", i, err)
-			}
+		windows, err := decodeRows[BudgetWindow](value.Windows, "window")
+		if err != nil {
+			return nil, err
 		}
 		return BudgetStatusResult{ActiveAt: value.ActiveAt, GenerationID: value.GenerationID, ManifestDigest: value.ManifestDigest, StreamHighWaterMark: value.StreamHighWaterMark, Windows: windows}, nil
 	case llm.QuerySpendSummary:
@@ -757,16 +750,26 @@ func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) 
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return nil, err
 		}
-		buckets := make([]SpendBucket, len(value.Buckets))
-		for i, r := range value.Buckets {
-			if err := json.Unmarshal(r, &buckets[i]); err != nil {
-				return nil, fmt.Errorf("bucket %d: %w", i, err)
-			}
+		buckets, err := decodeRows[SpendBucket](value.Buckets, "bucket")
+		if err != nil {
+			return nil, err
 		}
 		return SpendSummaryResult{StartTime: value.StartTime, EndTime: value.EndTime, Buckets: buckets}, nil
 	default:
 		return nil, fmt.Errorf("unknown query result kind %q", kind)
 	}
+}
+
+// decodeRows unmarshals each raw row into a T. label names one row in errors,
+// for example "route 3: ...".
+func decodeRows[T any](raw []json.RawMessage, label string) ([]T, error) {
+	rows := make([]T, len(raw))
+	for i, r := range raw {
+		if err := json.Unmarshal(r, &rows[i]); err != nil {
+			return nil, fmt.Errorf("%s %d: %w", label, i, err)
+		}
+	}
+	return rows, nil
 }
 
 func cloneTags(tags map[string]string) map[string]string {
@@ -825,72 +828,25 @@ func valueOrZeroTime(value *time.Time) time.Time {
 	return *value
 }
 
-func filterKind(filter QueryFilter) (llm.QueryKind, bool) {
-	switch value := filter.(type) {
-	case nil:
+// queryKindOf reports the query kind of a filter or result. Every
+// implementation has a value receiver, so a nil interface or a typed nil
+// pointer carries no kind instead of panicking.
+func queryKindOf(value interface{ queryKind() llm.QueryKind }) (llm.QueryKind, bool) {
+	if value == nil {
 		return "", false
-	case *ProviderStatusQuery:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *ModelInventoryQuery:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *CreditStatusQuery:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *BudgetStatusQuery:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *SpendSummaryQuery:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	default:
-		return filter.queryKind(), true
 	}
+	if reflected := reflect.ValueOf(value); reflected.Kind() == reflect.Pointer && reflected.IsNil() {
+		return "", false
+	}
+	return value.queryKind(), true
+}
+
+func filterKind(filter QueryFilter) (llm.QueryKind, bool) {
+	return queryKindOf(filter)
 }
 
 func resultKind(result QueryResult) (llm.QueryKind, bool) {
-	switch value := result.(type) {
-	case nil:
-		return "", false
-	case *ProviderStatusResult:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *ModelInventoryResult:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *CreditStatusResult:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *BudgetStatusResult:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	case *SpendSummaryResult:
-		if value == nil {
-			return "", false
-		}
-		return value.queryKind(), true
-	default:
-		return result.queryKind(), true
-	}
+	return queryKindOf(result)
 }
 func stringPtr(value *QueryCursor) *string {
 	if value == nil {

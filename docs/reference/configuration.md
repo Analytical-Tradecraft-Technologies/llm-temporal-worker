@@ -26,7 +26,9 @@ runtime construction, while `validate-config` and
 `workload_identity` secret references and endpoint auth are available to
 embeddings that supply a workload identity provider; the worker binary does
 not, so its `validate-config`, `print-effective-config` and `worker` commands
-reject them.
+reject them. A `workload_identity` reference names the token's `audience` and
+no `name` or `path`; `env` references take only `name` and `file` references
+only an absolute `path`.
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 
@@ -55,8 +57,13 @@ the development composition. Every other value is treated as production,
 including `production`, `staging`, `prod`, `Production` and names the worker
 has never seen. For those values:
 
-- `state.redis.tls.enabled` must be `true`;
-- `telemetry.content_logging` must be `disabled`;
+- `state.redis.tls.enabled` must be `true`, unless `state.redis.service_mesh`
+  is `true` (the only exemption; see below);
+- `telemetry.content_logging` must be `disabled`. The field accepts `disabled`
+  and `redacted`; the worker never writes prompts, outputs or other content to
+  its logs, metrics or traces, so both values currently behave the same and
+  `redacted` is reserved for development. It does not govern the
+  [Langfuse content export](#optional-langfuse-content-export);
 - `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
 - startup requires the durable v1 runtime, the cloud budget initialization
   receipt and the Redis budget authority probe.
@@ -64,6 +71,22 @@ has never seen. For those values:
 Where this document says "production", it means any environment other than
 `development`. Validation and runtime composition share one rule
 (`config.IsProductionEnvironment`), so a misspelt name cannot skip hardening.
+
+### Durable scope identity
+
+`environment` and `temporal.namespace` are part of every caller's durable
+scope. The production worker derives each tenant/project scope as
+`sha256(["llmtw:trusted-temporal-scope:v1", environment, temporal.namespace,
+tenant, project])`, and that scope keys every checkpoint row, is the HMAC scope
+of every checkpoint handle, and is the response cache's scope. Do not change
+either value for a running deployment. A reload that changes them is
+rejected, but a restart with a new value is accepted: every outstanding
+checkpoint handle then fails verification as `invalid_argument`, and every
+cached response is a miss, while operation replay (keyed on the raw
+tenant/project scope) keeps working. There is no migration tool; renaming an
+environment or moving to a new Temporal namespace starts every conversation
+afresh. Treat both like `state.redis.key_secret` and `state.requests.secret`:
+choose them once per deployment.
 
 ## Caller authorization
 
@@ -91,6 +114,20 @@ exception is `temporal.mesh_transport: true`, which declares that a service mesh
 supplies transport security and client identity. All of these fields are
 process-lifetime settings, read at startup; a reload that changes them is
 rejected. Redis TLS does not accept `cert_file` or `key_file`.
+
+`state.redis.service_mesh: true` is the Redis analogue. It declares that an
+externally enforced mTLS service mesh encrypts Redis traffic and authenticates
+the worker, so the worker opens plain Redis connections without `AUTH`. It is
+the only exemption from the production `state.redis.tls.enabled` requirement,
+and it requires `state.redis.tls` to be empty (TLS disabled) and
+`state.redis.username` and `state.redis.password` to be absent; the secret
+resolver then reads no Redis credentials. Validation and readiness cannot see
+the mesh: readiness still requires Redis to answer `PING` and `TIME` and to pass
+the persistence, eviction and admission-code checks, but nothing confirms that
+the traffic is protected. Enable it only where the mesh enforces strict mTLS
+and restricts Redis callers by workload identity. It is process-lifetime; a
+reload that changes it is rejected. `state.redis.key_secret` is still required
+and is unrelated to Redis authentication.
 
 ## Temporal payload encryption
 
@@ -207,7 +244,7 @@ they are not claims that a particular deployment currently supports a feature.
 
 ```yaml
 version: llm-temporal-worker/v1
-environment: production
+environment: production   # part of the durable scope identity; never change it
 
 server:
   health_address: 0.0.0.0:8080
@@ -217,11 +254,12 @@ server:
   readiness_probe_interval: 5s
   readiness_probe_timeout: 2s
   inline_payload_bytes: 524288
-  # responses_api_listen_address: 0.0.0.0:8000   # opt-in OpenAI Responses API; see below
+  # responses_api_listen_address: 127.0.0.1:8000 # opt-in OpenAI Responses API; see below
+  # responses_api_private_network: true          # required to bind beyond loopback in production
 
 temporal:
   target: temporal.example.internal:7233
-  namespace: production
+  namespace: production   # part of the durable scope identity; never change it
   task_queue: llm-inference
   identity_prefix: llmtw
   tls:
@@ -274,9 +312,9 @@ state:
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_aabd4a3cbc2a51cc
-    admission_version: admission_aabd4a3cbc2a51cc
-    admission_digest: 51027a77cc4d5c1e6c051a7fa424e5f6c18404baa4d17d5919443d1474df1c7f
+    function_library: llmtw_admission_f172942024ab388a
+    admission_version: admission_f172942024ab388a
+    admission_digest: e9ba1ff29d941d47f1ded3b21e32ebf5183685547e5e0465e404f30766ca2056
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
@@ -628,6 +666,18 @@ options: `heartbeat_keepalive_interval` may be at most `10s` (one third of the
 `10m` Activity start-to-close timeout, and `server.inline_payload_bytes` may be
 at most 2 MiB, Temporal's default payload blob limit.
 
+Raise `server.inline_payload_bytes` freely, but lower it only after draining:
+stop starting new Generate and Compact workflows and let every open one finish
+(or the older workers finish them) before workers with the smaller limit poll
+the task queue. Workers apply the limit to every workflow input, Activity
+argument and recorded result they decode or encode, including when they
+replay an open workflow's history after a restart. A history recorded under a
+larger limit can therefore hold a payload the new limit refuses, and replaying
+it fails the workflow with a non-determinism error rather than a typed
+`llm_invalid_argument`; a provider attempt it had paid for is then recoverable
+only through the pending-request index or `generation-recover`. A reload
+cannot change the limit; it takes a restart.
+
 Provider execution uses that same ten-minute Activity bound, including resumable
 polls, while preserving any shorter parent deadline. Choose endpoint and global
 provider timeouts below this bound with room to save the outcome. The durable
@@ -678,6 +728,24 @@ for replica configuration and regional failover constraints.
 
 See [cloud request storage](cloud-request-repository.md#worker-integration)
 for IAM configuration, table/bucket aliases and the encryption secret.
+
+Optional `state.requests.provider.aws.temp_directory` names the directory for
+the private staging files the AWS provider writes while it validates blob
+lengths; empty uses the operating system's temporary directory. The AWS
+`failover` block takes `dynamodb_regions` (one or two fallback regions, distinct
+from the primary), `payload_replicas` (one or two `{region, bucket}` fallbacks
+for the payload store) and `attempt_timeout` (positive, at most 30s), and
+requires `allow_mrsc: true`; `blob_store.s3.failover` takes `replicas` and
+`attempt_timeout` with the same bounds. Profile, temp directory, failover and
+`allow_mrsc` are process-lifetime: a reload that changes them is rejected.
+
+Optional `state.requests.parent_snapshot_storage` (`inline`, the default, or
+`blob`) selects how new request preparations store their parent snapshot:
+inline in the request record or as a separate referenced blob (#1112). Every
+build that has the field reads both forms, but a build without it cannot read
+a referenced preparation, so set `blob` only after every worker in the fleet
+runs a build that has it. The default is normalized away and does not change
+`config_version`. See [cloud request storage](cloud-request-repository.md).
 
 On the durable v1 path, `state.continuation_retention` sets the checkpoint
 lifetime. The other `state` timing settings are validated and defaulted, but
@@ -1312,7 +1380,24 @@ entries:
     reasoning_per_million: "0"
     per_request: "0"
     source: operator-verified
+    # Optional: a long-context price tier.
+    long_prompt:
+      min_prompt_tokens: 272000
+      input_per_million: "2.500000"
+      output_per_million: "15.000000"
+      cache_read_per_million: "0.250000"
+      cache_write_per_million: "0"
+      reasoning_per_million: "0"
+      per_request: "0"
 ```
+
+An entry's optional `long_prompt` replaces its prices for a call whose prompt
+(input, cache read and cache write tokens together) exceeds
+`min_prompt_tokens`, as a provider's long-context tier does. It must price
+exactly the components the entry prices: one the entry leaves unknown stays
+unknown for long prompts too. Without it, a long prompt to a model that has
+such a tier is reserved and settled at the base price, below the provider's
+bill.
 
 Prices in examples are illustrative. Production catalogs require provenance and
 review; they never refresh silently from an untrusted endpoint. The one opt-in
@@ -1376,7 +1461,11 @@ model_sync:
   a time, holding a Redis lease, fetches OpenRouter's lists and publishes them
   to Redis; every worker installs the published catalog within a minute. With
   `state.kind: memory` each process fetches its own. A failed fetch keeps the
-  last published catalog.
+  last published catalog. Readiness never waits for the first fetch: a worker
+  starts with configured and rules-direct models, and fetches at once when
+  nothing is published yet. Until a catalog is installed, a failed fetch is
+  retried after 30 seconds, doubling to at most 5 minutes (and never beyond
+  `refresh_interval_min`), rather than after the full interval.
 - **Credentials.** `optional: true` disables an endpoint whose environment
   credential is unset instead of failing startup, so a deployment can supply
   only the keys it wants. Only an endpoint that model sync uses and no
@@ -1405,6 +1494,8 @@ prices OpenRouter publishes with `go run ./tools/modelsyncdefaults` (from
 `golang/`) and review the diff; the Exa section is maintained by hand.
 
 Files in `model_sync.rules` are layered over the built-in rules at runtime.
+The [catalog loader reference](catalog-loaders.md#model-sync-rules-documents)
+specifies the document schema, merge order and validation rules.
 Model fields override field by field, prices merge per tier, and exclusions
 accumulate, so an override only states what it changes. A model's
 `exclude: true` stays in force through later layers that omit `exclude`; only
@@ -1778,6 +1869,13 @@ canonical configuration, so enabling the API is the only change that moves an
 existing digest.
 
 The listener has no TLS and no authentication: the API key names the tenant,
-project and actor. Bind it to a private interface or put it behind a network
-policy. See the [OpenAI Responses API reference](openai-responses-api.md) for
+project and actor, so anyone who can reach it can start paid work charged to
+any allowed scope. In production (any `environment` other than `development`)
+it must therefore bind a loopback or link-local address (`127.0.0.1`, `::1`,
+`localhost`, `169.254.0.0/16`, `fe80::/10`), for example for a sidecar in the
+same pod, unless `server.responses_api_private_network: true` acknowledges
+that a wider bind is reachable only from a private, policed network such as a
+Kubernetes NetworkPolicy. `0.0.0.0`, `::`, an empty host, any other address
+and any other host name need the acknowledgement. Setting the acknowledgement
+without a listener address is rejected. Development keeps the shape-only rule. See the [OpenAI Responses API reference](openai-responses-api.md) for
 the request mapping, polling and shutdown behaviour.

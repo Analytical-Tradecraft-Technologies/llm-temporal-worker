@@ -23,6 +23,9 @@ func TestGenerateActivityRecordsTerminalMetrics(t *testing.T) {
 		{name: "completed", status: "completed", errorClass: "none"},
 		{name: "provider transient", engineErr: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "unavailable"), status: "failed", errorClass: "provider_unavailable", origin: "provider"},
 		{name: "configuration", engineErr: provider.NewError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration unavailable"), status: "failed", errorClass: "internal", origin: "worker"},
+		{name: "provider permission denied", engineErr: provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "permission denied"), status: "failed", errorClass: "internal", origin: "provider"},
+		// The worker refusing the caller's scope is not a provider failure (#1535).
+		{name: "caller scope denied", engineErr: provider.NewError(provider.CodePermissionDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "caller scope is not permitted"), status: "failed", errorClass: "internal", origin: "caller"},
 		{name: "provider authentication", engineErr: provider.NewError(provider.CodeAuthentication, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "authentication failed"), status: "failed", errorClass: "internal", origin: "provider"},
 		{name: "pricing no route", engineErr: provider.NewError(provider.CodeNoRoute, provider.PhasePrice, provider.DispatchNotDispatched, provider.RetryNever, "no eligible price"), status: "failed", errorClass: "internal", origin: "worker"},
 		{name: "plan no route", engineErr: provider.NewError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "unknown model"), status: "failed", errorClass: "internal", origin: "caller"},
