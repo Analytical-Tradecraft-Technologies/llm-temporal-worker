@@ -60,6 +60,8 @@ func TestDockerfileStatesTheOpenRouterUpstreamPolicy(t *testing.T) {
 		"LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION=false",
 		"LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION=false",
 		"LLMTW_OPENROUTER_DENY_PROMPT_TRAINING=false",
+		"ARG OPENROUTER_PROVIDER_LOCATIONS=google-vertex=US,google-ai-studio=US,xai=US",
+		"LLMTW_OPENROUTER_PROVIDER_LOCATIONS=\"${OPENROUTER_PROVIDER_LOCATIONS}\"",
 	} {
 		if !strings.Contains(dockerfile, want) {
 			t.Errorf("Dockerfile does not set %q", want)

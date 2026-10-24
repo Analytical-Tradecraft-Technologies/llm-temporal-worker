@@ -118,6 +118,12 @@ type OpenRouterUpstreamConfig struct {
 	// DenyPromptTraining allows only providers that do not collect prompts
 	// for training.
 	DenyPromptTraining bool `yaml:"deny_prompt_training,omitempty" json:"deny_prompt_training,omitempty"`
+	// ProviderLocations maps an OpenRouter provider slug to the countries it
+	// is assumed to be in when OpenRouter publishes no headquarters or no
+	// datacenter for it. Published values are always used when present. The
+	// entries extend LLMTW_OPENROUTER_PROVIDER_LOCATIONS, replacing any entry
+	// for the same provider; an empty list removes that provider's entry.
+	ProviderLocations map[string][]string `yaml:"provider_locations,omitempty" json:"provider_locations,omitempty"`
 }
 
 // DefaultOpenRouterCountries applies when no country list is configured.

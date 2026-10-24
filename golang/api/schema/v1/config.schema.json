@@ -594,10 +594,16 @@
       "type": "object", "additionalProperties": false,
       "description": "Upstream providers OpenRouter may send any request to. Every OpenRouter request names the allowed endpoints. The LLMTW_OPENROUTER_* environment variables override these fields.",
       "properties": {
-        "countries": { "enum": ["US", "EU", "Core1", "Core2", "Core3", "Core4", "Core5"], "description": "Country list a provider's headquarters and every datacenter it lists must be in. A provider that publishes no datacenter never qualifies. Defaults to Core5." },
+        "countries": { "enum": ["US", "EU", "Core1", "Core2", "Core3", "Core4", "Core5"], "description": "Country list a provider's headquarters and every datacenter it lists must be in. A provider that publishes no headquarters or no datacenter qualifies only through provider_locations. Defaults to Core5." },
         "require_native_precision": { "type": "boolean", "description": "Allow only endpoints that serve a model at the precision its weights were released in." },
         "require_zero_retention": { "type": "boolean", "description": "Allow only endpoints that retain no prompts or completions." },
-        "deny_prompt_training": { "type": "boolean", "description": "Allow only providers that do not collect prompts for training." }
+        "deny_prompt_training": { "type": "boolean", "description": "Allow only providers that do not collect prompts for training." },
+        "provider_locations": {
+          "type": "object",
+          "description": "OpenRouter provider slug to the countries it is assumed to be in when OpenRouter publishes no headquarters or no datacenter for it. Published values always win. Entries extend LLMTW_OPENROUTER_PROVIDER_LOCATIONS, replacing the same provider's entry; an empty list removes it.",
+          "propertyNames": { "pattern": "^[!-~]+$" },
+          "additionalProperties": { "type": "array", "items": { "type": "string", "pattern": "^[A-Z]{2}$" } }
+        }
       }
     },
     "catalog": {

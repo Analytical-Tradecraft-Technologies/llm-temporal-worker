@@ -93,8 +93,17 @@ ENV LLMTW_BUILD_VERSION="${VERSION}" \
 # are in the country list (US, EU, Core1, Core2, Core3, Core4 or Core5), and,
 # when enabled, only native-precision, zero-retention or no-prompt-training
 # endpoints. Override any of these when running the container.
+#
+# OpenRouter publishes no datacenters for Google's and xAI's own hosting, so
+# without a stated location they never qualify. These are first-party
+# endpoints only: other hosts of Google's open models keep their own
+# published locations. Each entry is used only where OpenRouter publishes
+# nothing. Replace or empty the variable, or add or remove entries with
+# openrouter_upstream.provider_locations, to change them.
 ARG OPENROUTER_COUNTRIES=Core5
+ARG OPENROUTER_PROVIDER_LOCATIONS=google-vertex=US,google-ai-studio=US,xai=US
 ENV LLMTW_OPENROUTER_COUNTRIES="${OPENROUTER_COUNTRIES}" \
+    LLMTW_OPENROUTER_PROVIDER_LOCATIONS="${OPENROUTER_PROVIDER_LOCATIONS}" \
     LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION=false \
     LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION=false \
     LLMTW_OPENROUTER_DENY_PROMPT_TRAINING=false

@@ -73,7 +73,7 @@ func serveUpstreamLists(writer http.ResponseWriter, request *http.Request) bool 
 // testPolicy allows every provider in the Core5 countries.
 func testPolicy(t *testing.T) UpstreamPolicy {
 	t.Helper()
-	policy, err := NewUpstreamPolicy(CountryListCore5, false, false, false)
+	policy, err := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

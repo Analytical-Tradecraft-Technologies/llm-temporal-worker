@@ -1,6 +1,9 @@
 package modelsync
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // UpstreamPolicy decides which OpenRouter upstream endpoints may serve a
 // request. Every OpenRouter request names the endpoints it allows, so an
@@ -8,7 +11,7 @@ import "sort"
 type UpstreamPolicy struct {
 	// Countries holds the ISO 3166-1 alpha-2 codes a provider must be in: its
 	// headquarters and every datacenter it lists. A provider that publishes
-	// no headquarters or no datacenter never qualifies.
+	// no headquarters or no datacenter qualifies only through Locations.
 	Countries map[string]struct{}
 	// NativePrecision allows only endpoints whose published quantization the
 	// rules list as native for the model.
@@ -20,6 +23,10 @@ type UpstreamPolicy struct {
 	// not collect prompts for training. OpenRouter does not publish this per
 	// endpoint, so it is enforced by OpenRouter rather than filtered here.
 	DenyPromptTraining bool
+	// Locations maps a provider slug to the countries it is assumed to be
+	// in. They stand in for a headquarters or datacenter list the provider
+	// does not publish, and never replace a published value.
+	Locations map[string][]string
 }
 
 // Upstream is the set of OpenRouter endpoints a model may be served by.
@@ -32,12 +39,35 @@ type Upstream struct {
 }
 
 // NewUpstreamPolicy builds a policy for the named country list.
-func NewUpstreamPolicy(countryList string, nativePrecision, zeroRetention, denyPromptTraining bool) (UpstreamPolicy, error) {
+func NewUpstreamPolicy(countryList string, nativePrecision, zeroRetention, denyPromptTraining bool, locations map[string][]string) (UpstreamPolicy, error) {
 	countries, err := CountryList(countryList)
 	if err != nil {
 		return UpstreamPolicy{}, err
 	}
-	return UpstreamPolicy{Countries: countries, NativePrecision: nativePrecision, ZeroRetention: zeroRetention, DenyPromptTraining: denyPromptTraining}, nil
+	if err := ValidateProviderLocations(locations); err != nil {
+		return UpstreamPolicy{}, err
+	}
+	return UpstreamPolicy{Countries: countries, NativePrecision: nativePrecision, ZeroRetention: zeroRetention, DenyPromptTraining: denyPromptTraining,
+		Locations: locations}, nil
+}
+
+// ValidateProviderLocations checks that every provider slug is an identifier
+// and lists at least one ISO 3166-1 alpha-2 country code.
+func ValidateProviderLocations(locations map[string][]string) error {
+	for provider, countries := range locations {
+		if err := validateIdentifier(provider); err != nil {
+			return fmt.Errorf("provider %q: %w", provider, err)
+		}
+		if len(countries) == 0 {
+			return fmt.Errorf("provider %q lists no country", provider)
+		}
+		for _, country := range countries {
+			if country == "" || normalizeCountry(country) != country {
+				return fmt.Errorf("provider %q: %q is not an ISO 3166-1 alpha-2 country code", provider, country)
+			}
+		}
+	}
+	return nil
 }
 
 // Upstreams returns the allowed endpoints of every Document model that has
@@ -103,15 +133,23 @@ func (upstream Upstream) Allowed(endpoints []Endpoint) []Endpoint {
 }
 
 func (policy UpstreamPolicy) providerAllowed(provider Provider) bool {
-	if provider.Headquarters == "" || len(provider.Datacenters) == 0 {
+	assumed := policy.Locations[provider.Slug]
+	headquarters := assumed
+	if provider.Headquarters != "" {
+		headquarters = []string{provider.Headquarters}
+	}
+	datacenters := provider.Datacenters
+	if len(datacenters) == 0 {
+		datacenters = assumed
+	}
+	if len(headquarters) == 0 || len(datacenters) == 0 {
 		return false
 	}
-	if _, ok := policy.Countries[provider.Headquarters]; !ok {
-		return false
-	}
-	for _, country := range provider.Datacenters {
-		if _, ok := policy.Countries[country]; !ok {
-			return false
+	for _, countries := range [][]string{headquarters, datacenters} {
+		for _, country := range countries {
+			if _, ok := policy.Countries[country]; !ok {
+				return false
+			}
 		}
 	}
 	return true

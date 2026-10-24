@@ -1627,6 +1627,7 @@ openrouter_upstream:              # optional; these are the defaults
   require_native_precision: false
   require_zero_retention: false
   deny_prompt_training: false
+  provider_locations: {}
 ```
 
 The environment overrides each field: `LLMTW_OPENROUTER_COUNTRIES`,
@@ -1635,6 +1636,38 @@ The environment overrides each field: `LLMTW_OPENROUTER_COUNTRIES`,
 `LLMTW_OPENROUTER_DENY_PROMPT_TRAINING` (`true` or `false`). The image sets
 all four, with `Core5` (the `OPENROUTER_COUNTRIES` build argument) and every
 filter off.
+
+### Provider locations
+
+OpenRouter does not publish a location for every provider. A provider with no
+published headquarters or no published datacenter never qualifies for a
+country list, unless `provider_locations` states the countries it is in. A
+stated location fills only the missing value: a published headquarters or
+datacenter list is always used, and every stated country must be in the
+country list. Locations are per provider, so they apply only to the
+endpoints that provider hosts.
+
+`LLMTW_OPENROUTER_PROVIDER_LOCATIONS` supplies the base entries as
+comma-separated `provider=COUNTRY` pairs, joining several countries with `/`
+(`xai=US,acme=US/CA`); an empty value supplies none. `provider_locations`
+then layers over it: an entry replaces the same provider's entry or adds a
+new one, and an empty list removes it.
+
+The image sets `google-vertex=US,google-ai-studio=US,xai=US` (the
+`OPENROUTER_PROVIDER_LOCATIONS` build argument), because OpenRouter publishes
+no datacenters for Google's and xAI's own hosting. Other providers serving
+Google's open models are unaffected. To change these at deploy time:
+
+```yaml
+openrouter_upstream:
+  provider_locations:
+    xai: []              # drop the image's xAI entry
+    google-vertex: [US, NL]
+    acme: [CA]           # add a provider
+```
+
+or replace the whole set with `LLMTW_OPENROUTER_PROVIDER_LOCATIONS`, or set it
+to an empty value to use only published locations.
 
 The built-in native precision rules,
 `golang/internal/modelsync/rules/native_precision.yaml`, list only models whose
