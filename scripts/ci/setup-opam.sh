@@ -5,6 +5,12 @@ set -euo pipefail
 readonly opam_version="2.3.0"
 readonly opam_sha256="324e78e3f33efeba279aacf9f9610cfec7b2df7d7e0e1640f75f09de85f96cc9"
 readonly ocaml_version="5.2.0"
+# Packages resolve from this opam-repository commit, not whatever the default
+# repository serves that day, so a dependency release cannot change CI without
+# a change here (#1518). The opam cache keys hash this script, so moving the
+# commit also starts a fresh opam root.
+readonly opam_repository_commit="60801bf059243ec8b40c0767f103c64f3904c974"
+readonly opam_repository="git+https://github.com/ocaml/opam-repository.git#${opam_repository_commit}"
 
 : "${RUNNER_TEMP:?RUNNER_TEMP must identify a runner-temporary directory}"
 : "${GITHUB_ENV:?GITHUB_ENV must be available in GitHub Actions}"
@@ -46,7 +52,7 @@ if ! mkdir -p -- "${cargo_home}" || [[ ! -w "${cargo_home}" ]]; then
   exit 1
 fi
 if [[ ! -f "${opam_root}/config" ]]; then
-  opam init --bare --no-setup --yes
+  opam init --bare --no-setup --yes default "${opam_repository}"
 fi
 if opam switch list --short | grep -Fx -- "${ocaml_version}" > /dev/null; then
   opam switch set --yes "${ocaml_version}"

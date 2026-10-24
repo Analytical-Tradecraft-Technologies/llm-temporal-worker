@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -38,6 +39,16 @@ func TestWorkflowNativeOPAMSetupReusesRestoredSwitch(t *testing.T) {
 	}
 	if !strings.Contains(calls, "opam switch set") {
 		t.Fatalf("restored OPAM root did not select its cached switch:\n%s", calls)
+	}
+}
+
+// A fresh opam root must resolve packages from one opam-repository commit,
+// not the default repository's live head (#1518).
+func TestWorkflowNativeOPAMSetupPinsTheOPAMRepositoryCommit(t *testing.T) {
+	calls := runNativeCIHelper(t, "setup-opam.sh", "")
+	pinned := regexp.MustCompile(`(?m)^opam init --bare --no-setup --yes default git\+https://github\.com/ocaml/opam-repository\.git#[0-9a-f]{40} `)
+	if !pinned.MatchString(calls) {
+		t.Fatalf("native OPAM setup did not initialize from a pinned opam-repository commit:\n%s", calls)
 	}
 }
 
@@ -212,7 +223,9 @@ if [[ -z "${XDG_CACHE_HOME:-}" || "${CARGO_HOME:-}" != "${XDG_CACHE_HOME}/dune/"
   printf '%s\n' 'fake OPAM requires writable CARGO_HOME beneath the Dune writable mount before invocation' >&2
   exit 1
 fi
-printf 'opam %s %s cargo_home=%s\n' "$1" "${2:-}" "${CARGO_HOME:-}" >> "$FAKE_LOG"
+printf 'opam' >> "$FAKE_LOG"
+printf ' %s' "$@" >> "$FAKE_LOG"
+printf ' cargo_home=%s\n' "${CARGO_HOME:-}" >> "$FAKE_LOG"
 case "$1" in
   init)
     mkdir -p "$OPAMROOT"

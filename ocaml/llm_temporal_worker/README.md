@@ -58,6 +58,13 @@ the package metadata also pins. Commit an application lock file after
 `CARGO_HOME`, repeat the `cargo fetch`, and set `CARGO_NET_OFFLINE=true` for any
 later opam command that rebuilds `temporal-sdk`.
 
+The package metadata bounds `dune`, `base64`, `ptime` and `yojson` below their
+next major versions, and its `x-llm-temporal-api-version` field names the Go
+contract (`llm.temporal/v1`) its codecs are tested against. CI resolves these
+dependencies from one pinned opam-repository commit (in
+`scripts/ci/setup-opam.sh`), so a new release reaches CI only when that commit
+moves.
+
 Add `(libraries llm-temporal-ocaml)` to your Dune stanza.
 
 The repository also contains a separate [downstream Dune consumer smoke
