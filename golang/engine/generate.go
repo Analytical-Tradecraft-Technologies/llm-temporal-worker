@@ -343,10 +343,7 @@ func reservations(matches []budget.MatchedWindow, amount pricing.MicroUSD, amoun
 }
 
 func (engine *Engine) beginOrResume(ctx context.Context, request llm.Request, snapshot Snapshot, operationID, scopeKey string, digest [32]byte, quoted quotedPlan, now time.Time) (admission.Operation, bool, error) {
-	lease := snapshot.ReservationLease
-	if lease <= 0 {
-		lease = defaultLease
-	}
+	lease := reservationLease(snapshot)
 	retention := snapshot.OperationRetention
 	if retention <= 0 {
 		retention = defaultRetention

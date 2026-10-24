@@ -2,7 +2,6 @@ package openairesponses
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -133,7 +132,7 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 		return err
 	}
 	if adapter == nil {
-		return compileError("adapter is nil")
+		return provider.NewCompileError("adapter is nil")
 	}
 	if request.Output == nil {
 		return nil
@@ -154,51 +153,37 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 
 func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
 	if adapter == nil {
-		return provider.Call{}, compileError("adapter is nil")
+		return provider.Call{}, provider.NewCompileError("adapter is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return provider.Call{}, compileContextError(err)
+		return provider.Call{}, provider.NewCompileContextError(err)
 	}
-	if err := validateQuery(input.Query, adapter.endpointID); err != nil {
-		return provider.Call{}, compileError(err.Error())
+	if err := provider.ValidateCapabilityQuery(input.Query, "openai responses", provider.FamilyOpenAIResponses, adapter.endpointID); err != nil {
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	if (input.Request.WebSearch || input.Request.CodeExecution || input.Request.WebFetch) && !adapter.client.directOpenAI {
-		return provider.Call{}, compileError("hosted tools require the direct OpenAI Responses transport")
+		return provider.Call{}, provider.NewCompileError("hosted tools require the direct OpenAI Responses transport")
 	}
-	normalized, err := llm.NormalizeRequest(input.Request)
 	input.Metadata.WebSearch = input.Request.WebSearch
 	input.Metadata.WebFetch = input.Request.WebFetch
 	input.Metadata.CodeExecution = input.Request.CodeExecution
+	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, "")
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, err
 	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
+	set, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
+		return adapter.capabilities(ctx, input.Query)
+	}, adapter.capabilityVersion)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
-	}
-	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, compileError(err.Error())
-	}
-	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, compileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
-	}
-	set := input.Capability
-	if set.Version == "" && len(set.Features) == 0 {
-		set, err = adapter.capabilities(ctx, input.Query)
-		if err != nil {
-			return provider.Call{}, compileError(err.Error())
-		}
-	}
-	if set.Version == "" {
-		set.Version = adapter.capabilityVersion
+		return provider.Call{}, err
 	}
 	for _, feature := range requiredFeatures(normalized) {
 		capability, err := set.Resolve(feature, input.Strict)
 		if err != nil {
-			return provider.Call{}, unsupportedError(feature, err.Error())
+			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, err.Error())
 		}
 		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
-			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability is %s", capability.State))
+			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, fmt.Sprintf("capability is %s", capability.State))
 		}
 	}
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
@@ -215,26 +200,11 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		return provider.Call{}, lowerError(err)
 	}
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
-	digest := input.Metadata.SchemaDigest
-	if digest == ([32]byte{}) {
-		digest, err = llm.RequestDigest(normalized)
-		if err != nil {
-			return provider.Call{}, compileError(err.Error())
-		}
-	}
-	metadata := input.Metadata
-	metadata.SchemaDigest = digest
-	metadata.CapabilityVersion = set.Version
-	metadata.ProviderTier = tier
-	metadata.OpaqueStateRequired = normalized.Continuation != nil
-	if metadata.EstimatedBytes == 0 {
-		canonical, canonicalErr := canonicalRequestBytes(normalized)
-		if canonicalErr != nil {
-			return provider.Call{}, compileError(canonicalErr.Error())
-		}
-		metadata.EstimatedBytes = len(canonical)
+	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, tier)
+	if err != nil {
+		return provider.Call{}, err
 	}
 	return provider.Call{
 		EndpointID:   adapter.endpointID,
@@ -250,13 +220,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
 	if adapter == nil {
-		return provider.Result{}, dispatchError("adapter is nil", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
 	if err := ctx.Err(); err != nil {
-		return provider.Result{}, dispatchContextError(err)
+		return provider.Result{}, provider.NewDispatchContextError(err)
 	}
 	if call.Family != provider.FamilyOpenAIResponses || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, dispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
 	}
 	params, ok := call.SDKParams.(responses.ResponseNewParams)
 	if !ok {
@@ -266,24 +236,24 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		}
 	}
 	if !ok {
-		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
-		return provider.Result{}, dispatchError(err.Error(), provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError(err.Error(), provider.DispatchNotDispatched)
 	}
 	call.SDKParams = params
 	// Encode the ordered schemas before the possible-write boundary, so a
 	// failure here is a definite non-dispatch.
 	ordered, err := schemaOrderOptions(params)
 	if err != nil {
-		return provider.Result{}, dispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
 	}
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
 	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
 	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	var rawResponse *http.Response
 	probe := &provider.DispatchProbe{}
@@ -315,7 +285,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	// response without an error. Treat that as an accepted malformed provider
 	// response instead of dereferencing it below and panicking the Activity.
 	if response == nil {
-		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
+		return provider.Result{}, provider.NewInvalidResponseError(call, "", "provider returned an empty response")
 	}
 	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
 	if rawResponse != nil {
@@ -323,7 +293,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		metadata.RequestID = rawResponse.Header.Get("x-request-id")
 	}
 	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := dispatchObserverError(err, provider.DispatchAccepted)
+		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
 		mapped.Provider.ResponseID = response.ID
 		mapped.Provider.RequestID = metadata.RequestID
 		return provider.Result{}, mapped
@@ -336,7 +306,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if adapter.exaAgent {
 		cost, costErr := exaAgentCost(response.RawJSON())
 		if costErr != nil {
-			mapped := invalidResponseError(call, metadata.RequestID, costErr.Error())
+			mapped := provider.NewInvalidResponseError(call, metadata.RequestID, costErr.Error())
 			mapped.Provider.ResponseID = response.ID
 			return provider.Result{}, mapped
 		}
@@ -376,7 +346,7 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 	if request.Continuation != nil {
 		features = append(features, provider.FeatureContinuation)
 	}
-	return uniqueFeatures(features)
+	return provider.UniqueFeatures(features)
 }
 
 func partFeature(part llm.Part) provider.Feature {
@@ -390,68 +360,12 @@ func partFeature(part llm.Part) provider.Feature {
 	}
 }
 
-func uniqueFeatures(features []provider.Feature) []provider.Feature {
-	seen := make(map[provider.Feature]struct{}, len(features))
-	result := make([]provider.Feature, 0, len(features))
-	for _, feature := range features {
-		if feature == "" {
-			continue
-		}
-		if _, ok := seen[feature]; ok {
-			continue
-		}
-		seen[feature] = struct{}{}
-		result = append(result, feature)
-	}
-	return result
-}
-
-func canonicalRequestBytes(request llm.Request) ([]byte, error) {
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	return llm.CanonicalJSON(encoded)
-}
-
 // lowerError maps a lowering failure to the error contract. A request that
 // structured output cannot represent is unsupported, not malformed.
 func lowerError(err error) *provider.Error {
 	var unsupported *openaischema.UnsupportedError
 	if errors.As(err, &unsupported) {
-		return unsupportedError(provider.FeatureStructuredOutput, err.Error())
+		return provider.NewUnsupportedFeatureError(provider.FeatureStructuredOutput, err.Error())
 	}
-	return compileError(err.Error())
-}
-
-func compileError(message string) *provider.Error {
-	return provider.NewError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, message)
-}
-
-func unsupportedError(feature provider.Feature, message string) *provider.Error {
-	return provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, fmt.Sprintf("%s: %s", feature, message))
-}
-
-func compileContextError(err error) *provider.Error {
-	if err == context.Canceled {
-		return provider.NewError(provider.CodeCanceled, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "compile canceled")
-	}
-	return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "compile deadline exceeded")
-}
-
-func dispatchError(message string, certainty provider.DispatchCertainty) *provider.Error {
-	return provider.NewError(provider.CodeInvalidArgument, provider.PhaseDispatch, certainty, provider.RetryNever, message)
-}
-
-func dispatchContextError(err error) *provider.Error {
-	if err == context.Canceled {
-		return provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "dispatch canceled")
-	}
-	return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "dispatch deadline exceeded")
-}
-
-func dispatchObserverError(err error, certainty provider.DispatchCertainty) *provider.Error {
-	mapped := provider.NewError(provider.CodeInternal, provider.PhaseDispatch, certainty, provider.RetryNever, "observer rejected provider response")
-	mapped.Cause = err
-	return mapped
+	return provider.NewCompileError(err.Error())
 }

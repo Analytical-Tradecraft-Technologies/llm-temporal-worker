@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -22,25 +23,37 @@ type ProviderRouteStatusReader interface {
 }
 
 func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.Candidate) (bool, error) {
+	reason, err := p.routeHold(ctx, candidate)
+	return reason != "", err
+}
+
+// routeHold returns why the candidate's shared health record holds it, or ""
+// when nothing does.
+func (p *ProviderPlanning) routeHold(ctx context.Context, candidate routing.Candidate) (string, error) {
 	if isNilCapability(p.routeStatus) {
-		return false, nil
+		return "", nil
 	}
 	status, err := p.routeStatus.GetRouteStatus(ctx, p.configDigest, candidate.RouteID, candidate.EndpointID, candidate.Model, candidate.ProviderTier)
 	if errors.Is(err, control.ErrProviderStatusNotFound) {
-		return false, nil
+		return "", nil
 	}
 	if err != nil {
-		return false, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
+		return "", providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
 	if status.ConfigDigest != p.configDigest || status.RouteID != candidate.RouteID || status.EndpointID != candidate.EndpointID || status.EndpointAccountHMAC != candidate.EndpointAccountHMAC || status.Provider != candidate.Provider || status.EndpointFamily != candidate.Family || status.Model != candidate.Model || status.ProviderTier != candidate.ProviderTier {
 		// A record for another route identity is not evidence about this
 		// candidate. Health is advisory, so it must not fail the selection.
-		return false, nil
+		return "", nil
 	}
-	if status.Credit == control.CreditExhausted || status.Billing == control.BillingIssue {
-		return true, nil
+	switch {
+	case status.Credit == control.CreditExhausted:
+		return observability.RouteHeldCreditExhausted, nil
+	case status.Billing == control.BillingIssue:
+		return observability.RouteHeldBillingIssue, nil
+	case status.Circuit == control.CircuitOpen && p.clock().Before(status.StaleAfter):
+		return observability.RouteHeldCircuitOpen, nil
 	}
-	return status.Circuit == control.CircuitOpen && p.clock().Before(status.StaleAfter), nil
+	return "", nil
 }
 
 // routeHealthCooldown is how long an ordinary definite failure keeps counting

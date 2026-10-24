@@ -273,6 +273,12 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 			return durable.ReserveResult{}, fmt.Errorf("Redis reservation event: %w", err)
 		}
 		reserve.Events = append(reserve.Events, event)
+		if value.WindowExpiresMillis > 0 {
+			if reserve.WindowExpiries == nil {
+				reserve.WindowExpiries = make(map[string]time.Time, len(record.Reservations))
+			}
+			reserve.WindowExpiries[value.EventID] = time.UnixMilli(value.WindowExpiresMillis).UTC()
+		}
 	}
 	if err := reserve.Validate(request); err != nil {
 		return durable.ReserveResult{}, err

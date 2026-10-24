@@ -65,7 +65,18 @@ module Window_key = Make_nonempty ()
 
 module Checkpoint = struct
   type t = string
-  let of_string value = if value = "" then Error "checkpoint must not be empty" else Ok value
+  (* The v1 schemas bound every checkpoint handle to 1..512 Unicode code
+     points, as the Go codec does; count code points, not bytes. *)
+  let max_code_points = 512
+  let code_points value =
+    let count = ref 0 in
+    String.iter (fun c -> if Char.code c land 0xC0 <> 0x80 then incr count) value;
+    !count
+  let of_string value =
+    if value = "" then Error "checkpoint must not be empty"
+    else if code_points value > max_code_points then
+      Error (Printf.sprintf "checkpoint must contain at most %d Unicode code points" max_code_points)
+    else Ok value
   let of_string_exn value = match of_string value with Ok value -> value | Error message -> invalid_arg message
   let to_string value = value
 end

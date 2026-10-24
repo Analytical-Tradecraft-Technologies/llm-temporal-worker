@@ -768,6 +768,13 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 		"negative-generate-extensions-null.json",
 		"negative-generate-output-name.json",
 		"negative-generate-null-output.json",
+		"negative-generate-duplicate-fallbacks.json",
+		"negative-generate-tool-name.json",
+		"negative-generate-policy-name.json",
+		"negative-generate-empty-instruction.json",
+		"negative-generate-empty-message.json",
+		"negative-generate-empty-text-part.json",
+		"negative-generate-long-parent.json",
 		"negative-compact-tools.json",
 		"negative-compact-structured-output.json",
 		"negative-query-mismatched-result.json",
@@ -778,7 +785,8 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 			data := readV1Fixture(t, name)
 			var value any
 			switch {
-			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json", name == "negative-generate-output-name.json":
+			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json", name == "negative-generate-output-name.json",
+				name == "negative-generate-duplicate-fallbacks.json", name == "negative-generate-tool-name.json", name == "negative-generate-policy-name.json", name == "negative-generate-empty-instruction.json", name == "negative-generate-empty-message.json", name == "negative-generate-empty-text-part.json", name == "negative-generate-long-parent.json":
 				value = new(llm.GenerateRequestV1)
 			case strings.HasPrefix(name, "negative-generate"),
 				strings.HasPrefix(name, "negative-currency"),

@@ -1373,6 +1373,9 @@ type CompactRequestV1 struct {
 // settings_patch sets, the route the turn itself is planned on, so a model
 // retired since the parent was written does not strand the lineage. A
 // Generate that patches neither keeps the parent-routed request unchanged.
+// The summary always uses the compaction cache with variant 0 and no age
+// bound, whatever the Generate's own cache policy, which governs only its
+// final response; changing that would change recorded child inputs.
 func GenerateCompaction(generate GenerateRequestV1, operationKey string) CompactRequestV1 {
 	request := CompactRequestV1{OperationKey: operationKey, Context: generate.Context, Cache: &CachePolicyV1{}}
 	if generate.Parent != nil {

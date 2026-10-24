@@ -14,10 +14,13 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
+	temporalactivity "go.temporal.io/sdk/activity"
 )
 
 // Gate both initial compilation and reload before resolving any secret. The
@@ -34,6 +37,18 @@ func newCLIReferenceResolver(resolver secrets.Resolver) config.ReferenceResolver
 		}
 		return (secrets.ConfigResolver{Resolver: resolver}).Resolve(ctx, value)
 	})
+}
+
+// ValidateCLIConfig applies the composition preconditions the worker binary
+// checks before it resolves any secret, so validate-config and
+// print-effective-config reject a configuration the worker would refuse at
+// startup (#1529). Its errors are operator-safe and name the failing field.
+func ValidateCLIConfig(value config.Config) error {
+	if isCLIReadinessFixture(value) {
+		return nil
+	}
+	_, err := trustedTemporalCloudOptions(value)
+	return err
 }
 
 func isCLIReadinessFixture(value config.Config) bool {
@@ -149,14 +164,22 @@ func trustedTemporalQueryBuilder(factory *ProductionEngineFactory, value config.
 }
 
 func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, error) {
-	if value.State.Kind != config.StateKindDurable || value.Authorization == nil {
-		return CloudV1RuntimeOptions{}, fmt.Errorf("%w: CLI requires durable storage and explicit authorization policy", ErrDurableV1Composition)
+	// The messages name configuration fields only, so they are marked
+	// operator-safe; the CLI would otherwise hide "authorization" (#1529).
+	if value.Authorization == nil {
+		return CloudV1RuntimeOptions{}, diagnostic.Safe("authorization is required when environment is production or state.kind is durable",
+			fmt.Errorf("%w: CLI requires durable storage and explicit authorization policy", ErrDurableV1Composition))
+	}
+	if value.State.Kind != config.StateKindDurable {
+		return CloudV1RuntimeOptions{}, diagnostic.Safe("state.kind must be durable when environment is production or authorization is set",
+			fmt.Errorf("%w: CLI requires durable storage and explicit authorization policy", ErrDurableV1Composition))
 	}
 	if err := value.Authorization.Validate(); err != nil {
-		return CloudV1RuntimeOptions{}, fmt.Errorf("%w: %w", ErrDurableV1Composition, err)
+		return CloudV1RuntimeOptions{}, diagnostic.Safe(err.Error(), fmt.Errorf("%w: %w", ErrDurableV1Composition, err))
 	}
 	if value.Temporal.Namespace == "" || value.Environment == "" || value.Limits.ContinuationDepth <= 0 || value.Limits.ContinuationDepth > math.MaxInt32 {
-		return CloudV1RuntimeOptions{}, fmt.Errorf("%w: invalid scope namespace or continuation depth", ErrDurableV1Composition)
+		return CloudV1RuntimeOptions{}, diagnostic.Safe("temporal.namespace, environment and limits.continuation_depth must be set within range",
+			fmt.Errorf("%w: invalid scope namespace or continuation depth", ErrDurableV1Composition))
 	}
 	allowed := make(map[config.AuthorizedScope]string, len(value.Authorization.AllowedScopes))
 	for _, scope := range value.Authorization.AllowedScopes {
@@ -173,14 +196,19 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 	return CloudV1RuntimeOptions{
 		ResolveScope: func(ctx context.Context, caller llm.RequestContext) (string, error) {
 			if ctx == nil {
-				return "", executionError(provider.CodePermissionDenied)
+				return "", scopeDeniedError()
 			}
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
 			scope, ok := allowed[config.AuthorizedScope{Tenant: caller.Tenant, Project: caller.Project}]
 			if !ok {
-				return "", executionError(provider.CodePermissionDenied)
+				activityName := ""
+				if temporalactivity.IsActivity(ctx) {
+					activityName = temporalactivity.GetInfo(ctx).ActivityType.Name
+				}
+				observability.LoggerFromContext(ctx).ScopeAccessDenied(ctx, caller.Tenant, caller.Project, activityName)
+				return "", scopeDeniedError()
 			}
 			return scope, nil
 		},
@@ -189,4 +217,11 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 		// bound keeps a continuation_depth above the 512-row default effective.
 		Limits: state.MaterializeLimits{MaxDepth: int32(value.Limits.ContinuationDepth), MaxRows: value.Limits.ContinuationDepth + 1},
 	}, nil
+}
+
+// scopeDeniedError is a caller-scope denial. Nothing was planned, reserved or
+// sent, so it is not dispatched and never retried, and failure metrics count
+// it against the caller rather than the provider (#1535).
+func scopeDeniedError() error {
+	return provider.NewError(provider.CodePermissionDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "caller scope is not permitted")
 }

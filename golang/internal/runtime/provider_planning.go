@@ -198,11 +198,14 @@ func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Re
 			}
 			return PlannedProviderCall{}, providerPlanningError(provider.CodeInvalidArgument, provider.PhasePlan, provider.RetryNever)
 		}
-		blocked, healthErr := planning.routeBlocked(ctx, candidate)
+		hold, healthErr := planning.routeHold(ctx, candidate)
 		if healthErr != nil {
 			return PlannedProviderCall{}, healthErr
 		}
-		if blocked {
+		if hold != "" {
+			// Counted even when a later candidate serves the request, so a
+			// held route is visible before callers see no_route (#1538).
+			observability.MetricsFromContext(ctx).RecordRouteHeld(candidate.EndpointID, hold)
 			healthBlocked = true
 			rejections = append(rejections, planningRejection{RouteID: candidate.RouteID, Reason: routing.RejectHealth})
 			continue

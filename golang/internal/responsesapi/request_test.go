@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 func mapBody(t *testing.T, body string) (mappedRequest, *apiError) {
@@ -219,5 +220,42 @@ func TestContinuationSetsCompositeSettingsInFull(t *testing.T) {
 	mapped, _ = mapCreateRequest(request, testIdentity, "resp_new")
 	if mapped.Generate.SettingsPatch.Output.Set != nil || mapped.Generate.SettingsPatch.ToolPolicy.Set != nil {
 		t.Fatal("a new conversation sets settings it was not given")
+	}
+}
+
+// reasoning.effort none on one turn must not stick once a later turn asks for
+// an effort, and none drops an inherited effort (#1526).
+func TestReasoningEffortReplacesAnInheritedMode(t *testing.T) {
+	turn := func(body string, base state.ModelState) state.ModelState {
+		t.Helper()
+		request, apiErr := decodeCreateRequest([]byte(body))
+		if apiErr != nil {
+			t.Fatal(apiErr)
+		}
+		mapped, apiErr := mapCreateRequest(request, testIdentity, "resp_next")
+		if apiErr != nil {
+			t.Fatal(apiErr)
+		}
+		next, err := state.ApplySettingsPatchV1(base, mapped.Generate.SettingsPatch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	first := turn(`{"model":"gpt-contract","input":"hi","reasoning":{"effort":"none"}}`, state.RootModelState("gpt-contract"))
+	if first.ReasoningMode != llm.ReasoningModeDisabled || first.ReasoningEffort != "" {
+		t.Fatalf("effort none = mode %q effort %q", first.ReasoningMode, first.ReasoningEffort)
+	}
+	second := turn(`{"input":"more","previous_response_id":"resp_first","reasoning":{"effort":"high"}}`, first)
+	if second.ReasoningMode == llm.ReasoningModeDisabled || second.ReasoningEffort != llm.ReasoningEffort("high") {
+		t.Fatalf("effort high after none = mode %q effort %q, want reasoning re-enabled", second.ReasoningMode, second.ReasoningEffort)
+	}
+	third := turn(`{"input":"again","previous_response_id":"resp_second","reasoning":{"effort":"none"}}`, second)
+	if third.ReasoningMode != llm.ReasoningModeDisabled || third.ReasoningEffort != "" {
+		t.Fatalf("effort none after high = mode %q effort %q, want only disabled", third.ReasoningMode, third.ReasoningEffort)
+	}
+	kept := turn(`{"input":"plain","previous_response_id":"resp_third"}`, second)
+	if kept.ReasoningEffort != llm.ReasoningEffort("high") {
+		t.Fatalf("a continuation without reasoning dropped the inherited effort: %q", kept.ReasoningEffort)
 	}
 }

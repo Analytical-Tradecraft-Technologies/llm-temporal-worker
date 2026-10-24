@@ -69,7 +69,7 @@ func NewProfile(profile Profile) (Profile, error) {
 		return Profile{}, err
 	}
 	copy := profile
-	copy.Capabilities = cloneCapabilities(profile.Capabilities)
+	copy.Capabilities = profile.Capabilities.Clone()
 	copy.Capabilities.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(copy.Capabilities.Features[provider.FeatureStreaming])
 	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
 	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
@@ -236,13 +236,10 @@ func (profile Profile) capabilities(ctx context.Context, query provider.Capabili
 	if err := ctx.Err(); err != nil {
 		return provider.CapabilitySet{}, err
 	}
-	if query.Family != "" && query.Family != provider.FamilyAnthropicMessages {
-		return provider.CapabilitySet{}, fmt.Errorf("anthropic messages profile %q: capability family %q does not match %q", profile.ID, query.Family, provider.FamilyAnthropicMessages)
+	if err := provider.ValidateCapabilityQuery(query, fmt.Sprintf("anthropic messages profile %q", profile.ID), provider.FamilyAnthropicMessages, endpointID); err != nil {
+		return provider.CapabilitySet{}, err
 	}
-	if query.EndpointID != "" && query.EndpointID != endpointID {
-		return provider.CapabilitySet{}, fmt.Errorf("anthropic messages profile %q: capability endpoint %q does not match %q", profile.ID, query.EndpointID, endpointID)
-	}
-	set := cloneCapabilities(profile.Capabilities)
+	set := profile.Capabilities.Clone()
 	set.Version = profile.capabilityVersion()
 	set.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(set.Features[provider.FeatureStreaming])
 	return set, nil
@@ -306,15 +303,6 @@ func allFeatures() []provider.Feature {
 }
 
 func validProviderTier(value string) bool { return value != "" && len(value) <= 128 }
-
-func cloneCapabilities(set provider.CapabilitySet) provider.CapabilitySet {
-	features := set.Features
-	set.Features = make(map[provider.Feature]provider.Capability, len(features))
-	for feature, capability := range features {
-		set.Features[feature] = capability
-	}
-	return set
-}
 
 func cloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {
 	copy := make(map[llm.ServiceClass]string, len(values))

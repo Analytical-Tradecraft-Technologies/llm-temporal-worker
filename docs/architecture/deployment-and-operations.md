@@ -150,8 +150,11 @@ the exact identity and epoch and no expiry. A missing, malformed, or mismatched
 marker keeps readiness false; readiness never initializes or rebuilds state.
 Each budget mutation also checks the marker atomically. Run the explicit
 [`budget-initialize`](../reference/cli.md#budget-initialize) command with workers
-stopped before first installation. This does not recover individual lost budget
-keys or validate an older restored snapshot. Development and Redis-only fixtures
+stopped before first installation. The same command, run before each worker
+starts, recovers lost Redis accounting from durable cloud records behind a
+`recovering` fence; `--recover` also reconciles after a failover or an older
+restored snapshot. See
+[recovery after Redis data loss](../reference/redis-budget-leases.md#recovery-after-redis-data-loss). Development and Redis-only fixtures
 continue to omit this production authority check. The default Function
 path is provisioned by deployment automation before the worker starts; the
 runtime only verifies and calls it. Durable deployments also use an enabled
@@ -313,7 +316,10 @@ The series are:
 - `llmtw_activity_total{status,error_class}`;
 - `llmtw_activity_failure_total{origin}` where Activity classification emits
   `worker`, `provider`, `caller`, or `budget`; `other` is a bounded defensive
-  fallback for invalid direct recorder calls only;
+  fallback for invalid direct recorder calls only. A `permission_denied` the
+  worker raises before dispatch, such as a tenant/project outside
+  `authorization.allowed_scopes`, counts as `caller`; a provider's own
+  permission or credit denial counts as `provider`;
 - `llmtw_activity_duration_seconds{phase}`;
 - `llmtw_provider_attempt_total{endpoint,model,class,outcome}`;
 - `llmtw_provider_duration_seconds{endpoint,model,class}`;
@@ -328,6 +334,14 @@ The series are:
 - `llmtw_operation_state_total{state}`;
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
+- `llmtw_langfuse_export_failures_total{reason}`, one per failed Langfuse
+  export Activity attempt, where `reason` is `rejected`, `oversized`,
+  `saturated`, `unavailable` or `failed` (see the
+  [configuration reference](../reference/configuration.md#optional-langfuse-content-export));
+- `llmtw_route_held_total{endpoint,reason}`, one per route candidate that
+  provider planning skipped because shared route health holds it, where
+  `reason` is `circuit_open`, `credit_exhausted` or `billing_issue`. It counts
+  even when another route serves the request;
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
@@ -422,18 +436,35 @@ identifiers.
 
 ## Alerts
 
-Release dashboards and runbooks cover:
+Release dashboards and runbooks alert on these signals, each emitted by the
+worker or by Temporal:
 
-- ambiguous dispatch above zero;
-- priority requests downgraded or actual tier unknown;
-- reservation underestimation;
-- budget denials and sustained conservative over-reservation;
-- Redis persistence/eviction/memory/Function digest failures;
-- no eligible routes or failed config reload;
-- provider auth failures and route circuit opening;
-- Activity heartbeat/stuck age and task queue backlog;
-- continuation corruption or digest mismatch;
-- cost catalog expiry.
+| Alert | Signal |
+| --- | --- |
+| Ambiguous dispatch above zero | `llmtw_ambiguous_total{endpoint}` |
+| Priority requests downgraded or actual tier unknown | `llmtw_service_class_actual_total{requested,actual,endpoint}`, `actual` below `requested` or `unknown` |
+| Budget denials | `llmtw_budget_admission_total{policy,outcome}` and `llmtw_activity_failure_total{origin="budget"}` |
+| Paid work charged at its reservation because cost is unknown | `llmtw_cost_status_total{status="unknown"}` with `method="retained_reservation"` |
+| Redis persistence, eviction, memory or Function digest failures | `/health/ready` returning `503` and `llmtw_worker_polling` at 0 |
+| No eligible routes | `llmtw_activity_failure_total{origin="caller"}` (planning) or `{origin="worker"}` (pricing), and the `requested model is not in the route catalog` warning (`cause=model_not_in_catalog`) |
+| Failed configuration reload | `llmtw_config_reload_total{outcome="failure"}` and its `config_field` log |
+| Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` |
+| Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` |
+| Stuck Activities | `llmtw_heartbeat_age_seconds` |
+| Task queue backlog | Temporal's task-queue backlog metrics for `temporal.task_queue` |
+| Continuation corruption or digest mismatch | `llmtw_activity_failure_total{origin="worker"}`, with the `llm_state_corrupt` Temporal failure type |
+
+Not yet observable: no metric or log separates these, so runbooks cannot alert
+on them directly (#1538):
+
+- reservation underestimation (reservation versus settled cost);
+- provider authentication failures as distinct from other provider-origin
+  failures (rate limits, 5xx);
+- the moment a route circuit opens: `llmtw_route_held_total` counts the
+  requests a held route turns away, so a held route with no traffic shows
+  nothing;
+- a priced route approaching or passing its catalog `effective_until`; it
+  surfaces only as `no_route` once it expires.
 
 ## Local stack
 

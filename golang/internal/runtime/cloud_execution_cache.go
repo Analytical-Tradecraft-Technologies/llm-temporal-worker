@@ -111,13 +111,13 @@ func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedClou
 	var disposition durable.CacheDisposition
 	var origin *cache.ResponseEntry
 	var stalled bool
+	// cache.max_age_seconds bounds reuse for Generate and Compact alike, as
+	// the v1 contract states (#1508).
 	if p.Generate != nil {
 		decision, lookupErr := helper.PrepareGenerate(ctx, lease, cacheMaximumAge(cloudCachePolicy(p)))
 		err, disposition, origin, stalled = lookupErr, decision.Disposition, decision.Entry(), decision.StalledFill()
 	} else {
-		// Artifact reuse is content/policy based; generation freshness does not
-		// expire an otherwise compatible compaction artifact.
-		decision, lookupErr := helper.PrepareCompact(ctx, lease, nil)
+		decision, lookupErr := helper.PrepareCompact(ctx, lease, cacheMaximumAge(cloudCachePolicy(p)))
 		err, disposition, origin, stalled = lookupErr, decision.Disposition, decision.Entry(), decision.StalledFill()
 	}
 	if err != nil {

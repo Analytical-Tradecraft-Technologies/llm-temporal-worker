@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"fork-unknown-temperature","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"append":[],"parent":"ckp_v1.parent","cache":{"max_age_seconds":60,"variant":1}}

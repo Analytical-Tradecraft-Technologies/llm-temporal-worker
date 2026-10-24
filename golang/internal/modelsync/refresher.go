@@ -14,6 +14,11 @@ const (
 	defaultPollInterval = time.Minute
 	defaultLeaseTTL     = 5 * time.Minute
 	defaultFetchTimeout = 4 * time.Minute
+	// Until the first Document is installed, a failed refresh is retried
+	// after this backoff, doubling up to startupRetryMax and never beyond
+	// the normal interval (#1527).
+	startupRetryMin = 30 * time.Second
+	startupRetryMax = 5 * time.Minute
 )
 
 // Outcome classifies one Refresher step for logs and metrics.
@@ -171,7 +176,8 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 
 // Run polls and refreshes until ctx ends. The first refresh is immediate when
 // nothing has been published yet; afterwards each refresh is scheduled after a
-// fresh random interval.
+// fresh random interval. Until a Document is installed, a failed refresh is
+// retried after a short doubling backoff instead.
 func (refresher *Refresher) Run(ctx context.Context) {
 	installed, _ := refresher.Sync(ctx)
 	next := refresher.now()
@@ -180,12 +186,13 @@ func (refresher *Refresher) Run(ctx context.Context) {
 	}
 	poll := time.NewTicker(refresher.pollInterval())
 	defer poll.Stop()
+	var backoff time.Duration
 	for {
 		if !refresher.now().Before(next) {
 			// A failed refresh keeps the installed Document and retries at the
 			// next scheduled time; the published Document is never cleared.
 			_ = refresher.Refresh(ctx)
-			next = refresher.now().Add(refresher.interval())
+			next = refresher.now().Add(refresher.nextDelay(&backoff))
 		}
 		select {
 		case <-ctx.Done():
@@ -194,6 +201,24 @@ func (refresher *Refresher) Run(ctx context.Context) {
 			_, _ = refresher.Sync(ctx)
 		}
 	}
+}
+
+// nextDelay is the wait before the next refresh. With a Document installed it
+// is the normal random interval. Without one (a fresh deployment whose first
+// fetch failed) the worker serves no synced model, so it retries after
+// startupRetryMin, doubling to startupRetryMax, never beyond the interval.
+func (refresher *Refresher) nextDelay(backoff *time.Duration) time.Duration {
+	interval := refresher.interval()
+	if refresher.installed != "" {
+		*backoff = 0
+		return interval
+	}
+	if *backoff == 0 {
+		*backoff = startupRetryMin
+	} else {
+		*backoff = min(2**backoff, startupRetryMax)
+	}
+	return min(*backoff, interval)
 }
 
 func (refresher *Refresher) interval() time.Duration {

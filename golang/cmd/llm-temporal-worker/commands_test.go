@@ -295,6 +295,8 @@ func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
 		{"policy ID of 127 bytes", "id: acme-production", "id: " + strings.Repeat("p", 127), "budgets.policies[0].windows[0] identity"},
 		{"limit below one nano-USD", `limit_usd: "25.000000000000000000"`, `limit_usd: "0.0000000001"`, "budgets.policies[0].windows[0].limit_usd must be at least"},
 		{"second document", "", "\n---\nbudgets:\n  require_match: false\n", "configuration YAML"},
+		// The worker refuses these before resolving secrets (#1529).
+		{"production without authorization", "authorization:\n  mode: trusted_temporal\n  allowed_scopes:\n    - tenant: acme\n      project: invoice-processing\n", "", "authorization is required when environment is production or state.kind is durable"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			if !strings.Contains(string(example), row.old) {
@@ -343,6 +345,36 @@ func TestUsageCommandsHaveCLIReferenceSections(t *testing.T) {
 		}
 		if !headings["## `"+command+"`"] {
 			t.Errorf("docs/reference/cli.md has no \"## `%s`\" section", command)
+		}
+	}
+}
+
+// A durable development configuration needs the authorization policy too,
+// and the worker command reports the field rather than "command failed".
+func TestConfigAndWorkerCommandsRequireAuthorizationForDurableDevelopment(t *testing.T) {
+	example, err := os.ReadFile(exampleConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const policy = "authorization:\n  mode: trusted_temporal\n  allowed_scopes:\n    - tenant: acme\n      project: invoice-processing\n"
+	if !strings.Contains(string(example), policy) || !strings.Contains(string(example), "environment: production") {
+		t.Fatal("example configuration no longer contains the authorization block or production environment")
+	}
+	data := strings.ReplaceAll(strings.Replace(string(example), policy, "", 1), "environment: production", "environment: development")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const want = "authorization is required when environment is production or state.kind is durable"
+	for _, command := range []string{"validate-config", "print-effective-config", "worker"} {
+		var output, errorsOut bytes.Buffer
+		code := Execute(context.Background(), []string{command, "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut,
+			RunWorkerFile: func(context.Context, string, []byte, io.Writer) error {
+				t.Fatal("worker started without an authorization policy")
+				return nil
+			}})
+		if code != 1 || strings.TrimSpace(errorsOut.String()) != want {
+			t.Fatalf("%s code=%d out=%q error=%q, want %q", command, code, output.String(), errorsOut.String(), want)
 		}
 	}
 }

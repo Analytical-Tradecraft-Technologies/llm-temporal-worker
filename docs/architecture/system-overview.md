@@ -89,7 +89,7 @@ missing query capabilities return typed failures rather than inferred answers.
 | --- | --- |
 | Invalid or unauthorized input | Rejected before provider submission |
 | Insufficient budget | Wait result; Temporal timer and another bounded acquisition |
-| Redis unavailable or authority marker missing | Paid admission fails closed; no automatic accounting reconstruction |
+| Redis unavailable or authority marker missing | Paid admission fails closed; `budget-initialize --apply` rebuilds accounting from durable cloud records before readiness returns |
 | Cloud state unavailable | Required durable steps fail closed and replay their saved state on retry |
 | Retryable provider failure | Settle the old attempt, then acquire a distinct replacement attempt |
 | Unknown provider outcome | Retain the old charge and pending record; acquire new budget for retry |

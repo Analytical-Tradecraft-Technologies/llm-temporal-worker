@@ -1,0 +1,14 @@
+{
+  "api_version": "llm.temporal/query/v1",
+  "operation_key": "query-credit",
+  "query_execution_id": "qry-credit",
+  "kind": "credit_status",
+  "observed_at": "2026-07-18T03:14:15.926535Z",
+  "source": "persisted",
+  "freshness": "current",
+  "complete": true,
+  "result": {"endpoints": []},
+  "cost_status": "exact",
+  "actual_cost_usd": "0",
+  "cost_method": "control_query_zero"
+}

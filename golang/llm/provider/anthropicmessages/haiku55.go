@@ -15,10 +15,10 @@ func validateHaiku55Request(request llm.Request) error {
 		return nil
 	}
 	if request.ServiceClass == llm.ServiceClassPriority {
-		return unsupportedServiceError("Haiku 5.5 does not support Priority Tier")
+		return provider.NewUnsupportedCapabilityError("Haiku 5.5 does not support Priority Tier")
 	}
 	if reasoning := request.Reasoning; reasoning != nil && (reasoning.Mode == llm.ReasoningModeEnabled || reasoning.TokenBudget != nil) {
-		return unsupportedError(provider.FeatureReasoning, "Haiku 5.5 supports adaptive thinking without a token budget")
+		return provider.NewUnsupportedFeatureError(provider.FeatureReasoning, "Haiku 5.5 supports adaptive thinking without a token budget")
 	}
 	return nil
 }

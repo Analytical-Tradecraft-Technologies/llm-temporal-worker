@@ -26,6 +26,17 @@ spec:
       serviceAccountName: llmtw-worker
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
+      # Prefer one replica per node, so a node failure (which the disruption
+      # budget does not cover) cannot stop every poller at once. ScheduleAnyway
+      # keeps a single-node cluster schedulable.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: llm-temporal-worker
+              app.kubernetes.io/component: worker
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

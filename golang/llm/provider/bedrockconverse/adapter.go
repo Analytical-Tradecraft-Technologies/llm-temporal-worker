@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -70,56 +71,33 @@ func (adapter *Adapter) Capabilities(ctx context.Context, query provider.Capabil
 
 func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput) (provider.Call, error) {
 	if adapter == nil {
-		return provider.Call{}, compileError("adapter is nil")
+		return provider.Call{}, provider.NewCompileError("adapter is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return provider.Call{}, compileContextError(err)
+		return provider.Call{}, provider.NewCompileContextError(err)
 	}
 	if input.Query.Family != "" && input.Query.Family != provider.FamilyBedrockConverse {
-		return provider.Call{}, compileError(fmt.Sprintf("capability family %q does not match %q", input.Query.Family, provider.FamilyBedrockConverse))
+		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("capability family %q does not match %q", input.Query.Family, provider.FamilyBedrockConverse))
 	}
-	normalized, err := llm.NormalizeRequest(input.Request)
+	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, adapter.profile.ExpectedModel)
 	if err != nil {
-		return provider.Call{}, compileError(err.Error())
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		return provider.Call{}, compileError(err.Error())
-	}
-	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, compileError(err.Error())
-	}
-	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, compileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
-	}
-	if adapter.profile.ExpectedModel != "" && adapter.profile.ExpectedModel != normalized.Model {
-		return provider.Call{}, compileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
+		return provider.Call{}, err
 	}
 	if normalized.Continuation != nil {
-		return provider.Call{}, unsupportedError(provider.FeatureContinuation, "Bedrock Converse has no provider-hosted continuation handle")
+		return provider.Call{}, provider.NewUnsupportedFeatureError(provider.FeatureContinuation, "Bedrock Converse has no provider-hosted continuation handle")
 	}
-	capabilities := input.Capability
-	if capabilities.Version == "" && len(capabilities.Features) == 0 {
-		capabilities, err = adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
-		if err != nil {
-			return provider.Call{}, compileError(err.Error())
-		}
+	capabilities, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
+		return adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
+	}, adapter.profile.CapabilityVersion)
+	if err != nil {
+		return provider.Call{}, err
 	}
-	if capabilities.Version == "" {
-		capabilities.Version = adapter.profile.CapabilityVersion
-	}
-	for _, feature := range requiredFeatures(normalized) {
-		capability, resolveErr := capabilities.Resolve(feature, input.Strict)
-		if resolveErr != nil {
-			return provider.Call{}, unsupportedError(feature, resolveErr.Error())
-		}
-		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
-			return provider.Call{}, unsupportedError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
-		}
+	if err := provider.RequireFeatures(capabilities, requiredFeatures(normalized), input.Strict, nil); err != nil {
+		return provider.Call{}, err
 	}
 	tier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
-		return provider.Call{}, unsupportedServiceError(err.Error())
+		return provider.Call{}, provider.NewUnsupportedCapabilityError(err.Error())
 	}
 	params, err := lowerRequest(normalized, adapter.profile, tier, input.Strict)
 	if err != nil {
@@ -127,13 +105,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		if errors.As(err, &strict) {
 			return provider.Call{}, strict
 		}
-		return provider.Call{}, compileError(err.Error())
+		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
 	digest := input.Metadata.SchemaDigest
 	if digest == ([32]byte{}) {
 		digest, err = llm.RequestDigest(normalized)
 		if err != nil {
-			return provider.Call{}, compileError(err.Error())
+			return provider.Call{}, provider.NewCompileError(err.Error())
 		}
 	}
 	metadata := input.Metadata
@@ -152,13 +130,13 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
 	if adapter == nil {
-		return provider.Result{}, dispatchError("adapter is nil", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
 	if err := ctx.Err(); err != nil {
 		return provider.Result{}, dispatchContextError(err)
 	}
 	if call.Family != provider.FamilyBedrockConverse || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, dispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
 	}
 	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
 	if !ok {
@@ -167,14 +145,14 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		}
 	}
 	if !ok {
-		return provider.Result{}, dispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
 	}
 	if observer == nil {
 		observer = provider.NopObserver{}
 	}
 	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
 	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, dispatchObserverError(err, provider.DispatchNotDispatched)
+		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
 	}
 	stage := &dispatchStage{}
 	response, panicked, err := converseRecovered(callContext, adapter.client.converse, &params, stage)
@@ -194,7 +172,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
 	}
 	if response == nil {
-		return provider.Result{}, invalidResponseError(call, "", "provider returned an empty response")
+		return provider.Result{}, provider.NewInvalidResponseError(call, "", "provider returned an empty response")
 	}
 	requestID, _ := awsmiddleware.GetRequestIDMetadata(response.ResultMetadata)
 	metadata := provider.ResponseMetadata{RequestID: requestID}
@@ -202,14 +180,14 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		metadata.ProviderTier = string(response.ServiceTier.Type)
 	}
 	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := dispatchObserverError(err, provider.DispatchAccepted)
+		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
 		mapped.Provider.RequestID = requestID
 		return provider.Result{}, mapped
 	}
 	var rawToolUses []rawToolUse
 	if stage.body != nil {
 		if rawToolUses, err = decodeRawToolUses(stage.body); err != nil {
-			return provider.Result{}, invalidResponseError(call, requestID, err.Error())
+			return provider.Result{}, provider.NewInvalidResponseError(call, requestID, err.Error())
 		}
 	}
 	lifted, err := adapter.liftResponse(call, response, requestID, rawToolUses)
@@ -274,7 +252,7 @@ func (stage *dispatchStage) register(options *bedrockruntime.Options) {
 func (stage *dispatchStage) panicError(call provider.Call, panicked any) *provider.Error {
 	switch {
 	case stage.received:
-		return invalidResponseError(call, "", fmt.Sprintf("provider SDK panicked while decoding the response: %v", panicked))
+		return provider.NewInvalidResponseError(call, "", fmt.Sprintf("provider SDK panicked while decoding the response: %v", panicked))
 	case stage.sent:
 		mapped := provider.NewError(provider.CodeInternal, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, fmt.Sprintf("provider SDK panicked after the request was sent: %v", panicked))
 		mapped.OperationID = call.OperationKey
@@ -345,11 +323,11 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	actual := adapter.profile.actualClass(actualTier)
 	output, hasToolCalls, err := liftOutput(response.Output, rawToolUses)
 	if err != nil {
-		return llm.Response{}, invalidResponseError(call, requestID, err.Error())
+		return llm.Response{}, provider.NewInvalidResponseError(call, requestID, err.Error())
 	}
 	status, err := liftStatus(response.StopReason, hasToolCalls)
 	if err != nil {
-		return llm.Response{}, invalidResponseError(call, requestID, err.Error())
+		return llm.Response{}, provider.NewInvalidResponseError(call, requestID, err.Error())
 	}
 	usage := llm.Usage{}
 	if response.Usage != nil {
@@ -361,6 +339,9 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	var diagnostics []llm.Diagnostic
 	if call.Metadata.SequentialToolUseDropped {
 		diagnostics = append(diagnostics, sequentialToolUseDroppedDiagnostic())
+	}
+	if dropped := reasoningBlocks(response.Output); dropped > 0 {
+		diagnostics = append(diagnostics, reasoningDroppedDiagnostic(dropped))
 	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
 		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
@@ -375,6 +356,30 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 func sequentialToolUseDroppedDiagnostic() llm.Diagnostic {
 	return llm.Diagnostic{Code: "tool_policy_parallel_dropped", Severity: llm.DiagnosticWarning, Path: "/tool_policy/parallel",
 		Message: "Bedrock Converse cannot restrict a turn to one tool call; parallel false was not sent to the provider"}
+}
+
+// reasoningDroppedDiagnostic tells the caller that the provider returned
+// reasoning the normalized output omits; its tokens are still in the usage.
+// Dropping with a diagnostic is the only permitted lossy lift (#1504).
+func reasoningDroppedDiagnostic(blocks int) llm.Diagnostic {
+	return llm.Diagnostic{Code: "reasoning_dropped", Severity: llm.DiagnosticWarning, Path: "/output",
+		Message: "Bedrock Converse returned reasoning content that the normalized output omits",
+		Details: map[string]string{"blocks": strconv.Itoa(blocks)}}
+}
+
+// reasoningBlocks counts the reasoning content blocks liftOutput omits.
+func reasoningBlocks(output types.ConverseOutput) int {
+	message, ok := output.(*types.ConverseOutputMemberMessage)
+	if !ok || message == nil {
+		return 0
+	}
+	count := 0
+	for _, block := range message.Value.Content {
+		if _, ok := block.(*types.ContentBlockMemberReasoningContent); ok {
+			count++
+		}
+	}
+	return count
 }
 
 func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.Item, bool, error) {
@@ -421,7 +426,8 @@ func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.It
 		case *types.ContentBlockMemberReasoningContent:
 			// Some Converse models always emit reasoning. The adapter does not
 			// replay provider reasoning, so it is omitted from the normalized
-			// output rather than failing an otherwise valid paid response.
+			// output rather than failing an otherwise valid paid response;
+			// liftResponse reports the omission as reasoning_dropped.
 			continue
 		default:
 			return nil, false, fmt.Errorf("content block %d has unsupported type %T", index, block)
@@ -485,7 +491,10 @@ func liftStatus(reason types.StopReason, hasToolCalls bool) (llm.ResponseStatus,
 		// the raw stop reason stays in the provider facts.
 		return llm.ResponseStatusLength, nil
 	case types.StopReasonGuardrailIntervened, types.StopReasonContentFiltered:
-		return llm.ResponseStatusRefused, nil
+		// A service content filter or a configured Bedrock guardrail stopped
+		// the output; the model did not refuse. Report it as the Chat and
+		// Responses lifters report provider content filtering (#1505).
+		return llm.ResponseStatusContentFiltered, nil
 	default:
 		return "", fmt.Errorf("provider returned unknown stop reason %q", reason)
 	}
@@ -516,19 +525,7 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
 		features = append(features, provider.FeatureToolCall)
 	}
-	return uniqueFeatures(features)
-}
-
-func uniqueFeatures(features []provider.Feature) []provider.Feature {
-	seen := map[provider.Feature]bool{}
-	result := make([]provider.Feature, 0, len(features))
-	for _, feature := range features {
-		if feature != "" && !seen[feature] {
-			seen[feature] = true
-			result = append(result, feature)
-		}
-	}
-	return result
+	return provider.UniqueFeatures(features)
 }
 
 func int64Value(value *int32) int64 {
@@ -538,38 +535,9 @@ func int64Value(value *int32) int64 {
 	return int64(*value)
 }
 
-func compileError(message string) *provider.Error {
-	return provider.NewError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, message)
-}
-func unsupportedError(feature provider.Feature, message string) *provider.Error {
-	return provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, fmt.Sprintf("%s: %s", feature, message))
-}
-func unsupportedServiceError(message string) *provider.Error {
-	return provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, message)
-}
-func compileContextError(err error) *provider.Error {
-	if err == context.Canceled {
-		return provider.NewError(provider.CodeCanceled, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "compile canceled")
-	}
-	return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "compile deadline exceeded")
-}
-func dispatchError(message string, certainty provider.DispatchCertainty) *provider.Error {
-	return provider.NewError(provider.CodeInvalidArgument, provider.PhaseDispatch, certainty, provider.RetryNever, message)
-}
 func dispatchContextError(err error) *provider.Error {
 	if err == context.Canceled {
 		return provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "provider request canceled")
 	}
 	return provider.NewError(provider.CodeDeadlineExceeded, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "provider request deadline exceeded")
-}
-func dispatchObserverError(err error, certainty provider.DispatchCertainty) *provider.Error {
-	mapped := provider.NewError(provider.CodeInternal, provider.PhaseDispatch, certainty, provider.RetryNever, "observer rejected provider response")
-	mapped.Cause = err
-	return mapped
-}
-func invalidResponseError(call provider.Call, requestID, message string) *provider.Error {
-	mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, message)
-	mapped.Provider.RequestID = requestID
-	mapped.OperationID = call.OperationKey
-	return mapped
 }

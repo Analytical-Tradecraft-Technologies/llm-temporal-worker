@@ -147,6 +147,10 @@ type ServerConfig struct {
 	// listener. It is omitted from canonical JSON when unset, so enabling it
 	// is the only change that moves an existing configuration digest.
 	ResponsesAPIListenAddress string `yaml:"responses_api_listen_address,omitempty" json:"responses_api_listen_address,omitempty"`
+	// ResponsesAPIPrivateNetwork acknowledges that a production listener
+	// bound beyond loopback or link-local is reachable only from a private,
+	// policed network: the listener has no TLS and no authentication.
+	ResponsesAPIPrivateNetwork bool `yaml:"responses_api_private_network,omitempty" json:"responses_api_private_network,omitempty"`
 }
 
 type TemporalConfig struct {

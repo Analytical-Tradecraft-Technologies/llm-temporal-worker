@@ -2,7 +2,6 @@ package openairesponses
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -34,23 +33,13 @@ func capabilities(version string) provider.CapabilitySet {
 	}
 }
 
-func validateQuery(query provider.CapabilityQuery, endpointID string) error {
-	if query.Family != "" && query.Family != provider.FamilyOpenAIResponses {
-		return fmt.Errorf("openai responses: capability family %q does not match %q", query.Family, provider.FamilyOpenAIResponses)
-	}
-	if query.EndpointID != "" && query.EndpointID != endpointID {
-		return fmt.Errorf("openai responses: capability endpoint %q does not match %q", query.EndpointID, endpointID)
-	}
-	return nil
-}
-
 // Capabilities is kept as a small helper so tests and future route discovery
 // can inspect the exact adapter claims without constructing an SDK request.
 func (adapter *Adapter) capabilities(ctx context.Context, query provider.CapabilityQuery) (provider.CapabilitySet, error) {
 	if err := ctx.Err(); err != nil {
 		return provider.CapabilitySet{}, err
 	}
-	if err := validateQuery(query, adapter.endpointID); err != nil {
+	if err := provider.ValidateCapabilityQuery(query, "openai responses", provider.FamilyOpenAIResponses, adapter.endpointID); err != nil {
 		return provider.CapabilitySet{}, err
 	}
 	result := capabilities(adapter.capabilityVersion)

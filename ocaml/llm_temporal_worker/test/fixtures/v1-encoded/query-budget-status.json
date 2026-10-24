@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/query/v1","operation_key":"query-budget","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"kind":"budget_status","query":{"policy_key":"claims-default","active_at":"2026-07-18T03:14:15.926535000-00:00","include_windows":true}}

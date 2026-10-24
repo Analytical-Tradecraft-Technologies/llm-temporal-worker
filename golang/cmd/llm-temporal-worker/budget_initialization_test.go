@@ -26,7 +26,7 @@ func TestBudgetInitializeCommandIsExplicitAndBounded(t *testing.T) {
 		}
 		code := Execute(context.Background(), args, CommandOptions{
 			Out: &output, ErrOut: &stderr,
-			RunBudgetInitialize: func(ctx context.Context, data []byte, mutate bool, out io.Writer) error {
+			RunBudgetInitialize: func(ctx context.Context, data []byte, mutate, _ bool, out io.Writer) error {
 				called = true
 				deadline, ok := ctx.Deadline()
 				if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 2*time.Second {
@@ -52,7 +52,7 @@ func TestBudgetInitializeCommandRejectsInvalidFlagsBeforeCallingRuntime(t *testi
 	} {
 		args := append([]string{"budget-initialize", "--config", exampleConfigPath(t)}, extra...)
 		code := Execute(context.Background(), args, CommandOptions{
-			RunBudgetInitialize: func(context.Context, []byte, bool, io.Writer) error {
+			RunBudgetInitialize: func(context.Context, []byte, bool, bool, io.Writer) error {
 				t.Fatal("invalid invocation reached runtime")
 				return nil
 			},
@@ -67,7 +67,7 @@ func TestBudgetInitializeCommandPropagatesDeadlineAndReturnsFailure(t *testing.T
 	var stderr bytes.Buffer
 	code := Execute(context.Background(), []string{"budget-initialize", "--config", exampleConfigPath(t), "--apply", "--timeout", "1ms"}, CommandOptions{
 		ErrOut: &stderr,
-		RunBudgetInitialize: func(ctx context.Context, _ []byte, _ bool, _ io.Writer) error {
+		RunBudgetInitialize: func(ctx context.Context, _ []byte, _, _ bool, _ io.Writer) error {
 			<-ctx.Done()
 			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				t.Fatalf("context error = %v", ctx.Err())

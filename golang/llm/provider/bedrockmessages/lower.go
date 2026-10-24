@@ -26,6 +26,12 @@ func lowerRequest(request llm.Request, profile Profile) (anthropic.MessageNewPar
 }
 
 func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (anthropic.MessageNewParams, error) {
+	// Anthropic's hosted tools are not offered on Amazon Bedrock, and an
+	// adapter never drops a request parameter it cannot honour; the planner
+	// also keeps such requests off Bedrock routes (#1506).
+	if hosted := hostedToolFlag(request); hosted != "" {
+		return anthropic.MessageNewParams{}, provider.NewUnsupportedCapabilityError(hosted + " is not supported by the Bedrock Messages adapter")
+	}
 	// The profile has no extension allowlist, so no namespace can be carried
 	// to the wire. Strict mode rejects them; best-effort mode leaves them out
 	// and Compile records the drop so the lift reports it as a diagnostic.
@@ -396,7 +402,7 @@ func lowerSampling(sampling llm.SamplingSpec, target map[string]any) error {
 // effort or summary preference alone never turns thinking on.
 func lowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
 	if reasoning.Effort == llm.ReasoningEffortExtraHigh {
-		return nil, unsupportedError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by bedrockmessages")
+		return nil, provider.NewUnsupportedFeatureError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by bedrockmessages")
 	}
 	mode := reasoning.Mode
 	if mode == "" {
@@ -517,4 +523,17 @@ func rawContentBlock(raw []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("provider state content block type %q is not replayable", kind)
 	}
 	return append(json.RawMessage(nil), raw...), nil
+}
+
+// hostedToolFlag names the first provider-hosted tool the request asks for.
+func hostedToolFlag(request llm.Request) string {
+	switch {
+	case request.WebSearch:
+		return "web_search"
+	case request.WebFetch:
+		return "web_fetch"
+	case request.CodeExecution:
+		return "code_execution"
+	}
+	return ""
 }
