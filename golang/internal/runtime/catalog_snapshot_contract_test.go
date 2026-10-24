@@ -755,17 +755,28 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 	moved, _ := load("base_url: https://provider-mock:8081/v1", "base_url: https://provider-mock:8081/v2")
 	hosts, _ := load("outbound_hosts: [provider-mock]", "outbound_hosts: [provider-mock, provider-mirror]")
 	reorderedHosts, _ := load("outbound_hosts: [provider-mock]", "outbound_hosts: [provider-mirror, provider-mock]")
-	if original.EndpointDigest == ([32]byte{}) {
-		t.Fatal("route has no endpoint digest")
+	timeout, _ := load("    timeout: 25s", "    timeout: 20s")
+	if original.EndpointDigest == ([32]byte{}) || original.LegacyEndpointDigest == ([32]byte{}) || original.EndpointDigest == original.LegacyEndpointDigest {
+		t.Fatal("route lacks distinct recovery and legacy endpoint digests")
 	}
-	if unrelatedConfig == originalConfig || unrelated.EndpointDigest != original.EndpointDigest {
+	if unrelatedConfig == originalConfig || unrelated.EndpointDigest != original.EndpointDigest || unrelated.LegacyEndpointDigest != original.LegacyEndpointDigest {
 		t.Fatal("an unrelated setting changed the endpoint digest")
 	}
-	if moved.EndpointDigest == original.EndpointDigest {
+	if moved.EndpointDigest == original.EndpointDigest || moved.LegacyEndpointDigest == original.LegacyEndpointDigest {
 		t.Fatal("a moved endpoint kept its digest")
 	}
-	if hosts.EndpointDigest == original.EndpointDigest || hosts.EndpointDigest != reorderedHosts.EndpointDigest {
-		t.Fatal("outbound hosts must change the digest as a set, not as a list")
+	// Fields that cannot affect a dispatched call leave the recovery identity
+	// unchanged, so paid work survives a rollout that edits them (#1530).
+	for name, edited := range map[string]routing.Route{"outbound hosts": hosts, "timeout": timeout} {
+		if edited.EndpointDigest != original.EndpointDigest {
+			t.Fatalf("changing %s changed the recovery identity", name)
+		}
+		if edited.LegacyEndpointDigest == original.LegacyEndpointDigest {
+			t.Fatalf("changing %s did not change the legacy whole-configuration digest", name)
+		}
+	}
+	if hosts.LegacyEndpointDigest != reorderedHosts.LegacyEndpointDigest {
+		t.Fatal("the legacy digest must treat outbound hosts as a set, not as a list")
 	}
 }
 

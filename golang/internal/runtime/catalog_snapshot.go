@@ -186,6 +186,10 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 			if err != nil {
 				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
 			}
+			legacyEndpointDigest, err := legacyEndpointConfigDigest(routeValue.Endpoint, endpoint)
+			if err != nil {
+				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)
+			}
 			routes = append(routes, routing.Route{
 				ID:                    routeValue.ID,
 				EndpointID:            routeValue.Endpoint,
@@ -196,6 +200,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				EndpointAccountHMAC:   routing.DeriveEndpointAccountHMAC(providerName, routeValue.Endpoint, endpoint.AccountRegion, routeRegion, value.Version),
 				EndpointAccountDigest: endpointAccountDigest(providerName, endpoint),
 				EndpointDigest:        endpointDigest,
+				LegacyEndpointDigest:  legacyEndpointDigest,
 				Model:                 routeValue.Model,
 				ModelLineage:          routeValue.Model,
 				Classes:               append([]llm.ServiceClass(nil), routeValue.Classes...),
@@ -254,11 +259,31 @@ func endpointAccountDigest(providerName string, endpoint config.EndpointConfig) 
 	return sha256.Sum256(append([]byte("llm-temporal-worker/endpoint-account/v1\x00"), encoded...))
 }
 
+// endpointConfigDigest is the endpoint's recovery identity: every field that
+// can change how an already dispatched call is resumed, polled, priced or
+// settled (family, base URL, account, region, workspace, auth reference,
+// service classes and tiers, capability profile, price catalog, provider
+// storage and extensions). It leaves out timeout, langfuse, optional and
+// outbound_hosts, which cannot affect a call already sent, so changing them
+// with work in flight does not strand paid attempts after a rollout (#1530).
 func endpointConfigDigest(endpointID string, endpoint config.EndpointConfig) ([32]byte, error) {
+	endpoint.Timeout, endpoint.Langfuse, endpoint.Optional, endpoint.OutboundHosts = 0, nil, false, nil
+	return digestEndpointConfig("llm-temporal-worker/endpoint-config/v2", endpointID, endpoint)
+}
+
+// legacyEndpointConfigDigest is the v1 digest of the whole endpoint
+// configuration, which plans saved before the recovery identity carry.
+// Recovery still accepts it, so those plans resume when the endpoint is
+// otherwise unchanged.
+func legacyEndpointConfigDigest(endpointID string, endpoint config.EndpointConfig) ([32]byte, error) {
 	// outbound_hosts is a set (see sameEndpointOutboundHosts); reordering it
 	// is not a change. Maps already marshal with sorted keys.
 	endpoint.OutboundHosts = append([]string(nil), endpoint.OutboundHosts...)
 	sort.Strings(endpoint.OutboundHosts)
+	return digestEndpointConfig("llm-temporal-worker/endpoint-config/v1", endpointID, endpoint)
+}
+
+func digestEndpointConfig(domain, endpointID string, endpoint config.EndpointConfig) ([32]byte, error) {
 	encoded, err := json.Marshal(endpoint)
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("endpoint %q configuration cannot be identified", endpointID)
@@ -267,7 +292,7 @@ func endpointConfigDigest(endpointID string, endpoint config.EndpointConfig) ([3
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("endpoint %q configuration cannot be identified", endpointID)
 	}
-	return sha256.Sum256(append([]byte("llm-temporal-worker/endpoint-config/v1\x00"+endpointID+"\x00"), canonical...)), nil
+	return sha256.Sum256(append([]byte(domain+"\x00"+endpointID+"\x00"), canonical...)), nil
 }
 
 func routePriceIdentity(bundle catalog.Bundle, endpointID string, endpoint config.EndpointConfig, model string, classes []llm.ServiceClass, now time.Time) (string, string, string, bool, error) {

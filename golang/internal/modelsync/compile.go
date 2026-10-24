@@ -29,8 +29,9 @@ type Source struct {
 	// identity copied to each route; see routing.Route.
 	EndpointAccountDigest [32]byte
 	// EndpointDigest identifies the endpoint's own configuration and is
-	// copied to each route; see routing.Route.
-	EndpointDigest [32]byte
+	// copied to each route, as is LegacyEndpointDigest; see routing.Route.
+	EndpointDigest       [32]byte
+	LegacyEndpointDigest [32]byte
 	// Tiers maps each service class the endpoint offers to its provider_value.
 	Tiers            map[llm.ServiceClass]string
 	Capabilities     routing.CapabilitySet
@@ -267,6 +268,7 @@ func (source Source) route(model string, classes []llm.ServiceClass, contextToke
 		EndpointAccountHMAC:   source.EndpointAccountHMAC,
 		EndpointAccountDigest: source.EndpointAccountDigest,
 		EndpointDigest:        source.EndpointDigest,
+		LegacyEndpointDigest:  source.LegacyEndpointDigest,
 		Model:                 model,
 		ModelLineage:          model,
 		Classes:               classes,
