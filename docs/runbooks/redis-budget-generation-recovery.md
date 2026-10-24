@@ -38,6 +38,10 @@ or reset. Follow the JSON lines on the init container's standard error:
 - `budget recovery is running in another process` — this pod is waiting for
   the elected recoverer; it continues when the marker is ready.
 - `budget recovery merged a shard` — progress, with scanned and restored counts.
+  Shards run concurrently and finish in any order.
+- `budget recovery is still in progress` — this run's time ran out or too
+  little was left to start; the next init container start resumes from the
+  saved cursor. Restarts are expected for a large history.
 - `budget recovery completed` — the namespace is ready again.
 
 After a Redis failover or snapshot restore whose marker survived, run once:

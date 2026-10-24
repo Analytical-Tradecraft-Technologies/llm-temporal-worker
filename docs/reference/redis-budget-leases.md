@@ -80,8 +80,11 @@ starts, recovers when the cloud receipt is ready and the Redis marker is not:
 2. One process holds a disposable lease key
    (`<prefix>:{<tag>}:budget:recovery-lease`, PX expiry, renewed per page).
    Others wait for it; an expired lease is taken over.
-3. The holder pages through all eight request discovery shards, including
-   finished requests whose settled spend can still count. A finished request
+3. The holder pages through all eight request discovery shards at once,
+   including finished requests whose settled spend can still count. Each
+   page's records are read concurrently and its operations merged
+   concurrently; merges are independent and idempotent, so order does not
+   matter. A finished request
    last updated before the recovery horizon (the longest configured window
    plus its bucket, start lease and clock skew, and at least 31 days) is
    skipped without reading its payload.
@@ -100,8 +103,11 @@ starts, recovers when the cloud receipt is ready and the Redis marker is not:
    bucket field below the sum of its recorded live charges is raised to that
    sum. Floors only add spend: charges Redis holds without a durable record
    are kept.
-6. A cursor (`budget:recovery-progress`, one-day expiry) is stored after each
-   page so an interrupted run resumes. Merges are idempotent, so losing the
+6. A per-shard cursor (`budget:recovery-progress`, one-day expiry) is stored
+   after each page so an interrupted run resumes. A shard's cursor advances
+   only after every operation on its page merged. A process that obtains the
+   lease only after waiting for another, with less than 30 seconds left,
+   exits and leaves the work to the next start rather than time out mid-page. Merges are idempotent, so losing the
    cursor, the floor ledger or the lease only repeats work.
 7. Only after every shard is merged and every floor applied does one Function
    call publish an `initialize` hint and set `ready:<marker>`. The cursor and

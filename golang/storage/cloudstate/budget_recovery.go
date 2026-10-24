@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 )
+
+// budgetRecoveryReadConcurrency bounds the record reads of one page in flight.
+const budgetRecoveryReadConcurrency = 16
 
 // BudgetRecoveryPage is one bounded page of durable paid executions. Scanned
 // counts every discovery row read, including skipped ones, for progress logs.
@@ -44,6 +48,7 @@ func (r *Repository) ListBudgetRecovery(ctx context.Context, shard, pageSize int
 	}
 	result := BudgetRecoveryPage{Scanned: len(page.Records), NextPageToken: page.NextPageToken}
 	lastKey := ""
+	candidates := make([]indexRecord, 0, len(page.Records))
 	for _, row := range page.Records {
 		value, err := r.decodeIndex(row)
 		if err != nil {
@@ -58,19 +63,50 @@ func (r *Repository) ListBudgetRecovery(ctx context.Context, shard, pageSize int
 		if value.Status.terminal() && value.UpdatedAt.Before(terminalNotBefore) {
 			continue
 		}
-		record, err := r.ReadForRecovery(ctx, value.ID)
-		if errors.Is(err, contracts.ErrNotFound) && value.Revision == 0 {
-			continue // Create never published; nothing reached Redis.
+		candidates = append(candidates, value)
+	}
+	// Each record is an independent event-stream and payload read, so a page
+	// is read concurrently; sequential reads made a large history take hours.
+	type outcome struct {
+		saved SavedProviderExecution
+		ok    bool
+		err   error
+	}
+	outcomes := make([]outcome, len(candidates))
+	readCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	slots := make(chan struct{}, budgetRecoveryReadConcurrency)
+	var wg sync.WaitGroup
+	for index, value := range candidates {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			record, err := r.ReadForRecovery(readCtx, value.ID)
+			if errors.Is(err, contracts.ErrNotFound) && value.Revision == 0 {
+				return // Create never published; nothing reached Redis.
+			}
+			if err == nil {
+				outcomes[index].saved, outcomes[index].ok, err = budgetRecoveryExecution(record)
+			}
+			if err != nil {
+				outcomes[index].err = err
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	for _, outcome := range outcomes {
+		if outcome.err != nil && !errors.Is(outcome.err, context.Canceled) {
+			return BudgetRecoveryPage{}, outcome.err
 		}
-		if err != nil {
-			return BudgetRecoveryPage{}, err
+	}
+	for _, outcome := range outcomes {
+		if outcome.err != nil {
+			return BudgetRecoveryPage{}, outcome.err
 		}
-		saved, ok, err := budgetRecoveryExecution(record)
-		if err != nil {
-			return BudgetRecoveryPage{}, err
-		}
-		if ok {
-			result.Executions = append(result.Executions, saved)
+		if outcome.ok {
+			result.Executions = append(result.Executions, outcome.saved)
 		}
 	}
 	return result, nil
