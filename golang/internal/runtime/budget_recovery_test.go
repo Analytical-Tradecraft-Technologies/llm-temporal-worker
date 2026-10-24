@@ -342,19 +342,67 @@ func TestBudgetRecoveryResumesTheSequentialProgressFormat(t *testing.T) {
 	}
 }
 
-func TestBudgetRecoveryDoesNotStartWithoutTimeToWork(t *testing.T) {
+func TestBudgetRecoveryLateTakeoverNeedsTimeToWork(t *testing.T) {
 	receipt, store := recoveryTestReceipt(t)
 	redis := newRecoveryTestRedis(receipt.Identity)
+	// Another process holds the lease until just before this one's deadline.
+	redis.marker, redis.lease, redis.leaseEnd = "recovering:"+receipt.Marker(), "other", time.Now().Add(300*time.Millisecond)
 	source := &recoveryTestSource{}
 	var logs bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: source, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}, true, time.Now)
+	_, err := establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: source, Wait: 50 * time.Millisecond, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}, true, time.Now)
 	if !errors.Is(err, errBudgetRecoveryInProgress) || len(source.calls) != 0 || redis.lease != "" {
-		t.Fatalf("near-deadline takeover = %v, %d reads, lease %q", err, len(source.calls), redis.lease)
+		t.Fatalf("late takeover = %v, %d reads, lease %q", err, len(source.calls), redis.lease)
 	}
 	if !strings.Contains(logs.String(), "next start resumes it") || strings.Contains(logs.String(), "ERROR") {
-		t.Fatalf("near-deadline log = %s", logs.String())
+		t.Fatalf("late takeover log = %s", logs.String())
+	}
+}
+
+func TestBudgetRecoveryRunsWithinTheDefaultCommandTimeout(t *testing.T) {
+	receipt, store := recoveryTestReceipt(t)
+	redis := newRecoveryTestRedis(receipt.Identity)
+	// The CLI default is 30 seconds: shorter than MinimumWork, which must
+	// not stop a process that got the lease without waiting.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	report, err := establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: &recoveryTestSource{}}, true, time.Now)
+	if err != nil || !report.Recovered {
+		t.Fatalf("default-timeout recovery = %#v, %v", report, err)
+	}
+}
+
+// orderedProgressRedis records the order progress snapshots reach Redis.
+type orderedProgressRedis struct {
+	*recoveryTestRedis
+	saved []budgetRecoveryProgress
+}
+
+func (r *orderedProgressRedis) HoldRecoveryLease(ctx context.Context, value budget.Initialization, token string, ttl time.Duration, progress string) (string, bool, error) {
+	if progress != "" {
+		decoded, _ := decodeBudgetRecoveryProgress(progress)
+		r.mu.Lock()
+		r.saved = append(r.saved, decoded)
+		r.mu.Unlock()
+		time.Sleep(time.Millisecond) // widen any window between snapshot and save
+	}
+	return r.recoveryTestRedis.HoldRecoveryLease(ctx, value, token, ttl, progress)
+}
+
+func TestBudgetRecoveryCheckpointsNeverRewind(t *testing.T) {
+	receipt, store := recoveryTestReceipt(t)
+	redis := &orderedProgressRedis{recoveryTestRedis: newRecoveryTestRedis(receipt.Identity)}
+	if _, err := establishBudgetAuthority(context.Background(), store, redis, budgetRecovery{Recoverer: redis, Source: &recoveryTestSource{}}, true, time.Now); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index < len(redis.saved); index++ {
+		if redis.saved[index].Scanned < redis.saved[index-1].Scanned || redis.saved[index].shardsDone() < redis.saved[index-1].shardsDone() {
+			t.Fatalf("checkpoint %d rewound progress: %#v after %#v", index, redis.saved[index], redis.saved[index-1])
+		}
+	}
+	if len(redis.saved) != 2*cloudstate.PendingShards {
+		t.Fatalf("saved %d checkpoints", len(redis.saved))
 	}
 }
 

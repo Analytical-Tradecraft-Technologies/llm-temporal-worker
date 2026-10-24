@@ -47,7 +47,8 @@ type budgetRecovery struct {
 	Wait     time.Duration
 	LeaseTTL time.Duration
 	PageSize int
-	// MinimumWork is the least time left worth taking over the lease with.
+	// MinimumWork is the least time left worth taking over the lease with
+	// after waiting for another process to release it.
 	MinimumWork time.Duration
 }
 
@@ -193,7 +194,10 @@ func recoverBudgetAuthority(ctx context.Context, receipt budget.Initialization, 
 			log.Error("budget recovery could not acquire its lease", slog.String("reason", budgetRecoveryReason(err)))
 			return err
 		}
-		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < recovery.MinimumWork {
+		// Only a late takeover, after waiting out another process's lease, can
+		// be left with too little time; a process that got the lease at once
+		// always works, whatever its timeout.
+		if deadline, ok := ctx.Deadline(); ok && waiting && time.Until(deadline) < recovery.MinimumWork {
 			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			_ = recovery.Recoverer.ReleaseRecoveryLease(releaseCtx, receipt, token)
 			cancel()
@@ -300,21 +304,25 @@ func (recovery budgetRecovery) runShard(ctx context.Context, receipt budget.Init
 			return budgetRecoveryShardError{shard: shard, err: err}
 		}
 		cursor = page.NextPageToken
+		// Snapshot and save under one lock: saves from two shards must not
+		// land out of order, or an older snapshot would rewind the other's
+		// cursor.
 		mu.Lock()
 		progress.Scanned += page.Scanned
 		progress.Restored += restored
 		progress.Shards[shard] = budgetRecoveryShard{Token: cursor, Done: cursor == ""}
 		encoded, _ := json.Marshal(progress)
 		done, scanned, total := progress.shardsDone(), progress.Scanned, progress.Restored
+		_, ready, err := recovery.Recoverer.HoldRecoveryLease(ctx, receipt, token, recovery.LeaseTTL, string(encoded))
 		mu.Unlock()
-		if cursor == "" {
+		if cursor == "" && err == nil && !ready {
 			log.Info("budget recovery merged a shard", slog.Int("shard", shard), slog.Int("shards_done", done), slog.Int("shards", cloudstate.PendingShards),
 				slog.Int("scanned", scanned), slog.Int("restored", total))
 		}
-		if _, ready, err := recovery.Recoverer.HoldRecoveryLease(ctx, receipt, token, recovery.LeaseTTL, string(encoded)); err != nil || ready {
-			if ready {
-				return redisstore.ErrBudgetRecoveryBusy // finished elsewhere; the caller rechecks
-			}
+		if ready {
+			return redisstore.ErrBudgetRecoveryBusy // finished elsewhere; the caller rechecks
+		}
+		if err != nil {
 			return budgetRecoveryShardError{shard: shard, err: err}
 		}
 		if cursor == "" {

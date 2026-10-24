@@ -106,8 +106,8 @@ starts, recovers when the cloud receipt is ready and the Redis marker is not:
 6. A per-shard cursor (`budget:recovery-progress`, one-day expiry) is stored
    after each page so an interrupted run resumes. A shard's cursor advances
    only after every operation on its page merged. A process that obtains the
-   lease with less than 30 seconds left exits and leaves the work to the next
-   start rather than time out mid-page. Merges are idempotent, so losing the
+   lease only after waiting for another, with less than 30 seconds left,
+   exits and leaves the work to the next start rather than time out mid-page. Merges are idempotent, so losing the
    cursor, the floor ledger or the lease only repeats work.
 7. Only after every shard is merged and every floor applied does one Function
    call publish an `initialize` hint and set `ready:<marker>`. The cursor and
