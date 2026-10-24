@@ -233,10 +233,11 @@ func applyEnvironmentOverrides(config *Config) error {
 	return nil
 }
 
-// OpenRouter upstream environment variables. The image sets all four, so a
+// OpenRouter upstream environment variables. The image sets all of them, so a
 // container always states its upstream policy.
 const (
 	EnvOpenRouterCountries              = "LLMTW_OPENROUTER_COUNTRIES"
+	EnvOpenRouterProviderLocations      = "LLMTW_OPENROUTER_PROVIDER_LOCATIONS"
 	EnvOpenRouterRequireNativePrecision = "LLMTW_OPENROUTER_REQUIRE_NATIVE_PRECISION"
 	EnvOpenRouterRequireZeroRetention   = "LLMTW_OPENROUTER_REQUIRE_ZERO_RETENTION"
 	EnvOpenRouterDenyPromptTraining     = "LLMTW_OPENROUTER_DENY_PROMPT_TRAINING"
@@ -244,7 +245,10 @@ const (
 
 // applyOpenRouterUpstreamEnvironment overrides the openrouter_upstream
 // settings from the environment. A present variable must be set: a country
-// list must not be empty and a boolean must parse.
+// list must not be empty and a boolean must parse. Provider locations are
+// the exception: the environment supplies the base entries, which the
+// configuration file extends or removes per provider, and an empty value
+// supplies none.
 func applyOpenRouterUpstreamEnvironment(config *Config) error {
 	countries, hasCountries := os.LookupEnv(EnvOpenRouterCountries)
 	flags := []struct {
@@ -278,7 +282,63 @@ func applyOpenRouterUpstreamEnvironment(config *Config) error {
 		}
 		*flag.target(ensure()) = value
 	}
+	return mergeProviderLocations(config)
+}
+
+// mergeProviderLocations replaces the configured provider locations with the
+// LLMTW_OPENROUTER_PROVIDER_LOCATIONS entries overlaid by the configured ones.
+func mergeProviderLocations(config *Config) error {
+	merged := map[string][]string{}
+	if raw, present := os.LookupEnv(EnvOpenRouterProviderLocations); present {
+		parsed, err := parseProviderLocations(raw)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvOpenRouterProviderLocations, err)
+		}
+		merged = parsed
+	}
+	if config.OpenRouterUpstream != nil {
+		for provider, countries := range config.OpenRouterUpstream.ProviderLocations {
+			if len(countries) == 0 {
+				delete(merged, provider)
+				continue
+			}
+			merged[provider] = countries
+		}
+	}
+	if len(merged) == 0 {
+		if config.OpenRouterUpstream != nil {
+			config.OpenRouterUpstream.ProviderLocations = nil
+		}
+		return nil
+	}
+	if config.OpenRouterUpstream == nil {
+		config.OpenRouterUpstream = &OpenRouterUpstreamConfig{}
+	}
+	config.OpenRouterUpstream.ProviderLocations = merged
 	return nil
+}
+
+// parseProviderLocations reads comma-separated provider=COUNTRY entries,
+// with several countries joined by "/", such as "xai=US,acme=US/CA".
+func parseProviderLocations(raw string) (map[string][]string, error) {
+	locations := map[string][]string{}
+	if strings.TrimSpace(raw) == "" {
+		return locations, nil
+	}
+	for _, entry := range strings.Split(raw, ",") {
+		provider, countries, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		provider = strings.TrimSpace(provider)
+		if !ok || provider == "" || strings.TrimSpace(countries) == "" {
+			return nil, fmt.Errorf("entry %q is not provider=COUNTRY[/COUNTRY...]", entry)
+		}
+		if _, duplicate := locations[provider]; duplicate {
+			return nil, fmt.Errorf("provider %q is listed twice", provider)
+		}
+		for _, country := range strings.Split(countries, "/") {
+			locations[provider] = append(locations[provider], strings.TrimSpace(country))
+		}
+	}
+	return locations, nil
 }
 
 // DecodeYAML is useful to callers that need to inspect the decoded value

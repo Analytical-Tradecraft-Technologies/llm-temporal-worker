@@ -86,7 +86,7 @@ func newModelSyncRuntime(value config.Config, loaded loadedCatalogs, options cat
 		return nil, fmt.Errorf("model_sync rules: %w", err)
 	}
 	upstream := value.OpenRouterUpstreamSettings()
-	policy, err := modelsync.NewUpstreamPolicy(upstream.Countries, upstream.RequireNativePrecision, upstream.RequireZeroRetention, upstream.DenyPromptTraining)
+	policy, err := modelsync.NewUpstreamPolicy(upstream.Countries, upstream.RequireNativePrecision, upstream.RequireZeroRetention, upstream.DenyPromptTraining, upstream.ProviderLocations)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter_upstream: %w", err)
 	}

@@ -85,17 +85,17 @@ func TestUpstreamPolicyRequiresHeadquartersAndEveryDatacenterInTheList(t *testin
 		t.Fatal(err)
 	}
 	rules := mergedPrecisionRules(t)
-	core5, _ := NewUpstreamPolicy(CountryListCore5, false, false, false)
+	core5, _ := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
 	got := core5.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags
 	want := []string{"eu-host/fp8", "us-host/fp4", "us-host/fp8", "us-host/unknown"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Core5 tags = %v, want %v", got, want)
 	}
-	us, _ := NewUpstreamPolicy(CountryListUS, false, false, false)
+	us, _ := NewUpstreamPolicy(CountryListUS, false, false, false, nil)
 	if got := us.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags; slices.Contains(got, "eu-host/fp8") || len(got) != 3 {
 		t.Fatalf("US tags = %v, want only us-host endpoints", got)
 	}
-	eu, _ := NewUpstreamPolicy(CountryListEU, false, false, false)
+	eu, _ := NewUpstreamPolicy(CountryListEU, false, false, false, nil)
 	if got := eu.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags; !reflect.DeepEqual(got, []string{"eu-host/fp8"}) {
 		t.Fatalf("EU tags = %v", got)
 	}
@@ -107,7 +107,7 @@ func TestUpstreamPolicyRequiresHeadquartersAndEveryDatacenterInTheList(t *testin
 func TestUpstreamPolicyFiltersPrecisionAndRetention(t *testing.T) {
 	document := upstreamDocument()
 	rules := mergedPrecisionRules(t)
-	precise, _ := NewUpstreamPolicy(CountryListCore5, true, false, false)
+	precise, _ := NewUpstreamPolicy(CountryListCore5, true, false, false, nil)
 	upstreams := precise.Upstreams(document, rules)
 	got := upstreams["deepseek/deepseek-v3.2"]
 	if !reflect.DeepEqual(got.Tags, []string{"eu-host/fp8", "us-host/fp8"}) || !reflect.DeepEqual(got.Quantizations, []string{"bf16", "fp16", "fp32", "fp8"}) {
@@ -116,7 +116,7 @@ func TestUpstreamPolicyFiltersPrecisionAndRetention(t *testing.T) {
 	if _, ok := upstreams["vendor/unlisted-precision"]; ok {
 		t.Fatal("a model without a native precision rule is routable when native precision is required")
 	}
-	retained, _ := NewUpstreamPolicy(CountryListCore5, true, true, false)
+	retained, _ := NewUpstreamPolicy(CountryListCore5, true, true, false, nil)
 	if got := retained.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags; !reflect.DeepEqual(got, []string{"us-host/fp8"}) {
 		t.Fatalf("zero-retention tags = %v", got)
 	}
@@ -125,7 +125,7 @@ func TestUpstreamPolicyFiltersPrecisionAndRetention(t *testing.T) {
 func TestCompilePricesOpenRouterAtTheMostExpensiveAllowedEndpoint(t *testing.T) {
 	document := upstreamDocument()
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "default"})
-	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false)
+	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
 	compiled, err := Compile(Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy,
 		Reserved: map[string]struct{}{"vendor/unlisted-precision": {}}})
 	if err != nil {
@@ -149,7 +149,7 @@ func TestCompilePricesOpenRouterAtTheMostExpensiveAllowedEndpoint(t *testing.T) 
 	if _, ok := compiled.Upstreams["vendor/unlisted-precision"]; !ok {
 		t.Fatal("reserved model has no upstreams")
 	}
-	none, _ := NewUpstreamPolicy(CountryListUS, true, true, false)
+	none, _ := NewUpstreamPolicy(CountryListUS, true, true, false, nil)
 	compiled, err = Compile(Input{Document: document, Rules: Rules{Digest: "x"}, OpenRouter: &openrouter, Policy: none})
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +277,7 @@ func TestCompileTakesRouteLimitsFromAllowedEndpoints(t *testing.T) {
 	}
 	document.Models[0].ContextLength, document.Models[0].MaxCompletionTokens = 1000000, 100000
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false)
+	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
 	compiled, err := Compile(Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy})
 	if err != nil {
 		t.Fatal(err)
@@ -285,5 +285,29 @@ func TestCompileTakesRouteLimitsFromAllowedEndpoints(t *testing.T) {
 	route := compiled.Models["deepseek/deepseek-v3.2"].Routes[0]
 	if route.ContextTokens != 64000 || route.OutputTokens != 8000 {
 		t.Fatalf("route limits = %d/%d, want the allowed endpoints' 64000/8000", route.ContextTokens, route.OutputTokens)
+	}
+}
+
+func TestUpstreamPolicyAssumesProviderLocationsOnlyWhereNoneArePublished(t *testing.T) {
+	document := upstreamDocument()
+	rules := mergedPrecisionRules(t)
+	locations := map[string][]string{"no-dc": {"US"}, "no-hq": {"US"}, "abroad-dc": {"US"}, "eu-host": {"US"}}
+	us, err := NewUpstreamPolicy(CountryListUS, false, false, false, locations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := us.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags
+	want := []string{"no-dc", "no-hq", "us-host/fp4", "us-host/fp8", "us-host/unknown"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("US tags = %v, want %v: an assumed location must fill only unpublished values", got, want)
+	}
+	elsewhere, _ := NewUpstreamPolicy(CountryListUS, false, false, false, map[string][]string{"no-dc": {"US", "CN"}})
+	if got := elsewhere.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags; slices.Contains(got, "no-dc") {
+		t.Fatalf("tags = %v; an assumed country outside the list must exclude the provider", got)
+	}
+	for _, invalid := range []map[string][]string{{"no-dc": nil}, {"no-dc": {"usa"}}, {"bad slug": {"US"}}} {
+		if _, err := NewUpstreamPolicy(CountryListUS, false, false, false, invalid); err == nil {
+			t.Fatalf("locations %v accepted", invalid)
+		}
 	}
 }

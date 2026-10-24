@@ -47,6 +47,11 @@ func (config Config) Validate() error {
 			return fmt.Errorf("openrouter_upstream.countries: %w", err)
 		}
 	}
+	if config.OpenRouterUpstream != nil {
+		if err := modelsync.ValidateProviderLocations(config.OpenRouterUpstream.ProviderLocations); err != nil {
+			return fmt.Errorf("openrouter_upstream.provider_locations: %w", err)
+		}
+	}
 	if err := validateIdentifier(config.Environment, "environment"); err != nil {
 		return err
 	}
