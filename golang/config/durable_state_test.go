@@ -64,7 +64,7 @@ func TestRedisOnlyStateIsDevelopmentOnly(t *testing.T) {
 		AmbiguousRetention:         48,
 		ContinuationRetention:      24,
 		ReservationLease:           1,
-		Redis:                      RedisConfig{KeyPrefix: "llmtw", Addresses: []string{"redis:6379"}, Username: SecretRef{Kind: SecretEnv, Name: "REDIS_USER"}, Password: SecretRef{Kind: SecretEnv, Name: "REDIS_PASSWORD"}, AdmissionHashTag: "admission", AdmissionMode: "function", FunctionLibrary: "llmtw_admission_f172942024ab388a", AdmissionVersion: "admission_f172942024ab388a", AdmissionDigest: "0000000000000000000000000000000000000000000000000000000000000000", MaxConnections: 1, DialTimeout: 1, OperationTimeout: 1, RequiredPersistence: "aof_and_rdb"},
+		Redis:                      RedisConfig{KeyPrefix: "llmtw", Addresses: []string{"redis:6379"}, Username: SecretRef{Kind: SecretEnv, Name: "REDIS_USER"}, Password: SecretRef{Kind: SecretEnv, Name: "REDIS_PASSWORD"}, AdmissionHashTag: "admission", AdmissionMode: "function", FunctionLibrary: "llmtw_admission_a45dc50e0f9c0ff3", AdmissionVersion: "admission_a45dc50e0f9c0ff3", AdmissionDigest: "0000000000000000000000000000000000000000000000000000000000000000", MaxConnections: 1, DialTimeout: 1, OperationTimeout: 1, RequiredPersistence: "aof_and_rdb"},
 	}
 	if err := state.validate("production"); err == nil {
 		t.Fatal("Redis-only state was accepted for production")

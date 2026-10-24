@@ -867,9 +867,12 @@ if ACTION == 'durable_reserve' then
         local expires = durable_int(reservation.expires_millis)
         local window_expires = durable_int(reservation.window_expires_millis)
         if not window_expires or window_expires <= 0 then return {'invalid_request', ''} end
-        if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 or expires <= now_millis then
+        if not bucket or not amount or not limit or not expires or bucket < 0 or amount <= 0 or limit <= 0 then
             return {'invalid_request', ''}
         end
+        -- A lease that has already expired by Redis time is a lease expiry,
+        -- as in the reference model, not a malformed request (#1499).
+        if expires <= now_millis then return {'expired', ''} end
         -- The quote may have waited for capacity in an earlier bucket. Spend
         -- counts through the window from Redis acceptance time, never from the
         -- quote: raise the caller's bucket-derived expiry to the end of the

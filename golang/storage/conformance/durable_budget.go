@@ -20,7 +20,7 @@ import (
 // model share (#1498), so a lifecycle rule tested for only one of them belongs
 // here.
 func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (durable.BudgetMaterializer, func() time.Time, func(time.Duration))) {
-	for _, scenario := range []string{"reserved", "accounted", "batch", "concurrent", "concurrent-overlapping", "isolation", "expiry", "claim-expiry", "finalize-unknown", "duplicate-settlement"} {
+	for _, scenario := range []string{"reserved", "accounted", "batch", "concurrent", "concurrent-overlapping", "isolation", "expiry", "expired-lease", "claim-expiry", "finalize-unknown", "duplicate-settlement"} {
 		t.Run(scenario, func(t *testing.T) {
 			m, clock, advance := newMaterializer(t)
 			ctx := context.Background()
@@ -64,6 +64,14 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				}
 			}
 			switch scenario {
+			case "expired-lease":
+				// A quote whose lease expired before admission is a lease
+				// expiry in both implementations, never a malformed request.
+				_, err := m.Accept(ctx, durable.ReserveRequest{OperationID: "expired", GenerationID: "rolling-gen", ExpiresAt: clock().Add(-time.Second), Reservations: []admission.WindowReservation{reservation(0, "0.10")}})
+				if !errors.Is(err, durable.ErrLeaseExpired) {
+					t.Fatalf("expired lease: error = %v, want ErrLeaseExpired", err)
+				}
+				accept("after-expired", true, reservation(0, "1"))
 			case "reserved", "accounted":
 				first := accept("first", true, reservation(-1, "0.60"))
 				if scenario == "accounted" {

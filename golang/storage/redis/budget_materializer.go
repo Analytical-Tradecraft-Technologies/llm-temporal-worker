@@ -688,6 +688,8 @@ func mapDurableStatus(status string) error {
 		return ErrUnavailable
 	case "authority_unavailable":
 		return ErrBudgetAuthorityUnavailable
+	case "expired":
+		return durable.ErrLeaseExpired
 	default:
 		return fmt.Errorf("Redis durable budget Function returned status %q", status)
 	}
