@@ -377,13 +377,21 @@ func TestV1PositiveFixturesMatchSchemaAndCodec(t *testing.T) {
 
 // TestV1OCamlFixturesMirrorGoFixtures pins the copies the OCaml codec tests
 // decode to the Go fixtures validated above, so both codecs read one corpus.
+// The OCaml package is installed from its own subdirectory, so it carries
+// copies rather than reading golang/llm/testdata/v1; every Go fixture must
+// have one, and the OCaml tests decode each copy (#1517).
 func TestV1OCamlFixturesMirrorGoFixtures(t *testing.T) {
 	directory := filepath.Join("..", "..", "..", "ocaml", "llm_temporal_worker", "test", "fixtures", "v1")
-	paths, err := filepath.Glob(filepath.Join(directory, "*.json"))
-	if err != nil || len(paths) == 0 {
+	mirrors, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	if err != nil || len(mirrors) == 0 {
 		t.Fatalf("no OCaml v1 fixtures: %v", err)
 	}
-	for _, path := range paths {
+	sources, err := filepath.Glob(filepath.Join("..", "testdata", "v1", "*.json"))
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no Go v1 fixtures: %v", err)
+	}
+	mirrored := make(map[string]bool, len(mirrors))
+	for _, path := range mirrors {
 		mirror, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -391,6 +399,54 @@ func TestV1OCamlFixturesMirrorGoFixtures(t *testing.T) {
 		if !bytes.Equal(mirror, readV1Fixture(t, filepath.Base(path))) {
 			t.Fatalf("%s differs from golang/llm/testdata/v1/%s", path, filepath.Base(path))
 		}
+		mirrored[filepath.Base(path)] = true
+	}
+	for _, path := range sources {
+		if !mirrored[filepath.Base(path)] {
+			t.Errorf("golang/llm/testdata/v1/%s has no copy in ocaml/llm_temporal_worker/test/fixtures/v1", filepath.Base(path))
+		}
+	}
+}
+
+// TestV1OCamlEncodingsMatchSchemaAndCodec checks what the OCaml codec writes,
+// not only what it reads. The OCaml tests pin their encoding of each positive
+// fixture under fixtures/v1-encoded; each pinned encoding must be valid
+// against the published schema and decode with the Go codec (#1517).
+func TestV1OCamlEncodingsMatchSchemaAndCodec(t *testing.T) {
+	directory := filepath.Join("..", "..", "..", "ocaml", "llm_temporal_worker", "test", "fixtures", "v1-encoded")
+	sources, err := filepath.Glob(filepath.Join("..", "testdata", "v1", "*.json"))
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no Go v1 fixtures: %v", err)
+	}
+	positive := map[string]bool{}
+	for _, path := range sources {
+		if name := filepath.Base(path); !strings.HasPrefix(name, "negative-") {
+			positive[name] = true
+		}
+	}
+	encodings, err := filepath.Glob(filepath.Join(directory, "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range encodings {
+		if !positive[filepath.Base(path)] {
+			t.Errorf("%s has no positive Go fixture", path)
+		}
+	}
+	for name := range positive {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := os.ReadFile(filepath.Join(directory, name))
+			if err != nil {
+				t.Fatalf("no pinned OCaml encoding: %v", err)
+			}
+			schemaName, target := v1FixtureContract(name)
+			if err := readV1Schema(t, schemaName).Validate(encoded); err != nil {
+				t.Fatalf("schema rejects the OCaml encoding: %v\n%s", err, encoded)
+			}
+			if err := json.Unmarshal(encoded, target()); err != nil {
+				t.Fatalf("Go codec rejects the OCaml encoding: %v\n%s", err, encoded)
+			}
+		})
 	}
 }
 

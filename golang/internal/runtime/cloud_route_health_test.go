@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -77,7 +78,15 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 		t.Fatalf("shared failures missing: %+v events=%d", shared.status, shared.observations)
 	}
 	f.request.OperationKey = "blocked"
-	_, err := f.runtime.GenerateStepV1(context.Background(), f.request)
+	metrics, err := observability.NewMetrics(observability.AllowedValues{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.runtime.GenerateStepV1(observability.WithMetrics(context.Background(), metrics), f.request)
+	// The held route is counted, not only reported in the no-route failure.
+	if held := cloudMetricTotal(t, metrics, "llmtw_route_held_total", "reason", observability.RouteHeldCircuitOpen); held != 1 {
+		t.Fatalf("llmtw_route_held_total{reason=circuit_open} = %v, want 1", held)
+	}
 	var classified *provider.Error
 	if !errors.As(err, &classified) || classified.Code != provider.CodeProviderUnavailable || classified.Retry == provider.RetryNever {
 		t.Fatal("open circuit not retryable", err)

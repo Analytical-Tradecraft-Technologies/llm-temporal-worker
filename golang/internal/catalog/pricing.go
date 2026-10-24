@@ -31,11 +31,28 @@ type pricingEntryFile struct {
 	CacheWrite     decimalValue `yaml:"cache_write_per_million"`
 	Reasoning      decimalValue `yaml:"reasoning_per_million"`
 	PerRequest     decimalValue `yaml:"per_request"`
-	EffectiveFrom  time.Time    `yaml:"effective_from"`
-	EffectiveUntil time.Time    `yaml:"effective_until"`
-	Source         string       `yaml:"source"`
-	Provenance     string       `yaml:"provenance"`
-	Version        string       `yaml:"version"`
+	// LongPrompt replaces the prices above for a call whose prompt (input,
+	// cache read and cache write) exceeds its threshold, as a provider's
+	// long-context tier does (#1502).
+	LongPrompt     *longPromptFile `yaml:"long_prompt"`
+	EffectiveFrom  time.Time       `yaml:"effective_from"`
+	EffectiveUntil time.Time       `yaml:"effective_until"`
+	Source         string          `yaml:"source"`
+	Provenance     string          `yaml:"provenance"`
+	Version        string          `yaml:"version"`
+}
+
+// longPromptFile is an entry's long-prompt tier. It prices exactly the
+// components its entry prices: a component the entry leaves unknown stays
+// unknown for long prompts too.
+type longPromptFile struct {
+	MinPromptTokens int64        `yaml:"min_prompt_tokens"`
+	Input           decimalValue `yaml:"input_per_million"`
+	Output          decimalValue `yaml:"output_per_million"`
+	CacheRead       decimalValue `yaml:"cache_read_per_million"`
+	CacheWrite      decimalValue `yaml:"cache_write_per_million"`
+	Reasoning       decimalValue `yaml:"reasoning_per_million"`
+	PerRequest      decimalValue `yaml:"per_request"`
 }
 
 type decimalValue struct {
@@ -184,6 +201,10 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 	if !fileEntry.PerRequest.set {
 		unknownComponents = append(unknownComponents, pricing.PriceComponentPerRequest)
 	}
+	longPrompt, err := compileLongPrompt(path, fileEntry)
+	if err != nil {
+		return pricing.Entry{}, err
+	}
 	return pricing.Entry{
 		Provider:          providerName,
 		Family:            string(family),
@@ -192,10 +213,44 @@ func compilePricingEntry(document pricingDocument, catalogID string, index int, 
 		Model:             fileEntry.Model,
 		ProviderTier:      providerTier,
 		Prices:            pricing.UnitPrices{InputPerMillion: fileEntry.Input.value, OutputPerMillion: fileEntry.Output.value, CacheReadPerMillion: fileEntry.CacheRead.value, CacheWritePerMillion: fileEntry.CacheWrite.value, ReasoningPerMillion: fileEntry.Reasoning.value, PerRequest: fileEntry.PerRequest.value},
+		LongPrompt:        longPrompt,
 		UnknownComponents: unknownComponents,
 		EffectiveFrom:     fileEntry.EffectiveFrom,
 		EffectiveUntil:    fileEntry.EffectiveUntil,
 		Provenance:        provenance,
 		Version:           entryVersion,
 	}, nil
+}
+
+func compileLongPrompt(path string, fileEntry pricingEntryFile) (*pricing.LongPromptPrices, error) {
+	long := fileEntry.LongPrompt
+	if long == nil {
+		return nil, nil
+	}
+	path += ".long_prompt"
+	if long.MinPromptTokens <= 0 {
+		return nil, fmt.Errorf("%s.min_prompt_tokens must be positive", path)
+	}
+	for _, component := range []struct {
+		name       string
+		base, long decimalValue
+	}{
+		{"input_per_million", fileEntry.Input, long.Input},
+		{"output_per_million", fileEntry.Output, long.Output},
+		{"cache_read_per_million", fileEntry.CacheRead, long.CacheRead},
+		{"cache_write_per_million", fileEntry.CacheWrite, long.CacheWrite},
+		{"reasoning_per_million", fileEntry.Reasoning, long.Reasoning},
+		{"per_request", fileEntry.PerRequest, long.PerRequest},
+	} {
+		if component.base.set && !component.long.set {
+			return nil, fmt.Errorf("%s.%s is required because the entry prices it", path, component.name)
+		}
+		if !component.base.set && component.long.set {
+			return nil, fmt.Errorf("%s.%s is set but the entry leaves it unknown", path, component.name)
+		}
+	}
+	return &pricing.LongPromptPrices{MinPromptTokens: long.MinPromptTokens, Prices: pricing.UnitPrices{
+		InputPerMillion: long.Input.value, OutputPerMillion: long.Output.value, CacheReadPerMillion: long.CacheRead.value,
+		CacheWritePerMillion: long.CacheWrite.value, ReasoningPerMillion: long.Reasoning.value, PerRequest: long.PerRequest.value,
+	}}, nil
 }

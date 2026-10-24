@@ -110,27 +110,46 @@ configuration and durable cloud storage settings.
 ```sh
 llm-temporal-worker budget-initialize --config /etc/llmtw/config.yaml
 llm-temporal-worker budget-initialize --config /etc/llmtw/config.yaml --apply --timeout 30s
+llm-temporal-worker budget-initialize --config /etc/llmtw/config.yaml --apply --recover --timeout 5m
 ```
 
 Without `--apply`, the command performs reads only and reports JSON with
-`status` equal to `initialization_required`, `incomplete`, or `ready` and
-`applied: false`. The default overall timeout is 30 seconds; `--timeout` must
-be positive and at most five minutes. Inspection still requires the pinned
-Redis code, persistence policy, and access to the cloud receipt.
+`status` equal to `initialization_required`, `incomplete`, `recovery_required`,
+or `ready` and `applied: false`. The default overall timeout is 30 seconds;
+`--timeout` must be positive and at most five minutes. Inspection still
+requires the pinned Redis code, persistence policy, and access to the cloud
+receipt.
 
 `--apply` conditionally creates a permanent cloud receipt, verifies that the
 Redis namespace is unused, and writes a persistent Redis marker and initial
 coordination event. Repeating a completed initialization only verifies it;
-it never resets balances or re-creates a lost marker. An incomplete installation
-can resume only if its preparing or ready Redis marker remains present.
-Keep all workers stopped during first initialization. Provision the exact
-admission Function or Lua script separately before running the command.
+it never resets balances. An incomplete installation can resume only if its
+preparing or ready Redis marker remains present. Keep all workers stopped
+during first initialization. Provision the exact admission Function or Lua
+script separately before running the command.
 
-There is no reset flag or automatic data-loss recovery. A lost cloud-create
-reply or a crash before the first Redis write requires operator investigation;
-do not delete the receipt or change namespaces to get past the error. See
+When the cloud receipt is ready but its Redis marker is missing, for example
+after Redis lost its data, `--apply` recovers instead of initializing. It
+fences the namespace with a persistent `recovering` marker, rebuilds every
+reservation, claim, settlement and duplicate-settlement fence from the durable
+cloud execution records, then publishes the ready marker. Paid work stays
+unavailable until that commit. Concurrent invocations elect one recoverer
+through a short Redis lease; the others wait for it. An interrupted run leaves
+the fence and a progress cursor so the next run resumes. The report is
+`{"status":"ready","applied":true,"recovered":true}`. See
+[recovery after Redis data loss](redis-budget-leases.md#recovery-after-redis-data-loss).
+
+`--recover` (only with `--apply`) also fences and reconciles a namespace whose
+marker survived, for a failover or restore that may have dropped acknowledged
+writes. It only adds or advances accounting; it never removes surviving spend.
+
+Progress and failures are logged to standard error as JSON lines with counts,
+shard numbers and reason codes, never request content, identifiers or
+credentials. A lost cloud-create reply or a crash before the first Redis write
+of a first installation still requires operator investigation; do not delete
+the receipt or change namespaces to get past an error. See
 [budget initialization](redis-budget-leases.md#initialization-and-readiness)
-for ordering, permissions, and recovery limits.
+for ordering and permissions.
 
 ## `generation-recover`
 

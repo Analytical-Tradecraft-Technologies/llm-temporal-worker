@@ -353,7 +353,7 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 	redis, _ := state["redis"].(map[string]any)
 	for field, want := range map[string]string{
 		"admission_mode":    "function",
-		"admission_version": "admission_aabd4a3cbc2a51cc",
+		"admission_version": "admission_f172942024ab388a",
 	} {
 		if got, _ := redis[field].(string); got != want {
 			t.Fatalf("state.redis.%s = %q, want %q", field, got, want)
@@ -371,15 +371,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 51027a77cc4d5c1e6c051a7fa424e5f6c18404baa4d17d5919443d1474df1c7f",
-		"admission_digest: 51027A77CC4D5C1E6C051A7FA424E5F6C18404BAA4D17D5919443D1474DF1C7F",
+		"admission_digest: e9ba1ff29d941d47f1ded3b21e32ebf5183685547e5e0465e404f30766ca2056",
+		"admission_digest: E9BA1FF29D941D47F1DED3B21E32EBF5183685547E5E0465E404F30766CA2056",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "51027a77cc4d5c1e6c051a7fa424e5f6c18404baa4d17d5919443d1474df1c7f"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "e9ba1ff29d941d47f1ded3b21e32ebf5183685547e5e0465e404f30766ca2056"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -526,7 +526,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 51027a77cc4d5c1e6c051a7fa424e5f6c18404baa4d17d5919443d1474df1c7f", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: e9ba1ff29d941d47f1ded3b21e32ebf5183685547e5e0465e404f30766ca2056", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
@@ -670,11 +670,11 @@ func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
 	withAddress := func(address string) []byte {
 		return []byte(strings.Replace(example, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:9090\n  responses_api_listen_address: "+address, 1))
 	}
-	enabled, err := config.Load(withAddress("0.0.0.0:8000"))
+	enabled, err := config.Load(withAddress("127.0.0.1:8000"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enabled.Server.ResponsesAPIListenAddress != "0.0.0.0:8000" {
+	if enabled.Server.ResponsesAPIListenAddress != "127.0.0.1:8000" {
 		t.Fatalf("address = %q", enabled.Server.ResponsesAPIListenAddress)
 	}
 	// Unset, the field is absent from the canonical JSON the digest covers.
@@ -743,5 +743,37 @@ func TestLoadRejectsFractionalMillisecondBudgetWindows(t *testing.T) {
 	}
 	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "whole milliseconds") {
 		t.Fatalf("Load() error = %v, want a whole-millisecond rejection", err)
+	}
+}
+
+// The unauthenticated listener binds only the host in production unless the
+// operator acknowledges a private network (#1514).
+func TestResponsesAPIListenerBindsTheHostInProduction(t *testing.T) {
+	example := string(exampleYAML(t))
+	with := func(environment, lines string) []byte {
+		data := strings.Replace(example, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:9090\n"+lines, 1)
+		return []byte(strings.Replace(data, "environment: production", "environment: "+environment, 1))
+	}
+	for _, address := range []string{"127.0.0.1:8000", "[::1]:8000", "localhost:8000", "169.254.10.1:8000", "[fe80::1%eth0]:8000"} {
+		if _, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"")); err != nil {
+			t.Fatalf("host-local %s rejected: %v", address, err)
+		}
+	}
+	const want = "must bind a loopback or link-local address in production unless server.responses_api_private_network is true"
+	for _, address := range []string{"0.0.0.0:8000", ":8000", "10.0.0.5:8000", "[::]:8000", "worker.internal:8000"} {
+		if _, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"")); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load(%s) error = %v, want %q", address, err, want)
+		}
+		acknowledged, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"\n  responses_api_private_network: true"))
+		if err != nil || !acknowledged.Server.ResponsesAPIPrivateNetwork {
+			t.Fatalf("acknowledged %s rejected: %v", address, err)
+		}
+	}
+	if _, err := config.Load(with("production", "  responses_api_private_network: true")); err == nil || !strings.Contains(err.Error(), "requires server.responses_api_listen_address") {
+		t.Fatalf("acknowledgement without a listener = %v", err)
+	}
+	// Development keeps the shape-only rule.
+	if _, err := config.Load(with("development", "  responses_api_listen_address: 0.0.0.0:8000")); err != nil && strings.Contains(err.Error(), "responses_api") {
+		t.Fatalf("development listener rejected: %v", err)
 	}
 }

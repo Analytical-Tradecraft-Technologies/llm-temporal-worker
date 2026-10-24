@@ -1,0 +1,30 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "root-1",
+  "context": {
+    "tenant": "acme",
+    "project": "claims",
+    "actor": "workflow:claim-1"
+  },
+  "append": [
+    {
+      "kind": "message",
+      "actor": "human",
+      "content": [
+        {
+          "kind": "text",
+          "text": "Review this claim."
+        }
+      ]
+    }
+  ],
+  "settings_patch": {
+    "model": {
+      "set": "gpt-example"
+    },
+    "temperature": {
+      "set": "0.2"
+    }
+  },
+  "cache": {}
+}

@@ -188,7 +188,8 @@
         "readiness_probe_interval": { "$ref": "#/$defs/duration" },
         "readiness_probe_timeout": { "$ref": "#/$defs/duration" },
         "inline_payload_bytes": { "type": "integer", "minimum": 1 },
-        "responses_api_listen_address": { "type": "string", "description": "host:port for the plain-HTTP OpenAI Responses API listener. Omit to disable it." }
+        "responses_api_listen_address": { "type": "string", "description": "host:port for the plain-HTTP OpenAI Responses API listener. Omit to disable it." },
+        "responses_api_private_network": { "type": "boolean", "description": "Acknowledges that a production Responses API listener bound beyond loopback or link-local is reachable only from a private, policed network." }
       }
     },
     "temporal": {

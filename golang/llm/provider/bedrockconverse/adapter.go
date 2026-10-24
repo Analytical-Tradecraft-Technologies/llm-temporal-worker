@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -78,44 +79,21 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if input.Query.Family != "" && input.Query.Family != provider.FamilyBedrockConverse {
 		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("capability family %q does not match %q", input.Query.Family, provider.FamilyBedrockConverse))
 	}
-	normalized, err := llm.NormalizeRequest(input.Request)
+	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, adapter.profile.ExpectedModel)
 	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if err := llm.ValidateServiceClassFallbacks(serviceClass, normalized.ServiceClassFallbacks); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	if input.Query.Model != "" && input.Query.Model != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q does not match capability query %q", normalized.Model, input.Query.Model))
-	}
-	if adapter.profile.ExpectedModel != "" && adapter.profile.ExpectedModel != normalized.Model {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("model %q is not the pinned profile model %q", normalized.Model, adapter.profile.ExpectedModel))
+		return provider.Call{}, err
 	}
 	if normalized.Continuation != nil {
 		return provider.Call{}, provider.NewUnsupportedFeatureError(provider.FeatureContinuation, "Bedrock Converse has no provider-hosted continuation handle")
 	}
-	capabilities := input.Capability
-	if capabilities.Version == "" && len(capabilities.Features) == 0 {
-		capabilities, err = adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
-		if err != nil {
-			return provider.Call{}, provider.NewCompileError(err.Error())
-		}
+	capabilities, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
+		return adapter.profile.capabilities(ctx, input.Query, adapter.endpointID)
+	}, adapter.profile.CapabilityVersion)
+	if err != nil {
+		return provider.Call{}, err
 	}
-	if capabilities.Version == "" {
-		capabilities.Version = adapter.profile.CapabilityVersion
-	}
-	for _, feature := range requiredFeatures(normalized) {
-		capability, resolveErr := capabilities.Resolve(feature, input.Strict)
-		if resolveErr != nil {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, resolveErr.Error())
-		}
-		if capability.State != provider.CapabilityNative && capability.State != provider.CapabilityEmulated {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(feature, fmt.Sprintf("capability %q is %s", feature, capability.State))
-		}
+	if err := provider.RequireFeatures(capabilities, requiredFeatures(normalized), input.Strict, nil); err != nil {
+		return provider.Call{}, err
 	}
 	tier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
@@ -362,6 +340,9 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 	if call.Metadata.SequentialToolUseDropped {
 		diagnostics = append(diagnostics, sequentialToolUseDroppedDiagnostic())
 	}
+	if dropped := reasoningBlocks(response.Output); dropped > 0 {
+		diagnostics = append(diagnostics, reasoningDroppedDiagnostic(dropped))
+	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
 		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
 		Service: llm.ServiceFacts{Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual, ProviderValue: actualTier},
@@ -375,6 +356,30 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 func sequentialToolUseDroppedDiagnostic() llm.Diagnostic {
 	return llm.Diagnostic{Code: "tool_policy_parallel_dropped", Severity: llm.DiagnosticWarning, Path: "/tool_policy/parallel",
 		Message: "Bedrock Converse cannot restrict a turn to one tool call; parallel false was not sent to the provider"}
+}
+
+// reasoningDroppedDiagnostic tells the caller that the provider returned
+// reasoning the normalized output omits; its tokens are still in the usage.
+// Dropping with a diagnostic is the only permitted lossy lift (#1504).
+func reasoningDroppedDiagnostic(blocks int) llm.Diagnostic {
+	return llm.Diagnostic{Code: "reasoning_dropped", Severity: llm.DiagnosticWarning, Path: "/output",
+		Message: "Bedrock Converse returned reasoning content that the normalized output omits",
+		Details: map[string]string{"blocks": strconv.Itoa(blocks)}}
+}
+
+// reasoningBlocks counts the reasoning content blocks liftOutput omits.
+func reasoningBlocks(output types.ConverseOutput) int {
+	message, ok := output.(*types.ConverseOutputMemberMessage)
+	if !ok || message == nil {
+		return 0
+	}
+	count := 0
+	for _, block := range message.Value.Content {
+		if _, ok := block.(*types.ContentBlockMemberReasoningContent); ok {
+			count++
+		}
+	}
+	return count
 }
 
 func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.Item, bool, error) {
@@ -421,7 +426,8 @@ func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.It
 		case *types.ContentBlockMemberReasoningContent:
 			// Some Converse models always emit reasoning. The adapter does not
 			// replay provider reasoning, so it is omitted from the normalized
-			// output rather than failing an otherwise valid paid response.
+			// output rather than failing an otherwise valid paid response;
+			// liftResponse reports the omission as reasoning_dropped.
 			continue
 		default:
 			return nil, false, fmt.Errorf("content block %d has unsupported type %T", index, block)

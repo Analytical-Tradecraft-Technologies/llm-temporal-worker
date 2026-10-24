@@ -79,13 +79,15 @@ patch takes effect after compaction and governs subsequent turns.
 Planning performs no writes, reservations, claims, or provider requests. It
 returns only a boolean; materialized history stays out of its activity result.
 The public and internal workflow implementations are registered through
-`workflows.Register`. The activity registry registers eight v1 activities,
-including planning. See the [implementation boundary](mvp-v1-status.md) for the
+`workflows.Register`: six workflows, including the query workflow and the
+Langfuse export child. The activity registry registers nine v1 activities,
+including planning and the Langfuse export (see the
+[Activity runtime](activity-runtime.md#worker-registration) tables). See the [implementation boundary](mvp-v1-status.md) for the
 complete list and remaining optional capabilities.
 
 ## Workflow input validation
 
-All four workflows are registered with a raw Temporal payload argument. Each
+All six workflows are registered with a raw Temporal payload argument. Each
 applies the worker's inline payload limit and the strict v1 decode in workflow
 code before doing anything else, so a malformed, unknown-field, missing or
 oversize input fails once as a non-retryable `llm_invalid_argument` with

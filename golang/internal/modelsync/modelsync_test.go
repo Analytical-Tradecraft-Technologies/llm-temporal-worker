@@ -3,6 +3,7 @@ package modelsync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -945,5 +946,66 @@ func TestOpenRouterRoutePricesEachTierFromItsEndpoints(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRefresherBacksOffBrieflyUntilTheFirstDocumentIsInstalled(t *testing.T) {
+	refresher := &Refresher{MinInterval: 55 * time.Minute, MaxInterval: 55 * time.Minute}
+	var backoff time.Duration
+	var delays []time.Duration
+	for range 6 {
+		delays = append(delays, refresher.nextDelay(&backoff))
+	}
+	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute, 5 * time.Minute}
+	if fmt.Sprint(delays) != fmt.Sprint(want) {
+		t.Fatalf("delays without a Document = %v, want %v", delays, want)
+	}
+	refresher.installed = "digest"
+	if delay := refresher.nextDelay(&backoff); delay != 55*time.Minute || backoff != 0 {
+		t.Fatalf("delay with a Document = %v (backoff %v), want the interval", delay, backoff)
+	}
+	short := &Refresher{MinInterval: time.Minute, MaxInterval: time.Minute}
+	backoff = 4 * time.Minute
+	if delay := short.nextDelay(&backoff); delay != time.Minute {
+		t.Fatalf("backoff %v exceeded a one-minute interval", delay)
+	}
+}
+
+// A fresh deployment whose first fetch fails installs a catalog minutes
+// later, not after the 55 to 65 minute interval (#1527).
+func TestRefresherRetriesAFailedFirstFetchWellBeforeTheInterval(t *testing.T) {
+	store := NewMemoryStore(nil)
+	good := fetchFixture(t)
+	var elapsed atomic.Int64
+	clock := func() time.Time {
+		// Every clock read advances simulated time by five seconds.
+		return fixtureTime.Add(time.Duration(elapsed.Add(1)) * 5 * time.Second)
+	}
+	var fetches atomic.Int32
+	installed := make(chan time.Time, 1)
+	refresher := &Refresher{Store: store, MinInterval: 55 * time.Minute, MaxInterval: 65 * time.Minute, PollInterval: time.Millisecond, Clock: clock,
+		Fetch: func(context.Context, Document) (Document, error) {
+			if fetches.Add(1) == 1 {
+				return Document{}, errors.New("openrouter unavailable")
+			}
+			return good, nil
+		},
+		Install: func(Document) error {
+			select {
+			case installed <- clock():
+			default:
+			}
+			return nil
+		}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go refresher.Run(ctx)
+	select {
+	case at := <-installed:
+		if waited := at.Sub(fixtureTime); waited >= 5*time.Minute || fetches.Load() != 2 {
+			t.Fatalf("catalog installed after %v and %d fetches, want a retry within minutes", waited, fetches.Load())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no catalog installed after %d fetches", fetches.Load())
 	}
 }

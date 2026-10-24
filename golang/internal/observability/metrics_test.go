@@ -88,6 +88,8 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "unknown", "")
 	metrics.RecordOperationState("started")
 	metrics.RecordAmbiguous("endpoint-a")
+	metrics.RecordRouteHeld("endpoint-a", observability.RouteHeldCircuitOpen)
+	metrics.RecordRouteHeld("endpoint-a", "unbounded-reason")
 	metrics.RecordContinuation("continue")
 	metrics.RecordConfigReload("success")
 	metrics.RecordMaintenance("cache", "eligible", 0, time.Second)
@@ -118,6 +120,7 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		"llmtw_heartbeat_age_seconds", "llmtw_maintenance_rows_total",
 		"llmtw_maintenance_failures_total", "llmtw_maintenance_duration_seconds",
 		"llmtw_cache_events_total", "llmtw_provider_poll_total", "llmtw_cost_status_total",
+		"llmtw_route_held_total",
 	}
 	seen := make(map[string]bool, len(families))
 	for _, family := range families {
@@ -127,6 +130,12 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		if !seen[name] {
 			t.Fatalf("metric family %q was not gathered; families = %v", name, seen)
 		}
+	}
+	if got := metricValue(families, "llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "circuit_open"}); got != 1 {
+		t.Fatalf("route held = %v, want 1", got)
+	}
+	if got := metricValue(families, "llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "other"}); got != 1 {
+		t.Fatalf("route held with an unknown reason = %v, want it bounded to other", got)
 	}
 	if got := metricValue(families, "llmtw_worker_polling", nil); got != 0 {
 		t.Fatalf("worker polling = %v, want 0 after stop", got)

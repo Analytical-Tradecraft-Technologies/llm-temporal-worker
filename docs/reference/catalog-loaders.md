@@ -190,6 +190,100 @@ The `pricing.PriceResolver` applies the same boundary to in-process reloads:
 replacement leaves the previous snapshot in place. The compatibility `Reload`
 method is also fail-closed when its caller does not need the returned error.
 
+## Model-sync rules documents
+
+Each `model_sync.rules[i]` entry is a `config.CatalogRef` read with the same
+integrity contract as capability and price documents (absolute path, SHA-256
+pin, size bound; see above), then decoded by `modelsync.ParseRules` with
+strict YAML: unknown fields and duplicate keys are errors, an empty document
+is rejected, and `version` must be exactly `model-sync-rules/v1`.
+
+### Shape
+
+```yaml
+version: model-sync-rules/v1
+exclude: ["openai/gpt-4*"]          # path.Match patterns of OpenRouter IDs
+native_precision:                   # optional; pattern -> quantizations
+  "meta-llama/*": [bf16, fp16]
+providers:
+  anthropic:                        # provider name
+    prefix: anthropic/              # one path segment ending in /
+    model_id: dots_to_dashes        # verbatim or dots_to_dashes
+    models:
+      anthropic/claude-sonnet-4.5:  # OpenRouter ID, under the prefix
+        model: claude-sonnet-4-5    # optional; else derived by model_id
+        family: anthropic_messages  # optional endpoint-family restriction
+        context_tokens: 200000      # optional; 0 is unspecified
+        output_tokens: 64000        # optional; 0 is unspecified
+        exclude: false              # optional tri-state; see merging
+        prices:                     # keyed by the endpoint tier provider_value
+          standard_only:
+            input_per_million: "3"
+            output_per_million: "15"
+            cache_read_per_million: "0.3"
+            cache_write_per_million: "3.75"
+            per_request: "0"
+            long_prompt:            # optional, replaces every component above
+              min_prompt_tokens: 200000
+              input_per_million: "6"
+              output_per_million: "22.5"
+              cache_read_per_million: "0.6"
+              cache_write_per_million: "7.5"
+              per_request: "0"
+```
+
+`exclude` removes matching models from routing entirely, on OpenRouter and
+directly. A model's `exclude: true` removes only its direct route; the
+OpenRouter route remains. `native_precision` maps OpenRouter ID patterns to the
+quantizations (lowercase OpenRouter names, never `unknown`) that serve a model
+at its released precision; when several patterns match, the longest wins, and
+equal lengths resolve to the lexically first.
+
+### Merging and precedence
+
+The worker layers documents in order: the built-in `rules/default.yaml`, the
+built-in `rules/native_precision.yaml`, then each `model_sync.rules` entry in
+list order. Later layers win:
+
+- `exclude` patterns accumulate across layers;
+- `native_precision` entries replace earlier entries pattern by pattern;
+- a provider's `prefix` and `model_id` are replaced when a later layer sets
+  them, and its `models` merge by ID;
+- a model's `model`, `family`, `context_tokens` and `output_tokens` are
+  replaced when a later layer sets them (non-empty or non-zero), so an
+  override states only what it changes;
+- `exclude` is tri-state: a layer that omits it keeps the earlier value, and
+  only an explicit `exclude: false` restores a direct route an earlier layer
+  excluded;
+- `prices` merge per tier: a later layer's tier replaces that whole tier,
+  including its `long_prompt`, which it must restate to keep. Other tiers are
+  kept.
+
+The merged rule set has a digest over every layer, which versions the prices
+of synced models that have no route in `models`.
+
+### Validation
+
+The merged set, not each layer, must be valid; a failure rejects startup or
+the reload:
+
+- `exclude` and `native_precision` patterns are valid `path.Match` patterns;
+  every `native_precision` entry lists at least one quantization;
+- provider names, model IDs, `model`, `family` and tier names are 1-256 bytes
+  of printable ASCII without spaces;
+- each provider's `prefix` is a single path segment ending in `/`, unique
+  across providers, and every model ID starts with it;
+- `model_id` is `verbatim` or `dots_to_dashes`;
+- token limits are not negative;
+- a model that is not excluded has at least one priced tier, and every tier
+  states all five components as exact non-negative decimal USD strings
+  (reasoning is billed inside output); a `long_prompt` needs a positive
+  `min_prompt_tokens` and all five components.
+
+A tier with no price is not offered on the direct route. See
+[model sync](configuration.md#model-sync) for how the merged rules combine with
+the fetched OpenRouter catalog.
+
 ## Catalog persistence
 
 The SQL catalog repository has been removed. The runtime loads and verifies the

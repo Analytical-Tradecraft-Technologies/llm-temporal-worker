@@ -1,0 +1,10 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "empty-reasoning-patch",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "append": [],
+  "settings_patch": {
+    "reasoning_effort": {"set": ""},
+    "reasoning_summary": {"set": ""}
+  }
+}

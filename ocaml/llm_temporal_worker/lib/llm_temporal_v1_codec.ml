@@ -294,6 +294,66 @@ let reasoning_mode_of_json context = function
   | `String "adaptive" -> Ok Adaptive | `String "enabled" -> Ok Reasoning_enabled
   | _ -> Error (errorf "%s has an invalid reasoning mode" context)
 
+let validate_service_class_fallbacks context values =
+  let rec loop seen = function
+    | [] -> Ok values
+    | value :: rest -> if List.mem value seen then Error (errorf "%s must not contain duplicates" context) else loop (value :: seen) rest
+  in
+  loop [] values
+
+let validate_tool_names context tools =
+  let* _ = map_result (fun (tool : function_tool) -> Llm_temporal_codec.valid_tool_name (context ^ " name") (Tool_name.to_string tool.name)) tools in
+  Ok tools
+
+let validate_tool_policy_name context (policy : tool_policy) =
+  match policy.choice with
+  | Named name -> let* _ = Llm_temporal_codec.valid_tool_name (context ^ ".name") (Tool_name.to_string name) in Ok policy
+  | _ -> Ok policy
+
+(* Like the Go codec, empty text parts and empty content are request errors:
+   every provider family rejects them.  Stored transcripts that contain empty
+   model output stay decodable, so this applies to request leaves only. *)
+let validate_nonempty_parts context = function
+  | [] -> Error (errorf "%s content must not be empty" context)
+  | parts ->
+    let rec loop index = function
+      | [] -> Ok ()
+      | Text "" :: _ -> Error (errorf "%s part %d text must not be empty" context index)
+      | _ :: rest -> loop (index + 1) rest
+    in
+    loop 0 parts
+
+let validate_instructions context instructions =
+  let* _ =
+    map_result
+      (fun instruction -> match instruction with
+         | Text_instruction { text = ""; _ } -> Error (errorf "%s instruction text must not be empty" context)
+         | Text_instruction _ -> Ok ()
+         | Parts_instruction { content; _ } -> validate_nonempty_parts (context ^ " instruction") content)
+      instructions
+  in
+  Ok instructions
+
+let validate_append context items =
+  let* _ =
+    List.mapi (fun index item -> (index, item)) items
+    |> map_result (fun (index, item) -> match item with
+         | Message message -> validate_nonempty_parts (Printf.sprintf "%s %d message" context index) message.content
+         | _ -> Ok ())
+  in
+  Ok ()
+
+(* Mirror what the Go codec and the schema reject in these leaves
+   (uniqueItems, the tool-name pattern, non-empty instruction content), so a
+   start fails here with a field-level reason instead of in the Go workflow
+   with a content-free one (#1516).  Both directions apply these. *)
+let validate_settings_patch_leaves (value : settings_patch) =
+  let check name validate = function Set value -> Result.map (fun _ -> ()) (validate ("settings_patch." ^ name ^ ".set") value) | Keep | Clear -> Ok () in
+  let* () = check "service_class_fallbacks" validate_service_class_fallbacks value.service_class_fallbacks in
+  let* () = check "tools" validate_tool_names value.tools in
+  let* () = check "tool_policy" validate_tool_policy_name value.tool_policy in
+  check "instructions" validate_instructions value.instructions
+
 (* Encoding refuses an out-of-bounds Set the same way decoding does, so a
    caller-built patch fails locally instead of at the worker. *)
 let validate_settings_patch (value : settings_patch) =
@@ -307,7 +367,8 @@ let validate_settings_patch (value : settings_patch) =
   let compaction context policy = match Llm_temporal_compaction_policy.check_settings_json policy with
     | Ok () -> Ok policy | Error message -> Error (errorf "%s: %s" context message) in
   let* () = check "compaction_policy" compaction value.compaction_policy in
-  check "reasoning_token_budget" validate_reasoning_token_budget value.reasoning_token_budget
+  let* () = check "reasoning_token_budget" validate_reasoning_token_budget value.reasoning_token_budget in
+  validate_settings_patch_leaves value
 
 let output_to_json = Llm_temporal_codec.output_to_json
 let instruction_to_json = Llm_temporal_codec.instruction_to_json
@@ -423,6 +484,8 @@ let route_of_v1_json context value =
 let generate_request_to_json (value : generate_request) =
   let* () = validate_cache_policy "generate request.cache" value.cache in
   let* () = validate_settings_patch value.settings_patch in
+  let* () = validate_append "generate request.append" value.append in
+  let* () = match value.parent with None -> Ok () | Some parent -> Result.map ignore (validated "generate request.parent" Checkpoint.of_string (Checkpoint.to_string parent)) in
   let* context = context_to_v1_json value.context in
   let fields = ["api_version", `String generate_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "context", context; "append", `List (List.map item_to_json value.append)] in
   let fields = match value.parent with None -> fields | Some parent -> fields @ ["parent", `String (Checkpoint.to_string parent)] in
@@ -437,7 +500,9 @@ let generate_request_of_json value =
   let* context = required "generate request" "context" fields >>= context_of_v1_json in
   let* parent = match optional "parent" fields with None | Some `Null -> Ok None | Some value -> let* value = string "generate request.parent" value in let* value = validated "generate request.parent" Checkpoint.of_string value in Ok (Some value) in
   let* append = required "generate request" "append" fields >>= list "generate request.append" >>= map_result (fun value -> Llm_temporal_codec.item_of_json value) in
+  let* () = validate_append "generate request.append" append in
   let* settings_patch = match optional "settings_patch" fields with None -> Ok empty_settings_patch | Some value -> settings_patch_of_json value in
+  let* () = validate_settings_patch_leaves settings_patch in
   let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "generate request.cache" value in Ok (Some value) in
   Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; append; settings_patch; cache }
 

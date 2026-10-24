@@ -1,0 +1,22 @@
+{
+  "api_version": "llm.temporal/v1",
+  "operation_key": "fork-clear",
+  "context": {"tenant": "acme", "project": "claims", "actor": "workflow:claim-1"},
+  "parent": "ckp_v1.parent",
+  "append": [],
+  "settings_patch": {
+    "model": {"clear": true},
+    "service_class": {"clear": true},
+    "service_class_fallbacks": {"clear": true},
+    "portability": {"clear": true},
+    "instructions": {"clear": true},
+    "tools": {"clear": true},
+    "tool_policy": {"clear": true},
+    "output": {"clear": true},
+    "temperature": {"clear": true},
+    "reasoning_effort": {"clear": true},
+    "reasoning_summary": {"clear": true},
+    "compaction_policy": {"clear": true},
+    "extensions": {"clear": true}
+  }
+}
