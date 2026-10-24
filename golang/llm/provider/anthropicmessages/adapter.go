@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 )
 
@@ -109,7 +110,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err != nil {
 		return provider.Call{}, err
 	}
-	if err := provider.RequireFeatures(set, requiredFeatures(normalized), input.Strict, nil); err != nil {
+	if err := provider.RequireFeatures(set, anthropicwire.RequiredFeatures(normalized), input.Strict, nil); err != nil {
 		return provider.Call{}, err
 	}
 	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)

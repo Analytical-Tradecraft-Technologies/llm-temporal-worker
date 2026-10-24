@@ -159,9 +159,9 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "adaptive", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive}, wantType: "adaptive"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := lowerReasoning(test.reasoning, true)
+			got, err := wire.LowerReasoning(test.reasoning, true)
 			if err != nil || got["type"] != test.wantType {
-				t.Fatalf("lowerReasoning() = %#v, %v", got, err)
+				t.Fatalf("wire.LowerReasoning() = %#v, %v", got, err)
 			}
 		})
 	}
@@ -175,9 +175,9 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "unknown mode", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningMode("future")}, want: "not supported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := lowerReasoning(test.reasoning, true)
+			_, err := wire.LowerReasoning(test.reasoning, true)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("lowerReasoning() = %v, want substring %q", err, test.want)
+				t.Fatalf("wire.LowerReasoning() = %v, want substring %q", err, test.want)
 			}
 		})
 	}
@@ -238,7 +238,7 @@ func TestLoweringSendsNonStrictToolsAndRejectsSchemalessJSONOutput(t *testing.T)
 		t.Fatalf("tool must not be forced strict: %#v", tools[0])
 	}
 	target := map[string]any{}
-	err = lowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target, true)
+	err = wire.LowerOutput(llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}, target, true)
 	if err == nil || !strings.Contains(err.Error(), "without a schema") || target["output_config"] != nil {
 		t.Fatalf("schema-less JSON output = %v, %#v", err, target)
 	}
