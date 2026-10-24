@@ -3,7 +3,6 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -215,9 +214,10 @@ func TestBudgetRecoveryResumesAfterInterruption(t *testing.T) {
 	if !strings.HasPrefix(redis.marker, "recovering:") || redis.lease != "" {
 		t.Fatalf("interruption published readiness or kept the lease: %q %q", redis.marker, redis.lease)
 	}
-	var progress budgetRecoveryProgress
-	if err := json.Unmarshal([]byte(redis.progress), &progress); err != nil || progress.Shard != 3 || progress.Restored != 3 {
-		t.Fatalf("progress = %q, %v", redis.progress, err)
+	// The other shards run alongside the failed one and keep their progress.
+	progress, ok := decodeBudgetRecoveryProgress(redis.progress)
+	if !ok || progress.Restored != cloudstate.PendingShards-1 || progress.Shards[3].Done || progress.shardsDone() != cloudstate.PendingShards-1 {
+		t.Fatalf("progress = %q", redis.progress)
 	}
 	if !strings.Contains(logs.String(), "durable_record_invalid") || !strings.Contains(logs.String(), "progress is kept") {
 		t.Fatalf("failure log is not actionable: %s", logs.String())
@@ -227,8 +227,10 @@ func TestBudgetRecoveryResumesAfterInterruption(t *testing.T) {
 	if err != nil || !report.Recovered {
 		t.Fatalf("resume = %#v, %v", report, err)
 	}
-	if source.calls[0] != 3 {
-		t.Fatalf("resume restarted from shard %d", source.calls[0])
+	for _, shard := range source.calls {
+		if shard != 3 {
+			t.Fatalf("resume reread finished shard %d", shard)
+		}
 	}
 	for id, count := range redis.merged {
 		if count != 1 {
@@ -244,7 +246,7 @@ func TestBudgetRecoveryConcurrentStartupsWaitForOneRecoverer(t *testing.T) {
 	receipt, store := recoveryTestReceipt(t)
 	redis := newRecoveryTestRedis(receipt.Identity)
 	source := &recoveryTestSource{}
-	recovery := budgetRecovery{Recoverer: redis, Source: source, Wait: 5 * time.Millisecond}
+	recovery := budgetRecovery{Recoverer: redis, Source: source, Wait: 5 * time.Millisecond, MinimumWork: time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -326,4 +328,56 @@ func TestBudgetRecoveryHorizonCoversLongestWindow(t *testing.T) {
 	if got := budgetRecoveryHorizon(value); got < minimumBudgetRecoveryHorizon {
 		t.Fatalf("horizon %v below minimum", got)
 	}
+}
+
+func TestBudgetRecoveryResumesTheSequentialProgressFormat(t *testing.T) {
+	// Written by the first release, which merged one shard at a time.
+	progress, ok := decodeBudgetRecoveryProgress(`{"shard":2,"token":"page-7","scanned":14100,"restored":5712}`)
+	if !ok || progress.Scanned != 14100 || progress.Restored != 5712 || !progress.Shards[0].Done || !progress.Shards[1].Done ||
+		progress.Shards[2] != (budgetRecoveryShard{Token: "page-7"}) || progress.Shards[3] != (budgetRecoveryShard{}) {
+		t.Fatalf("sequential progress = %#v, %t", progress, ok)
+	}
+	if progress, ok := decodeBudgetRecoveryProgress(`{"shards":[{"done":true}]}`); ok || len(progress.Shards) != cloudstate.PendingShards {
+		t.Fatalf("malformed progress accepted: %#v", progress)
+	}
+}
+
+func TestBudgetRecoveryDoesNotStartWithoutTimeToWork(t *testing.T) {
+	receipt, store := recoveryTestReceipt(t)
+	redis := newRecoveryTestRedis(receipt.Identity)
+	source := &recoveryTestSource{}
+	var logs bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: source, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}, true, time.Now)
+	if !errors.Is(err, errBudgetRecoveryInProgress) || len(source.calls) != 0 || redis.lease != "" {
+		t.Fatalf("near-deadline takeover = %v, %d reads, lease %q", err, len(source.calls), redis.lease)
+	}
+	if !strings.Contains(logs.String(), "next start resumes it") || strings.Contains(logs.String(), "ERROR") {
+		t.Fatalf("near-deadline log = %s", logs.String())
+	}
+}
+
+func TestBudgetRecoveryTimeoutIsReportedAsProgressNotStorageFailure(t *testing.T) {
+	receipt, store := recoveryTestReceipt(t)
+	redis := newRecoveryTestRedis(receipt.Identity)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	source := &blockingRecoverySource{}
+	var logs bytes.Buffer
+	_, err := establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: source, MinimumWork: time.Millisecond, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}, true, time.Now)
+	if !errors.Is(err, errBudgetRecoveryInProgress) || !strings.HasPrefix(redis.marker, "recovering:") {
+		t.Fatalf("timed-out recovery = %v, marker %q", err, redis.marker)
+	}
+	if strings.Contains(logs.String(), "restore cloud request storage access") || !strings.Contains(logs.String(), "resumes from the saved cursor") {
+		t.Fatalf("timeout log = %s", logs.String())
+	}
+}
+
+// blockingRecoverySource never returns a page before its context ends.
+type blockingRecoverySource struct{}
+
+func (blockingRecoverySource) ListBudgetRecovery(ctx context.Context, _, _ int, _ string, _ time.Time) (cloudstate.BudgetRecoveryPage, error) {
+	<-ctx.Done()
+	return cloudstate.BudgetRecoveryPage{}, ctx.Err()
 }
