@@ -148,7 +148,9 @@ Trivy `v0.72.0` inputs, with the checked-in
 temporary OCI directories it scans.
 
 Before compact manifest collection, trusted CI installs `kubectl v1.32.6` with
-the immutable `azure/setup-kubectl` `v4.0.1` action commit. The collector
+[`scripts/ci/setup-kubectl.sh`](../../scripts/ci/setup-kubectl.sh), which
+downloads the official binary and checks its pinned SHA-256 before putting it
+on `PATH`; automatically triggered workflows use only GitHub-owned actions. The collector
 checks that exact client version before using `kubectl kustomize`; it has no
 cluster configuration and only renders the checked-in local manifests.
 
