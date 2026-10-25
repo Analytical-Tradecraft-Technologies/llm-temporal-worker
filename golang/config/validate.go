@@ -538,7 +538,15 @@ func (blob BlobStoreConfig) validate(environment string) error {
 				return err
 			}
 		}
-		return blob.S3.Auth.Validate("blob_store.s3.auth")
+		if err := blob.S3.Auth.Validate("blob_store.s3.auth"); err != nil {
+			return err
+		}
+		// The worker builds an S3 blob store only from the AWS default
+		// credential chain, so any other kind would fail every start (#1669).
+		if blob.S3.Auth.Kind != "aws_default_chain" {
+			return fmt.Errorf("blob_store.s3.auth.kind %s is not supported; the S3 blob store requires aws_default_chain", blob.S3.Auth.Kind)
+		}
+		return nil
 	case "file":
 		if IsProductionEnvironment(environment) {
 			return fmt.Errorf("blob_store.kind file is supported only in development")

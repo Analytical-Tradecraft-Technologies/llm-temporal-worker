@@ -468,7 +468,8 @@
       "required": ["bucket", "region", "prefix", "auth"],
       "properties": {
         "bucket": { "type": "string", "minLength": 1 }, "region": { "type": "string", "minLength": 1 },
-        "prefix": { "type": "string", "minLength": 1 }, "auth": { "$ref": "#/$defs/auth" },
+        "prefix": { "type": "string", "minLength": 1 },
+        "auth": { "$ref": "#/$defs/auth", "properties": { "kind": { "const": "aws_default_chain" } } },
         "failover": { "$ref": "#/$defs/blob_failover" }
       }
     },

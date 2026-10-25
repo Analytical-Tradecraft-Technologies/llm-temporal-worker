@@ -662,3 +662,53 @@ func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
 		}
 	}
 }
+
+// The worker builds an S3 blob store only from the AWS default credential
+// chain, so validation refuses every other auth kind the generic auth check
+// accepts rather than letting the worker fail each start (#1669).
+func TestConfigValidationRejectsS3BlobAuthTheWorkerCannotBuild(t *testing.T) {
+	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := schema.Parse(schemaData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for kind, auth := range map[string]config.AuthConfig{
+		"bearer_env":               {Kind: "bearer_env", Name: "S3_TOKEN"},
+		"header_env":               {Kind: "header_env", Name: "S3_TOKEN"},
+		"azure_default_credential": {Kind: "azure_default_credential"},
+		"workload_identity":        {Kind: "workload_identity", Audience: "sts.amazonaws.com"},
+		"aws_default_chain":        {Kind: "aws_default_chain"},
+	} {
+		t.Run(kind, func(t *testing.T) {
+			if err := auth.Validate("blob_store.s3.auth"); err != nil {
+				t.Fatalf("generic auth validation rejects %s: %v", kind, err)
+			}
+			loaded, err := config.Load(exampleYAML(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded.BlobStore.S3.Auth = auth
+			encoded, err := json.Marshal(loaded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			schemaErr := compiled.Validate(encoded)
+			err = loaded.Validate()
+			if kind == "aws_default_chain" {
+				if err != nil || schemaErr != nil {
+					t.Fatalf("Validate = %v, schema = %v", err, schemaErr)
+				}
+				return
+			}
+			if schemaErr == nil {
+				t.Fatalf("the configuration schema accepts blob_store.s3.auth.kind %s", kind)
+			}
+			if err == nil || !strings.Contains(err.Error(), "blob_store.s3.auth.kind") {
+				t.Fatalf("Validate = %v, want an error naming blob_store.s3.auth.kind", err)
+			}
+		})
+	}
+}
