@@ -429,8 +429,10 @@ Function/Lua mismatch handling, configured persistence across a restart, and
 the configured single hash slot. Because Docker can remap an ephemeral host
 port during that restart, each live test re-discovers the container's current
 published port instead of reusing the initial address.
-Redis logs are emitted only on failure after redaction. The target is invoked
-by the trusted master workflow, not the pull-request workflow.
+Redis logs are emitted only on failure after redaction. Both workflows' `verify`
+jobs run the target: the pull-request workflow with `GOFLAGS=-race`, so a Redis
+contract regression fails the pull request, and the trusted master workflow
+again after merge.
 
 ### Temporal tests
 
