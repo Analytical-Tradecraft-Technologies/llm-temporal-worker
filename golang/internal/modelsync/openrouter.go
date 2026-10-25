@@ -44,13 +44,15 @@ type Fetcher struct {
 	// answered with 429 or 5xx; it doubles per attempt. Zero uses 500ms.
 	RetryDelay time.Duration
 	// OnSkipped, when set, receives once per fetch the listed models and
-	// endpoints left out because their price could not be used. A dropped
-	// model is otherwise only visible as a no_route planning failure.
+	// endpoints left out because their price could not be used, and the
+	// providers whose published location could not be read. A dropped model
+	// or provider is otherwise only visible as a no_route planning failure.
 	OnSkipped func([]SkippedModel)
 }
 
-// SkippedModel names a listed OpenRouter model, or one of its endpoints, that
-// a fetch left out, with a bounded cause.
+// SkippedModel names a listed OpenRouter model, one of its endpoints, or a
+// provider (for SkipProviderLocation) that a fetch left out, with a bounded
+// cause.
 type SkippedModel struct {
 	ID    string
 	Cause string
@@ -63,6 +65,10 @@ const (
 	// SkipEndpointPrice is an endpoint whose price cannot be decoded or
 	// represented; the model stays routable through its other endpoints.
 	SkipEndpointPrice = "endpoint_price_unusable"
+	// SkipProviderLocation is a provider whose published headquarters or
+	// datacenter list cannot be read; ID is the provider slug. The provider
+	// qualifies for no country list.
+	SkipProviderLocation = "provider_location_unreadable"
 )
 
 // Fetch returns a complete, normalized Document. Models whose output is not
@@ -83,10 +89,11 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	if err != nil {
 		return Document{}, err
 	}
-	providers, slugs, err := fetcher.listProviders(ctx)
+	providers, slugs, unreadable, err := fetcher.listProviders(ctx)
 	if err != nil {
 		return Document{}, err
 	}
+	skipped = append(skipped, unreadable...)
 	retention, err := fetcher.listZeroRetention(ctx)
 	if err != nil {
 		return Document{}, err
@@ -254,11 +261,13 @@ type wireEndpoint struct {
 }
 
 // listProviders returns OpenRouter's provider list with normalized country
-// codes, and a map from each provider's display name, which endpoint lists
-// use, to its slug. A country value that is not a two-letter code is
-// dropped, so a provider never qualifies for a country list on a value the
-// worker cannot read.
-func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[string]string, error) {
+// codes, a map from each provider's display name, which endpoint lists use,
+// to its slug, and the providers whose published location could not be
+// read. A published country that is not a two-letter code, or a datacenter
+// list longer than maxListEntries, is stored as UnreadableCountry, so the
+// provider qualifies for no country list and an assumed location never
+// stands in for what OpenRouter published (#1668).
+func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[string]string, []SkippedModel, error) {
 	var body struct {
 		Data []struct {
 			Name         string   `json:"name"`
@@ -268,11 +277,12 @@ func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[strin
 		} `json:"data"`
 	}
 	if err := fetcher.get(ctx, "/providers", &body); err != nil {
-		return nil, nil, fmt.Errorf("list OpenRouter providers: %w", err)
+		return nil, nil, nil, fmt.Errorf("list OpenRouter providers: %w", err)
 	}
 	providers := make([]Provider, 0, len(body.Data))
 	slugs := make(map[string]string, len(body.Data))
 	seen := make(map[string]struct{}, len(body.Data))
+	var unreadable []SkippedModel
 	for _, wire := range body.Data {
 		if validateIdentifier(wire.Slug) != nil {
 			continue
@@ -282,12 +292,24 @@ func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[strin
 		}
 		seen[wire.Slug] = struct{}{}
 		provider := Provider{Slug: wire.Slug}
+		readable := true
+		// A blank value is treated as unpublished.
+		published := func(country string) string {
+			if strings.TrimSpace(country) == "" {
+				return ""
+			}
+			if code := normalizeCountry(country); code != "" {
+				return code
+			}
+			readable = false
+			return UnreadableCountry
+		}
 		if wire.Headquarters != nil {
-			provider.Headquarters = normalizeCountry(*wire.Headquarters)
+			provider.Headquarters = published(*wire.Headquarters)
 		}
 		datacenters := map[string]struct{}{}
 		for _, country := range wire.Datacenters {
-			if code := normalizeCountry(country); code != "" {
+			if code := published(country); code != "" {
 				datacenters[code] = struct{}{}
 			}
 		}
@@ -296,7 +318,10 @@ func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[strin
 		}
 		sort.Strings(provider.Datacenters)
 		if len(provider.Datacenters) > maxListEntries {
-			provider.Datacenters = nil
+			provider.Datacenters, readable = []string{UnreadableCountry}, false
+		}
+		if !readable {
+			unreadable = append(unreadable, SkippedModel{ID: wire.Slug, Cause: SkipProviderLocation})
 		}
 		providers = append(providers, provider)
 		if wire.Name != "" {
@@ -307,9 +332,9 @@ func (fetcher Fetcher) listProviders(ctx context.Context) ([]Provider, map[strin
 		}
 	}
 	if len(providers) == 0 {
-		return nil, nil, fmt.Errorf("list OpenRouter providers: no providers")
+		return nil, nil, nil, fmt.Errorf("list OpenRouter providers: no providers")
 	}
-	return providers, slugs, nil
+	return providers, slugs, unreadable, nil
 }
 
 // listZeroRetention returns the endpoints OpenRouter lists as zero data

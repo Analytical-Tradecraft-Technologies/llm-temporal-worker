@@ -59,7 +59,9 @@ all records no rejection; it is `no_route` at the `plan` phase with
 catalog` with `model`. Model sync logs each OpenRouter model it leaves out for
 an unusable price as `model catalog sync left out a model` with `model` and
 `cause` (`model_price_unusable`, or `endpoint_price_unusable` when only some
-endpoints were dropped), up to 16 per fetch. Route IDs and the other details
+endpoints were dropped), up to 16 per fetch, together with each provider whose
+published location it could not read (`provider_location_unreadable`; see
+[provider locations](configuration.md#provider-locations)). Route IDs and the other details
 never leave the worker: the Temporal error carries the code, phase, dispatch
 certainty and, as `reason`, `reason_1` when it is a bounded lowercase token.
 
