@@ -141,7 +141,7 @@ func (schema *Schema) Validate(instance []byte) error {
 	if err := checkNumbers(value, ""); err != nil {
 		var bound *NumberBoundError
 		if errors.As(err, &bound) {
-			return fmt.Errorf("instance JSON: %w", &NumberBoundError{Path: safeInstancePath(bound.Path, ""), Reason: bound.Reason})
+			return fmt.Errorf("instance JSON: %w", &NumberBoundError{Path: arrayIndexPath(value, bound.Path), Reason: bound.Reason})
 		}
 		return fmt.Errorf("instance JSON has an invalid number")
 	}

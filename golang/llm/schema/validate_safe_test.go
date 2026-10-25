@@ -34,6 +34,14 @@ func TestValidationErrorsAreContentFree(t *testing.T) {
 			schema: `{"additionalProperties":{"type":"string"}}`, instance: `{"` + secret + `":{"x":1}}`,
 			keyword: "type", path: "/*", leaks: []string{secret},
 		},
+		"all-digit property name": {
+			schema: `{"additionalProperties":{"type":"string"}}`, instance: `{"4111111111111111":false}`,
+			keyword: "type", path: "/*", leaks: []string{"4111111111111111"},
+		},
+		"declared names and indexes kept": {
+			schema:   `{"properties":{"list":{"prefixItems":[{},{"items":{"$ref":"#/$defs/n"}}]}},"$defs":{"n":{"properties":{"v":{"minimum":0}}}}}`,
+			instance: `{"list":[0,[{"v":-1}]]}`, keyword: "minimum", path: "/list/1/0/v",
+		},
 		"propertyNames": {
 			schema: `{"propertyNames":{"pattern":"^a"}}`, instance: `{"` + secret + `":1}`,
 			keyword: "propertyNames", leaks: []string{secret},
@@ -95,9 +103,10 @@ func TestInstanceJSONErrorsAreContentFree(t *testing.T) {
 		`{"a":1} "SECRETXYZ"`,
 		`{"SECRETXYZ":1e9999}`,
 		`[{"SECRETXYZ":1e9999}]`,
+		`{"4111111111111111":1e9999}`,
 	} {
 		err := compiled.Validate([]byte(instance))
-		if err == nil || strings.Contains(err.Error(), "SECRETXYZ") {
+		if err == nil || strings.Contains(err.Error(), "SECRETXYZ") || strings.Contains(err.Error(), "4111111111111111") {
 			t.Fatalf("Validate(%s) = %v, want a content-free error", instance, err)
 		}
 	}

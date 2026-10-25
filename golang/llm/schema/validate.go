@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
@@ -119,6 +120,8 @@ func safeMessage(failure *jsonschema.OutputError) string {
 		message = "value does not match exactly one oneOf schema"
 	case *kind.AnyOf:
 		message = "value matches no anyOf schema"
+	case *kind.AllOf:
+		message = "value does not match every allOf schema"
 	case *kind.Format:
 		message = "value does not match format"
 	case *kind.ContentEncoding:
@@ -135,28 +138,77 @@ func safeMessage(failure *jsonschema.OutputError) string {
 }
 
 // safeInstancePath returns the failing instance pointer with every token the
-// schema did not supply replaced by "*". Array indexes are kept, and so is a
-// property name that a "properties" keyword on the failing keyword's path
-// declares; any other name, such as one matched by additionalProperties,
-// came from the model. A pointer over maxPathBytes keeps its trailing
-// tokens behind a leading "/…".
+// schema did not supply replaced by "*". It follows the failing keyword's
+// path, which steps into the instance only through properties,
+// additionalProperties, items and prefixItems: a property name a properties
+// keyword declares and an array index items or prefixItems reached are kept,
+// and anything else, such as a name additionalProperties matched or an
+// all-digit key, came from the model. A pointer over maxPathBytes keeps its
+// trailing tokens behind a leading "/…".
 func safeInstancePath(instance, keyword string) string {
 	if instance == "" {
 		return ""
 	}
-	declared := map[string]bool{}
-	keywordTokens := strings.Split(strings.TrimPrefix(keyword, "/"), "/")
-	for index := 0; index+1 < len(keywordTokens); index++ {
-		if keywordTokens[index] == "properties" {
-			declared[keywordTokens[index+1]] = true
-		}
-	}
 	tokens := strings.Split(strings.TrimPrefix(instance, "/"), "/")
-	for index, token := range tokens {
-		if !declared[token] && !isArrayIndex(token) {
-			tokens[index] = "*"
+	safe := make([]string, len(tokens))
+	for index := range safe {
+		safe[index] = "*"
+	}
+	keywordTokens := strings.Split(strings.TrimPrefix(keyword, "/"), "/")
+	consumed := 0
+	for index := 0; index < len(keywordTokens) && consumed < len(tokens); index++ {
+		switch keywordTokens[index] {
+		case "properties":
+			if index+1 < len(keywordTokens) && keywordTokens[index+1] == tokens[consumed] {
+				safe[consumed] = tokens[consumed]
+			}
+			index++
+			consumed++
+		case "additionalProperties":
+			consumed++
+		case "items", "prefixItems":
+			if isArrayIndex(tokens[consumed]) {
+				safe[consumed] = tokens[consumed]
+			}
+			if keywordTokens[index] == "prefixItems" {
+				index++
+			}
+			consumed++
+		case "allOf", "anyOf", "oneOf", "$defs":
+			index++
 		}
 	}
+	return boundPath(safe)
+}
+
+// arrayIndexPath returns the pointer to a number checkNumbers rejected, with
+// every object key replaced by "*" and array indexes kept.
+func arrayIndexPath(value any, pointer string) string {
+	if pointer == "" {
+		return ""
+	}
+	tokens := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	safe := make([]string, len(tokens))
+	for index, token := range tokens {
+		safe[index] = "*"
+		switch current := value.(type) {
+		case map[string]any:
+			value = current[strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")]
+		case []any:
+			safe[index] = token
+			if position, err := strconv.Atoi(token); err == nil && position >= 0 && position < len(current) {
+				value = current[position]
+			} else {
+				value = nil
+			}
+		default:
+			value = nil
+		}
+	}
+	return boundPath(safe)
+}
+
+func boundPath(tokens []string) string {
 	path := "/" + strings.Join(tokens, "/")
 	for len(path) > maxPathBytes && len(tokens) > 1 {
 		tokens = tokens[1:]
