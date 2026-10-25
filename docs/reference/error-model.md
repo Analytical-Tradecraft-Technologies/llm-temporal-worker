@@ -41,7 +41,8 @@ const (
 wrapped provider body is never serialized into Temporal details or logs.
 
 Phases are `decode`, `normalize`, `state_load`, `plan`, `price`,
-`admission`, `compile`, `dispatch`, `stream`, `lift`, `finalize`, and
+`admission`, `compile`, `dispatch`, `poll` (checking a resumable provider
+call that was already submitted), `stream`, `lift`, `finalize`, and
 `continuation_write`.
 
 ## Stable codes

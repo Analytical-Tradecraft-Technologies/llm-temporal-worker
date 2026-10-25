@@ -110,8 +110,8 @@ dispatch `accepted`, settled at the response's cost.
 `provider_rejected` means the provider definitely did not accept the request
 (dispatch `not_dispatched` or `rejected`); `provider_error` covers failures that
 may have reached the provider. A provider failure also carries `error_code`, the
-stable provider error code (for example `invalid_argument`, `rate_limited` or
-`permission_denied`), and `dispatch`, its dispatch certainty. The public
+stable provider error code (for example `invalid_argument`,
+`provider_rate_limited` or `permission_denied`), and `dispatch`, its dispatch certainty. The public
 workflows raise a non-retryable `ApplicationError` whose type is the failure
 code and whose details hold `{"error_code", "dispatch"}`, so callers can tell an
 invalid request from an outage without the provider's message. Failures saved

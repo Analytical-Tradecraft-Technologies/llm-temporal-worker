@@ -351,7 +351,7 @@ func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
 func TestExecuteRequestFailureCarriesProviderDetails(t *testing.T) {
 	failed := step(activity.PollActivityName, llm.ExecutionFailed)
 	failed.alter = func(v *llm.ExecutionResultV1) {
-		v.FailureCode, v.ErrorCode, v.Dispatch = "provider_rejected", "rate_limited", "rejected"
+		v.FailureCode, v.ErrorCode, v.Dispatch = "provider_rejected", "provider_rate_limited", "rejected"
 	}
 	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionPending), failed)
 	f.env.ExecuteWorkflow(RequestWorkflowName, f.input)
@@ -360,7 +360,7 @@ func TestExecuteRequestFailureCarriesProviderDetails(t *testing.T) {
 		t.Fatalf("workflow error = %v, want provider_rejected with details", f.env.GetWorkflowError())
 	}
 	var details ExecutionFailureDetails
-	if err := application.Details(&details); err != nil || details.ErrorCode != "rate_limited" || details.Dispatch != "rejected" {
+	if err := application.Details(&details); err != nil || details.ErrorCode != "provider_rate_limited" || details.Dispatch != "rejected" {
 		t.Fatalf("details = %+v, %v", details, err)
 	}
 }

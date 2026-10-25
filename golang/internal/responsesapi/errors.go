@@ -76,7 +76,7 @@ func failureFromCode(code string) *apiError {
 		return &apiError{Status: http.StatusForbidden, Type: "invalid_request_error", Code: code, Message: "the request is not permitted for this tenant, project and actor"}
 	case "budget_denied":
 		return &apiError{Status: http.StatusTooManyRequests, Type: "insufficient_quota", Code: "insufficient_quota", Message: "the budget for this request is exhausted"}
-	case "provider_rate_limited", "rate_limited":
+	case "provider_rate_limited":
 		return &apiError{Status: http.StatusTooManyRequests, Type: "rate_limit_error", Code: "rate_limit_exceeded", Message: "the model provider is rate limiting requests"}
 	case "operation_conflict":
 		return &apiError{Status: http.StatusConflict, Type: "invalid_request_error", Code: "idempotency_conflict", Message: "this response ID was already used for a different request"}
