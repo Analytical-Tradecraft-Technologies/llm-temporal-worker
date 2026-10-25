@@ -64,7 +64,9 @@ has never seen. For those values:
   its logs, metrics or traces, so both values currently behave the same and
   `redacted` is reserved for development. It does not govern the
   [Langfuse content export](#optional-langfuse-content-export);
-- `state.kind` must be `durable` and `blob_store.kind` must be `s3`;
+- `state.kind` must be `durable` and `blob_store.kind` must be `s3`. The S3
+  blob store authenticates only through the AWS default credential chain, so
+  `blob_store.s3.auth.kind` must be `aws_default_chain` in every environment;
 - startup requires the durable v1 runtime, the cloud budget initialization
   receipt and the Redis budget authority probe.
 

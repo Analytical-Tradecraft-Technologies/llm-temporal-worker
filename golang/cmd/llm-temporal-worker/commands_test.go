@@ -296,6 +296,7 @@ func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
 		{"limit below one nano-USD", `limit_usd: "25.000000000000000000"`, `limit_usd: "0.0000000001"`, "budgets.policies[0].windows[0].limit_usd must be at least"},
 		{"second document", "", "\n---\nbudgets:\n  require_match: false\n", "configuration YAML"},
 		// The worker refuses these before resolving secrets (#1529).
+		{"S3 blob auth the worker cannot build", "    auth:\n      kind: aws_default_chain\n\nlimits:", "    auth:\n      kind: bearer_env\n      name: S3_TOKEN\n\nlimits:", "blob_store.s3.auth.kind bearer_env is not supported"},
 		{"production without authorization", "authorization:\n  mode: trusted_temporal\n  allowed_scopes:\n    - tenant: acme\n      project: invoice-processing\n", "", "authorization is required when environment is production or state.kind is durable"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
