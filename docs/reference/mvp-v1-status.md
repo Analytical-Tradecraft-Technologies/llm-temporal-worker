@@ -24,6 +24,7 @@ for cached results, durable progress, provider execution and completion, and
 | `llm.poll.v1` | Retrieve provider status once using the internal request reference |
 | `llm.complete.v1` | Publish durable output/checkpoint/cache and settle the reservation |
 | `llm.query.v1` | Execute an explicitly configured typed control-plane query |
+| `llm.ExportLangfuse.v1` | Export one finished request to Langfuse, or do nothing when no sink is configured |
 
 Synchronous providers hold the submission activity through the HTTP response.
 Resumable providers return pending and are polled by later activities. Provider

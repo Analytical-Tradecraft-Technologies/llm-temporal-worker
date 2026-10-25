@@ -1,6 +1,6 @@
 # Temporal Worker
 
-The worker registers four workflows and eight activities on its configured task
+The worker registers six workflows and nine activities on its configured task
 queue. Public callers normally start `llm.generate.workflow.v1` or
 `llm.compact.workflow.v1` and receive a final typed response. Application tool
 execution and agent loops remain the caller's responsibility.
@@ -14,6 +14,7 @@ execution and agent loops remain the caller's responsibility.
 | `llm.compact.workflow.v1` | Standalone or child compaction through shared execution |
 | `llm.request.execute.v1` | Internal cache, budget, submit, poll and completion orchestration |
 | `llm.budget.wait.v1` | Internal acquisition loop with Temporal timers |
+| `llm.langfuse.export.v1` | Internal best-effort Langfuse export of one finished request |
 
 | Activity | Role |
 | --- | --- |
@@ -25,6 +26,7 @@ execution and agent loops remain the caller's responsibility.
 | `llm.poll.v1` | Retrieve status once for the stored provider work |
 | `llm.complete.v1` | Publish result/checkpoint/cache and finish accounting |
 | `llm.query.v1` | Independently authorized typed control-plane read |
+| `llm.ExportLangfuse.v1` | Export one finished request to Langfuse, or do nothing when no sink is configured |
 
 Generate and Compact activities return execution state; they do not necessarily
 return a finished model response. Synchronous provider HTTP requests remain in
@@ -335,7 +337,7 @@ rather than a heartbeat-timeout retry.
 
 The Temporal Go SDK Activity test environment covers:
 
-- registration under all three exact versioned names;
+- registration of every workflow and Activity under its exact versioned name;
 - payload round trips and oversized BlobRef behavior;
 - heartbeat detail schema and cancellation delivery;
 - completed-operation replay after simulated worker loss;
