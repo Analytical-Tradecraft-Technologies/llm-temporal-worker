@@ -17,6 +17,18 @@ func NewCompileError(message string) *Error {
 	return NewError(CodeInvalidArgument, PhaseCompile, DispatchNotDispatched, RetryNever, message)
 }
 
+// RequireFunctionTool rejects a tool definition that is not a function tool.
+// The v1 contract accepts provider and remote_mcp kinds, which no adapter can
+// carry; offering one as a callable function would pay for a call the
+// caller never defined. Every adapter's lowerTools calls this, so the
+// contract cannot drift between families (#1665).
+func RequireFunctionTool(index int, tool llm.Tool, api string) error {
+	if tool.Kind != "" && tool.Kind != llm.ToolKindFunction {
+		return fmt.Errorf("tool %d kind %q is not supported by %s", index, tool.Kind, api)
+	}
+	return nil
+}
+
 // NewUnsupportedFeatureError reports a required feature the route's
 // capability set does not support.
 func NewUnsupportedFeatureError(feature Feature, message string) *Error {
