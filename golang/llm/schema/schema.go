@@ -18,9 +18,10 @@ type Schema struct {
 	digest    [32]byte
 	compiled  *jsonschema.Schema
 	limits    Limits
-	// applications is the worst-case number of subschemas applied to one
-	// instance value; it bounds each validation's work.
-	applications int
+	// work bounds each validation's work: the worst-case number of
+	// subschemas applied to one instance value, and the closures that meter
+	// one instance's keyword costs.
+	work *workPlan
 }
 
 // Parse parses, canonicalizes, checks the v1 subset, and compiles one schema.
@@ -56,12 +57,12 @@ func ParseWithLimits(data []byte, limits Limits) (*Schema, error) {
 	}
 	// Validation runs after the provider has been paid, so a schema whose
 	// worst case is exponential is refused here, before dispatch (#1521).
-	applications, err := schemaFanout(document.(map[string]any), limits.MaxDepth)
+	work, err := schemaFanout(document.(map[string]any), limits.MaxDepth)
 	if err != nil {
 		return nil, err
 	}
 	digest := sha256.Sum256(canonical)
-	return &Schema{canonical: append([]byte(nil), canonical...), digest: digest, compiled: compiled, limits: limits, applications: applications}, nil
+	return &Schema{canonical: append([]byte(nil), canonical...), digest: digest, compiled: compiled, limits: limits, work: work}, nil
 }
 
 const schemaResourceURL = "urn:llmtw/schema/v1/root"
@@ -135,8 +136,14 @@ func (schema *Schema) Validate(instance []byte) error {
 	if err := checkNumbers(value, ""); err != nil {
 		return fmt.Errorf("instance JSON: %w", err)
 	}
-	if values := countValues(value); values > 0 && values > MaxValidationWork/max(schema.applications, 1) {
+	if values := countValues(value); values > 0 && values > MaxValidationWork/max(schema.work.applications, 1) {
 		return &ValidationError{Message: fmt.Sprintf("instance has too many values to validate against this schema within %d subschema applications", MaxValidationWork)}
+	}
+	// enum, const, required and pattern cost more than one application each,
+	// in proportion to their own size and the instance's (#1660). The check
+	// above bounds this metering pass to the same work.
+	if !schema.work.within(value, MaxValidationWork) {
+		return &ValidationError{Message: fmt.Sprintf("instance needs more than %d units of validation work against this schema", MaxValidationWork)}
 	}
 	return schema.validateValue(value)
 }

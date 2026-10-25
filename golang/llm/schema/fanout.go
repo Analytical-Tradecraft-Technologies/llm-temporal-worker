@@ -52,6 +52,9 @@ type fanoutNode struct {
 	// unresolved records a $ref this analysis cannot follow. It matters
 	// only if validation can reach the node.
 	unresolved bool
+	// keywords weights the node's size-dependent keywords; nil when it has
+	// none.
+	keywords *keywordCost
 }
 
 type fanoutGraph struct {
@@ -73,12 +76,13 @@ type fanoutGraph struct {
 }
 
 // schemaFanout returns the worst-case number of subschema applications at
-// one instance location for an instance at most maxDepth deep.
-func schemaFanout(root map[string]any, maxDepth int) (int, error) {
+// one instance location for an instance at most maxDepth deep, with the
+// in-place closures Validate uses to meter one instance's work.
+func schemaFanout(root map[string]any, maxDepth int) (*workPlan, error) {
 	graph := &fanoutGraph{root: root, nodes: map[string]*fanoutNode{}, resources: map[string]string{}, anchors: map[string]map[string]string{}, bases: map[string]string{}, uris: map[string]string{schemaResourceURL: ""}}
 	graph.index(root, "", "", schemaResourceURL)
 	if graph.aliased != "" {
-		return 0, &FanoutError{Path: graph.aliased, Reason: "declares a $id that names another schema resource"}
+		return nil, &FanoutError{Path: graph.aliased, Reason: "declares a $id that names another schema resource"}
 	}
 	rootNode := graph.node("")
 	graph.linkPending()
@@ -112,7 +116,7 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 			for node, count := range bucket.nodes {
 				result, err := closures.of(node)
 				if err != nil {
-					return 0, err
+					return nil, err
 				}
 				apps = saturate(apps + saturate(count*result.apps))
 				if result.saturated() {
@@ -123,14 +127,14 @@ func schemaFanout(root map[string]any, maxDepth int) (int, error) {
 				}
 			}
 			if apps > limit {
-				return 0, &FanoutError{Path: bucket.key, Reason: fmt.Sprintf("can apply more than %d subschemas to one instance value", limit)}
+				return nil, &FanoutError{Path: bucket.key, Reason: fmt.Sprintf("can apply more than %d subschemas to one instance value", limit)}
 			}
 			worst = max(worst, apps)
 			childBuckets(bucket.key, reached, next)
 		}
 		level = next.level()
 	}
-	return worst, nil
+	return &workPlan{applications: worst, root: rootNode, closures: closures.memo}, nil
 }
 
 // maxFanoutBuckets bounds the distinct instance locations tracked per depth.
@@ -546,6 +550,7 @@ func (graph *fanoutGraph) link(node *fanoutNode) {
 	if target := child("propertyNames"); target != nil {
 		node.names = append(node.names, target)
 	}
+	node.keywords = keywordCosts(node.value)
 }
 
 // resolve follows a same-resource reference: "#", "#/json/pointer" or

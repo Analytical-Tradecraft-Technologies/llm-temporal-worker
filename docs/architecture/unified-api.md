@@ -239,6 +239,22 @@ The canonical schema dialect is JSON Schema Draft 2020-12. Processing is:
 4. lower to provider-specific strict structured output or tool schema;
 5. locally validate the final model JSON against the canonical schema.
 
+Step 5 runs after the provider has been paid, so its cost is bounded before
+it starts. Parse rejects a schema that can apply more than 1000 subschemas to
+one instance value. Validation then meters the instance against the schema
+and refuses it as a provider invalid-response error, without running the
+validator, when the work would exceed 2,000,000 units, about a second
+(`schema.MaxValidationWork`). One unit is one subschema application. `enum`
+and `const` add one unit per numeric member, one sixteenth per other scalar
+member and one unit per value of an array or object member, counting only the
+members of the instance value's JSON kind. `required` adds one sixteenth per
+listed name on an object, and `pattern` (also under `propertyNames`) adds a
+sixty-fourth of a unit per compiled regular-expression instruction per byte
+of the string. The keywords themselves have no separate size limit beyond the
+schema's byte limit; see
+[provider adapters](provider-adapters.md#response-lifting) for
+the subschema bound.
+
 `output.format.name` is optional. When present it must match
 `^[A-Za-z0-9_-]{1,64}$`, the strictest provider rule; the request is rejected
 at decode otherwise. Providers that require a name receive the constant
