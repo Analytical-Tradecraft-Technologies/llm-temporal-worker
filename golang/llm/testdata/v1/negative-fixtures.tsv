@@ -2,6 +2,7 @@
 # and a field name both the Go and the OCaml rejection must contain (#1678).
 # golang/llm/v1_contract_test.go and ocaml/.../test/test_v1_protocol.ml both
 # read this file and fail on a fixture it does not list.
+negative-compact-long-operation-key.json	compact-request	operation_key
 negative-compact-structured-output.json	compact-request	output
 negative-compact-tools.json	compact-request	tools
 negative-currency-field.json	generate-response	currency
@@ -19,7 +20,12 @@ negative-generate-empty-reasoning-patch.json	generate-request	reasoning_effort
 negative-generate-empty-text-part.json	generate-request	append
 negative-generate-enum-patch.json	generate-request	service_class
 negative-generate-extensions-null.json	generate-request	extensions
+negative-generate-file-url.json	generate-request	url
+negative-generate-long-context.json	generate-request	context.tenant
+negative-generate-long-model.json	generate-request	model.set
+negative-generate-long-operation-key.json	generate-request	operation_key
 negative-generate-long-parent.json	generate-request	parent
+negative-generate-metadata-url.json	generate-request	url
 negative-generate-null-append.json	generate-request	append
 negative-generate-null-output.json	generate-response	output
 negative-generate-output-name.json	generate-request	output format

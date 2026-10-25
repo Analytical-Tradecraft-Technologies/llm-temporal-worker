@@ -223,6 +223,17 @@ exception is Bedrock Converse with `Best_effort` portability, which silently
 drops `reasoning_mode` and `reasoning_token_budget`; under `Strict` it
 rejects them.
 
+Generate and Compact requests are also checked against the worker's request
+bounds, in both directions: `operation_key`, the context tenant, project and
+actor, and `settings_patch.model` hold 1 to 256 Unicode code points, and
+`append` holds at most 10,000 items. Image and document URLs, in appended
+items, tool results, instruction parts and the `Item.image`/`Item.document`
+helpers, must satisfy the worker's remote-media policy: `http` or `https`, no
+user information, an ASCII host name, and no loopback, private, link-local,
+metadata or other non-public address, including numeric forms resolvers
+normalise such as `127.1`. A URL the worker would refuse fails when the request
+is built, naming the field.
+
 The repository's `ocaml/consumer_smoke` project is that downstream-package
 check.  It executes deterministic injected dispatchers for one root Generate,
 three immutable sibling forks, Compact, the post-compaction Generate, and all

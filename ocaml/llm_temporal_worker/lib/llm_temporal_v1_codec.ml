@@ -481,7 +481,71 @@ let route_of_v1_json context value =
   let* route_id = optional_id "route_id" Route_id.of_string in let* endpoint_id = optional_id "endpoint_id" Endpoint_id.of_string in let* api_family = optional_id "api_family" Api_family.of_string in let* requested_model = optional_id "requested_model" Model_selector.of_string in let* resolved_model = optional_id "resolved_model" Resolved_model_id.of_string in
   Ok { route_id; endpoint_id; api_family; requested_model; resolved_model }
 
+(* The schema's request bounds (code points, as JSON Schema maxLength counts
+   them) and the Go remote-media URL policy, applied in both directions so a
+   request Go would refuse fails here with its field (#1676). *)
+let max_request_code_points = 256
+let max_append_items = 10000
+
+let validate_code_points context value =
+  let length = utf8_length value in
+  if length < 1 || length > max_request_code_points then
+    Error (errorf "%s must contain between 1 and %d Unicode code points; it contains %d" context max_request_code_points length)
+  else Ok ()
+
+let validate_request_identity context ~operation_key (identity : request_context) =
+  let* () = validate_code_points (context ^ ".operation_key") operation_key in
+  let one name = function None -> Ok () | Some value -> validate_code_points (context ^ ".context." ^ name) value in
+  let* () = one "tenant" (Option.map Tenant_id.to_string identity.tenant) in
+  let* () = one "project" (Option.map Project_id.to_string identity.project) in
+  one "actor" (Option.map Actor_id.to_string identity.actor)
+
+let validate_media_parts context parts =
+  let* _ =
+    List.mapi (fun index part -> (index, part)) parts
+    |> map_result (fun (index, part) ->
+         let checked kind url =
+           match Llm_temporal_media_url.check url with
+           | Ok () -> Ok ()
+           | Error reason -> Error (errorf "%s part %d %s url: %s" context index kind reason)
+         in
+         match part with
+         | Image { source = Url url; _ } -> checked "image" url
+         | Document { source = Url url; _ } -> checked "document" url
+         | _ -> Ok ())
+  in
+  Ok ()
+
+let validate_generate_request_bounds (value : generate_request) =
+  let* () = validate_request_identity "generate request" ~operation_key:(Operation_key.to_string value.operation_key) value.context in
+  let count = List.length value.append in
+  let* () =
+    if count > max_append_items then Error (errorf "generate request.append contains %d items; at most %d are allowed" count max_append_items)
+    else Ok ()
+  in
+  let* () = match value.settings_patch.model with
+    | Set model -> validate_code_points "settings_patch.model.set" (Model_selector.to_string model)
+    | Keep | Clear -> Ok () in
+  let* () = match value.settings_patch.instructions with
+    | Set instructions ->
+        let* _ =
+          List.mapi (fun index instruction -> (index, instruction)) instructions
+          |> map_result (fun (index, instruction) -> match instruction with
+               | Parts_instruction { content; _ } -> validate_media_parts (Printf.sprintf "settings_patch.instructions.set %d" index) content
+               | Text_instruction _ -> Ok ())
+        in
+        Ok ()
+    | Keep | Clear -> Ok () in
+  let* _ =
+    List.mapi (fun index item -> (index, item)) value.append
+    |> map_result (fun (index, item) -> match item with
+         | Message { content; _ } | Tool_result { content; _ } -> validate_media_parts (Printf.sprintf "generate request.append %d" index) content
+         | _ -> Ok ())
+  in
+  Ok ()
+
 let generate_request_to_json (value : generate_request) =
+  let* () = validate_generate_request_bounds value in
   let* () = validate_cache_policy "generate request.cache" value.cache in
   let* () = validate_settings_patch value.settings_patch in
   let* () = validate_append "generate request.append" value.append in
@@ -504,7 +568,9 @@ let generate_request_of_json value =
   let* settings_patch = match optional "settings_patch" fields with None -> Ok empty_settings_patch | Some value -> settings_patch_of_json value in
   let* () = validate_settings_patch_leaves settings_patch in
   let* cache = match optional "cache" fields with None | Some `Null -> Ok None | Some value -> let* value = cache_policy_of_json "generate request.cache" value in Ok (Some value) in
-  Ok { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; append; settings_patch; cache }
+  let request = { api_version = version; operation_key = Operation_key.of_string operation_key; context; parent; append; settings_patch; cache } in
+  let* () = validate_generate_request_bounds request in
+  Ok request
 
 let generate_response_to_json (value : generate_response) =
   let* () = Llm_temporal_response_validation.validate_generate_response value in
@@ -554,6 +620,7 @@ let max_compact_model_length = 256
 let valid_compact_model value = value <> "" && String.is_valid_utf_8 value && utf8_length value <= max_compact_model_length
 
 let compact_request_to_json (value : compact_request) =
+  let* () = validate_request_identity "compact request" ~operation_key:(Operation_key.to_string value.operation_key) value.context in
   let* () = validate_cache_policy "compact request.cache" value.cache in
   let* context = context_to_v1_json value.context in
   let fields = ["api_version", `String compact_api_version; "operation_key", `String (Operation_key.to_string value.operation_key); "context", context; "parent", `String (Checkpoint.to_string value.parent)] in
@@ -571,6 +638,7 @@ let compact_request_of_json value =
   let* () = if version = compact_api_version then Ok () else Error (errorf "unsupported compact api_version %S" version) in
   let* operation_key = required "compact request" "operation_key" fields >>= string "compact request.operation_key" >>= fun value -> nonempty "compact request.operation_key" value in
   let* context = required "compact request" "context" fields >>= context_of_v1_json in
+  let* () = validate_request_identity "compact request" ~operation_key context in
   let* parent = required "compact request" "parent" fields >>= string "compact request.parent" >>= fun value -> nonempty "compact request.parent" value in
   let* policy = match optional "policy" fields with None | Some `Null -> Ok None | Some value -> let* value = policy_of_json "compact request.policy" value in Ok (Some value) in
   let* summarizer_model = match optional "model" fields with None | Some `Null -> Ok None | Some value -> let* value = string "compact request.model" value in if valid_compact_model value then Ok (Some (Model_selector.of_string value)) else Error (errorf "compact request.model must be 1 to %d code points" max_compact_model_length) in

@@ -2,6 +2,8 @@ package llm
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,67 +60,30 @@ func decodeMediaURLRequest(t *testing.T, wire, raw string) (GenerateRequestV1, e
 	return request, err
 }
 
-var blockedMediaURLs = []string{
-	// Policy of #997.
-	"http://169.254.169.254/latest/meta-data/",
-	"file:///etc/passwd",
-	"http://localhost:6379/",
-	"http://api.localhost/x",
-	"gopher://10.0.0.1/",
-	"https://user:pw@internal.example/",
-	"http://10.0.0.1/image.png",
-	"http://[::1]/image.png",
-	"http://[::ffff:127.0.0.1]/image.png",
-	"https://168.63.129.16/doc.pdf",
-	"https://0.0.0.0/doc.pdf",
-	"ftp://example.com/doc.pdf",
-	// Non-canonical IPv4 forms that resolvers normalise (#1091).
-	"http://127.1/x",
-	"http://2130706433/x",
-	"http://0x7f000001/x",
-	"http://0X7F000001/x",
-	"http://0177.0.0.1/x",
-	"http://0x7f.0.0.1/x",
-	"http://127.0.0.1./x",
-	"http://example.com.0x7f000001/x",
-	"http://１２７.０.０.１/x",
-	"http://127.0.0.1\\.example.com/x",
-	// Ranges of the provider egress policy.
-	"http://[64:ff9b::a9fe:a9fe]/x",
-	"http://[64:ff9b:1::a00:1]/x",
-	"http://[2002:a9fe:a9fe::1]/x",
-	"http://[2001:0:a9fe:a9fe::1]/x",
-	"http://[::169.254.169.254]/x",
-	"http://[fec0::1]/x",
-	"http://[fe80::1%25eth0]/x",
-	"http://[2001:4860:4860::8888%25eth0]/x",
-	"http://100.64.0.1/x",
-	"http://192.0.0.8/x",
-	"http://198.18.0.1/x",
-	"http://240.0.0.1/x",
-	// Metadata and private-zone names.
-	"http://metadata.google.internal/x",
-	"http://METADATA.GOOGLE.INTERNAL./x",
-	"http://metadata.goog/x",
-	"http://metadata/x",
-	"http://instance-data/latest/meta-data/",
-	"http://instance-data.ec2.internal/x",
-}
+// The policy cases live in testdata/v1/media-url-policy.tsv, which the OCaml
+// codec tests read too, so both sides judge the same URLs (#1676).
+var blockedMediaURLs, allowedMediaURLs = mediaURLPolicyCases()
 
-var allowedMediaURLs = []string{
-	"https://example.com/image.png",
-	"http://cdn.example.com/a.png",
-	"https://cdn1.example.com/a.png",
-	"https://1password.com/logo.png",
-	"https://3.example.co.uk/a.png",
-	"https://0x7f.example.com/a.png",
-	"https://xn--bcher-kva.example/a.png",
-	"https://my_bucket.s3.amazonaws.com/a.png",
-	"https://internal.example/a.png",
-	"https://example.com:8443/a.png?x=1#frag",
-	"https://8.8.8.8/image.png",
-	"https://[2001:4860:4860::8888]/image.png",
-	"https://[64:ff9b::808:808]/image.png",
+func mediaURLPolicyCases() (blocked, allowed []string) {
+	data, err := os.ReadFile(filepath.Join("testdata", "v1", "media-url-policy.tsv"))
+	if err != nil {
+		panic(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		verdict, url, ok := strings.Cut(line, "\t")
+		switch {
+		case ok && verdict == "blocked":
+			blocked = append(blocked, url)
+		case ok && verdict == "allowed":
+			allowed = append(allowed, url)
+		default:
+			panic("media-url-policy.tsv line is not blocked|allowed<TAB>url: " + line)
+		}
+	}
+	return blocked, allowed
 }
 
 func TestGenerateRequestV1DecodeRejectsBlockedMediaURLs(t *testing.T) {

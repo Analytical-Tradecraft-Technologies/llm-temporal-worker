@@ -406,13 +406,16 @@ func TestV1OCamlFixturesMirrorGoFixtures(t *testing.T) {
 			t.Errorf("golang/llm/testdata/v1/%s has no copy in ocaml/llm_temporal_worker/test/fixtures/v1", filepath.Base(path))
 		}
 	}
-	// Both corpus tests classify negative fixtures from one manifest (#1678).
-	manifest, err := os.ReadFile(filepath.Join(directory, "negative-fixtures.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(manifest, readV1Fixture(t, "negative-fixtures.tsv")) {
-		t.Fatal("ocaml/llm_temporal_worker/test/fixtures/v1/negative-fixtures.tsv differs from golang/llm/testdata/v1/negative-fixtures.tsv")
+	// Both corpus tests classify negative fixtures from one manifest (#1678)
+	// and judge media URLs from one case list (#1676).
+	for _, name := range []string{"negative-fixtures.tsv", "media-url-policy.tsv"} {
+		copied, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(copied, readV1Fixture(t, name)) {
+			t.Fatalf("ocaml/llm_temporal_worker/test/fixtures/v1/%s differs from golang/llm/testdata/v1/%s", name, name)
+		}
 	}
 }
 
