@@ -255,8 +255,8 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 			// portability modes rather than silently dropping the contract.
 			return nil, provider.NewStrictPortabilityError("function tool output schema is not representable by Bedrock Messages")
 		}
-		if tool.Kind != "" && tool.Kind != llm.ToolKindFunction {
-			return nil, fmt.Errorf("tool %d kind %q is not supported by Bedrock Messages", index, tool.Kind)
+		if err := provider.RequireFunctionTool(index, tool, "Bedrock Messages"); err != nil {
+			return nil, err
 		}
 		var schema map[string]any
 		if err := schemaorder.Decode(tool.InputSchema, &schema); err != nil || schema == nil {

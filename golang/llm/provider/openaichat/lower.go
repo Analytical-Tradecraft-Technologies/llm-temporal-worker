@@ -448,8 +448,8 @@ func lowerToolResultContent(content []llm.Part) (string, error) {
 func lowerTools(tools []llm.Tool) ([]any, error) {
 	result := make([]any, 0, len(tools))
 	for index, tool := range tools {
-		if tool.Kind != "" && tool.Kind != llm.ToolKindFunction {
-			return nil, fmt.Errorf("tool %d kind %q is not supported by Chat Completions", index, tool.Kind)
+		if err := provider.RequireFunctionTool(index, tool, "Chat Completions"); err != nil {
+			return nil, err
 		}
 		var schema map[string]any
 		if err := schemaorder.Decode(tool.InputSchema, &schema); err != nil {

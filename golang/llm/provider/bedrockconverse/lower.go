@@ -240,6 +240,9 @@ func lowerToolResultParts(parts []llm.Part) ([]types.ToolResultContentBlock, err
 func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
 	result := make([]types.Tool, 0, len(tools))
 	for index, tool := range tools {
+		if err := provider.RequireFunctionTool(index, tool, "Bedrock Converse"); err != nil {
+			return nil, err
+		}
 		if len(tool.OutputSchema) > 0 {
 			// This API has no function-tool output schema slot. Reject in both
 			// portability modes rather than silently dropping the contract.

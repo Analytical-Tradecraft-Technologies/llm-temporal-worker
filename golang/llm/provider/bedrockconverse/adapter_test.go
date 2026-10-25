@@ -3,6 +3,7 @@ package bedrockconverse
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -104,5 +105,27 @@ func TestLowerToolCallUsesSmithyJSONDocument(t *testing.T) {
 	encoded, err := tool.Value.Input.MarshalSmithyDocument()
 	if err != nil || string(encoded) != `{"city":"Sydney"}` {
 		t.Fatalf("tool input = %s, err=%v", encoded, err)
+	}
+}
+
+// Converse has no slot for a provider-hosted or remote MCP tool, so either is
+// refused at compile in both portability modes, as every other adapter does,
+// rather than offered to the model as a callable function (#1665).
+func TestCompileRejectsNonFunctionToolKinds(t *testing.T) {
+	adapter, err := New(&Client{converse: &fakeConverse{}}, "bedrock-prod", DefaultProfile("nova"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []llm.ToolKind{llm.ToolKindProvider, llm.ToolKindRemoteMCP} {
+		for _, strict := range []bool{true, false} {
+			request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0",
+				Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}},
+				Tools: []llm.Tool{{Kind: kind, Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Parallel: true}}
+			_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{Family: provider.FamilyBedrockConverse, EndpointID: "bedrock-prod", Model: request.Model}, Strict: strict})
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Dispatch != provider.DispatchNotDispatched {
+				t.Fatalf("kind %s strict %v: Compile = %v, want invalid_argument before dispatch", kind, strict, err)
+			}
+		}
 	}
 }
