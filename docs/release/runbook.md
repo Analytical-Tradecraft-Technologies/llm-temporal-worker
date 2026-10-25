@@ -8,7 +8,8 @@ provider credentials, or calls a live LLM provider.
 ## Master image publication
 
 The master workflow's separate `container` job does publish. On every master
-push it runs `scripts/ci/build-scanned-image.sh` on Docker Build Cloud, which:
+run (push, the daily schedule and manual dispatch) it runs
+`scripts/ci/build-scanned-image.sh` on Docker Build Cloud, which:
 
 1. builds linux/amd64 and linux/arm64 as two single-platform builds, each
    exported to its own OCI layout with provenance (`mode=max`) and SBOM
@@ -104,6 +105,12 @@ The `release-evidence` job runs only after `verify` and every split
 verification job it aggregates succeed on a `push` to `master`.
 Pull-request, scheduled, and manual workflow executions do not collect or
 retain this bundle. The job has only `contents: read` permission.
+
+Scheduled and manual master runs still publish a `yyyyMMdd.RUN_NUMBER` tag,
+often of a commit an earlier push run already published, with a different
+digest. Those tags are development images: no evidence bundle binds them, so
+`release.yml` rejects them. Release only a digest recorded by the successful
+`push` run of the tagged commit.
 
 ### Runtime tests and scans
 

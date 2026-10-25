@@ -1493,3 +1493,26 @@ func guardGitCommitID(t *testing.T, output string) string {
 	t.Fatalf("git rev-parse output does not contain a commit ID: %q", output)
 	return ""
 }
+
+// Every master run publishes a development tag, but only a push run records
+// release evidence, so only a push-run digest is releasable. The release
+// runbook and operations guide say so; a change to either trigger must update
+// them (#1679).
+func TestWorkflowPublicationAndEvidenceTriggers(t *testing.T) {
+	master := readWorkflow(t, "master.yml")
+	if got := scalarString(t, master.name, workflowJob(t, master, "container"), "if"); got != "github.ref == 'refs/heads/master'" {
+		t.Fatalf("container if = %q; update docs/release/runbook.md and the operations guide with the new publication trigger", got)
+	}
+	if got := scalarString(t, master.name, workflowJob(t, master, "release-evidence"), "if"); got != "github.event_name == 'push' && github.ref == 'refs/heads/master'" {
+		t.Fatalf("release-evidence if = %q; update docs/release/runbook.md with the new evidence trigger", got)
+	}
+	runbook, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "release", "runbook.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"On every master\nrun (push, the daily schedule and manual dispatch)", "Those tags are development images"} {
+		if !strings.Contains(string(runbook), want) {
+			t.Fatalf("docs/release/runbook.md does not say %q", want)
+		}
+	}
+}

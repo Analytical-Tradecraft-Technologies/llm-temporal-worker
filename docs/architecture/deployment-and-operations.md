@@ -576,7 +576,10 @@ container job pushes `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMB
 using the UTC build date and `github.run_number`. Push, schedule, and manual
 master runs publish; non-master dispatches cannot enter the Docker environment.
 This publishes a development image and does not deploy or create a signed
-versioned release.
+versioned release. Only a push run also records release evidence, so only the
+digest a push run published can be released; a scheduled or manual tag is a
+development image even when it was built from the same commit (see the
+[release runbook](../release/runbook.md#trusted-boundary)).
 
 The single image tag is an OCI index containing `linux/amd64` and `linux/arm64`
 images, built on Docker Cloud's native nodes in parallel. The job requests SBOM
