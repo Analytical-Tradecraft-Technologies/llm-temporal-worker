@@ -102,8 +102,10 @@ var routeHeldReasons = map[string]struct{}{
 var langfuseExportFailureReasons = map[string]struct{}{
 	"failed":      {},
 	"oversized":   {},
+	"redirected":  {},
 	"rejected":    {},
 	"saturated":   {},
+	"throttled":   {},
 	"unavailable": {},
 }
 

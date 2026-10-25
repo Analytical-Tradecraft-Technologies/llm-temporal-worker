@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -57,8 +58,8 @@ func TestExportRejectsPartialSuccessAndNeverLeaksResponse(t *testing.T) {
 	defer server.Close()
 	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
 	err := c.Export(context.Background(), Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()})
-	if err == nil || strings.Contains(err.Error(), "private response") {
-		t.Fatalf("unsafe or absent failure: %v", err)
+	if !errors.Is(err, ErrRejected) || errors.Is(err, ErrExport) || strings.Contains(err.Error(), "private response") {
+		t.Fatalf("partial success must be a safe, permanent rejection: %v", err)
 	}
 }
 
@@ -225,5 +226,93 @@ func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
 	defer c.mu.Unlock()
 	if c.failures != 0 {
 		t.Fatalf("saturation counted %d breaker failures", c.failures)
+	}
+}
+
+// Only a transport or server failure says Langfuse is unhealthy. Throttling,
+// rejected spans and the caller's own cancellation neither open the breaker
+// nor hide earlier failures from it (#1670).
+func TestExportBreakerCountsOnlyOutages(t *testing.T) {
+	var status atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch code := int(status.Load()); code {
+		case 0:
+			// The server notices a client disconnect only after the body is
+			// read.
+			io.Copy(io.Discard, r.Body)
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+		default:
+			w.WriteHeader(code)
+		}
+	}))
+	defer server.Close()
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
+	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	for _, code := range []int32{429, 408} {
+		status.Store(code)
+		for i := 0; i < breakerThreshold+1; i++ {
+			if err := c.Export(context.Background(), op); !errors.Is(err, ErrThrottled) || !errors.Is(err, ErrExport) || errors.Is(err, ErrUnavailable) {
+				t.Fatalf("%d attempt %d: want throttled, got %v", code, i, err)
+			}
+		}
+	}
+	status.Store(0)
+	for i := 0; i < breakerThreshold+1; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(10*time.Millisecond, cancel)
+		if err := c.Export(ctx, op); !errors.Is(err, ErrExport) || errors.Is(err, ErrUnavailable) {
+			t.Fatalf("canceled attempt %d: got %v", i, err)
+		}
+		cancel()
+	}
+	// Two outages, then neutral answers, then one more outage opens it: the
+	// neutral answers neither reset nor add to the count.
+	status.Store(503)
+	for i := 0; i < breakerThreshold-1; i++ {
+		c.Export(context.Background(), op)
+	}
+	status.Store(429)
+	c.Export(context.Background(), op)
+	status.Store(503)
+	c.Export(context.Background(), op)
+	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("throttling hid earlier failures from the breaker: %v", err)
+	}
+}
+
+func TestExportClassifiesRedirectsAndPartialSuccess(t *testing.T) {
+	var body atomic.Value
+	var status atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if code := int(status.Load()); code != 200 {
+			w.Header().Set("Location", "https://elsewhere.example/")
+			w.WriteHeader(code)
+			return
+		}
+		w.Write([]byte(body.Load().(string)))
+	}))
+	defer server.Close()
+	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
+	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	for _, code := range []int32{301, 302, 307, 308} {
+		status.Store(code)
+		if err := c.Export(context.Background(), op); !errors.Is(err, ErrRedirected) || !errors.Is(err, ErrRejected) {
+			t.Fatalf("%d: want redirected, got %v", code, err)
+		}
+	}
+	status.Store(200)
+	for response, want := range map[string]error{
+		`{"partialSuccess":{"rejectedSpans":"3"}}`:                          ErrRejected,
+		`{"partialSuccess":{"rejectedSpans":0,"errorMessage":"a warning"}}`: nil,
+		`{"partialSuccess":{}}`:                                             nil,
+		`{}`:                                                                nil,
+	} {
+		body.Store(response)
+		if err := c.Export(context.Background(), op); !errors.Is(err, want) || (want == nil && err != nil) {
+			t.Fatalf("%s: got %v, want %v", response, err, want)
+		}
 	}
 }
