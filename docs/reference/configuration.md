@@ -29,6 +29,21 @@ not, so its `validate-config`, `print-effective-config` and `worker` commands
 reject them. A `workload_identity` reference names the token's `audience` and
 no `name` or `path`; `env` references take only `name` and `file` references
 only an absolute `path`.
+
+```yaml
+state:
+  redis:
+    username: {kind: env, name: REDIS_USERNAME}
+    password: {kind: file, path: /var/run/secrets/llmtw/redis-password}
+    # Embeddings that supply a workload identity provider only:
+    key_secret: {kind: workload_identity, audience: api://llmtw-redis}
+endpoints:
+  azure-openai-au:
+    # Endpoint auth takes the same workload_identity form, again only in
+    # embeddings; the worker binary rejects it.
+    auth: {kind: workload_identity, audience: https://cognitiveservices.azure.com}
+```
+
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 
@@ -741,6 +756,29 @@ requires `allow_mrsc: true`; `blob_store.s3.failover` takes `replicas` and
 `attempt_timeout` with the same bounds. Profile, temp directory, failover and
 `allow_mrsc` are process-lifetime: a reload that changes them is rejected.
 
+```yaml
+state:
+  requests:
+    provider:
+      aws:
+        region: ap-southeast-2
+        profile: llmtw                    # optional shared-config profile
+        temp_directory: /var/tmp/llmtw    # optional; empty uses the OS default
+        allow_mrsc: true
+        failover:
+          dynamodb_regions: [ap-southeast-4]
+          payload_replicas:
+            - {region: ap-southeast-4, bucket: acme-llmtw-payloads-dr}
+          attempt_timeout: 5s
+    parent_snapshot_storage: inline       # or blob, once the whole fleet reads it
+blob_store:
+  s3:
+    failover:
+      replicas:
+        - {region: ap-southeast-4, bucket: acme-llmtw-results-dr}
+      attempt_timeout: 5s
+```
+
 Optional `state.requests.parent_snapshot_storage` (`inline`, the default, or
 `blob`) selects how new request preparations store their parent snapshot:
 inline in the request record or as a separate referenced blob (#1112). Every
@@ -822,6 +860,17 @@ addresses and credentials are ignored by the memory factory and
 should be omitted. `blob_store.kind: memory` is rejected unless
 `state.kind: memory` is also selected, and external blob kinds are rejected
 with memory state.
+
+Development can instead keep result blobs in a local directory, which every
+other environment rejects:
+
+```yaml
+blob_store:
+  kind: file
+  inline_bytes: 262144
+  file:
+    root: /var/lib/llmtw/blobs
+```
 
 **state.redis.key_prefix** has a
 default of **llmtw**. The optional **LLMTW_REDIS_KEY_PREFIX** environment
@@ -1094,6 +1143,14 @@ the history at approximately 10,000 entries and refreshes a 24-hour idle TTL,
 making the entire Stream eligible for eviction under memory pressure.
 Redis-only legacy adapters use expiring budget keys and cannot select this
 policy. All `allkeys-*` policies are rejected.
+
+```yaml
+state:
+  redis:
+    maxmemory_policy: volatile-lru   # default noeviction
+    service_mesh: false              # true only when a mesh supplies TLS and identity
+```
+
 Expiring operational views and throttle records may disappear under memory
 pressure, so throttles remain operational backpressure rather than financial
 spend authority.
@@ -1180,6 +1237,13 @@ price-catalog tier (2x standard). Fast mode exists only on some models
 those models. Anthropic Priority Tier capacity (`provider_value: auto` with
 `requires_capability: priority_capacity`) is still accepted for existing
 configurations but is no longer the recommended `priority` mapping.
+
+```yaml
+endpoints:
+  anthropic-direct:
+    service_classes:
+      priority: {provider_value: auto, requires_capability: priority_capacity}
+```
 
 OpenRouter reports the tier that served the request, and a `priority` request
 that it serves from a default endpoint is classified and billed as `standard`.
@@ -1314,6 +1378,25 @@ and `service_class`. All populated keys must match the request and candidate;
 enum. `*` is an exact-field wildcard, not a restriction, so a policy with only
 wildcards is rejected. A missing request or candidate fact cannot satisfy an
 exact or prefix restriction.
+
+```yaml
+budgets:
+  policies:
+    - id: claims-priority
+      match:
+        tenant: acme
+        project: claims
+        actor_prefix: "workflow:"
+        environment: production
+        logical_model: invoice-summarizer
+        endpoint: openai-prod
+        service_class: priority
+      windows:
+        - id: day
+          duration: 24h
+          bucket: 1h
+          limit_micro_usd: 25000000   # or limit_usd: "25"
+```
 
 A matcher that can never match is a configuration error, because its policy
 would silently never apply, or with `require_match: true` silently remove the
@@ -1794,6 +1877,12 @@ to explicitly enable those endpoints. Eligibility is captured when planning an
 attempt; export also honors current endpoint disabling. Enabling later does not
 backfill disabled attempts. Langfuse availability is not a readiness dependency.
 
+```yaml
+endpoints:
+  openai-prod:
+    langfuse: {enabled: false}
+```
+
 Each operation gets a trace, with child generations only for actual provider
 attempts. Cache hits and no-work compaction have no paid generation. Compaction
 has its own trace; checkpoint parent edges and shared sessions connect compaction
@@ -1888,6 +1977,16 @@ internal workflows. Existing executions stay on their original version; new
 executions use the version selected by Temporal's routing configuration. Provision
 routing with Temporal's worker deployment APIs or the Temporal Worker Controller.
 Changing the version identity requires restarting the process; hot reload rejects it.
+
+```yaml
+temporal:
+  worker:
+    versioning:
+      enabled: true
+      deployment_name: llm-temporal-worker
+      build_id: 20261025.1
+```
+
 
 Both identity fields must be non-empty, contain no whitespace or NUL, must not
 start with `__`, and must be at most 255 bytes (the default Temporal server limit
