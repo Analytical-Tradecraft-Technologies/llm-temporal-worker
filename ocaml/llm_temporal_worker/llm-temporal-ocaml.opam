@@ -16,7 +16,7 @@ depends: [
   "yojson" {>= "3.0" & < "4.0"}
 ]
 pin-depends: [
-  [ "temporal-sdk.dev" "git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#0d3f618590ed09501b004d5052b7bd88b81e2723" ]
+  [ "temporal-sdk.dev" "git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#ddaea320cd5a7817ad679dda6603aad59448c2ba" ]
 ]
 # The Go contract this package's codecs were verified against.
 x-llm-temporal-api-version: "llm.temporal/v1"

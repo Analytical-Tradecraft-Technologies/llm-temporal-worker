@@ -182,7 +182,7 @@ printf 'cargo offline=%s home=%s %s\n' "${CARGO_NET_OFFLINE:-}" "${CARGO_HOME:-}
 		t.Fatal(err)
 	}
 	wantCalls := []string{
-		"opam offline= home=" + cargoHome + " pin add --yes --no-action --kind=git temporal-sdk git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#0d3f618590ed09501b004d5052b7bd88b81e2723",
+		"opam offline= home=" + cargoHome + " pin add --yes --no-action --kind=git temporal-sdk git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#ddaea320cd5a7817ad679dda6603aad59448c2ba",
 		"opam offline= home=" + cargoHome + " pin add --yes --no-action --kind=git llm-temporal-ocaml git+https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git#" + packageRef + " --subpath=ocaml/llm_temporal_worker",
 		"cargo offline= home=" + cargoHome + " fetch --locked --manifest-path " + filepath.Join(prefix, ".opam-switch", "sources", "temporal-sdk", "rust", "Cargo.toml"),
 		"opam offline=true home=" + cargoHome + " install --yes llm-temporal-ocaml",

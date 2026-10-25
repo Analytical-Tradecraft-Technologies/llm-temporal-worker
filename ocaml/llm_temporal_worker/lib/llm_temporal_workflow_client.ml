@@ -55,10 +55,13 @@ let start_compact owner ~task_queue ~id ~request_id (request : compact_request) 
   let* () = validate_version Llm_temporal_v1_codec.compact_api_version request.api_version in
   start owner compact_workflow validate_compact ~task_queue ~id ~request_id request
 
+(* Every handle here comes from [Temporal.Client.start] or [follow], which
+   address an exact run, so the SDK always reports its run ID; only a
+   current-run [get_handle] handle has none. *)
 let execution (Handle handle) : Temporal.Client.execution =
-  { namespace = handle.owner.namespace;
-    workflow_id = Temporal.Client.workflow_id handle.run;
-    run_id = Temporal.Client.run_id handle.run }
+  match Temporal.Client.run_id handle.run with
+  | Some run_id -> { namespace = handle.owner.namespace; workflow_id = Temporal.Client.workflow_id handle.run; run_id }
+  | None -> invalid_arg "Llm_temporal workflow handle does not address an exact run"
 
 let resume owner workflow validate ~execution request =
   let* () = validate_request workflow request in
@@ -74,9 +77,9 @@ let resume_compact owner ~execution (request : compact_request) =
 let wait (Handle handle) =
   let* result = Temporal.Client.wait handle.run in
   match result with
-  | Temporal.Client.Completed response ->
-      let* () = handle.validate handle.request response in
-      Ok (Temporal.Client.Completed response)
+  | Temporal.Client.Completed { output; successor } ->
+      let* () = handle.validate handle.request output in
+      Ok (Temporal.Client.Completed { output; successor })
   | result -> Ok result
 
 module Runs = Set.Make(String)
@@ -90,7 +93,9 @@ let await first =
       let seen = Runs.add identity.run_id seen in
       let* result = wait current in
       match result with
-      | Temporal.Client.Completed response -> Ok response
+      (* A cron or retry successor of a completed run is not part of this
+         request; the completed output is the answer. *)
+      | Temporal.Client.Completed { output; _ } -> Ok output
       | Temporal.Client.Failed { error; _ } | Temporal.Client.Cancelled error
       | Temporal.Client.Terminated error | Temporal.Client.Timed_out { error; _ } -> Error error
       | Temporal.Client.Continued_as_new successor ->
