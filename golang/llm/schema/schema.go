@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -125,16 +126,25 @@ func (schema *Schema) Validate(instance []byte) error {
 	if schema == nil || schema.compiled == nil {
 		return fmt.Errorf("schema is nil")
 	}
+	// Instance errors become provider safe messages, so none quotes the
+	// instance: a duplicate key, a stray token or a number's path (#1661).
 	canonical, err := llm.CanonicalJSONWithLimits(instance, schema.limits.MaxBytes, schema.limits.MaxDepth)
 	if err != nil {
-		return fmt.Errorf("instance JSON: %w", err)
+		if errors.Is(err, llm.ErrCanonicalJSONLimit) {
+			return fmt.Errorf("instance JSON: %w", err)
+		}
+		return fmt.Errorf("instance JSON is not valid canonical JSON")
 	}
 	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(canonical))
 	if err != nil {
-		return fmt.Errorf("instance JSON: %w", err)
+		return fmt.Errorf("instance JSON is not valid canonical JSON")
 	}
 	if err := checkNumbers(value, ""); err != nil {
-		return fmt.Errorf("instance JSON: %w", err)
+		var bound *NumberBoundError
+		if errors.As(err, &bound) {
+			return fmt.Errorf("instance JSON: %w", &NumberBoundError{Path: arrayIndexPath(value, bound.Path), Reason: bound.Reason})
+		}
+		return fmt.Errorf("instance JSON has an invalid number")
 	}
 	if values := countValues(value); values > 0 && values > MaxValidationWork/max(schema.work.applications, 1) {
 		return &ValidationError{Message: fmt.Sprintf("instance has too many values to validate against this schema within %d subschema applications", MaxValidationWork)}
