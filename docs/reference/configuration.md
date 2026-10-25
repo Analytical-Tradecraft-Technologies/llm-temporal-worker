@@ -1832,8 +1832,15 @@ is retried), `unavailable` (breaker open; nothing was sent and the export is
 dropped) or `failed` (any other failure, retried within the attempt bounds).
 A steadily rising `saturated` count means `max_in_flight` is too low for the
 worker's export rate; `unavailable` counts traces lost to a Langfuse outage.
-Every reason is exported at zero from startup. Capture failures also log a safe warning; missing paid
-captures prevent acknowledgement of an incomplete trace. Content stays in the
+Every reason is exported at zero from startup. Every capture the worker drops
+logs a safe warning, `Langfuse operation capture failed` or `Langfuse
+generation capture failed`, with `request_id` and a `cause`:
+`input_unavailable` (the request input could not be loaded),
+`state_read_failed` (the bounded state-store read failed),
+`attempt_unreadable` (the attempt record could not be decoded),
+`encode_failed` or `save_failed`. A missing paid capture prevents
+acknowledgement of an incomplete trace, so its export is retried and counted
+as `failed`; the capture warning names the cause. Content stays in the
 existing encrypted blob store before export. No credentials or opaque provider
 continuation state are exported, and caller-owned tools are represented in I/O
 rather than invented execution spans.
