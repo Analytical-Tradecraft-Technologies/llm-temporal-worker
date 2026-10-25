@@ -74,7 +74,9 @@ func decodeTool(data []byte) (Tool, error) {
 	if err := validateToolName(name); err != nil {
 		return Tool{}, err
 	}
-	description, _, err := optionalString(fields, "description")
+	// The schema requires description and the encoder always writes it, so
+	// the decoder requires it too (#1662).
+	description, err := requiredString(fields, "description")
 	if err != nil {
 		return Tool{}, err
 	}

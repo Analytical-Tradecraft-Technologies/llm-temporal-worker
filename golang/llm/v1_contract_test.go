@@ -780,13 +780,16 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 		"negative-query-mismatched-result.json",
 		"negative-query-page-size.json",
 		"negative-query-cursor.json",
+		// The schema requires a tool description (#1662).
+		"negative-generate-tool-description.json",
 	} {
 		t.Run(name, func(t *testing.T) {
 			data := readV1Fixture(t, name)
 			var value any
 			switch {
 			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json", name == "negative-generate-output-name.json",
-				name == "negative-generate-duplicate-fallbacks.json", name == "negative-generate-tool-name.json", name == "negative-generate-policy-name.json", name == "negative-generate-empty-instruction.json", name == "negative-generate-empty-message.json", name == "negative-generate-empty-text-part.json", name == "negative-generate-long-parent.json":
+				name == "negative-generate-duplicate-fallbacks.json", name == "negative-generate-tool-name.json", name == "negative-generate-policy-name.json", name == "negative-generate-empty-instruction.json", name == "negative-generate-empty-message.json", name == "negative-generate-empty-text-part.json", name == "negative-generate-long-parent.json",
+				name == "negative-generate-tool-description.json":
 				value = new(llm.GenerateRequestV1)
 			case strings.HasPrefix(name, "negative-generate"),
 				strings.HasPrefix(name, "negative-currency"),

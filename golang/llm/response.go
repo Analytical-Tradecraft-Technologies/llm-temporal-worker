@@ -124,17 +124,17 @@ func decodeServiceFacts(data []byte) (ServiceFacts, error) {
 }
 
 // decodeServiceFactsStrict decodes the public v1 service object, whose schema
-// requires fallback_index.
+// requires fallback_index and allows actual only as a service class.
 func decodeServiceFactsStrict(data []byte) (ServiceFacts, error) {
 	return decodeServiceFactsFields(data, true)
 }
 
-func decodeServiceFactsFields(data []byte, requireFallbackIndex bool) (ServiceFacts, error) {
+func decodeServiceFactsFields(data []byte, strict bool) (ServiceFacts, error) {
 	fields, err := decodeObject(data)
 	if err != nil {
 		return ServiceFacts{}, err
 	}
-	if _, ok := fields["fallback_index"]; requireFallbackIndex && !ok {
+	if _, ok := fields["fallback_index"]; strict && !ok {
 		return ServiceFacts{}, fmt.Errorf("service fallback_index is required")
 	}
 	if err := checkUnknownFields(fields, "requested", "attempted", "actual", "provider_value", "fallback_index"); err != nil {
@@ -171,6 +171,11 @@ func decodeServiceFactsFields(data []byte, requireFallbackIndex bool) (ServiceFa
 		}
 	}
 	var actual *ServiceClass
+	// The public schema allows only a service class; the encoder omits an
+	// unknown actual class rather than writing null (#1662).
+	if raw, ok := fields["actual"]; ok && string(raw) == "null" && strict {
+		return ServiceFacts{}, fmt.Errorf("service actual must be a service class")
+	}
 	if raw, ok := fields["actual"]; ok && string(raw) != "null" {
 		value, err := requiredString(map[string]json.RawMessage{"actual": raw}, "actual")
 		if err != nil {

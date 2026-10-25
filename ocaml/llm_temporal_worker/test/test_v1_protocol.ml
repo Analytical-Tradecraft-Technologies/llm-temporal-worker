@@ -319,7 +319,8 @@ let negative_decoder = function
   | "negative-generate-empty-instruction.json"
   | "negative-generate-empty-message.json"
   | "negative-generate-empty-text-part.json"
-  | "negative-generate-long-parent.json" -> fun bytes -> Result.is_ok (V1_codec.decode_generate_request bytes)
+  | "negative-generate-long-parent.json"
+  | "negative-generate-tool-description.json" -> fun bytes -> Result.is_ok (V1_codec.decode_generate_request bytes)
   | "negative-query-mismatched-result.json" -> fun bytes -> Result.is_ok (V1_codec.decode_query_response bytes)
   | name when starts_with "negative-generate" name || starts_with "negative-currency" name || starts_with "negative-numeric" name ->
     fun bytes -> Result.is_ok (V1_codec.decode_generate_response bytes)

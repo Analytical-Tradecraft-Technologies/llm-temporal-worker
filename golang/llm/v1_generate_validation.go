@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"fmt"
 	"unicode/utf8"
 )
@@ -43,6 +44,80 @@ func validateGenerateRequestV1Bounds(request GenerateRequestV1) error {
 	if request.SettingsPatch.Model.Set != nil {
 		if err := validateCodePointLength("settings_patch.model.set", *request.SettingsPatch.Model.Set, 1, generateModelMaxCodePoints); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateCompactRequestV1Bounds applies the Compact schema's code-point
+// bounds, which match Generate's (#1662).
+func validateCompactRequestV1Bounds(request CompactRequestV1) error {
+	if err := validateCodePointLength("operation_key", request.OperationKey, 1, generateOperationKeyMaxCodePoints); err != nil {
+		return err
+	}
+	for _, component := range []struct {
+		name  string
+		value string
+	}{
+		{name: "context.tenant", value: request.Context.Tenant},
+		{name: "context.project", value: request.Context.Project},
+		{name: "context.actor", value: request.Context.Actor},
+	} {
+		if err := validateCodePointLength(component.name, component.value, 1, generateContextMaxCodePoints); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// compactionPolicyPatchRanges are the published schema's integer bounds for
+// settings_patch.compaction_policy.set.
+var compactionPolicyPatchRanges = map[string][2]int{
+	"trigger_tokens":                  {1, 10000000},
+	"target_tokens":                   {1, 9999999},
+	"recent_turns":                    {0, 1000},
+	"output_reserve_tokens":           {1, 1000000},
+	"materialization_threshold_bytes": {0, 1073741824},
+}
+
+// validateCompactionPolicyPatchV1 decodes settings_patch.compaction_policy.set
+// against the published schema's closed field set and value ranges, so a bad
+// policy fails at decode with its field rather than as a content-free
+// preparation failure (#1662). Whether target_tokens is below trigger_tokens
+// after defaults apply is still checked during request preparation.
+func validateCompactionPolicyPatchV1(raw json.RawMessage) error {
+	fields, err := decodeObject(raw)
+	if err != nil {
+		return fmt.Errorf("compaction_policy.set must be an object")
+	}
+	allowed := []string{"version", "prompt_version", "summary_style"}
+	for name := range compactionPolicyPatchRanges {
+		allowed = append(allowed, name)
+	}
+	if err := checkUnknownFields(fields, allowed...); err != nil {
+		return fmt.Errorf("compaction_policy.set: %w", err)
+	}
+	for name, want := range map[string]string{"version": "generic-2026-07-18", "prompt_version": "v1"} {
+		if value, ok := fields[name]; ok {
+			if text, err := requiredString(map[string]json.RawMessage{name: value}, name); err != nil || text != want {
+				return fmt.Errorf("compaction_policy.set.%s must be %q", name, want)
+			}
+		}
+	}
+	if value, ok := fields["summary_style"]; ok {
+		style, err := requiredString(map[string]json.RawMessage{"summary_style": value}, "summary_style")
+		if err != nil || (style != "concise" && style != "balanced" && style != "detailed") {
+			return fmt.Errorf("compaction_policy.set.summary_style must be concise, balanced or detailed")
+		}
+	}
+	for name, bounds := range compactionPolicyPatchRanges {
+		value, ok := fields[name]
+		if !ok {
+			continue
+		}
+		number, err := decodeInt(value)
+		if err != nil || number < bounds[0] || number > bounds[1] {
+			return fmt.Errorf("compaction_policy.set.%s must be an integer between %d and %d", name, bounds[0], bounds[1])
 		}
 	}
 	return nil
