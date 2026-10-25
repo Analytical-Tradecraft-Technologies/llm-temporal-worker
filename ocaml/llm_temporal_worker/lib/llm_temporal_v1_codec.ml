@@ -677,16 +677,6 @@ let credit_filter_to_json (value : credit_status_filter) =
 let budget_filter_to_json (value : budget_status_filter) = `Assoc (option_field "policy_key" (fun value -> `String (Budget_policy_key.to_string value)) value.policy_key @ option_field "active_at" time_to_json value.active_at @ ["include_windows", `Bool value.include_windows])
 let spend_filter_to_json (value : spend_summary_filter) = `Assoc (["start_time", time_to_json value.start_time; "end_time", time_to_json value.end_time; "group_by", `List (List.map (fun value -> `String (group_by_to_string value)) value.group_by); "operation_kinds", `List (List.map (fun value -> `String (operation_kind_to_string value)) value.operation_kinds)])
 
-let query_request_to_json value =
-  let kind, query = match value with
-    | Provider_status_request value -> "provider_status", provider_filter_to_json value
-    | Model_inventory_request value -> "model_inventory", model_filter_to_json value
-    | Credit_status_request value -> "credit_status", credit_filter_to_json value
-    | Budget_status_request value -> "budget_status", budget_filter_to_json value
-    | Spend_summary_request value -> "spend_summary", spend_filter_to_json value
-  in
-  Ok (`Assoc ["api_version", `String query_api_version; "operation_key", `String "query"; "context", `Assoc ["tenant", `String "query"; "project", `String "query"; "actor", `String "query"]; "kind", `String kind; "query", query])
-
 let query_request_of_json value =
   let* fields = closed "query request" ["api_version"; "operation_key"; "context"; "kind"; "query"] value in
   let* version = required "query request" "api_version" fields >>= string "query request.api_version" in
@@ -739,14 +729,11 @@ let query_request_of_json value =
         Ok (Spend_summary_request { start_time; end_time; group_by; operation_kinds })
     | _ -> Error (errorf "query kind %S is unsupported" kind)
   in
-  (* The request codec intentionally carries the caller's key/context.  The
-     query union itself is returned here; invocation wraps these values with
-     the common envelope before dispatch. *)
+  (* Only the query union is read here; query_envelope_of_json reads the
+     caller's key and context. There is no public codec for the bare union:
+     encoding it would have to invent the caller's identity (#1677). *)
   let _ = operation_key in
   Ok query
-
-let encode_query_request value = let* value = query_request_to_json value in to_bytes value
-let decode_query_request bytes = parse_json query_request_of_json bytes
 
 let query_envelope_to_json (value : query_envelope) =
   let kind, query = match value.query with

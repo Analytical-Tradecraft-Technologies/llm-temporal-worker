@@ -53,7 +53,10 @@ final Go contract.
 
 The protocol layer now contains the Task 17 Generate, Compact, and Query v1
 wire records, closed Yojson codecs, exact decimal-cost representation, and
-their three Temporal workflow descriptors. The public `Llm_temporal.Query`
+their three Temporal workflow descriptors. The query request codec is
+`V1_codec.encode_query_envelope`/`decode_query_envelope`, which carries the
+caller's operation key and context; no codec encodes the bare `query_request`
+union, because it would have to invent that identity. The public `Llm_temporal.Query`
 module now adds the five-constructor GADT over those closed query records. The
 companion `Llm_temporal.Conversation` facade now provides immutable v1
 checkpoint roots, forks, Generate/Compact helpers, and persistent
