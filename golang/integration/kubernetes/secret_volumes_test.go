@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v4"
@@ -65,7 +66,13 @@ type projectedVolumeSource struct {
 }
 
 type projectedSecret struct {
-	Name string `yaml:"name"`
+	Name  string          `yaml:"name"`
+	Items []projectedItem `yaml:"items"`
+}
+
+type projectedItem struct {
+	Key  string `yaml:"key"`
+	Path string `yaml:"path"`
 }
 
 type secretVolume struct {
@@ -244,5 +251,62 @@ func assertProjectedSecretNames(t *testing.T, projected *projectedVolume, want [
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("runtime-secrets projected Secret names = %q, want %q", got, want)
+	}
+}
+
+// Every runtime secret file the base configuration reads is projected exactly
+// once, in the base and in the Redis TLS overlay that moves the CA to its own
+// Secret, so no Secret key goes undocumented and two sources never project
+// onto one path, which the kubelet rejects (#1683).
+func TestProjectedSecretsProvideEveryConfiguredFileOnce(t *testing.T) {
+	config, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "kubernetes", "base", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mount = "/var/run/secrets/llmtw/"
+	wanted := map[string]bool{}
+	for _, field := range strings.Fields(string(config)) {
+		if strings.HasPrefix(field, mount) {
+			wanted[strings.TrimPrefix(field, mount)] = true
+		}
+	}
+	if len(wanted) < 9 {
+		t.Fatalf("base config reads %d runtime secret files, want at least 9", len(wanted))
+	}
+	readme, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, manifest := range [][]string{
+		{"deploy", "kubernetes", "base", "deployment.yaml"},
+		{"deploy", "kubernetes", "examples", "redis-tls", "deployment-patch.yaml"},
+	} {
+		projected := findVolume(t, readDeploymentManifest(t, manifest...), "runtime-secrets").Projected
+		if projected == nil {
+			t.Fatalf("%s runtime-secrets is not projected", filepath.Join(manifest...))
+		}
+		paths := map[string]string{}
+		for _, source := range projected.Sources {
+			if source.Secret == nil {
+				continue
+			}
+			if len(source.Secret.Items) == 0 {
+				t.Fatalf("%s projects every key of %s; list its items so paths cannot collide", filepath.Join(manifest...), source.Secret.Name)
+			}
+			for _, item := range source.Secret.Items {
+				if owner, taken := paths[item.Path]; taken {
+					t.Fatalf("%s projects %s from both %s and %s", filepath.Join(manifest...), item.Path, owner, source.Secret.Name)
+				}
+				paths[item.Path] = source.Secret.Name
+				if !strings.Contains(string(readme), "`"+item.Key+"`") {
+					t.Errorf("deploy/README.md does not document %s key %s", source.Secret.Name, item.Key)
+				}
+			}
+		}
+		for file := range wanted {
+			if _, ok := paths[file]; !ok {
+				t.Errorf("%s does not project %s, which the base config reads", filepath.Join(manifest...), file)
+			}
+		}
 	}
 }
