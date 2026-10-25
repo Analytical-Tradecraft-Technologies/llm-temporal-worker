@@ -86,8 +86,8 @@ starts, recovers when the cloud receipt is ready and the Redis marker is not:
    concurrently; merges are independent and idempotent, so order does not
    matter. A finished request
    last updated before the recovery horizon (the longest configured window
-   plus its bucket, start lease and clock skew, and at least 31 days) is
-   skipped without reading its payload.
+   plus its bucket, start lease and clock skew, plus a one-hour margin, and at
+   least 31 days) is skipped without reading its payload.
 4. For each paid execution, one atomic Function call merges the durable state
    into Redis: the operation record with its original request fingerprint and
    reservation event IDs, the claim, the settled amounts, revisions and

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -264,5 +265,36 @@ func TestModelSyncPublishesAllowedUpstreamsForEveryOpenRouterModel(t *testing.T)
 	}
 	if routes := snapshot.Routes.Models["openai/gpt-5.4-mini"].Routes; len(routes) != 0 {
 		t.Fatalf("synced model routes = %+v, want none without an allowed upstream", routes)
+	}
+}
+
+// The fields left out of an endpoint's recovery identity are the ones the
+// recovery reference page names as safe to change with paid work in flight,
+// so the next identity change cannot leave that page stale (#1690).
+func TestEndpointRecoveryIdentityMatchesTheRecoveryReference(t *testing.T) {
+	endpoint := modelSyncTestConfig().Endpoints["openrouter"]
+	base, err := endpointConfigDigest("openrouter", endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := endpoint
+	changed.Timeout += config.Duration(time.Second)
+	changed.Optional = !changed.Optional
+	changed.OutboundHosts = append(append([]string(nil), changed.OutboundHosts...), "extra.example")
+	changed.Langfuse = &config.LangfuseEndpointConfig{}
+	if digest, err := endpointConfigDigest("openrouter", changed); err != nil || digest != base {
+		t.Fatalf("an excluded field changed the recovery identity: %v", err)
+	}
+	if legacy, err := legacyEndpointConfigDigest("openrouter", changed); err != nil || legacy == base {
+		t.Fatalf("the legacy digest must still cover the whole configuration: %v", err)
+	}
+	page, err := os.ReadFile("../../../docs/reference/cloud-provider-recovery.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"`timeout`", "`langfuse`", "`optional`", "`outbound_hosts`", "legacy digest"} {
+		if !strings.Contains(string(page), field) {
+			t.Fatalf("cloud-provider-recovery.md does not name %s", field)
+		}
 	}
 }

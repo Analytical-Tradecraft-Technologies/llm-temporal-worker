@@ -49,13 +49,21 @@ context cancellation returns no usable call.
 
 A snapshot with a different configuration digest or epoch can reconstruct the
 call only when nothing the call depends on changed. Each route carries an
-endpoint digest over that endpoint's whole non-secret configuration, including
-its address and credential reference; the budget plan saves it. Recovery then
-requires the same endpoint digest in addition to every check above, so an
-unrelated edit, such as another endpoint, a budget or a server setting, does not
-strand dispatched work. Any mismatch, and any plan saved without an endpoint
-digest, returns `state_unavailable`/`same_operation` instead of a permanent
-failure: the work waits for a compatible worker and is never silently rerouted.
+endpoint digest over that endpoint's recovery identity, and the budget plan
+saves it. The identity is every non-secret endpoint field that can change how
+an already dispatched call is resumed, polled, priced or settled: family, base
+URL, region, account region, AWS workspace, auth reference, service classes and
+tiers, capability profile, price catalog, provider storage and extensions. It
+leaves out `timeout`, `langfuse`, `optional` and `outbound_hosts`, which cannot
+affect a call already sent, so changing them with paid work in flight does not
+strand it. Recovery requires the same endpoint digest in addition to every check
+above, so an unrelated edit, such as another endpoint, a budget or a server
+setting, does not strand dispatched work either. A plan saved before the
+recovery identity existed carries a legacy digest of the endpoint's whole
+non-secret configuration; it is still resumed while that endpoint is entirely
+unchanged. Any mismatch, and any plan saved without an endpoint digest, returns
+`state_unavailable`/`same_operation` instead of a permanent failure: the work
+waits for a compatible worker and is never silently rerouted.
 The cloud runtime uses this only for attempts that already have a saved provider
 execution. Historical snapshot loading is outside this helper. Snapshot catalogs and
 health are detached from later mutations; the injected registry must also belong
