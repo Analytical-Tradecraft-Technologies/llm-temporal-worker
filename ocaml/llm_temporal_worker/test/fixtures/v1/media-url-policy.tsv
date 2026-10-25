@@ -1,0 +1,60 @@
+# Remote-media URL policy cases shared by golang/llm/media_url_policy_test.go
+# and ocaml/llm_temporal_worker/test/test_media_url.ml (#1676): blocked or
+# allowed, a tab, then the URL exactly as a caller would send it.
+# Policy of #997.
+blocked	http://169.254.169.254/latest/meta-data/
+blocked	file:///etc/passwd
+blocked	http://localhost:6379/
+blocked	http://api.localhost/x
+blocked	gopher://10.0.0.1/
+blocked	https://user:pw@internal.example/
+blocked	http://10.0.0.1/image.png
+blocked	http://[::1]/image.png
+blocked	http://[::ffff:127.0.0.1]/image.png
+blocked	https://168.63.129.16/doc.pdf
+blocked	https://0.0.0.0/doc.pdf
+blocked	ftp://example.com/doc.pdf
+# Non-canonical IPv4 forms that resolvers normalise (#1091).
+blocked	http://127.1/x
+blocked	http://2130706433/x
+blocked	http://0x7f000001/x
+blocked	http://0X7F000001/x
+blocked	http://0177.0.0.1/x
+blocked	http://0x7f.0.0.1/x
+blocked	http://127.0.0.1./x
+blocked	http://example.com.0x7f000001/x
+blocked	http://１２７.０.０.１/x
+blocked	http://127.0.0.1\.example.com/x
+# Ranges of the provider egress policy.
+blocked	http://[64:ff9b::a9fe:a9fe]/x
+blocked	http://[64:ff9b:1::a00:1]/x
+blocked	http://[2002:a9fe:a9fe::1]/x
+blocked	http://[2001:0:a9fe:a9fe::1]/x
+blocked	http://[::169.254.169.254]/x
+blocked	http://[fec0::1]/x
+blocked	http://[fe80::1%25eth0]/x
+blocked	http://[2001:4860:4860::8888%25eth0]/x
+blocked	http://100.64.0.1/x
+blocked	http://192.0.0.8/x
+blocked	http://198.18.0.1/x
+blocked	http://240.0.0.1/x
+# Metadata and private-zone names.
+blocked	http://metadata.google.internal/x
+blocked	http://METADATA.GOOGLE.INTERNAL./x
+blocked	http://metadata.goog/x
+blocked	http://metadata/x
+blocked	http://instance-data/latest/meta-data/
+blocked	http://instance-data.ec2.internal/x
+allowed	https://example.com/image.png
+allowed	http://cdn.example.com/a.png
+allowed	https://cdn1.example.com/a.png
+allowed	https://1password.com/logo.png
+allowed	https://3.example.co.uk/a.png
+allowed	https://0x7f.example.com/a.png
+allowed	https://xn--bcher-kva.example/a.png
+allowed	https://my_bucket.s3.amazonaws.com/a.png
+allowed	https://internal.example/a.png
+allowed	https://example.com:8443/a.png?x=1#frag
+allowed	https://8.8.8.8/image.png
+allowed	https://[2001:4860:4860::8888]/image.png
+allowed	https://[64:ff9b::808:808]/image.png

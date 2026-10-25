@@ -363,3 +363,21 @@ let () =
       names
   in
   if failures <> [] then failwith (String.concat "\n" failures)
+
+(* append holds at most 10,000 items, as the schema and the Go codec require;
+   both directions refuse one more and name the field (#1676). *)
+let () =
+  let request count =
+    let item = {|{"kind":"message","actor":"human","content":[{"kind":"text","text":"x"}]}|} in
+    Bytes.of_string
+      (Printf.sprintf {|{"api_version":"llm.temporal/v1","operation_key":"append-bound","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"append":[%s]}|}
+         (String.concat "," (List.init count (fun _ -> item))))
+  in
+  let at_limit = ok (V1_codec.decode_generate_request (request 10_000)) in
+  ignore (ok (V1_codec.encode_generate_request at_limit));
+  (match V1_codec.decode_generate_request (request 10_001) with
+   | Ok _ -> failwith "decode accepted 10,001 append items"
+   | Error error -> if not (String.length (Temporal.Error.message error) > 0 && String.sub (Temporal.Error.message error) 0 23 = "generate request.append") then failf "10,001 items rejected without naming append: %s" (Temporal.Error.message error));
+  (match V1_codec.encode_generate_request { at_limit with append = Item.human "x" :: at_limit.append } with
+   | Ok _ -> failwith "encode accepted 10,001 append items"
+   | Error _ -> ())

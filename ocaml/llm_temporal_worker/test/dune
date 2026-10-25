@@ -46,3 +46,8 @@
 (test
  (name test_compaction_policy)
  (libraries llm_temporal temporal-sdk yojson))
+
+(test
+ (name test_media_url)
+ (libraries llm_temporal temporal-sdk yojson)
+ (deps (source_tree fixtures)))

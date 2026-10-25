@@ -18,7 +18,12 @@ module Item = struct
   let message ~actor content = checked (Message { actor; content })
   let instruction ?(level = Application) text = Text_instruction { level; text }
   let checked_content content =
-    let* () = Llm_temporal_codec.validate_content "content" content in Ok content
+    let* () = Llm_temporal_codec.validate_content "content" content in
+    (* The remote-media policy the worker applies at request ingress (#1676). *)
+    match content with
+    | Image { source = Url url; _ } | Document { source = Url url; _ } -> (
+        match Llm_temporal_media_url.check url with Ok () -> Ok content | Error reason -> error ("content url: " ^ reason))
+    | _ -> Ok content
   let image ?detail ~media_type source =
     let* () = match detail with
       | None | Some ("auto" | "low" | "high" | "original") -> Ok ()
