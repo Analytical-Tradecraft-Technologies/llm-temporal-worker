@@ -825,6 +825,31 @@ jobs:
             gh issue create --title "$title" --body "$body"
           fi
 
+  # A green scheduled run closes the tracking issue, so an open one always
+  # means the latest scheduled run failed (#1680).
+  close-scheduled-failure:
+    name: Close scheduled failure
+    if: success() && github.event_name == 'schedule'
+    needs: [verify, ocaml, ocaml-readme-install, fuzz-shard, container]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Close the scheduled failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Scheduled master build failed"
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")"
+          if [[ -n "$number" ]]; then
+            gh issue close "$number" --comment "Scheduled master run $RUN_URL passed at commit $GITHUB_SHA."
+          fi
+
   # This produces a retained, redacted evidence bundle only after the normal
   # master verification jobs. It is intentionally excluded from manual,
   # scheduled, and pull-request executions, and does not publish or sign.
