@@ -642,14 +642,21 @@ func lowerReasoning(reasoning llm.ReasoningSpec) (map[string]any, error) {
 	default:
 		return nil, fmt.Errorf("reasoning mode %q is not supported", reasoning.Mode)
 	}
+	effort := ""
 	switch reasoning.Effort {
 	case "", llm.ReasoningEffortProviderDefault:
 	case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortExtraHigh:
-		result["effort"] = string(reasoning.Effort)
+		effort = string(reasoning.Effort)
 	case llm.ReasoningEffortMaximum:
-		result["effort"] = "max"
+		effort = "max"
 	default:
 		return nil, fmt.Errorf("reasoning effort %q is not supported", reasoning.Effort)
+	}
+	// Disabled wins over an effort, as on Chat and Anthropic: settings
+	// patches set the two independently, so turning reasoning off must not
+	// be undone by an effort an earlier turn chose (#1666).
+	if effort != "" && reasoning.Mode != llm.ReasoningModeDisabled {
+		result["effort"] = effort
 	}
 	switch reasoning.Summary {
 	case "", llm.ReasoningSummaryProviderDefault:

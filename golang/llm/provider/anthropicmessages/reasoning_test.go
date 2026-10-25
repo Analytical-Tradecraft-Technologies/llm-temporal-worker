@@ -72,6 +72,9 @@ func TestCompileReasoningSummaryMapsToThinkingDisplay(t *testing.T) {
 		{name: "none adaptive strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone}, strict: true, wantType: "adaptive", wantDisplay: "omitted"},
 		{name: "default adaptive strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive}, strict: true, wantType: "adaptive"},
 		{name: "concise disabled best effort", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Summary: llm.ReasoningSummaryConcise}, wantType: "disabled"},
+		// Disabled wins over an effort, as on Chat and Responses (#1666).
+		{name: "disabled with effort strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortHigh}, strict: true, wantType: "disabled"},
+		{name: "disabled with maximum effort strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortMaximum}, strict: true, wantType: "disabled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := compileReasoning(t, test.reasoning, test.strict)
@@ -136,6 +139,24 @@ func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
 					t.Fatalf("Compile() = %v, want non-retryable unsupported capability before dispatch", err)
 				}
 			})
+		}
+	}
+}
+
+// Disabled wins over an effort on every family: thinking is disabled and no
+// output_config.effort is sent, as Chat and Responses send effort none
+// (#1666).
+func TestCompileDisabledReasoningIgnoresEffort(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		wire, err := compileReasoning(t, llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortHigh}, strict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if thinking, _ := wire["thinking"].(map[string]any); thinking["type"] != "disabled" {
+			t.Fatalf("thinking = %#v, want disabled", wire["thinking"])
+		}
+		if config, _ := wire["output_config"].(map[string]any); config["effort"] != nil {
+			t.Fatalf("output_config = %#v, want no effort", config)
 		}
 	}
 }

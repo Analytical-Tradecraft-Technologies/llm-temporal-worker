@@ -77,6 +77,13 @@ func (family Family) LowerReasoning(reasoning llm.ReasoningSpec, strict bool) (m
 	if reasoning.Effort == llm.ReasoningEffortExtraHigh {
 		return nil, provider.NewUnsupportedFeatureError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by "+family.Package)
 	}
+	if reasoning.Mode == llm.ReasoningModeDisabled {
+		// Disabled wins over an effort the family can express, as on Chat
+		// and Responses: settings patches set the two independently, so
+		// turning reasoning off must not fail on an earlier turn's effort
+		// (#1666).
+		reasoning.Effort = ""
+	}
 	mode := reasoning.Mode
 	if mode == "" {
 		mode = llm.ReasoningModeProviderDefault
@@ -136,9 +143,13 @@ func (family Family) LowerReasoning(reasoning llm.ReasoningSpec, strict bool) (m
 }
 
 // ReasoningOutputEffort maps a reasoning effort to output_config.effort, or
-// "" when the effort has no wire value.
-func ReasoningOutputEffort(effort llm.ReasoningEffort) string {
-	switch effort {
+// "" when the effort has no wire value or the mode is disabled, which wins
+// over an effort on every family (#1666).
+func ReasoningOutputEffort(reasoning llm.ReasoningSpec) string {
+	if reasoning.Mode == llm.ReasoningModeDisabled {
+		return ""
+	}
+	switch reasoning.Effort {
 	case llm.ReasoningEffortMinimal, llm.ReasoningEffortLow:
 		return "low"
 	case llm.ReasoningEffortMedium:

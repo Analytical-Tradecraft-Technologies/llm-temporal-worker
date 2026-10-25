@@ -237,6 +237,9 @@ func TestLoweringReasoningSummaryPreservesEffort(t *testing.T) {
 		{name: "concise", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryConcise, wantEffort: "high", wantSummary: "concise"},
 		{name: "detailed", mode: llm.ReasoningModeEnabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryDetailed, wantEffort: "high", wantSummary: "detailed"},
 		{name: "disabled", mode: llm.ReasoningModeDisabled, summary: llm.ReasoningSummaryNone, wantEffort: "none"},
+		// Disabled wins over an effort, as on Chat and Anthropic (#1666).
+		{name: "disabled with effort", mode: llm.ReasoningModeDisabled, effort: llm.ReasoningEffortHigh, summary: llm.ReasoningSummaryNone, wantEffort: "none"},
+		{name: "disabled with maximum effort", mode: llm.ReasoningModeDisabled, effort: llm.ReasoningEffortMaximum, summary: llm.ReasoningSummaryNone, wantEffort: "none"},
 		{name: "default effort", mode: llm.ReasoningModeEnabled, summary: llm.ReasoningSummaryNone},
 	} {
 		t.Run(test.name, func(t *testing.T) {
