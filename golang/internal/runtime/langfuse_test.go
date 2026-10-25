@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -503,5 +504,39 @@ func TestCloudLangfuseNoWorkCompactionExportsOnlyRoot(t *testing.T) {
 	}
 	if serverCalls != 1 || !strings.Contains(payload, "no_work") || strings.Contains(payload, `\"stringValue\":\"generation\"`) {
 		t.Fatalf("no-work trace incorrect: %s", payload)
+	}
+}
+
+type unreadableLangfuseState struct{ *cloudstate.Repository }
+
+func (unreadableLangfuseState) Read(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.Record, error) {
+	return cloudstate.Record{}, errors.New("state unavailable")
+}
+
+// A generation capture dropped because the state store could not be read is
+// logged with its cause, since export then retries the missing capture as a
+// Langfuse failure (#1671).
+func TestCloudLangfuseGenerationCaptureLogsAStateReadFailure(t *testing.T) {
+	f := boundedCloud(t, false)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	defer server.Close()
+	capabilities := f.cap
+	capabilities.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	capabilities.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
+	execution := &CloudProviderExecution{capabilities: capabilities, store: unreadableLangfuseState{f.repository}}
+	var output strings.Builder
+	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Format: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithLogger(context.Background(), logger)
+	call := &CloudBudgetCall{id: "req_attempt"}
+	execution.captureLangfuse(ctx, call, cloudstate.SavedProviderExecution{Plan: cloudstate.BudgetPlan{Route: durable.RoutePlan{EndpointID: "endpoint"}}})
+	var record map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output.String())), &record); err != nil {
+		t.Fatalf("log = %q, want one JSON record", output.String())
+	}
+	if record["level"] != "WARN" || record["msg"] != "Langfuse generation capture failed" || record["request_id"] != "req_attempt" || record["cause"] != langfuseCaptureRead {
+		t.Fatalf("log record = %v", record)
 	}
 }

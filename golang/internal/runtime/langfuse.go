@@ -134,6 +134,22 @@ func saveLangfuseCapture(ctx context.Context, store langfuseRepository, scope cl
 	}
 	return store.SaveLangfuseCapture(ctx, scope, id, attempt, marker)
 }
+
+// Bounded causes for a dropped Langfuse capture. A dropped paid capture makes
+// export retry as a Langfuse failure, so each one is logged with its cause
+// (#1671).
+const (
+	langfuseCaptureInput   = "input_unavailable"
+	langfuseCaptureEncode  = "encode_failed"
+	langfuseCaptureRead    = "state_read_failed"
+	langfuseCaptureAttempt = "attempt_unreadable"
+	langfuseCaptureSave    = "save_failed"
+)
+
+func warnLangfuseCapture(ctx context.Context, message string, id cloudstate.RequestID, cause string) {
+	observability.LoggerFromContext(ctx).Warn(ctx, message, slog.String("request_id", string(id)), slog.String("cause", cause))
+}
+
 func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p PreparedCloudRequest) {
 	if r.capabilities.Langfuse == nil || p.Preparation.Version == 0 {
 		return
@@ -148,6 +164,7 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 	if p.Generate != nil {
 		input, err := p.generateInput(ctx)
 		if err != nil {
+			warnLangfuseCapture(ctx, "Langfuse operation capture failed", p.Record.Request.ID, langfuseCaptureInput)
 			return
 		}
 		request = &input.Request
@@ -156,6 +173,7 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 	} else {
 		input, err := p.compactInput(ctx)
 		if err != nil {
+			warnLangfuseCapture(ctx, "Langfuse operation capture failed", p.Record.Request.ID, langfuseCaptureInput)
 			return
 		}
 		request = input.Request
@@ -192,12 +210,13 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 	value := operationCapture{CheckpointScope: p.Preparation.CheckpointScope, Context: caller, Input: input, Session: store.LangfuseID(scope, "session", root), Metadata: metadata}
 	data, err := json.Marshal(value)
 	if err != nil {
+		warnLangfuseCapture(ctx, "Langfuse operation capture failed", p.Record.Request.ID, langfuseCaptureEncode)
 		return
 	}
 	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if err := saveLangfuseCapture(bounded, store, scope, p.Record.Request.ID, "operation", data, func() any { value.Input, value.Oversized = nil, true; return value }); err != nil {
-		observability.LoggerFromContext(ctx).Warn(ctx, "Langfuse operation capture failed", slog.String("request_id", string(p.Record.Request.ID)))
+		warnLangfuseCapture(ctx, "Langfuse operation capture failed", p.Record.Request.ID, langfuseCaptureSave)
 	}
 }
 func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *CloudBudgetCall, saved cloudstate.SavedProviderExecution) {
@@ -216,11 +235,13 @@ func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *Clou
 	defer cancel()
 	record, err := e.store.Read(bounded, call.scope, call.id)
 	if err != nil {
+		warnLangfuseCapture(ctx, "Langfuse generation capture failed", call.id, langfuseCaptureRead)
 		return
 	}
 	var progress map[string]json.RawMessage
 	var attempt cloudstate.RequestAttempt
 	if json.Unmarshal(record.Progress, &progress) != nil || json.Unmarshal(progress["attempt_parent"], &attempt) != nil || attempt.Validate() != nil {
+		warnLangfuseCapture(ctx, "Langfuse generation capture failed", call.id, langfuseCaptureAttempt)
 		return
 	}
 	providerName := saved.Plan.Route.Provider
@@ -233,10 +254,11 @@ func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *Clou
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
+		warnLangfuseCapture(ctx, "Langfuse generation capture failed", attempt.RootID, langfuseCaptureEncode)
 		return
 	}
 	if err := saveLangfuseCapture(bounded, store, call.scope, attempt.RootID, string(call.id), data, func() any { value.Input, value.Oversized = nil, true; return value }); err != nil {
-		observability.LoggerFromContext(ctx).Warn(ctx, "Langfuse generation capture failed", slog.String("request_id", string(attempt.RootID)))
+		warnLangfuseCapture(ctx, "Langfuse generation capture failed", attempt.RootID, langfuseCaptureSave)
 	}
 }
 func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.ExecutionReferenceV1) error {
