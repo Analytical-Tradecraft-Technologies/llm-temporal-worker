@@ -95,7 +95,38 @@ because it does not construct worker dependencies.
 continues to exclude local credentials and runtime state through
 [`.dockerignore`](../.dockerignore).
 
-The worker Secret must include `redis-key-secret`, containing at least 32 bytes
-of stable namespace identity material. This is independent of `redis-password`;
-credential rotation must preserve it. These manifests are templates and do not
-provision or rotate either secret.
+## Secret contract
+
+The manifests read three externally provisioned Secrets. They are templates
+and never create or rotate any of them. Each projected key is listed in the
+Deployment, so a missing key stops the pod from starting instead of the worker
+failing later.
+
+`llmtw-worker-secrets` is projected read-only under `/var/run/secrets/llmtw/`:
+
+| Key | Read by |
+| --- | --- |
+| `temporal-ca.pem` | `temporal.tls.ca_file` |
+| `temporal-client.pem` | `temporal.tls.cert_file` |
+| `temporal-client-key.pem` | `temporal.tls.key_file` |
+| `redis-username` | `state.redis.username` |
+| `redis-password` | `state.redis.password` |
+| `redis-key-secret` | `state.redis.key_secret` |
+| `redis-ca.pem` | `state.redis.tls.ca_file` (base only; see below) |
+| `cloud-request-key` | `state.requests.secret` (request payload encryption key) |
+| `continuation-hmac` | `continuation.handle_keys[0].secret` (handle HMAC key) |
+
+`redis-key-secret` must contain at least 32 bytes of stable namespace identity
+material. It is independent of `redis-password`, and credential rotation must
+preserve it.
+
+`llmtw-provider-credentials` is loaded as environment variables with
+`envFrom`; the base needs `OPENAI_API_KEY` for the example endpoint's
+`bearer_env` auth, and each further endpoint's `bearer_env` or `header_env`
+names its own key.
+
+`llmtw-redis-ca` is used only by the `examples/redis-tls` overlay, for a Redis
+CA managed separately (for example by cert-manager). That overlay projects its
+`ca.crt` key as `redis-ca.pem` and stops projecting `redis-ca.pem` from
+`llmtw-worker-secrets`, so exactly one Secret supplies the file; with the
+overlay, `llmtw-worker-secrets` does not need that key.

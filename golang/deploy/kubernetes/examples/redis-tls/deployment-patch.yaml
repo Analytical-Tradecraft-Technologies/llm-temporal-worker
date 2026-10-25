@@ -10,11 +10,34 @@ spec:
           projected:
             defaultMode: 0440
             sources:
+              # The Redis CA comes from its own Secret here, so
+              # llmtw-worker-secrets projects every base key except
+              # redis-ca.pem (#1683).
               - secret:
                   name: llmtw-worker-secrets
                   optional: false
+                  items:
+                    - key: temporal-ca.pem
+                      path: temporal-ca.pem
+                    - key: temporal-client.pem
+                      path: temporal-client.pem
+                    - key: temporal-client-key.pem
+                      path: temporal-client-key.pem
+                    - key: redis-username
+                      path: redis-username
+                    - key: redis-password
+                      path: redis-password
+                    - key: redis-key-secret
+                      path: redis-key-secret
+                    - key: cloud-request-key
+                      path: cloud-request-key
+                    - key: continuation-hmac
+                      path: continuation-hmac
               - secret:
                   name: llmtw-redis-ca
                   optional: false
+                  items:
+                    - key: ca.crt
+                      path: redis-ca.pem
       containers:
         - name: worker

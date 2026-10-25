@@ -120,9 +120,31 @@ spec:
           projected:
             defaultMode: 0440
             sources:
+              # Every key is listed so a missing one fails the pod at
+              # schedule time and an overlay cannot project a second file
+              # onto the same path (#1683). deploy/README.md documents them.
               - secret:
                   name: llmtw-worker-secrets
                   optional: false
+                  items:
+                    - key: temporal-ca.pem
+                      path: temporal-ca.pem
+                    - key: temporal-client.pem
+                      path: temporal-client.pem
+                    - key: temporal-client-key.pem
+                      path: temporal-client-key.pem
+                    - key: redis-username
+                      path: redis-username
+                    - key: redis-password
+                      path: redis-password
+                    - key: redis-key-secret
+                      path: redis-key-secret
+                    - key: redis-ca.pem
+                      path: redis-ca.pem
+                    - key: cloud-request-key
+                      path: cloud-request-key
+                    - key: continuation-hmac
+                      path: continuation-hmac
         - name: tmp
           emptyDir:
             medium: Memory
