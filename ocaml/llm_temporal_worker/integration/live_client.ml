@@ -57,7 +57,7 @@ let resume address queue input saved output =
     let handle = get (Client.resume_generate client ~execution:(execution saved) request) in
     let generated = get (Client.await handle) in
     (match get (Client.wait handle) with
-     | Temporal.Client.Completed repeated when repeated = generated -> ()
+     | Temporal.Client.Completed { output = repeated; _ } when repeated = generated -> ()
      | _ -> failwith "repeated result observation changed response");
     let compact = compact_request request generated in
     let handle = get (Client.start_compact client
@@ -95,7 +95,7 @@ let child address parent_queue go_queue input output =
       ~task_queue:parent_queue ~id:(parent_queue ^ "-parent")
       ~request_id:(parent_queue ^ "-parent-start") ~input:(request input) ()) in
     match get (Temporal.Client.wait handle) with
-    | Temporal.Client.Completed value -> Yojson.Safe.to_file output (Yojson.Safe.from_string value)
+    | Temporal.Client.Completed { output = value; _ } -> Yojson.Safe.to_file output (Yojson.Safe.from_string value)
     | _ -> failwith "OCaml parent did not complete")
 
 let () =

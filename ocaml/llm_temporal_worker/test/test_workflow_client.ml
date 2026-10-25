@@ -34,7 +34,7 @@ let compact_response : compaction_response = {
 let seed sdk ~id workflow codec value =
   let echo = Temporal.Workflow.remote ~name:(Temporal.Workflow.name workflow) ~input:codec ~output:codec in
   let handle = ok (Temporal.Client.start sdk ~workflow:echo ~task_queue:"llm-worker" ~id ~request_id:id ~input:value ()) in
-  ({ Temporal.Client.namespace; workflow_id = id; run_id = Temporal.Client.run_id handle }, handle)
+  ({ Temporal.Client.namespace; workflow_id = id; run_id = Option.get (Temporal.Client.run_id handle) }, handle)
 
 let () =
   if Temporal.Workflow.name Client.generate_workflow <> "llm.generate.workflow.v1"
@@ -66,7 +66,7 @@ let () =
       let execution, _ = seed sdk ~id:"generate-response" Client.generate_workflow (Temporal.Workflow.output Client.generate_workflow) response in
       let restored = ok (Client.resume_generate client ~execution request) in
       if Client.execution restored <> execution || ok (Client.await restored) <> response then failwith "resume lost typed result or identity";
-      (match ok (Client.wait restored) with Temporal.Client.Completed value when value = response -> () | _ -> failwith "repeated wait changed result");
+      (match ok (Client.wait restored) with Temporal.Client.Completed { output = value; _ } when value = response -> () | _ -> failwith "repeated wait changed result");
       rejected (Client.resume_generate client ~execution:{ execution with namespace = "other" } request);
       rejected (Client.resume_generate client ~execution { request with api_version = "future" });
       List.iteri (fun index altered ->
