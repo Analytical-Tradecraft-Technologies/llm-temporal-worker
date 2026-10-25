@@ -140,6 +140,7 @@ func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
 		}
 	}
 }
+
 // Disabled wins over an effort on every family: thinking is disabled and no
 // output_config.effort is sent, as Chat and Responses send effort none
 // (#1666).
