@@ -242,6 +242,10 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 
 const reasoningStateMediaType = "application/vnd.openai.reasoning+json"
 
+// responseStateMediaType marks the continuation state that carries a stored
+// response ID.
+const responseStateMediaType = "application/vnd.openai.response+json"
+
 // lowerReasoningState replays a reasoning output item lifted by this adapter.
 // Only OpenAI Responses reasoning state is accepted, and its payload must be a
 // reasoning item, so another provider's opaque state can never be injected.
@@ -681,7 +685,16 @@ func lowerContinuation(continuation *llm.Continuation) (string, error) {
 		return "", nil
 	}
 	for _, state := range continuation.ProviderStates {
-		if state.Provider == "openai" && state.EndpointFamily == "responses" && len(state.Opaque) > 0 {
+		if state.Provider != "openai" || state.EndpointFamily != "responses" {
+			continue
+		}
+		// Only a stored-response state names previous_response_id; a
+		// reasoning or tool state from the same lift must never be sent as
+		// one (#1667).
+		if state.MediaType != responseStateMediaType {
+			return "", fmt.Errorf("continuation provider state %q is not an OpenAI Responses response ID", state.MediaType)
+		}
+		if len(state.Opaque) > 0 {
 			return string(state.Opaque), nil
 		}
 	}

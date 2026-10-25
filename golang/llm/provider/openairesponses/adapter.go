@@ -171,6 +171,11 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err != nil {
 		return provider.Call{}, err
 	}
+	// A stored response exists only on the endpoint that created it, as on
+	// the Anthropic-family adapters (#1667).
+	if continuation := normalized.Continuation; continuation != nil && continuation.Pinned && continuation.EndpointID != "" && continuation.EndpointID != adapter.endpointID {
+		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("continuation endpoint %q is not pinned endpoint %q", continuation.EndpointID, adapter.endpointID))
+	}
 	set, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
 		return adapter.capabilities(ctx, input.Query)
 	}, adapter.capabilityVersion)

@@ -373,7 +373,7 @@ func continuationForResponse(call provider.Call, response *responses.Response) *
 		ProviderStates: []llm.ProviderState{{
 			Provider:       "openai",
 			EndpointFamily: "responses",
-			MediaType:      "application/vnd.openai.response+json",
+			MediaType:      responseStateMediaType,
 			Opaque:         []byte(response.ID),
 		}},
 	}

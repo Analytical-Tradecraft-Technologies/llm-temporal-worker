@@ -516,3 +516,34 @@ func (reader *countingReadCloser) Read(data []byte) (int, error) {
 	*reader.reads++
 	return reader.ReadCloser.Read(data)
 }
+
+// A continuation pinned to another endpoint, or whose first Responses state
+// is not a stored-response ID, fails at compile instead of after admission
+// (#1667).
+func TestCompileRejectsForeignOrMistypedContinuations(t *testing.T) {
+	adapter := newFixtureAdapter(t, nil)
+	reasoning := llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: reasoningStateMediaType, Opaque: []byte(`{"type":"reasoning"}`)}
+	response := llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: responseStateMediaType, Opaque: []byte("resp-1")}
+	for want, continuation := range map[string]*llm.Continuation{
+		"is not pinned endpoint":                 {Handle: "openai-responses:resp-1", EndpointID: "azure-prod", Pinned: true, ProviderStates: []llm.ProviderState{response}},
+		"is not an OpenAI Responses response ID": {Handle: "openai-responses:resp-1", EndpointID: "openai-prod", Pinned: true, ProviderStates: []llm.ProviderState{reasoning, response}},
+	} {
+		name := want
+		t.Run(name, func(t *testing.T) {
+			_, err := adapter.Compile(context.Background(), provider.CompileInput{
+				Request: llm.Request{
+					OperationKey: "op-follow-up",
+					Model:        "gpt-contract",
+					Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
+					Continuation: continuation,
+				},
+				Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+				Strict: true,
+			})
+			var mapped *provider.Error
+			if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Compile = %v, want invalid_argument before dispatch naming %q", err, want)
+			}
+		})
+	}
+}
