@@ -384,16 +384,16 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 	if err := addPatch("service_class", patch.ServiceClass, fields, add); err != nil {
 		return nil, err
 	}
-	if err := addPatch("service_class_fallbacks", patch.ServiceClassFallbacks, fields, add); err != nil {
+	if err := addPatch("service_class_fallbacks", emptyNilSet(patch.ServiceClassFallbacks), fields, add); err != nil {
 		return nil, err
 	}
 	if err := addPatch("portability", patch.Portability, fields, add); err != nil {
 		return nil, err
 	}
-	if err := addPatch("instructions", patch.Instructions, fields, add); err != nil {
+	if err := addPatch("instructions", emptyNilSet(patch.Instructions), fields, add); err != nil {
 		return nil, err
 	}
-	if err := addPatch("tools", patch.Tools, fields, add); err != nil {
+	if err := addPatch("tools", emptyNilSet(patch.Tools), fields, add); err != nil {
 		return nil, err
 	}
 	if err := addPatch("tool_policy", patch.ToolPolicy, fields, add); err != nil {
@@ -458,6 +458,17 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return marshalObject(fields)
+}
+
+// emptyNilSet makes a Set of a nil slice encode as [] rather than null,
+// which decodePatch rejects, so the codec never writes a patch it cannot
+// read (#1663).
+func emptyNilSet[T any](patch Patch[[]T]) Patch[[]T] {
+	if patch.Set != nil && *patch.Set == nil {
+		empty := []T{}
+		patch.Set = &empty
+	}
+	return patch
 }
 
 func addPatch[T any](name string, patch Patch[T], fields map[string]any, add func(string, any, bool) error) error {

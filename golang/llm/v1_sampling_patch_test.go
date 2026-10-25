@@ -81,3 +81,53 @@ func TestSettingsPatchV1MarshalRejectsOutOfBoundsLeaves(t *testing.T) {
 		})
 	}
 }
+
+// A Set of a nil slice or map is either encoded as an empty value the decoder
+// reads back, or refused at encode; the codec never writes {"set":null}
+// (#1663).
+func TestSettingsPatchV1NilSetsRoundTripOrFailToEncode(t *testing.T) {
+	var (
+		fallbacks    []ServiceClass
+		instructions []Instruction
+		tools        []Tool
+		stop         []string
+		policy       json.RawMessage
+		extensions   map[string]json.RawMessage
+	)
+	for name, test := range map[string]struct {
+		patch  SettingsPatchV1
+		want   string
+		refuse bool
+	}{
+		"service_class_fallbacks": {patch: SettingsPatchV1{ServiceClassFallbacks: Patch[[]ServiceClass]{Set: &fallbacks}}, want: `{"service_class_fallbacks":{"set":[]}}`},
+		"instructions":            {patch: SettingsPatchV1{Instructions: Patch[[]Instruction]{Set: &instructions}}, want: `{"instructions":{"set":[]}}`},
+		"tools":                   {patch: SettingsPatchV1{Tools: Patch[[]Tool]{Set: &tools}}, want: `{"tools":{"set":[]}}`},
+		"stop_sequences":          {patch: SettingsPatchV1{StopSequences: Patch[[]string]{Set: &stop}}, refuse: true},
+		"compaction_policy":       {patch: SettingsPatchV1{CompactionPolicy: Patch[json.RawMessage]{Set: &policy}}, refuse: true},
+		"extensions":              {patch: SettingsPatchV1{Extensions: Patch[map[string]json.RawMessage]{Set: &extensions}}, refuse: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := test.patch.MarshalJSON()
+			if test.refuse {
+				if err == nil {
+					t.Fatalf("encoded %s, want an error", encoded)
+				}
+				return
+			}
+			if err != nil || string(encoded) != test.want {
+				t.Fatalf("encoded = %s, %v; want %s", encoded, err, test.want)
+			}
+			var decoded SettingsPatchV1
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatalf("decode %s: %v", encoded, err)
+			}
+			again, err := decoded.MarshalJSON()
+			if err != nil || string(again) != test.want {
+				t.Fatalf("re-encoded = %s, %v; want %s", again, err, test.want)
+			}
+		})
+	}
+	if tools != nil || instructions != nil || fallbacks != nil {
+		t.Fatal("encoding replaced the caller's nil slices")
+	}
+}
