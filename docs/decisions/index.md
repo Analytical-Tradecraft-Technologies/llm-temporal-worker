@@ -1,11 +1,23 @@
 # Architecture Decision Records
 
-The first five decisions describe current implementation. Decisions 0006
-through 0008 define staged target designs; acceptance does not claim that any
-phase has shipped. [Scope](../scope.md#staged-delivery-and-document-authority)
-owns phase and document authority. A specification defect or measured evidence
-may change an accepted design through a short superseding ADR amendment rather
-than silent divergence or knowingly faithful implementation of a defect.
+Each decision's status line records where it stands, grouped here:
+
+- **Current and implemented:** 0001, 0002, 0003, 0004 (its storage ownership
+  refined by 0007), 0006, 0007, 0008, 0010, 0012 and 0016 (behind the optional
+  `model_sync` configuration).
+- **Implemented contract, different production path:** 0011 and 0013 define
+  direct-phase Generate and Compact contracts; production runs the bounded
+  cloud workflows instead.
+- **Reference only:** 0014, a test and reference budget materializer.
+- **Superseded:** 0005, by the Generate-only Temporal Activity boundary, and
+  0015, whose bucket-pruning implementation was removed while its conservative
+  retention principle still applies.
+- **Deferred:** 0009, non-USD pricing; the v1 pricing contract is USD-only.
+
+[Scope](../scope.md#staged-delivery-and-document-authority) owns phase and
+document authority. A specification defect or measured evidence may change an
+accepted design through a short superseding ADR amendment rather than silent
+divergence or knowingly faithful implementation of a defect.
 
 1. [Semantic IR and official SDKs](0001-semantic-ir-and-official-sdks.md)
 2. [Public service classes](0002-service-classes.md)

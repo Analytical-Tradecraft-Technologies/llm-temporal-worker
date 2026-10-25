@@ -1,6 +1,8 @@
 # ADR 0006: Forkable Conversation Checkpoints
 
-- Status: Accepted design; implementation pending
+- Status: Accepted; implemented (immutable checkpoint graph, `llm.compact.v1`
+  and automatic compaction). Checkpoint retention and safe deletion remain
+  deferred ([#818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818)).
 - Date: 2026-07-18
 
 ## Context
