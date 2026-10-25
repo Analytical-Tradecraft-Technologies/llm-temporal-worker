@@ -1,0 +1,34 @@
+# Every negative-*.json fixture, the v1 contract whose decoder must reject it,
+# and a field name both the Go and the OCaml rejection must contain (#1678).
+# golang/llm/v1_contract_test.go and ocaml/.../test/test_v1_protocol.ml both
+# read this file and fail on a fixture it does not list.
+negative-compact-structured-output.json	compact-request	output
+negative-compact-tools.json	compact-request	tools
+negative-currency-field.json	generate-response	currency
+negative-generate-cache-field.json	generate-request	bogus
+negative-generate-compaction-checkpoint.json	generate-response	checkpoint
+negative-generate-compaction-scalar.json	generate-request	compaction_policy
+negative-generate-cost-cross-variant.json	generate-response	method
+negative-generate-cost-enum.json	generate-response	method
+negative-generate-depth-overflow.json	generate-response	checkpoint
+negative-generate-diagnostics.json	generate-response	details
+negative-generate-duplicate-fallbacks.json	generate-request	service_class_fallbacks
+negative-generate-empty-instruction.json	generate-request	instructions
+negative-generate-empty-message.json	generate-request	append
+negative-generate-empty-reasoning-patch.json	generate-request	reasoning_effort
+negative-generate-empty-text-part.json	generate-request	append
+negative-generate-enum-patch.json	generate-request	service_class
+negative-generate-extensions-null.json	generate-request	extensions
+negative-generate-long-parent.json	generate-request	parent
+negative-generate-null-append.json	generate-request	append
+negative-generate-null-output.json	generate-response	output
+negative-generate-output-name.json	generate-request	output format
+negative-generate-policy-name.json	generate-request	tool_policy
+negative-generate-tool-description.json	generate-request	description
+negative-generate-tool-name.json	generate-request	tools
+negative-generate-transcript.json	generate-response	transcript
+negative-numeric-usd.json	generate-response	actual_cost_usd
+negative-query-cursor.json	query-request	cursor
+negative-query-mismatched-result.json	query-response	models
+negative-query-page-size.json	query-request	page_size
+negative-unknown-field.json	generate-request	transcript
