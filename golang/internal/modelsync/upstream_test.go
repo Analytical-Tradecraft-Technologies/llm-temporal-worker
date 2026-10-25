@@ -1,6 +1,10 @@
 package modelsync
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"testing"
@@ -309,5 +313,63 @@ func TestUpstreamPolicyAssumesProviderLocationsOnlyWhereNoneArePublished(t *test
 		if _, err := NewUpstreamPolicy(CountryListUS, false, false, false, invalid); err == nil {
 			t.Fatalf("locations %v accepted", invalid)
 		}
+	}
+}
+
+// A published location the worker cannot read fails the provider closed: an
+// assumed location never stands in for it, and the fetch reports it (#1668).
+func TestUnreadablePublishedLocationsFailClosed(t *testing.T) {
+	long := make([]string, 0, maxListEntries+1)
+	for first := 'A'; len(long) <= maxListEntries; first++ {
+		for second := 'A'; second <= 'Z' && len(long) <= maxListEntries; second++ {
+			long = append(long, string([]rune{first, second}))
+		}
+	}
+	listed := []map[string]any{
+		{"name": "Bad HQ", "slug": "bad-hq", "headquarters": "USA", "datacenters": []string{"US"}},
+		{"name": "Bad DC", "slug": "bad-dc", "headquarters": "US", "datacenters": []string{"us-central1"}},
+		{"name": "Mixed DC", "slug": "mixed-dc", "headquarters": "US", "datacenters": []string{"US", "europe-west4"}},
+		{"name": "Long DC", "slug": "long-dc", "headquarters": "US", "datacenters": long},
+		{"name": "Unpublished", "slug": "unpublished", "headquarters": " ", "datacenters": []string{""}},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": listed})
+	}))
+	defer server.Close()
+	providers, _, unreadable, err := Fetcher{Client: server.Client(), BaseURL: server.URL}.listProviders(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantUnreadable := []SkippedModel{{ID: "bad-hq", Cause: SkipProviderLocation}, {ID: "bad-dc", Cause: SkipProviderLocation},
+		{ID: "mixed-dc", Cause: SkipProviderLocation}, {ID: "long-dc", Cause: SkipProviderLocation}}
+	if !reflect.DeepEqual(unreadable, wantUnreadable) {
+		t.Fatalf("unreadable = %+v, want %+v", unreadable, wantUnreadable)
+	}
+	document := &Document{Schema: DocumentSchema, FetchedAt: time.Unix(1, 0).UTC(), Providers: providers}
+	for _, provider := range providers {
+		document.Models = append(document.Models, Model{ID: "vendor/" + provider.Slug, Endpoints: []Endpoint{{Tag: provider.Slug, Provider: provider.Slug, Pricing: Pricing{Prompt: "0.000001", Completion: "0.000002"}}}})
+	}
+	// A reader of any version accepts the stored value and fails it closed.
+	document.Normalize()
+	if err := document.Validate(); err != nil {
+		t.Fatalf("Validate = %v", err)
+	}
+	assumed := map[string][]string{}
+	for _, provider := range providers {
+		assumed[provider.Slug] = []string{"US"}
+	}
+	policy, err := NewUpstreamPolicy(CountryListUS, false, false, false, assumed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var allowed []string
+	for model := range policy.Upstreams(document, Rules{}) {
+		allowed = append(allowed, model)
+	}
+	if !reflect.DeepEqual(allowed, []string{"vendor/unpublished"}) {
+		t.Fatalf("allowed models = %v, want only the provider with unpublished locations", allowed)
+	}
+	if _, err := NewUpstreamPolicy(CountryListUS, false, false, false, map[string][]string{"x": {UnreadableCountry}}); err == nil {
+		t.Fatal("an assumed location may not name the unreadable placeholder")
 	}
 }

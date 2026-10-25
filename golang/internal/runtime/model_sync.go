@@ -358,7 +358,8 @@ func (log *modelSyncLogger) observe(event modelsync.Event) {
 const maxSkippedModelLogs = 16
 
 // skipped warns about OpenRouter models and endpoints a fetch left out
-// because their price was unusable. Model IDs are public catalog names.
+// because their price was unusable, and providers whose published location
+// it could not read. Model IDs and provider slugs are public catalog names.
 func (log *modelSyncLogger) skipped(models []modelsync.SkippedModel) {
 	logger := log.logger.Load()
 	if logger == nil {
@@ -369,6 +370,11 @@ func (log *modelSyncLogger) skipped(models []modelsync.SkippedModel) {
 			logger.Warn(context.Background(), "model catalog sync left out more models", slog.String("source", "model_sync"),
 				slog.String("outcome", strconv.Itoa(len(models)-maxSkippedModelLogs)+"_more"))
 			return
+		}
+		if model.Cause == modelsync.SkipProviderLocation {
+			logger.Warn(context.Background(), "model catalog sync could not read a provider's published location", slog.String("source", "model_sync"),
+				slog.String("provider", model.ID), slog.String("cause", model.Cause))
+			continue
 		}
 		logger.Warn(context.Background(), "model catalog sync left out a model", slog.String("source", "model_sync"),
 			slog.String("model", model.ID), slog.String("cause", model.Cause))

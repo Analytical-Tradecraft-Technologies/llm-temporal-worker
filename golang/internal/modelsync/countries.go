@@ -44,6 +44,13 @@ var (
 	}
 )
 
+// UnreadableCountry stands in for a published headquarters or datacenter the
+// worker cannot read. It is the user-assigned ISO 3166-1 code CLDR uses for
+// an unknown region, no country list contains it, and it passes the stored
+// Document's country-code check, so a reader of any version fails the
+// provider closed.
+const UnreadableCountry = "ZZ"
+
 // CountryListNames returns the supported list names in sorted order.
 func CountryListNames() []string {
 	names := make([]string, 0, len(countryLists))

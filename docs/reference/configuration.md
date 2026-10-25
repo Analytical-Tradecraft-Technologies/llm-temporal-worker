@@ -1644,8 +1644,15 @@ published headquarters or no published datacenter never qualifies for a
 country list, unless `provider_locations` states the countries it is in. A
 stated location fills only the missing value: a published headquarters or
 datacenter list is always used, and every stated country must be in the
-country list. Locations are per provider, so they apply only to the
-endpoints that provider hosts.
+country list. A published value the worker cannot read (not a two-letter
+country code, such as `USA` or `us-central1`, or a list of more than 64
+datacenters) counts as published: it is stored as the placeholder `ZZ`, which
+no country list contains, so the provider qualifies for none and a stated
+location never replaces it. Model sync logs each such provider as `model
+catalog sync could not read a provider's published location` with `provider`
+and `cause=provider_location_unreadable`. `ZZ` is not accepted as a stated
+location. Locations are per provider, so they apply only to the endpoints
+that provider hosts.
 
 `LLMTW_OPENROUTER_PROVIDER_LOCATIONS` supplies the base entries as
 comma-separated `provider=COUNTRY` pairs, joining several countries with `/`

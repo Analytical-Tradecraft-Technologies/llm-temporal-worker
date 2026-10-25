@@ -25,7 +25,8 @@ type UpstreamPolicy struct {
 	DenyPromptTraining bool
 	// Locations maps a provider slug to the countries it is assumed to be
 	// in. They stand in for a headquarters or datacenter list the provider
-	// does not publish, and never replace a published value.
+	// does not publish, and never replace a published value, including one
+	// stored as UnreadableCountry.
 	Locations map[string][]string
 }
 
@@ -64,6 +65,9 @@ func ValidateProviderLocations(locations map[string][]string) error {
 		for _, country := range countries {
 			if country == "" || normalizeCountry(country) != country {
 				return fmt.Errorf("provider %q: %q is not an ISO 3166-1 alpha-2 country code", provider, country)
+			}
+			if country == UnreadableCountry {
+				return fmt.Errorf("provider %q: %q is reserved for an unreadable published location", provider, country)
 			}
 		}
 	}
