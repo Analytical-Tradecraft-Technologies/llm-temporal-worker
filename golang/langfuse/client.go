@@ -34,13 +34,28 @@ var ErrUnavailable = fmt.Errorf("%w: exporter unavailable", ErrExport)
 // caller can retry it after a short backoff.
 var ErrSaturated = fmt.Errorf("%w: in-flight limit reached", ErrUnavailable)
 
+// ErrThrottled is the ErrExport for a 408 or 429 answer. Langfuse answered
+// promptly and the request held its slot only briefly, so it says nothing
+// about an outage: it neither counts towards nor resets the breaker, and a
+// caller can retry it after a backoff (#1670).
+var ErrThrottled = fmt.Errorf("%w: throttled", ErrExport)
+
+// ErrRedirected is the ErrRejected for a 3xx answer. The client never follows
+// redirects, so base_url names a redirecting address rather than the API.
+var ErrRedirected = fmt.Errorf("%w: redirected", ErrRejected)
+
+// errCanceled is the ErrExport for a request whose caller context ended
+// before Langfuse answered. It says nothing about Langfuse's health.
+var errCanceled = fmt.Errorf("%w: canceled", ErrExport)
+
 const maxBody = 16 << 20
 
 // Export shares the worker's Activity slots with model calls, so a slow or
 // black-holed Langfuse must hold only a few of them. At most the configured
 // in-flight limit (defaultMaxInFlight unless set) of requests wait on the
 // network per client; after breakerThreshold consecutive
-// transport or server failures, exports fail immediately for breakerCooldown,
+// transport or server failures (not throttling or caller cancellation),
+// exports fail immediately for breakerCooldown,
 // then a single probe decides whether the breaker closes again.
 const (
 	httpTimeout        = 5 * time.Second
@@ -104,10 +119,13 @@ func (c *Client) admit() error {
 }
 
 // release returns the slot and records the outcome. A rejection proves
-// Langfuse answered, so only ErrExport counts towards the breaker.
+// Langfuse answered, so only ErrExport counts towards the breaker; throttling
+// and caller cancellation leave it unchanged.
 func (c *Client) release(err error) {
 	c.mu.Lock()
-	if errors.Is(err, ErrExport) {
+	if errors.Is(err, ErrThrottled) || errors.Is(err, errCanceled) {
+		// Neither proves Langfuse healthy nor unhealthy.
+	} else if errors.Is(err, ErrExport) {
 		c.failures++
 		if c.failures >= breakerThreshold {
 			c.openUntil = c.now().Add(breakerCooldown)
@@ -238,10 +256,18 @@ func (c *Client) send(ctx context.Context, body []byte) error {
 	req.Header.Set("x-langfuse-ingestion-version", "4")
 	response, err := c.http.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return errCanceled
+		}
 		return ErrExport
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 300 && response.StatusCode < 500 && response.StatusCode != 408 && response.StatusCode != 429 {
+	switch {
+	case response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests:
+		return ErrThrottled
+	case response.StatusCode >= 300 && response.StatusCode < 400:
+		return ErrRedirected
+	case response.StatusCode >= 400 && response.StatusCode < 500:
 		return ErrRejected
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -260,8 +286,11 @@ func (c *Client) send(ctx context.Context, body []byte) error {
 	if len(data) > 0 && json.Unmarshal(data, &result) != nil {
 		return ErrExport
 	}
-	if result.Partial != nil && (result.Partial.Message != "" || (len(result.Partial.Rejected) > 0 && string(result.Partial.Rejected) != "0" && string(result.Partial.Rejected) != `"0"`)) {
-		return ErrExport
+	// Langfuse rejected some spans of this exact payload, so a retry would be
+	// rejected again. An error message with no rejected spans is an OTLP
+	// warning: the batch was accepted.
+	if result.Partial != nil && len(result.Partial.Rejected) > 0 && string(result.Partial.Rejected) != "0" && string(result.Partial.Rejected) != `"0"` && string(result.Partial.Rejected) != "null" {
+		return ErrRejected
 	}
 	return nil
 }

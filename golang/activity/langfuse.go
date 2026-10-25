@@ -40,6 +40,12 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 			a.Metrics.RecordLangfuseExportFailure("saturated")
 			return temporal.NewApplicationErrorWithOptions("Langfuse export saturated", "langfuse_export_saturated", temporal.ApplicationErrorOptions{NextRetryDelay: saturatedRetryDelay(sdkactivity.GetInfo(ctx).Attempt)})
 		}
+		// A throttled Langfuse is healthy and asked for a slower rate, so the
+		// export backs off the same way rather than dropping the trace (#1670).
+		if errors.Is(err, langfuse.ErrThrottled) {
+			a.Metrics.RecordLangfuseExportFailure("throttled")
+			return temporal.NewApplicationErrorWithOptions("Langfuse export throttled", "langfuse_export_throttled", temporal.ApplicationErrorOptions{NextRetryDelay: saturatedRetryDelay(sdkactivity.GetInfo(ctx).Attempt)})
+		}
 		// An open breaker sent nothing and signals a Langfuse outage; it stays
 		// a fast-fail so an outage cannot pile retries up behind the cooldown.
 		if errors.Is(err, langfuse.ErrUnavailable) {
@@ -49,6 +55,10 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 		if errors.Is(err, langfuse.ErrOversized) {
 			a.Metrics.RecordLangfuseExportFailure("oversized")
 			return temporal.NewNonRetryableApplicationError("Langfuse export oversized", "langfuse_export_oversized", nil)
+		}
+		if errors.Is(err, langfuse.ErrRedirected) {
+			a.Metrics.RecordLangfuseExportFailure("redirected")
+			return temporal.NewNonRetryableApplicationError("Langfuse export redirected", "langfuse_export_redirected", nil)
 		}
 		if errors.Is(err, langfuse.ErrRejected) {
 			a.Metrics.RecordLangfuseExportFailure("rejected")

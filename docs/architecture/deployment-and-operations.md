@@ -335,8 +335,8 @@ The series are:
 - `llmtw_ambiguous_total{endpoint}`;
 - `llmtw_continuation_total{decision}`;
 - `llmtw_langfuse_export_failures_total{reason}`, one per failed Langfuse
-  export Activity attempt, where `reason` is `rejected`, `oversized`,
-  `saturated`, `unavailable` or `failed` (see the
+  export Activity attempt, where `reason` is `rejected`, `redirected`,
+  `oversized`, `saturated`, `throttled`, `unavailable` or `failed` (see the
   [configuration reference](../reference/configuration.md#optional-langfuse-content-export));
 - `llmtw_route_held_total{endpoint,reason}`, one per route candidate that
   provider planning skipped because shared route health holds it, where

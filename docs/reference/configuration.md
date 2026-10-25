@@ -1823,7 +1823,9 @@ and export workflows started before the upgrade keep the earlier bounds
 the request task queue and shares the worker's Activity slots with model
 calls, so each worker bounds it: each HTTP request times out after 5 seconds,
 at most `max_in_flight` requests wait on Langfuse at once, and three
-consecutive transport or server failures open a breaker. An export that finds
+consecutive transport or server failures open a breaker. A 408 or 429 answer,
+a batch Langfuse partly rejected, and a request the Activity itself cancelled
+say nothing about an outage, so they neither count towards nor reset it. An export that finds
 every in-flight slot taken sends nothing and is retried after a jittered
 backoff (about 1, 2 and 4 seconds, then 4 to 8 seconds) that holds no Activity
 slot, so a burst larger than `max_in_flight` on a healthy Langfuse is delivered
@@ -1834,7 +1836,12 @@ most `max_in_flight` slots per worker, for up to 5 seconds per attempt. Failed
 export logs a safe warning, preserving the operation's original result or
 error. Each failed export Activity attempt increments the worker's
 `llmtw_langfuse_export_failures_total{reason}` counter on `/metrics`, where
-`reason` is `rejected` (Langfuse refused the batch, such as bad credentials),
+`reason` is `rejected` (Langfuse refused the batch, such as bad credentials,
+or rejected some of its spans; retrying the same batch cannot help),
+`redirected` (Langfuse answered with a 3xx redirect, which the exporter never
+follows; `base_url` names a redirecting address rather than the API; not
+retried), `throttled` (a 408 or 429 answer; retried after the same jittered
+backoff as `saturated`),
 `oversized` (the trace exceeds a size limit below; nothing was sent and the
 export is dropped without retry), `saturated` (the in-flight limit was reached; nothing was sent and the attempt
 is retried), `unavailable` (breaker open; nothing was sent and the export is
