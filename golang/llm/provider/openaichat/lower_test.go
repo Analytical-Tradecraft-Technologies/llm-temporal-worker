@@ -157,7 +157,7 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 type openaiChatParams = openai.ChatCompletionNewParams
 
 func TestCompilePreservesDisabledReasoning(t *testing.T) {
-	for _, effort := range []llm.ReasoningEffort{"", llm.ReasoningEffortProviderDefault, llm.ReasoningEffortHigh} {
+	for _, effort := range []llm.ReasoningEffort{"", llm.ReasoningEffortProviderDefault, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum} {
 		t.Run(string(effort), func(t *testing.T) {
 			adapter := testAdapter(t)
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{

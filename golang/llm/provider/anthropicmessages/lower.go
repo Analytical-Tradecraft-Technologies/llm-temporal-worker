@@ -119,7 +119,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		if thinking != nil {
 			requestMap["thinking"] = thinking
 		}
-		if effort := anthropicwire.ReasoningOutputEffort(request.Reasoning.Effort); effort != "" {
+		if effort := anthropicwire.ReasoningOutputEffort(*request.Reasoning); effort != "" {
 			outputConfig, _ := requestMap["output_config"].(map[string]any)
 			if outputConfig == nil {
 				outputConfig = map[string]any{}

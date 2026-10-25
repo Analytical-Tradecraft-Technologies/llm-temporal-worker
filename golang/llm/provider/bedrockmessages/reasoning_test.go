@@ -140,3 +140,21 @@ func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
 		}
 	}
 }
+
+// Disabled wins over an effort on every family: thinking is disabled and no
+// output_config.effort is sent, as Chat and Responses send effort none
+// (#1666).
+func TestCompileDisabledReasoningIgnoresEffort(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		wire, err := compileReasoning(t, llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortHigh}, strict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if thinking, _ := wire["thinking"].(map[string]any); thinking["type"] != "disabled" {
+			t.Fatalf("thinking = %#v, want disabled", wire["thinking"])
+		}
+		if config, _ := wire["output_config"].(map[string]any); config["effort"] != nil {
+			t.Fatalf("output_config = %#v, want no effort", config)
+		}
+	}
+}

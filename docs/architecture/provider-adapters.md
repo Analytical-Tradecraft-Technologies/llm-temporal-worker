@@ -291,6 +291,13 @@ usage/cost lifter.
   SigV4 signature covers it. The served tier is read from the response header
   of the same name when the body reports none.
 
+A `disabled` reasoning mode wins over any effort on every family. Settings
+patches set mode and effort independently, so a conversation can turn
+reasoning off after an earlier turn chose an effort. Chat and Responses send
+effort `none`, and Anthropic and Bedrock Messages send `thinking.type:
+disabled` with no effort. An effort a family cannot express at all, such as
+`xhigh` on Anthropic, is still rejected.
+
 Reasoning controls lower the same way on Anthropic Messages and Bedrock
 Messages:
 
@@ -304,8 +311,8 @@ Messages:
   `disabled` map to the matching `thinking.type`. With no mode and no budget
   the `thinking` object is omitted and the model default applies. The v1
   contract carries only effort and summary, so a v1 request never sends
-  `thinking`. An effort combined with an `enabled` or `disabled` mode is
-  rejected.
+  `thinking`. An effort combined with an `enabled` mode is rejected; with
+  `disabled` the effort is ignored and no `output_config.effort` is sent.
 - The summary maps to `thinking.display`, whose only values are `summarized`
   (the provider default) and `omitted`: `none` sends `omitted` and `auto`
   sends `summarized`. `concise` and `detailed` cannot express their detail
