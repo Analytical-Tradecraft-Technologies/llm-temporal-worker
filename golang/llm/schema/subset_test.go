@@ -29,3 +29,24 @@ func TestSupportedSubsetRejectsProviderExecutionKeywords(t *testing.T) {
 		}
 	}
 }
+
+// format, contentEncoding and contentMediaType are accepted as annotations
+// only, so local validation never rejects a value for them (#1664). A change
+// to assert them must update docs/architecture/unified-api.md.
+func TestAnnotationOnlyKeywordsAreNotAsserted(t *testing.T) {
+	for _, test := range []struct{ schema, instance string }{
+		{`{"type":"string","format":"date-time"}`, `"not a date"`},
+		{`{"type":"string","format":"email"}`, `"nobody"`},
+		{`{"type":"string","contentEncoding":"base64"}`, `"!!!"`},
+		{`{"type":"string","contentMediaType":"application/json","contentEncoding":"base64"}`, `"e30"`},
+		{`{"type":"string","contentMediaType":"application/json"}`, `"{"`},
+	} {
+		compiled, err := schema.Parse([]byte(test.schema))
+		if err != nil {
+			t.Fatalf("Parse(%s) = %v", test.schema, err)
+		}
+		if err := compiled.Validate([]byte(test.instance)); err != nil {
+			t.Fatalf("Validate(%s, %s) = %v, want the keyword ignored", test.schema, test.instance, err)
+		}
+	}
+}

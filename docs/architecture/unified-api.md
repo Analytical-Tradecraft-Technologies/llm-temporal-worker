@@ -239,6 +239,13 @@ The canonical schema dialect is JSON Schema Draft 2020-12. Processing is:
 4. lower to provider-specific strict structured output or tool schema;
 5. locally validate the final model JSON against the canonical schema.
 
+In step 5, `format`, `contentEncoding` and `contentMediaType` are accepted in
+the subset as annotations only, as Draft 2020-12 specifies by default: local
+validation does not check them, so `{"type": "string", "format": "date-time"}`
+accepts any string. A provider may still use them while generating. A caller
+that depends on one of them must check that value itself, or use `pattern`,
+which is asserted.
+
 Step 5 runs after the provider has been paid, so its cost is bounded before
 it starts. Parse rejects a schema that can apply more than 1000 subschemas to
 one instance value. Validation then meters the instance against the schema

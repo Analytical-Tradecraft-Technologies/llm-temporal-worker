@@ -44,6 +44,9 @@ var supportedKeywords = map[string]struct{}{
 	"propertyNames": {}, "minProperties": {}, "maxProperties": {},
 	"items": {}, "prefixItems": {}, "minItems": {}, "maxItems": {}, "uniqueItems": {},
 	"minLength": {}, "maxLength": {}, "pattern": {},
+	// contentEncoding, contentMediaType and format are annotations only: the
+	// compiler is never asked to assert them, so validation ignores them
+	// (#1664).
 	"contentEncoding": {}, "contentMediaType": {},
 	"minimum": {}, "maximum": {}, "exclusiveMinimum": {}, "exclusiveMaximum": {}, "multipleOf": {},
 	"allOf": {}, "anyOf": {}, "oneOf": {}, "not": {}, "if": {}, "then": {}, "else": {},
