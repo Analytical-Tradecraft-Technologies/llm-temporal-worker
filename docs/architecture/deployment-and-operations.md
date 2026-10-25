@@ -563,7 +563,8 @@ port drift apart; overlays inherit the base probes rather than redefining them.
 ## GitHub Actions split
 
 `pull-request.yml` validates documentation and, once Go exists, formatting,
-the rendered Kubernetes deployment policy (with the pinned `kubectl` action),
+the rendered Kubernetes deployment policy (with `kubectl v1.32.6` installed and
+checksum-verified by `scripts/ci/setup-kubectl.sh`),
 vet, race tests, unit/integration tests, build, and Docker build for pull
 requests. It has read-only permissions and no provider credentials.
 
@@ -579,12 +580,20 @@ This publishes a development image and does not deploy or create a signed
 versioned release.
 
 The single image tag is an OCI index containing `linux/amd64` and `linux/arm64`
-images, built on Docker Cloud's native nodes in parallel. The job requests SBOM
-and provenance attestations, verifies both platform descriptors by the published
-digest, and records that digest in the Actions summary. It pushes directly from
-the cloud builder and uses its managed cache; no GitHub image cache round-trip,
-QEMU emulation, or local fallback is used. Runtime smoke tests still load the
-cloud-built test images onto the runner.
+images. `scripts/ci/build-scanned-image.sh` builds each platform separately on
+its native Docker Build Cloud node into its own OCI layout, with SBOM and
+provenance attestations, scans each layout with the pinned Trivy, and assembles
+the scanned layouts into one multi-platform layout with `tools/ocimerge`. Only
+when both platforms pass does `skopeo copy --all --preserve-digests` publish
+that exact layout, so the published bytes are the scanned bytes; nothing is
+pushed from the cloud builder. The job then verifies both platform descriptors
+by the published digest and records it in the Actions summary. No GitHub image
+cache round-trip, QEMU emulation, or local fallback is used. No CI job runs the
+published digest: runtime smoke tests run `verify-image`'s own `linux/amd64`
+build of the same commit (see
+[Runtime tests and scans](../release/runbook.md#runtime-tests-and-scans)).
+Merge-queue runs exercise the same per-platform build and scan on an
+uncredentialed local builder with one node per platform.
 
 Configure the protected `docker_push` GitHub environment with:
 
@@ -608,7 +617,10 @@ See [Docker Cloud CI credentials](https://docs.docker.com/build-cloud/ci/) and
 [cloud builder selection](https://docs.docker.com/build-cloud/usage/) for the
 upstream authentication, Compose, and multi-platform contracts.
 
-Both workflows use concurrency cancellation, immutable official-action commits
+Pull-request runs cancel superseded runs of the same pull request. Master push
+runs get a per-commit concurrency group and are never cancelled, because the
+release guard requires a successful push run for the tagged commit; scheduled
+and manual master runs supersede each other. Both workflows use immutable official-action commits
 with readable major-version comments, dependency caching through `setup-go`,
 explicit timeouts, and conditional Go/Docker steps. `make workflow-verify`
 uses pinned `actionlint` syntax validation plus a YAML contract test to keep

@@ -155,8 +155,8 @@ verify the same local render and never contact a cluster.
 
 `make workflow-verify` runs pinned `actionlint` syntax validation and strict
 YAML contract tests for the checked-in GitHub Actions workflows
-(`.github/workflows/`). The pull-request and master workflows install the
-pinned `kubectl` action and run
+(`.github/workflows/`). The pull-request and master workflows install
+`kubectl v1.32.6` with the checksum-verified `scripts/ci/setup-kubectl.sh` and run
 `make deployment-policy-verify`, so every pull request and master validation
 renders the Kubernetes base and overlays before the Go release gates. The test
 requires immutable action commits with readable major-version comments,
