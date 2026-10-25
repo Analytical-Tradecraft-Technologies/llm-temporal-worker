@@ -243,6 +243,7 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 				MakeTargets: []string{"redis-integration"},
 				WorkflowJobs: []v1TraceabilityWorkflowJob{
 					{Path: ".github/workflows/master.yml", Job: "verify"},
+					{Path: ".github/workflows/pull-request.yml", Job: "verify"},
 				},
 			},
 			Evidence: v1TraceabilityEvidence{Mode: "offline", Status: "unrecorded"},
