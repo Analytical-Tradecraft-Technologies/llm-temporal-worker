@@ -304,29 +304,38 @@ let assert_positive name =
   else if starts_with "query-" name && ends_with "-response.json" name then round_trip V1_codec.decode_query_response V1_codec.encode_query_response name
   else if starts_with "query-" name then round_trip V1_codec.decode_query_envelope V1_codec.encode_query_envelope name
   else failf "shared fixture %s does not name a v1 contract" name
+(* fixtures/v1/negative-fixtures.tsv, shared with the Go corpus test, names
+   each negative fixture's contract and a field its rejection must mention, so
+   a request fixture can never be "rejected" by a response decoder for an
+   unrelated reason (#1678). *)
+let negative_manifest () =
+  fixture_in "v1" "negative-fixtures.tsv"
+  |> String.split_on_char '\n'
+  |> List.filter (fun line -> line <> "" && not (starts_with "#" line))
+  |> List.map (fun line ->
+       match String.split_on_char '\t' line with
+       | [ name; contract; field ] when field <> "" -> (name, (contract, field))
+       | _ -> failf "negative-fixtures.tsv line is not fixture<TAB>contract<TAB>field: %s" line)
+let contains text needle =
+  let length = String.length needle in
+  let rec at index = index + length <= String.length text && (String.sub text index length = needle || at (index + 1)) in
+  at 0
 let negative_decoder = function
-  | "negative-unknown-field.json"
-  | "negative-generate-cache-field.json"
-  | "negative-generate-null-append.json"
-  | "negative-generate-enum-patch.json"
-  | "negative-generate-empty-reasoning-patch.json"
-  | "negative-generate-compaction-scalar.json"
-  | "negative-generate-extensions-null.json"
-  | "negative-generate-output-name.json"
-  | "negative-generate-duplicate-fallbacks.json"
-  | "negative-generate-tool-name.json"
-  | "negative-generate-policy-name.json"
-  | "negative-generate-empty-instruction.json"
-  | "negative-generate-empty-message.json"
-  | "negative-generate-empty-text-part.json"
-  | "negative-generate-long-parent.json"
-  | "negative-generate-tool-description.json" -> fun bytes -> Result.is_ok (V1_codec.decode_generate_request bytes)
-  | "negative-query-mismatched-result.json" -> fun bytes -> Result.is_ok (V1_codec.decode_query_response bytes)
-  | name when starts_with "negative-generate" name || starts_with "negative-currency" name || starts_with "negative-numeric" name ->
-    fun bytes -> Result.is_ok (V1_codec.decode_generate_response bytes)
-  | name when starts_with "negative-compact" name -> fun bytes -> Result.is_ok (V1_codec.decode_compact_request bytes)
-  | name when starts_with "negative-query" name -> fun bytes -> Result.is_ok (V1_codec.decode_query_envelope bytes)
-  | name -> failf "negative fixture %s does not name a v1 contract" name
+  | "generate-request" -> fun bytes -> Result.map ignore (V1_codec.decode_generate_request bytes)
+  | "generate-response" -> fun bytes -> Result.map ignore (V1_codec.decode_generate_response bytes)
+  | "compact-request" -> fun bytes -> Result.map ignore (V1_codec.decode_compact_request bytes)
+  | "query-request" -> fun bytes -> Result.map ignore (V1_codec.decode_query_envelope bytes)
+  | "query-response" -> fun bytes -> Result.map ignore (V1_codec.decode_query_response bytes)
+  | contract -> failf "negative-fixtures.tsv names unknown contract %s" contract
+let assert_negative manifest name =
+  match List.assoc_opt name manifest with
+  | None -> failf "negative fixture %s is not listed in negative-fixtures.tsv" name
+  | Some (contract, field) ->
+      (match negative_decoder contract (Bytes.of_string (fixture_in "v1" name)) with
+       | Ok () -> failf "negative fixture %s was accepted" name
+       | Error error ->
+           let message = Temporal.Error.message error in
+           if not (contains message field) then failf "negative fixture %s was rejected without naming %s: %s" name field message)
 let fixture_directory directory =
   let candidates =
     [ Filename.concat (Sys.getcwd ()) ("fixtures/" ^ directory);
@@ -342,13 +351,12 @@ let () =
     Sys.readdir (fixture_directory "v1") |> Array.to_list |> List.filter (ends_with ".json") |> List.sort compare
   in
   if List.length names < 50 then failf "shared fixture corpus has only %d fixtures" (List.length names);
+  let manifest = negative_manifest () in
   let failures =
     List.filter_map
       (fun name ->
         try
-          if starts_with "negative-" name then begin
-            if negative_decoder name (Bytes.of_string (fixture_in "v1" name)) then failf "negative fixture %s was accepted" name
-          end
+          if starts_with "negative-" name then assert_negative manifest name
           else assert_positive name;
           None
         with Failure message -> Some message)

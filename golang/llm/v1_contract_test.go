@@ -751,64 +751,74 @@ func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 	}
 }
 
+// TestV1RejectsNegativeContractFixtures rejects every negative fixture with
+// the decoder of the contract testdata/v1/negative-fixtures.tsv names for it,
+// and requires the error to name the corrupted field. The OCaml corpus test
+// reads the same manifest, so neither side can send a request fixture to a
+// response decoder that rejects it for an unrelated reason (#1678).
 func TestV1RejectsNegativeContractFixtures(t *testing.T) {
-	for _, name := range []string{
-		"negative-generate-cache-field.json",
-		"negative-generate-compaction-checkpoint.json",
-		"negative-generate-cost-enum.json",
-		"negative-generate-depth-overflow.json",
-		"negative-generate-diagnostics.json",
-		"negative-generate-transcript.json",
-		"negative-currency-field.json",
-		"negative-numeric-usd.json",
-		"negative-generate-cost-cross-variant.json",
-		"negative-generate-enum-patch.json",
-		"negative-generate-empty-reasoning-patch.json",
-		"negative-generate-compaction-scalar.json",
-		"negative-generate-extensions-null.json",
-		"negative-generate-output-name.json",
-		"negative-generate-null-output.json",
-		"negative-generate-duplicate-fallbacks.json",
-		"negative-generate-tool-name.json",
-		"negative-generate-policy-name.json",
-		"negative-generate-empty-instruction.json",
-		"negative-generate-empty-message.json",
-		"negative-generate-empty-text-part.json",
-		"negative-generate-long-parent.json",
-		"negative-compact-tools.json",
-		"negative-compact-structured-output.json",
-		"negative-query-mismatched-result.json",
-		"negative-query-page-size.json",
-		"negative-query-cursor.json",
-		// The schema requires a tool description (#1662).
-		"negative-generate-tool-description.json",
-	} {
+	manifest := readNegativeFixtureManifest(t)
+	paths, err := filepath.Glob(filepath.Join("testdata", "v1", "negative-*.json"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no negative fixtures: %v", err)
+	}
+	for _, path := range paths {
+		if _, ok := manifest[filepath.Base(path)]; !ok {
+			t.Errorf("%s is not listed in testdata/v1/negative-fixtures.tsv", filepath.Base(path))
+		}
+	}
+	decoders := map[string]func() any{
+		"generate-request":  func() any { return new(llm.GenerateRequestV1) },
+		"generate-response": func() any { return new(llm.GenerateResponseV1) },
+		"compact-request":   func() any { return new(llm.CompactRequestV1) },
+		"query-request":     func() any { return new(llm.QueryRequestV1) },
+		"query-response":    func() any { return new(llm.QueryResponseV1) },
+	}
+	for name, entry := range manifest {
 		t.Run(name, func(t *testing.T) {
-			data := readV1Fixture(t, name)
-			var value any
-			switch {
-			case name == "negative-generate-cache-field.json", name == "negative-generate-null-append.json", name == "negative-generate-enum-patch.json", name == "negative-generate-empty-reasoning-patch.json", name == "negative-generate-compaction-scalar.json", name == "negative-generate-extensions-null.json", name == "negative-generate-output-name.json",
-				name == "negative-generate-duplicate-fallbacks.json", name == "negative-generate-tool-name.json", name == "negative-generate-policy-name.json", name == "negative-generate-empty-instruction.json", name == "negative-generate-empty-message.json", name == "negative-generate-empty-text-part.json", name == "negative-generate-long-parent.json",
-				name == "negative-generate-tool-description.json":
-				value = new(llm.GenerateRequestV1)
-			case strings.HasPrefix(name, "negative-generate"),
-				strings.HasPrefix(name, "negative-currency"),
-				strings.HasPrefix(name, "negative-numeric"):
-				value = new(llm.GenerateResponseV1)
-			case strings.HasPrefix(name, "negative-compact"):
-				value = new(llm.CompactRequestV1)
-			default:
-				if strings.Contains(name, "mismatched") {
-					value = new(llm.QueryResponseV1)
-				} else {
-					value = new(llm.QueryRequestV1)
-				}
+			decoder, ok := decoders[entry.contract]
+			if !ok {
+				t.Fatalf("unknown contract %q", entry.contract)
 			}
-			if err := json.Unmarshal(data, value); err == nil {
+			err := json.Unmarshal(readV1Fixture(t, name), decoder())
+			if err == nil {
 				t.Fatal("negative fixture was accepted")
+			}
+			if !strings.Contains(err.Error(), entry.field) {
+				t.Fatalf("rejection %q does not name %q", err, entry.field)
 			}
 		})
 	}
+}
+
+type negativeFixture struct{ contract, field string }
+
+// readNegativeFixtureManifest parses negative-fixtures.tsv: one
+// fixture<TAB>contract<TAB>field line per negative fixture, # comments.
+func readNegativeFixtureManifest(t *testing.T) map[string]negativeFixture {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "v1", "negative-fixtures.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]negativeFixture{}
+	for number, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		columns := strings.Split(line, "\t")
+		if len(columns) != 3 || columns[2] == "" {
+			t.Fatalf("negative-fixtures.tsv line %d is not fixture<TAB>contract<TAB>field", number+1)
+		}
+		if _, duplicate := manifest[columns[0]]; duplicate {
+			t.Fatalf("negative-fixtures.tsv lists %s twice", columns[0])
+		}
+		if _, err := os.Stat(filepath.Join("testdata", "v1", columns[0])); err != nil {
+			t.Fatalf("negative-fixtures.tsv lists missing fixture %s", columns[0])
+		}
+		manifest[columns[0]] = negativeFixture{contract: columns[1], field: columns[2]}
+	}
+	return manifest
 }
 
 func readV1Fixture(t *testing.T, name string) []byte {

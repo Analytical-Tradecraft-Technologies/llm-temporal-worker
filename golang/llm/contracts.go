@@ -1300,7 +1300,7 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	}
 	output, err := decodeItems(outputRaw)
 	if err != nil {
-		return err
+		return fmt.Errorf("output: %w", err)
 	}
 	checkpointRaw, err := requireField(fields, "checkpoint")
 	if err != nil {
