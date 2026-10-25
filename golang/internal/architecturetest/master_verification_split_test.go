@@ -211,7 +211,7 @@ func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 			}
 		}
 		for name := range workflowMapping(t, workflow, "jobs") {
-			if name == "report-scheduled-failure" || covered[name] || !jobCanRunOnSchedule(t, workflow, name) {
+			if name == "report-scheduled-failure" || name == "close-scheduled-failure" || covered[name] || !jobCanRunOnSchedule(t, workflow, name) {
 				continue
 			}
 			t.Fatalf("%s job %q can fail on a schedule without report-scheduled-failure depending on it", workflow.name, name)
@@ -227,6 +227,20 @@ func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 		if scalarString(t, workflow.name, permissions, "issues") != "write" {
 			t.Fatalf("%s report-scheduled-failure permissions = %#v, want issues: write", workflow.name, permissions)
 		}
+		// A green scheduled run closes the tracking issue, so an open one
+		// means the latest scheduled run failed (#1680). It watches the same
+		// jobs as the reporter and may only write issues.
+		closer := workflowJob(t, workflow, "close-scheduled-failure")
+		if got, want := scalarString(t, workflow.name, closer, "if"), "success() && github.event_name == 'schedule'"; got != want {
+			t.Fatalf("%s close-scheduled-failure if = %q, want %q", workflow.name, got, want)
+		}
+		if got, want := jobNeeds(t, workflow, "close-scheduled-failure"), jobNeeds(t, workflow, "report-scheduled-failure"); !slices.Equal(got, want) {
+			t.Fatalf("%s close-scheduled-failure needs = %v, want the reporter's %v", workflow.name, got, want)
+		}
+		if closerPermissions := nestedMapping(t, workflow.name, closer, "permissions"); len(closerPermissions) != 1 || scalarString(t, workflow.name, closerPermissions, "issues") != "write" {
+			t.Fatalf("%s close-scheduled-failure permissions = %#v, want only issues: write", workflow.name, closerPermissions)
+		}
+		assertJobRunContains(t, workflow, "close-scheduled-failure", "gh issue close")
 		assertJobRunContains(t, workflow, "report-scheduled-failure", "gh issue create")
 		assertJobRunContains(t, workflow, "report-scheduled-failure", "gh issue comment")
 	}

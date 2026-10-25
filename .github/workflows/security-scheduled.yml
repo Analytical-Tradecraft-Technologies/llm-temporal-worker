@@ -39,7 +39,8 @@ jobs:
   # Pull requests only compare base and head, so this is the only gate that
   # re-evaluates current master against new vulnerability data and exception
   # expiry. A failed scheduled run opens, or comments on, one tracking issue
-  # that carries only the run URL and commit, never raw scanner output.
+  # that carries the run URL, commit and rejected GO-* identifiers, never raw
+  # scanner output.
   report-scheduled-failure:
     name: Report scheduled failure
     if: failure() && github.event_name == 'schedule'
@@ -47,9 +48,51 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       issues: write
     steps:
       - name: Open or update the scheduled failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Scheduled security review failed"
+          body="Scheduled security review run $RUN_URL failed at commit $GITHUB_SHA."
+          # Only identifiers in the Go vulnerability database's GO-YYYY-NNNN
+          # form are copied from the log (#1680). Lookups are best effort.
+          ids=""
+          while IFS= read -r job_id; do
+            [[ -n "$job_id" ]] || continue
+            ids+="$(gh api "repos/$GH_REPO/actions/jobs/$job_id/logs" 2>/dev/null | grep -oE '\bGO-[0-9]{4}-[0-9]{1,6}\b' || true)"$'\n'
+          done < <(gh api --paginate "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure") | .id' || true)
+          ids="$(sort -u <<< "$ids" | grep -E '^GO-[0-9]{4}-[0-9]{1,6}$' | head -n 50 | sed 's/^/- /' || true)"
+          if [[ -n "$ids" ]]; then
+            body+=$'\n\n'"Vulnerability identifiers named in the failed job log:"$'\n'"$ids"
+          fi
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+
+  # A green scheduled run closes the tracking issue, so an open one always
+  # means the latest scheduled run failed (#1680).
+  close-scheduled-failure:
+    name: Close scheduled failure
+    if: success() && github.event_name == 'schedule'
+    needs: [security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Close the scheduled failure issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -58,10 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           title="Scheduled security review failed"
-          body="Scheduled security review run $RUN_URL failed at commit $GITHUB_SHA."
           number="$(gh issue list --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\"))[0].number // empty")"
           if [[ -n "$number" ]]; then
-            gh issue comment "$number" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
+            gh issue close "$number" --comment "Scheduled security review run $RUN_URL passed at commit $GITHUB_SHA."
           fi
