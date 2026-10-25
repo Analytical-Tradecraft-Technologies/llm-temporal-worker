@@ -308,8 +308,12 @@ retry. The Generate or Compact step's replay of the reservation its acquire
 step made is not counted again; an acquire retry that recovers a committed
 reservation whose reply was lost is counted. `llmtw_activity_duration_seconds` and
 `llmtw_provider_duration_seconds` use buckets from 0.1 s to 600 s so
-minute-long calls stay in finite buckets. The maintenance series are emitted only by the legacy engine Activity
-that memory mode runs.
+minute-long calls stay in finite buckets. The three maintenance series are
+registered but never emitted: no worker path runs a retention pass, because
+cloud cleanup is unimplemented
+([#818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818)).
+Do not build dashboards or alerts on them, and do not read their absence as
+retention running cleanly.
 
 The series are:
 
@@ -347,10 +351,10 @@ The series are:
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
   updated when a heartbeat is emitted; it is not Activity elapsed duration and
   may remain unchanged between heartbeats);
-- `llmtw_maintenance_rows_total{resource,outcome}` and
-  `llmtw_maintenance_failures_total{resource}` for bounded eligible,
-  tombstoned, deleted, skipped, and failed passes;
-- `llmtw_maintenance_duration_seconds{resource}`;
+- `llmtw_maintenance_rows_total{resource,outcome}`,
+  `llmtw_maintenance_failures_total{resource}` and
+  `llmtw_maintenance_duration_seconds{resource}`, reserved for bounded
+  retention passes and currently never emitted (see above);
 - `llmtw_cache_events_total{event}` for bounded hit/use/miss/fill events;
 - `llmtw_provider_poll_total{outcome}` for started, completed, retry, and
   failed polls of provider-owned operations.
