@@ -18,16 +18,24 @@ let response_for _ = {
  cost = Exact_cost { actual_cost_usd = Usd_decimal.zero; method_ = Control_query_zero; catalog_version = None }
 }
 
+let operation_key = Operation_key.of_string "boundary-query"
+let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] }
+(* Query request bytes always carry the caller's identity, so the tests
+   round-trip a bare query union through the envelope codec (#1677). *)
+let encode_query request =
+  V1_codec.encode_query_envelope { api_version = V1_codec.query_api_version; operation_key; context; query = request }
+let decode_query bytes = Result.map (fun (envelope : query_envelope) -> envelope.query) (V1_codec.decode_query_envelope bytes)
+
 let () =
   let start_time = time "2026-09-20T12:00:00.100000001Z" in
   let end_time = time "2026-09-20T12:00:00.900000009Z" in
   let filter = { (spend_filter ()) with start_time; end_time } in
   let request = Spend_summary_request filter in
-  (match ok (V1_codec.decode_query_request (ok (V1_codec.encode_query_request request))) with
+  (match ok (decode_query (ok (encode_query request))) with
    | Spend_summary_request actual when Ptime.equal actual.start_time start_time && Ptime.equal actual.end_time end_time -> ()
    | _ -> failwith "fractional spend boundaries changed on the wire");
   let request = Budget_status_request { (budget_filter ()) with active_at = Some start_time } in
-  (match ok (V1_codec.decode_query_request (ok (V1_codec.encode_query_request request))) with
+  (match ok (decode_query (ok (encode_query request))) with
    | Budget_status_request { active_at = Some actual; _ } when Ptime.equal actual start_time -> ()
    | _ -> failwith "fractional budget timestamp changed on the wire");
   let original = { (response_for request) with observed_at = start_time } in
@@ -41,7 +49,7 @@ let () =
    | _ -> failwith "fractional result timestamp changed");
   let empty_policy = Bytes.of_string
     {|{"api_version":"llm.temporal/query/v1","operation_key":"query-1","context":{"tenant":"tenant","project":"project","actor":"actor"},"kind":"budget_status","query":{"policy_key":""}}|} in
-  (match V1_codec.decode_query_request empty_policy with
+  (match decode_query empty_policy with
    | Error _ -> () | Ok _ -> failwith "empty policy identifier accepted");
   (match V1_codec.decode_query_envelope empty_policy with
    | Error _ -> () | Ok _ -> failwith "empty policy identifier accepted in envelope");

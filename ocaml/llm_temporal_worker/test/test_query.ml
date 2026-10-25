@@ -37,6 +37,11 @@ let provider_response_payload cost_fields =
 
 let context = { tenant = Some (Tenant_id.of_string "tenant"); project = Some (Project_id.of_string "project"); actor = Some (Actor_id.of_string "actor"); tags = [] }
 let operation_key = Operation_key.of_string "query-test"
+(* Query request bytes always carry the caller's identity, so the tests
+   round-trip a bare query union through the envelope codec (#1677). *)
+let encode_query request =
+  V1_codec.encode_query_envelope { api_version = V1_codec.query_api_version; operation_key; context; query = request }
+let decode_query bytes = Result.map (fun (envelope : query_envelope) -> envelope.query) (V1_codec.decode_query_envelope bytes)
 
 let provider_filter ?cursor () =
   { provider = None; endpoint = None; availability = None; include_healthy = true;
@@ -640,7 +645,7 @@ let () =
       (Query.Model_inventory built_model_with_prefix)
   in
   let prefix_payload =
-    ok (V1_codec.encode_query_request prefix_envelope.query)
+    ok (encode_query prefix_envelope.query)
   in
   let prefix_json = Yojson.Safe.from_string (Bytes.to_string prefix_payload) in
   (match prefix_json with
@@ -702,7 +707,7 @@ let () =
   } in
   List.iter (fun availability ->
     let request = Provider_status_request { (provider_filter ()) with availability = Some availability } in
-    (match ok (V1_codec.decode_query_request (ok (V1_codec.encode_query_request request))) with
+    (match ok (decode_query (ok (encode_query request))) with
      | Provider_status_request { availability = Some actual; _ } when actual = availability -> ()
      | _ -> failwith "availability filter did not round-trip");
     let row = { provider_status with availability; billing_state = Billing_blocked } in
@@ -750,7 +755,7 @@ let () =
                      (Query.Model_inventory filter)).query
     in
     let payload = Yojson.Safe.from_string
-      (Bytes.to_string (ok (V1_codec.encode_query_request request)))
+      (Bytes.to_string (ok (encode_query request)))
     in
     (match payload with
      | `Assoc fields ->
@@ -761,8 +766,8 @@ let () =
                | _ -> failwith ("unexpected lifecycle wire value for " ^ expected))
           | _ -> failwith "model inventory lifecycle payload is missing its query object")
      | _ -> failwith "model inventory lifecycle payload is not an object");
-    (match V1_codec.decode_query_request
-             (ok (V1_codec.encode_query_request request)) with
+    (match decode_query
+             (ok (encode_query request)) with
      | Ok (Model_inventory_request { lifecycle = Some actual; _ })
        when actual = lifecycle -> ()
      | Ok _ -> failwith ("model inventory lifecycle did not round-trip: " ^ expected)
@@ -776,7 +781,7 @@ let () =
   let invalid_lifecycle = Bytes.of_string
     {|{"api_version":"llm.temporal/query/v1","operation_key":"query-1","context":{"tenant":"tenant","project":"project","actor":"actor"},"kind":"model_inventory","query":{"lifecycle":"active"}}|}
   in
-  (match V1_codec.decode_query_request invalid_lifecycle with
+  (match decode_query invalid_lifecycle with
    | Error _ -> ()
    | Ok _ -> failwith "legacy active lifecycle spelling was accepted");
   (match (Query.to_envelope ~operation_key ~context
@@ -807,3 +812,26 @@ let () =
    | Error _ -> ()
    | Ok _ -> failwith "unknown query result tag was accepted");
   print_endline "typed query tests passed"
+
+(* The query request codec carries exactly the caller's operation key and
+   context; it never invents an identity the worker would authorize and audit
+   the query under (#1677). *)
+let () =
+  let caller_key = Operation_key.of_string "caller-query-7" in
+  let caller = { tenant = Some (Tenant_id.of_string "acme"); project = Some (Project_id.of_string "claims"); actor = Some (Actor_id.of_string "workflow:claim-9"); tags = [] } in
+  let envelope = { api_version = V1_codec.query_api_version; operation_key = caller_key; context = caller; query = Provider_status_request (provider_filter ()) } in
+  let json = Yojson.Safe.from_string (Bytes.to_string (ok (V1_codec.encode_query_envelope envelope))) in
+  (match json with
+   | `Assoc fields ->
+       (match List.assoc_opt "operation_key" fields, List.assoc_opt "context" fields with
+        | Some (`String "caller-query-7"), Some (`Assoc context) ->
+            List.iter (fun (field, want) ->
+              match List.assoc_opt field context with
+              | Some (`String got) when got = want -> ()
+              | _ -> failf "encoded context.%s is not the caller's %s" field want)
+              [ "tenant", "acme"; "project", "claims"; "actor", "workflow:claim-9" ]
+        | _ -> failwith "encoded query request does not carry the caller's operation key and context")
+   | _ -> failwith "encoded query request is not an object");
+  let decoded = ok (V1_codec.decode_query_envelope (ok (V1_codec.encode_query_envelope envelope))) in
+  if Operation_key.to_string decoded.operation_key <> "caller-query-7" || decoded.context <> caller then
+    failwith "decoded query request changed the caller's identity"

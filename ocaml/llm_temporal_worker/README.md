@@ -425,6 +425,12 @@ Validation failures are ordinary `validation_error` strings and happen before
 a child workflow is started, which makes malformed query construction explicit in
 deterministic Workflow code.
 
+At the protocol layer, `V1_codec.encode_query_envelope` and
+`decode_query_envelope` are the only query request codecs. A query request
+always carries the caller's operation key and context, which the worker
+authorizes and audits the query under, so there is no codec for the bare
+`query_request` union.
+
 The `Provider_status`, `Model_inventory`, `Credit_status`, `Budget_status`,
 and `Spend_summary` constructors are exhaustive. The facade validates that
 the closed result tag matches the requested constructor and returns a codec

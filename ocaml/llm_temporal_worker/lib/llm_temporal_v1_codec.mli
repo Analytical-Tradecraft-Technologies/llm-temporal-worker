@@ -10,8 +10,9 @@ val encode_compact_request : Llm_temporal_models.compact_request -> (bytes, Temp
 val decode_compact_request : bytes -> (Llm_temporal_models.compact_request, Temporal.Error.t) result
 val encode_compaction_response : Llm_temporal_models.compaction_response -> (bytes, Temporal.Error.t) result
 val decode_compaction_response : bytes -> (Llm_temporal_models.compaction_response, Temporal.Error.t) result
-val encode_query_request : Llm_temporal_models.query_request -> (bytes, Temporal.Error.t) result
-val decode_query_request : bytes -> (Llm_temporal_models.query_request, Temporal.Error.t) result
+(* The envelope codec is the only query request codec: it carries the
+   caller's operation key and context, which the worker authorizes and audits
+   the query under. *)
 val encode_query_envelope : Llm_temporal_models.query_envelope -> (bytes, Temporal.Error.t) result
 val decode_query_envelope : bytes -> (Llm_temporal_models.query_envelope, Temporal.Error.t) result
 val encode_query_response : Llm_temporal_models.query_response -> (bytes, Temporal.Error.t) result
