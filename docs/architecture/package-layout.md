@@ -21,47 +21,85 @@ current-layout reference.
 │   │   ├── schema/                 JSON Schema normalization and local validation
 │   │   ├── provider/               Adapter interfaces and provider-neutral calls
 │   │   │   ├── contracttest/       Fixture manifest and coverage contract harness
-│   │   │   ├── internal/           Shared adapter configuration and test helpers
+│   │   │   ├── internal/           Helpers shared by adapters, never imported outside provider
+│   │   │   │   ├── anthropicschema/  Output schemas for Claude structured outputs
+│   │   │   │   ├── anthropicwire/  Lowering shared by the two Messages adapters
+│   │   │   │   ├── awscredentials/ AWS credential failures as pre-dispatch auth errors
+│   │   │   │   ├── azurecredentials/ Azure credential failures as pre-dispatch auth errors
 │   │   │   │   ├── clientconfig/   Provider endpoint and URL configuration helpers
 │   │   │   │   ├── contract/       Shared adapter contract-test helpers
+│   │   │   │   ├── openaierror/    OpenAI SDK errors to the provider error contract
+│   │   │   │   ├── openaischema/   Output schemas for OpenAI strict structured outputs
+│   │   │   │   ├── schemaorder/    JSON Schema serialization in a deliberate order
 │   │   │   │   ├── streamdecode/   Shared SSE and event-stream decoding
-│   │   │   │   └── streamtest/     Deterministic stream-fragmentation helpers
+│   │   │   │   ├── streamtest/     Deterministic stream-fragmentation helpers
+│   │   │   │   ├── thinkingwire/   Manual extended-thinking cross-field rules
+│   │   │   │   ├── toolcallid/     Portable tool-call IDs for the Anthropic families
+│   │   │   │   └── usage/          Token accounting normalization for pricing
 │   │   │   ├── openairesponses/    OpenAI Responses lowering/lifting
 │   │   │   ├── openaichat/         OpenAI-compatible Chat lowering/lifting
 │   │   │   ├── anthropicmessages/  Direct and Claude Platform AWS Messages
 │   │   │   ├── bedrockmessages/    Bedrock Runtime InvokeModel Messages profile
+│   │   │   ├── bedrockconverse/    Bedrock Runtime Converse lowering/lifting
 │   │   │   └── */testdata/contracts/ Redacted provider wire fixtures by adapter
 │   │   └── testdata/               Shared normalized request and response fixtures
-│   ├── engine/                     End-to-end inference lifecycle composition
+│   ├── workflows/                  Public and internal Temporal workflows over the Activities
+│   ├── activity/                   Temporal payloads and Activity implementation
+│   ├── engine/                     Legacy in-process inference lifecycle composition
 │   ├── routing/                    Route planning, health, fallback, pinning
 │   ├── pricing/                    Catalogs, decimal arithmetic, and quotes
 │   ├── budget/                     Policy matching, estimation, sliding-window semantics
 │   ├── admission/                  Operation state machine and atomic store port
 │   ├── state/                      Continuation records, handles, blob references
-│   ├── activity/                   Temporal payloads and Activity implementation
+│   ├── cache/                      Exact-response cache identities and persistence contracts
+│   ├── compaction/                 Provider-independent compaction safeguards
+│   ├── control/                    Provider status and inventory domain model
+│   ├── langfuse/                   Optional content-bearing OTLP exporter
+│   ├── maintenance/                Storage-neutral maintenance contracts (not wired)
 │   ├── temporalcodec/              Opt-in AES-256-GCM Temporal Payload Codec
 │   ├── integration/                Offline Temporal, Compose, and Kubernetes gates
 │   │   ├── temporal_lifecycle_test.go  Offline Temporal lifecycle gate
 │   │   ├── compose/                Local compose-stack smoke tests
-│   │   └── kubernetes/              Manifest and deployment verification tests
+│   │   ├── kubernetes/             Manifest and deployment verification tests
+│   │   ├── live/                   Opt-in live provider contract checks (build tag live)
+│   │   └── temporal/               Live Temporal recovery tests (build tag composeliveintegration)
 │   ├── config/                     External config structs and snapshot compiler
-│   ├── storage/                    Shared blob-store ports and implementations
+│   ├── storage/                    Storage ports and implementations
 │   │   ├── blob/                   Shared content-addressed blob-store port
+│   │   ├── cloudstate/             Durable requests, attempts and checkpoints over cloud-storage
+│   │   ├── conformance/            Black-box shared-state contract for every store
+│   │   ├── durable/                Storage-neutral production durable-state contract
+│   │   ├── regional/               Bounded regional storage routing
 │   │   ├── memory/                 In-process conformance implementation
-│   │   ├── redis/                  Redis admission and continuation implementation
+│   │   ├── redis/                  Redis admission, budgets and shared state
 │   │   │   └── functions/          Redis Function source and loader
 │   │   ├── fileblob/               Development-only content-addressed blobs
 │   │   └── s3blob/                 Production object-store blob implementation
 │   ├── internal/                   Process wiring and repository-only verification
 │   │   ├── app/                    Process construction, reload, worker lifecycle
 │   │   ├── architecturetest/       Import-boundary and workflow-structure tests
+│   │   ├── buildinfo/              Metadata stamped into the binary at build time
 │   │   ├── catalog/                Verified capability and price catalog loading
+│   │   ├── diagnostic/             Errors whose message is safe for operators
 │   │   ├── documentationtest/      Markdown link and documentation invariant tests
 │   │   ├── httpserver/             Health, readiness, and metrics HTTP server
+│   │   ├── modelsync/              OpenRouter model and price sync
+│   │   ├── netpolicy/              Destination-address policy for egress and media URLs
 │   │   ├── observability/          slog, metrics, and trace wiring
+│   │   ├── qualitytest/            Repository quality gates
 │   │   ├── responsesapi/           Optional OpenAI Responses API over Generate
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
 │   │   └── secrets/                Environment/file secret resolution
+│   ├── tools/                      Repository verification and generation commands
+│   │   ├── deploymentpolicy/       Offline Kubernetes workload policy checks
+│   │   ├── modelsyncdefaults/      Regenerates the built-in model-sync rules
+│   │   ├── mutationverify/         Reviewed source-mutation kill checks
+│   │   ├── ocimerge/               Multi-platform OCI layout assembly and checks
+│   │   ├── releaseverify/          Redacted release evidence bundles
+│   │   ├── sourceverify/           Credential-like material and test output checks
+│   │   └── supplychainverify/      Module inventory and govulncheck evaluation
+│   ├── scripts/                    Build and verification scripts the Makefile runs
+│   ├── testdata/                   Module-level test fixtures
 │   ├── deploy/                     Deployment manifests and local test assets
 │   │   ├── local/provider-mock/    Local provider-mock container
 │   │   └── kubernetes/
@@ -83,6 +121,7 @@ The permitted dependency direction is:
 ```text
 cmd -> internal/runtime -> internal/app
 internal/runtime -> internal/responsesapi -> llm/activity/workflows + Temporal SDK
+internal/runtime -> workflows -> activity/config/llm + Temporal SDK
 internal/app -> activity/engine/config/storage/provider/observability
 activity -> engine + Temporal SDK
 temporalcodec -> Temporal SDK + Go standard library
