@@ -382,7 +382,11 @@ one value at any depth up to the depth limit
 instance data, as `invalid_argument` before admission. Validation then refuses
 an instance whose value count times that worst case exceeds 2,000,000
 (`schema.MaxValidationWork`) as a provider invalid-response error, which takes
-at most about a second.
+at most about a second. `enum`, `const`, `required` and `pattern` cost more
+than one application in proportion to their size and the instance's, so
+validation also meters those keywords over the instance and refuses it the
+same way when the weighted total exceeds the same bound; the weights are in
+[the unified API](unified-api.md#structured-output).
 
 Tool-call arguments must be valid JSON. OpenAI Chat and Responses send them as
 a string, and some compatible providers send an empty string for a tool that
