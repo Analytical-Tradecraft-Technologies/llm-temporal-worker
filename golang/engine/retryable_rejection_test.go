@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -35,5 +36,29 @@ func TestGenerateRetriesTheSameOperationAfterADefiniteRetryableRejection(t *test
 	// The completed operation now replays without another dispatch.
 	if _, err := harness.engine.Generate(context.Background(), request); err != nil || adapter.invokes != 2 {
 		t.Fatalf("replay = %v, provider invokes = %d", err, adapter.invokes)
+	}
+}
+
+// When MaxAttempts cuts the candidate list after a definite provider
+// failure, the operation finishes with that failure and its attempt facts,
+// not as no_route with "no eligible compiled adapter" (#1672).
+func TestGenerateAttemptCapKeepsTheLastProviderFailure(t *testing.T) {
+	adapter := &fakeAdapter{name: "cap", rejectFirst: true, response: successfulResponse()}
+	harness := newHarness(t, adapter)
+	harness.engine.dependencies.MaxAttempts = 1
+	request := baseRequest("attempt-cap")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	_, err := harness.engine.Generate(context.Background(), request)
+	var failure *provider.Error
+	if !errors.As(err, &failure) || failure.Code != provider.CodeProviderUnavailable || failure.Dispatch != provider.DispatchRejected {
+		t.Fatalf("error = %#v, want the provider's definite rejection", err)
+	}
+	if adapter.invokes != 1 {
+		t.Fatalf("provider invokes = %d, want the cap to stop after one", adapter.invokes)
+	}
+	operation, err := harness.admission.Get(context.Background(), failure.OperationID)
+	if err != nil || operation.State != admission.StateDefiniteFailed || operation.Attempt.EndpointID != "endpoint-1" || operation.Attempt.AttemptNumber == 0 {
+		t.Fatalf("operation = %+v, %v; want a definite failure with the attempt's route facts", operation, err)
 	}
 }

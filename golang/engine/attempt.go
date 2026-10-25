@@ -165,7 +165,10 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 		}
 		remaining := quoted.candidates[index+1:]
-		if len(remaining) == 0 {
+		// The attempt cap ends the plan like running out of candidates: the
+		// operation finishes with this provider failure rather than being
+		// re-reserved for a candidate the loop will never try (#1672).
+		if len(remaining) == 0 || index+1 >= engine.dependencies.MaxAttempts {
 			return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, mapped, 0)
 		}
 		continued, continueErr := engine.continueAfterDefiniteFailure(ctx, operation, candidate.candidate, mapped, remaining, snapshot)
