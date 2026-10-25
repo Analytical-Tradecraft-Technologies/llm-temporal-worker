@@ -1,0 +1,1 @@
+{"api_version":"llm.temporal/v1","operation_key":"missing-tool-description","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"},"append":[{"kind":"message","actor":"human","content":[{"kind":"text","text":"Review this claim."}]}],"settings_patch":{"tools":{"set":[{"name":"lookup","input_schema":{"type":"object"}}]}}}

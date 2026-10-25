@@ -360,8 +360,8 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 		}
 	}
 	if patch.CompactionPolicy.Set != nil {
-		if _, err := decodeObject(*patch.CompactionPolicy.Set); err != nil {
-			return nil, fmt.Errorf("compaction_policy.set must be an object")
+		if err := validateCompactionPolicyPatchV1(*patch.CompactionPolicy.Set); err != nil {
+			return nil, err
 		}
 	}
 	if patch.Extensions.Set != nil {
@@ -727,6 +727,9 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 	}
 	if raw, ok := fields["compaction_policy"]; ok && err == nil {
 		result.CompactionPolicy, err = decodePatch[json.RawMessage](raw, "compaction_policy")
+		if err == nil && result.CompactionPolicy.Set != nil {
+			err = validateCompactionPolicyPatchV1(*result.CompactionPolicy.Set)
+		}
 	}
 	if raw, ok := fields["extensions"]; ok && err == nil {
 		result.Extensions, err = decodePatch[map[string]json.RawMessage](raw, "extensions")
@@ -1485,6 +1488,9 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	result := CompactRequestV1{APIVersion: version, OperationKey: key, Parent: CheckpointHandle(parent), Context: context}
+	if err := validateCompactRequestV1Bounds(result); err != nil {
+		return err
+	}
 	if !result.Parent.valid() {
 		return fmt.Errorf("compact parent checkpoint is invalid")
 	}
@@ -1723,6 +1729,9 @@ func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
 	}
 	key, err := requiredString(fields, "operation_key")
 	if err != nil {
+		return err
+	}
+	if err := validateCodePointLength("operation_key", key, 1, generateOperationKeyMaxCodePoints); err != nil {
 		return err
 	}
 	kindValue, err := requiredString(fields, "kind")
