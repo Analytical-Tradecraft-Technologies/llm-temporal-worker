@@ -41,7 +41,7 @@ services:
       start_period: 20s
 
   redis:
-    image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
     # Generate the ACL before passing control to the image entrypoint. The
     # entrypoint then initializes the mounted /data volume and drops to redis.
     working_dir: /data
@@ -84,7 +84,7 @@ services:
   # readiness will fail closed if a retained local volume has the wrong code.
   redis-function-provisioner:
     profiles: [worker]
-    image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
     depends_on:
       redis:
         condition: service_healthy
@@ -137,7 +137,7 @@ services:
   # writable root before the read-only worker starts.
   blob-volume-provisioner:
     profiles: [worker]
-    image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
+    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
