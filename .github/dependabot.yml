@@ -13,6 +13,24 @@ updates:
     opentelemetry:
       patterns:
       - go.opentelemetry.io/*
+    aws-sdk-go-v2:
+      patterns:
+      - github.com/aws/aws-sdk-go-v2
+      - github.com/aws/aws-sdk-go-v2/*
+      - github.com/aws/smithy-go
+    azure-sdk-for-go:
+      patterns:
+      - github.com/Azure/azure-sdk-for-go/sdk/*
+      - github.com/AzureAD/microsoft-authentication-library-for-go
+    prometheus:
+      patterns:
+      - github.com/prometheus/*
+    temporal:
+      patterns:
+      - go.temporal.io/*
+    cloud-storage:
+      patterns:
+      - github.com/Analytical-Tradecraft-Technologies/cloud-storage/*
 - package-ecosystem: docker
   directories:
   - /golang
@@ -44,3 +62,8 @@ updates:
     timezone: Australia/Sydney
   cooldown:
     default-days: 3
+  groups:
+    artifact-actions:
+      patterns:
+      - actions/upload-artifact
+      - actions/download-artifact
