@@ -21,7 +21,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/aws/smithy-go v1.28.8
 	github.com/google/uuid v1.6.0
-	github.com/openai/openai-go/v3 v3.91.1
+	github.com/openai/openai-go/v3 v3.94.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.73.1
@@ -83,7 +83,7 @@ require (
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/tidwall/gjson v1.19.0 // indirect
+	github.com/tidwall/gjson v1.20.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
