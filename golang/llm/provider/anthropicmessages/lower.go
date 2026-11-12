@@ -106,27 +106,8 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	} else if serviceTier != "" {
 		requestMap["service_tier"] = serviceTier
 	}
-	if request.Sampling != nil {
-		if err := wire.LowerSampling(*request.Sampling, requestMap); err != nil {
-			return anthropic.MessageNewParams{}, err
-		}
-	}
-	if request.Reasoning != nil {
-		thinking, err := wire.LowerReasoning(*request.Reasoning, strict)
-		if err != nil {
-			return anthropic.MessageNewParams{}, err
-		}
-		if thinking != nil {
-			requestMap["thinking"] = thinking
-		}
-		if effort := anthropicwire.ReasoningOutputEffort(*request.Reasoning); effort != "" {
-			outputConfig, _ := requestMap["output_config"].(map[string]any)
-			if outputConfig == nil {
-				outputConfig = map[string]any{}
-				requestMap["output_config"] = outputConfig
-			}
-			outputConfig["effort"] = effort
-		}
+	if err := wire.LowerSamplingAndReasoning(request, requestMap, strict); err != nil {
+		return anthropic.MessageNewParams{}, err
 	}
 	if containerID != "" {
 		requestMap["container"] = containerID

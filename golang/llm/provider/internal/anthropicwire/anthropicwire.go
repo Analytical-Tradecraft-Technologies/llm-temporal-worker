@@ -186,6 +186,36 @@ func (family Family) LowerSampling(sampling llm.SamplingSpec, target map[string]
 	return nil
 }
 
+// LowerSamplingAndReasoning writes the request's sampling fields, thinking
+// block and reasoning effort into target. The effort is added to any
+// output_config that LowerOutput already wrote, so call it after LowerOutput.
+func (family Family) LowerSamplingAndReasoning(request llm.Request, target map[string]any, strict bool) error {
+	if request.Sampling != nil {
+		if err := family.LowerSampling(*request.Sampling, target); err != nil {
+			return err
+		}
+	}
+	if request.Reasoning == nil {
+		return nil
+	}
+	thinking, err := family.LowerReasoning(*request.Reasoning, strict)
+	if err != nil {
+		return err
+	}
+	if thinking != nil {
+		target["thinking"] = thinking
+	}
+	if effort := ReasoningOutputEffort(*request.Reasoning); effort != "" {
+		outputConfig, _ := target["output_config"].(map[string]any)
+		if outputConfig == nil {
+			outputConfig = map[string]any{}
+			target["output_config"] = outputConfig
+		}
+		outputConfig["effort"] = effort
+	}
+	return nil
+}
+
 // LowerOutput writes the structured output format into target.
 func (family Family) LowerOutput(output llm.OutputSpec, target map[string]any, strict bool) error {
 	switch output.Format.Kind {

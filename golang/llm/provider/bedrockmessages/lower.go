@@ -100,27 +100,8 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 		}
 		target["system"] = system
 	}
-	if request.Sampling != nil {
-		if err := wire.LowerSampling(*request.Sampling, target); err != nil {
-			return anthropic.MessageNewParams{}, err
-		}
-	}
-	if request.Reasoning != nil {
-		thinking, err := wire.LowerReasoning(*request.Reasoning, strict)
-		if err != nil {
-			return anthropic.MessageNewParams{}, err
-		}
-		if thinking != nil {
-			target["thinking"] = thinking
-		}
-		if effort := anthropicwire.ReasoningOutputEffort(*request.Reasoning); effort != "" {
-			outputConfig, _ := target["output_config"].(map[string]any)
-			if outputConfig == nil {
-				outputConfig = map[string]any{}
-				target["output_config"] = outputConfig
-			}
-			outputConfig["effort"] = effort
-		}
+	if err := wire.LowerSamplingAndReasoning(request, target, strict); err != nil {
+		return anthropic.MessageNewParams{}, err
 	}
 	if len(request.Tools) > 0 {
 		tools, err := lowerTools(request.Tools)
