@@ -72,3 +72,33 @@ func TestRequiredFeaturesCountsProviderState(t *testing.T) {
 		}
 	}
 }
+
+func TestLowerSamplingAndReasoningMergesEffortIntoOutputConfig(t *testing.T) {
+	temperature := 0.5
+	request := llm.Request{
+		Sampling:  &llm.SamplingSpec{Temperature: &temperature},
+		Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortHigh},
+	}
+	target := map[string]any{"output_config": map[string]any{"format": "kept"}}
+	if err := Anthropic.LowerSamplingAndReasoning(request, target, false); err != nil {
+		t.Fatal(err)
+	}
+	if target["temperature"] != temperature {
+		t.Fatalf("temperature = %v", target["temperature"])
+	}
+	if _, ok := target["thinking"].(map[string]any); !ok {
+		t.Fatalf("thinking = %#v", target["thinking"])
+	}
+	outputConfig := target["output_config"].(map[string]any)
+	if outputConfig["format"] != "kept" || outputConfig["effort"] != "high" {
+		t.Fatalf("output_config = %#v", outputConfig)
+	}
+
+	empty := map[string]any{}
+	if err := Bedrock.LowerSamplingAndReasoning(llm.Request{}, empty, true); err != nil || len(empty) != 0 {
+		t.Fatalf("empty request lowered to %#v, %v", empty, err)
+	}
+	if err := Bedrock.LowerSamplingAndReasoning(llm.Request{Sampling: &llm.SamplingSpec{Seed: new(int64)}}, empty, false); err == nil || err.Error() != "sampling field is not supported by Bedrock Messages" {
+		t.Fatalf("seed error = %v", err)
+	}
+}
