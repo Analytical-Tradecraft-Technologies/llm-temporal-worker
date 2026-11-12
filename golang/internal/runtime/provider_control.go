@@ -286,23 +286,8 @@ type CompactPortsFactory func(context.Context, V1RuntimeCapabilities) (durablest
 // typed-nil interface as missing. Compact and Query have separate contracts
 // and are not implied by this validation.
 func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
-	if isNilCapability(capabilities.Snapshot) {
-		return errors.New("v1 Generate snapshot source is not configured")
-	}
-	if isNilCapability(capabilities.Planner) {
-		return errors.New("v1 Generate planner is not configured")
-	}
-	if isNilCapability(capabilities.Adapters) {
-		return errors.New("v1 Generate adapter registry is not configured")
-	}
-	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
-		return fmt.Errorf("v1 Generate checkpoint capabilities: %w", err)
-	}
-	if isNilCapability(capabilities.Budgets) {
-		return errors.New("v1 Generate Redis budgets are not configured")
-	}
-	if capabilities.Clock == nil {
-		return errors.New("v1 Generate clock is not configured")
+	if err := capabilities.validateShared("Generate"); err != nil {
+		return err
 	}
 	if capabilities.GeneratePortsFactory == nil {
 		return errors.New("v1 Generate ports factory is not configured")
@@ -316,26 +301,35 @@ func (capabilities V1RuntimeCapabilities) ValidateGenerate() error {
 // validated, and no builder calls the factory until all callback ports are
 // implemented.
 func (capabilities V1RuntimeCapabilities) ValidateCompact() error {
-	if isNilCapability(capabilities.Snapshot) {
-		return errors.New("v1 Compact snapshot source is not configured")
-	}
-	if isNilCapability(capabilities.Planner) {
-		return errors.New("v1 Compact planner is not configured")
-	}
-	if isNilCapability(capabilities.Adapters) {
-		return errors.New("v1 Compact adapter registry is not configured")
-	}
-	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
-		return fmt.Errorf("v1 Compact checkpoint capabilities: %w", err)
-	}
-	if isNilCapability(capabilities.Budgets) {
-		return errors.New("v1 Compact Redis budgets are not configured")
-	}
-	if capabilities.Clock == nil {
-		return errors.New("v1 Compact clock is not configured")
+	if err := capabilities.validateShared("Compact"); err != nil {
+		return err
 	}
 	if capabilities.CompactPortsFactory == nil {
 		return errors.New("v1 Compact ports factory is not configured")
+	}
+	return nil
+}
+
+// validateShared checks the capabilities Generate and Compact both need,
+// naming phase in each error.
+func (capabilities V1RuntimeCapabilities) validateShared(phase string) error {
+	if isNilCapability(capabilities.Snapshot) {
+		return fmt.Errorf("v1 %s snapshot source is not configured", phase)
+	}
+	if isNilCapability(capabilities.Planner) {
+		return fmt.Errorf("v1 %s planner is not configured", phase)
+	}
+	if isNilCapability(capabilities.Adapters) {
+		return fmt.Errorf("v1 %s adapter registry is not configured", phase)
+	}
+	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
+		return fmt.Errorf("v1 %s checkpoint capabilities: %w", phase, err)
+	}
+	if isNilCapability(capabilities.Budgets) {
+		return fmt.Errorf("v1 %s Redis budgets are not configured", phase)
+	}
+	if capabilities.Clock == nil {
+		return fmt.Errorf("v1 %s clock is not configured", phase)
 	}
 	return nil
 }
