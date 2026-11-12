@@ -2,7 +2,6 @@ package bedrockmessages
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,7 +9,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
@@ -127,7 +125,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		return provider.Call{}, err
 	}
 	metadata.ExtensionsDropped = !input.Strict && len(normalized.Extensions) > 0
-	return provider.Call{EndpointID: adapter.endpointID, Family: provider.FamilyBedrockMessages, Model: normalized.Model, OperationKey: normalized.OperationKey, ServiceClass: serviceClass, SDKParams: params, OutputSchema: outputSchema(normalized), Metadata: metadata}, nil
+	return provider.Call{EndpointID: adapter.endpointID, Family: provider.FamilyBedrockMessages, Model: normalized.Model, OperationKey: normalized.OperationKey, ServiceClass: serviceClass, SDKParams: params, OutputSchema: provider.OutputSchema(normalized), Metadata: metadata}, nil
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
@@ -137,17 +135,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := ctx.Err(); err != nil {
 		return provider.Result{}, provider.NewDispatchContextError(err)
 	}
-	if call.Family != provider.FamilyBedrockMessages || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
-	}
-	params, ok := call.SDKParams.(anthropic.MessageNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*anthropic.MessageNewParams); pointerOK && pointer != nil {
-			params, ok = *pointer, true
-		}
-	}
-	if !ok {
-		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+	params, err := provider.DispatchParams[anthropic.MessageNewParams](call, provider.FamilyBedrockMessages, adapter.endpointID)
+	if err != nil {
+		return provider.Result{}, err
 	}
 	// Providers generate structured output in schema order; write the schemas
 	// with properties in "required" order instead of the SDK's sorted map
@@ -220,7 +210,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		}
 	}
 	if metadata.RequestID == "" {
-		metadata.RequestID = responseRequestID(response)
+		metadata.RequestID = anthropicwire.ResponseRequestID(response)
 	}
 	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
 		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
@@ -234,26 +224,4 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		return provider.Result{}, err
 	}
 	return provider.Result{Response: lifted}, nil
-}
-
-// outputSchema returns the caller's schema for the lift; the wire carries a
-// lowered form the provider enforces more loosely.
-func outputSchema(request llm.Request) json.RawMessage {
-	if request.Output == nil || request.Output.Format.Kind != llm.OutputKindJSONSchema {
-		return nil
-	}
-	return append(json.RawMessage(nil), request.Output.Format.Schema...)
-}
-
-func responseRequestID(response *anthropic.Message) string {
-	if response == nil {
-		return ""
-	}
-	var envelope struct {
-		RequestID string `json:"request_id"`
-	}
-	if err := json.Unmarshal([]byte(response.RawJSON()), &envelope); err == nil {
-		return envelope.RequestID
-	}
-	return ""
 }

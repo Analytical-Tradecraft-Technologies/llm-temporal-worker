@@ -218,7 +218,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
-		OutputSchema: outputSchema(normalized),
+		OutputSchema: provider.OutputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }
@@ -230,18 +230,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := ctx.Err(); err != nil {
 		return provider.Result{}, provider.NewDispatchContextError(err)
 	}
-	if call.Family != provider.FamilyOpenAIResponses || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
-	}
-	params, ok := call.SDKParams.(responses.ResponseNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*responses.ResponseNewParams); pointerOK && pointer != nil {
-			params = *pointer
-			ok = true
-		}
-	}
-	if !ok {
-		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+	params, err := provider.DispatchParams[responses.ResponseNewParams](call, provider.FamilyOpenAIResponses, adapter.endpointID)
+	if err != nil {
+		return provider.Result{}, err
 	}
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
 		return provider.Result{}, provider.NewDispatchError(err.Error(), provider.DispatchNotDispatched)
