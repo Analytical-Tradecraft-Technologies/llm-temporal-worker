@@ -31,6 +31,13 @@ type Operation struct {
 // observation, NOT a lock or authorization to dispatch: the inner runtime must
 // enforce idempotency and Redis's single-use budget claim on every invocation.
 func (r *Repository) BeginOperation(ctx context.Context, operation Operation) (Record, error) {
+	return r.BeginOperationValidated(ctx, operation, nil)
+}
+
+// BeginOperationValidated runs validateNew before creating any record for a
+// previously uncommitted operation. An existing operation still has its binding
+// checked and can replay without applying current validation rules.
+func (r *Repository) BeginOperationValidated(ctx context.Context, operation Operation, validateNew func() error) (Record, error) {
 	if err := validContext(ctx); err != nil {
 		return Record{}, err
 	}
@@ -67,6 +74,12 @@ func (r *Repository) BeginOperation(ctx context.Context, operation Operation) (R
 			return Record{}, readErr
 		}
 		if existing == nil {
+			if validateNew != nil {
+				if err := validateNew(); err != nil {
+					return Record{}, err
+				}
+				validateNew = nil
+			}
 			_, err = r.Create(ctx, request)
 			if errors.Is(err, contracts.ErrConflict) {
 				continue

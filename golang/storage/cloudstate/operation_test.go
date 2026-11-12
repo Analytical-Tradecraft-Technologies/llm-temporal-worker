@@ -241,3 +241,30 @@ func TestLookupOperationIsReadOnlyAndScoped(t *testing.T) {
 		t.Fatalf("empty key: %v", err)
 	}
 }
+
+func TestBeginOperationValidatedRejectsNewInputBeforePublication(t *testing.T) {
+	r, _, _, op := operationFixture(t)
+	ctx := context.Background()
+	rejected := errors.New("invalid new request")
+	reject := func() error { return rejected }
+
+	if _, err := r.BeginOperationValidated(ctx, op, reject); !errors.Is(err, rejected) {
+		t.Fatalf("validation error = %v", err)
+	}
+	if _, err := r.LookupOperation(ctx, op); !errors.Is(err, contracts.ErrNotFound) {
+		t.Fatalf("rejected operation became discoverable: %v", err)
+	}
+
+	first, err := r.BeginOperationValidated(ctx, op, func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := r.BeginOperationValidated(ctx, op, reject)
+	if err != nil || replay.Request.ID != first.Request.ID || replay.Revision != first.Revision {
+		t.Fatalf("replay changed or reapplied validation: %v", err)
+	}
+	op.Manifest = json.RawMessage(`{"different":true}`)
+	if _, err := r.BeginOperationValidated(ctx, op, reject); !errors.Is(err, contracts.ErrConflict) {
+		t.Fatalf("changed operation binding = %v", err)
+	}
+}
