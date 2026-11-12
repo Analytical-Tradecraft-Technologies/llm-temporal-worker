@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
@@ -179,6 +180,9 @@ func TestPendingRejectsMalformedBackendPages(t *testing.T) {
 			shard, _ := PendingShard(request.ID)
 			if _, err := r.ListPending(ctx, shard, 2, "repeated"); !errors.Is(err, ErrCorrupt) {
 				t.Fatalf("accepted bad page: %v", err)
+			}
+			if _, err := r.ListBudgetRecovery(ctx, shard, 2, "repeated", time.Time{}); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("budget recovery accepted bad page: %v", err)
 			}
 		})
 	}

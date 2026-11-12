@@ -8,7 +8,6 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 )
 
 // budgetRecoveryReadConcurrency bounds the record reads of one page in flight.
@@ -30,34 +29,13 @@ type BudgetRecoveryPage struct {
 // skipped without reading its payload. Corrupt records fail the page: recovery
 // must never treat an unreadable record as unused budget.
 func (r *Repository) ListBudgetRecovery(ctx context.Context, shard, pageSize int, token string, terminalNotBefore time.Time) (BudgetRecoveryPage, error) {
-	if err := validContext(ctx); err != nil {
-		return BudgetRecoveryPage{}, err
-	}
-	if shard < 0 || shard >= PendingShards || pageSize < 0 || pageSize > 1000 {
-		return BudgetRecoveryPage{}, ErrInvalid
-	}
-	if pageSize == 0 {
-		pageSize = 100
-	}
-	page, err := r.table.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: r.partition(shard), SortKeyPrefix: RequestIDPrefix, PageSize: pageSize, PageToken: token})
+	rows, nextPageToken, err := r.discoveryPage(ctx, shard, pageSize, token)
 	if err != nil {
 		return BudgetRecoveryPage{}, err
 	}
-	if len(page.Records) > pageSize || (page.NextPageToken != "" && page.NextPageToken == token) {
-		return BudgetRecoveryPage{}, ErrCorrupt
-	}
-	result := BudgetRecoveryPage{Scanned: len(page.Records), NextPageToken: page.NextPageToken}
-	lastKey := ""
-	candidates := make([]indexRecord, 0, len(page.Records))
-	for _, row := range page.Records {
-		value, err := r.decodeIndex(row)
-		if err != nil {
-			return BudgetRecoveryPage{}, err
-		}
-		if row.Item.PartitionKey != r.partition(shard) || row.Item.SortKey <= lastKey {
-			return BudgetRecoveryPage{}, ErrCorrupt
-		}
-		lastKey = row.Item.SortKey
+	result := BudgetRecoveryPage{Scanned: len(rows), NextPageToken: nextPageToken}
+	candidates := make([]indexRecord, 0, len(rows))
+	for _, value := range rows {
 		// A terminal index row is written at the request's final revision,
 		// after any settlement it carries.
 		if value.Status.terminal() && value.UpdatedAt.Before(terminalNotBefore) {

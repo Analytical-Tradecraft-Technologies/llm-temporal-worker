@@ -126,37 +126,53 @@ func (r *Repository) advanceIndex(ctx context.Context, record Record) error {
 // acting. No pagination snapshot or automatic recovery/cleanup is promised.
 // Terminal discovery rows are retained for now and filtered from returned pages.
 func (r *Repository) ListPending(ctx context.Context, shard, pageSize int, token string) (PendingPage, error) {
-	if err := validContext(ctx); err != nil {
-		return PendingPage{}, err
-	}
-	if shard < 0 || shard >= PendingShards || pageSize < 0 || pageSize > 1000 {
-		return PendingPage{}, ErrInvalid
-	}
-	if pageSize == 0 {
-		pageSize = 100
-	}
-	page, err := r.table.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: r.partition(shard), SortKeyPrefix: RequestIDPrefix, PageSize: pageSize, PageToken: token})
+	rows, nextPageToken, err := r.discoveryPage(ctx, shard, pageSize, token)
 	if err != nil {
 		return PendingPage{}, err
 	}
-	if len(page.Records) > pageSize || (page.NextPageToken != "" && page.NextPageToken == token) {
-		return PendingPage{}, ErrCorrupt
-	}
-	result := PendingPage{Requests: make([]PendingRequest, 0, len(page.Records)), NextPageToken: page.NextPageToken}
-	lastKey := ""
-	for _, row := range page.Records {
-		value, err := r.decodeIndex(row)
-		if err != nil {
-			return PendingPage{}, err
-		}
-		if row.Item.PartitionKey != r.partition(shard) || row.Item.SortKey <= lastKey {
-			return PendingPage{}, ErrCorrupt
-		}
-		lastKey = row.Item.SortKey
+	result := PendingPage{Requests: make([]PendingRequest, 0, len(rows)), NextPageToken: nextPageToken}
+	for _, value := range rows {
 		if value.Status.terminal() {
 			continue
 		}
 		result.Requests = append(result.Requests, PendingRequest{ID: value.ID, Status: value.Status, Revision: value.Revision, UpdatedAt: value.UpdatedAt, Initializing: value.Revision == 0})
 	}
 	return result, nil
+}
+
+// discoveryPage reads one bounded page of one discovery shard and decodes its
+// index rows. A page larger than requested, a continuation token that repeats
+// the request's, or a row that fails to decode, belongs to another shard or is
+// out of sort-key order fails the whole page.
+func (r *Repository) discoveryPage(ctx context.Context, shard, pageSize int, token string) ([]indexRecord, string, error) {
+	if err := validContext(ctx); err != nil {
+		return nil, "", err
+	}
+	if shard < 0 || shard >= PendingShards || pageSize < 0 || pageSize > 1000 {
+		return nil, "", ErrInvalid
+	}
+	if pageSize == 0 {
+		pageSize = 100
+	}
+	page, err := r.table.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: r.partition(shard), SortKeyPrefix: RequestIDPrefix, PageSize: pageSize, PageToken: token})
+	if err != nil {
+		return nil, "", err
+	}
+	if len(page.Records) > pageSize || (page.NextPageToken != "" && page.NextPageToken == token) {
+		return nil, "", ErrCorrupt
+	}
+	rows := make([]indexRecord, 0, len(page.Records))
+	lastKey := ""
+	for _, row := range page.Records {
+		value, err := r.decodeIndex(row)
+		if err != nil {
+			return nil, "", err
+		}
+		if row.Item.PartitionKey != r.partition(shard) || row.Item.SortKey <= lastKey {
+			return nil, "", ErrCorrupt
+		}
+		lastKey = row.Item.SortKey
+		rows = append(rows, value)
+	}
+	return rows, page.NextPageToken, nil
 }
