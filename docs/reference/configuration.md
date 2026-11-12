@@ -207,9 +207,12 @@ The setting is opt-in. When it is omitted, behaviour, payload bytes and the
 - **Size.** `server.inline_payload_bytes` limits the plaintext payload.
   Encryption adds a few dozen bytes per payload, so leave headroom below
   Temporal's payload size limit. Before decrypting, the worker rejects
-  ciphertext longer than that limit plus a fixed allowance (4 KiB for metadata
-  and 39 bytes for nonce, tag and framing), so an oversized payload costs no
-  decryption work.
+  ciphertext longer than the largest limit any configuration allows (2 MiB)
+  plus a fixed allowance (4 KiB for metadata and 39 bytes for nonce, tag and
+  framing), so an oversized payload costs no decryption work. The ceiling is
+  not the configured limit because a workflow's recorded input is decrypted
+  before the workflow applies the limit recorded when it started; the
+  decrypted plaintext is then checked against that limit.
 - **Scope.** The codec covers payloads: workflow and Activity inputs and
   results, heartbeat details, and memos. Like any Temporal Payload Codec, it
   does not encrypt workflow and Activity IDs and type names, search
@@ -687,14 +690,23 @@ at most 2 MiB, Temporal's default payload blob limit.
 Raise `server.inline_payload_bytes` freely, but lower it only after draining:
 stop starting new Generate and Compact workflows and let every open one finish
 (or the older workers finish them) before workers with the smaller limit poll
-the task queue. Workers apply the limit to every workflow input, Activity
-argument and recorded result they decode or encode, including when they
-replay an open workflow's history after a restart. A history recorded under a
-larger limit can therefore hold a payload the new limit refuses, and replaying
-it fails the workflow with a non-determinism error rather than a typed
-`llm_invalid_argument`; a provider attempt it had paid for is then recoverable
-only through the pending-request index or `generation-recover`. A reload
-cannot change the limit; it takes a restart.
+the task queue. A reload cannot change the limit; it takes a restart, after
+which the new workers replay every open workflow from its history.
+
+Each workflow run records the limit in force when it started (the
+`pinned-inline-payload-limit-v1` version marker and a side effect) and keeps
+using it for its own input, the Activity and child arguments it encodes, and
+the results it decodes, so replay after a restart with a smaller limit makes
+the same decisions and does not fail with a non-determinism error. The limit
+still protects each new Activity execution: an Activity whose argument exceeds
+the worker's current limit fails with a typed, non-retryable
+`llm_invalid_argument`, which fails its workflow. Draining is therefore still
+required, because an open request whose next Activity carries a payload above
+the new limit fails, and a provider attempt it had paid for is then
+recoverable only through the pending-request index or `generation-recover`.
+Runs started by a release without the marker keep the older behaviour: replay
+applies the current limit, and a recorded payload above it fails the workflow
+with a non-determinism error.
 
 Provider execution uses that same ten-minute Activity bound, including resumable
 polls, while preserving any shorter parent deadline. Choose endpoint and global

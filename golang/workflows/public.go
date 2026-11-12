@@ -37,10 +37,12 @@ func Register(registry worker.WorkflowRegistry, limits activity.PayloadLimits) {
 // child, and Go's JSON escaping of <, > and & can grow it past the limit. That
 // failure would otherwise surface after the plan Activity or paid compaction,
 // or as an SDK panic that blocks the workflow task. Histories recorded before
-// the check skip it, so their replay schedules the same commands.
+// the check skip it, so their replay schedules the same commands. The check
+// uses the limit the run pinned when it started, when it pinned one.
 func reencoded[T, R any](limits activity.PayloadLimits, payloads func(T) []any, run func(workflow.Context, T) (R, error)) func(workflow.Context, T) (R, error) {
 	return func(ctx workflow.Context, input T) (R, error) {
 		if workflow.GetVersion(ctx, "reencoded-payload-limit-v1", workflow.DefaultVersion, 1) >= 1 {
+			limits := activity.WorkflowPayloadLimits(ctx, limits)
 			for _, payload := range payloads(input) {
 				if !activity.FitsInlinePayload(limits, payload) {
 					var zero R

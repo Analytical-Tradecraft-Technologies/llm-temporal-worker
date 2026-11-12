@@ -19,6 +19,12 @@ func (limits PayloadLimits) inlineBytes() int {
 	return limits.MaxInlineBytes
 }
 
+// InlineBytes is the effective inline limit: MaxInlineBytes, or
+// DefaultInlineBytes when it is not positive.
+func (limits PayloadLimits) InlineBytes() int {
+	return limits.inlineBytes()
+}
+
 func MarshalRequest(request GenerateRequest, limits PayloadLimits) ([]byte, error) {
 	if _, err := request.Validate(limits.inlineBytes()); err != nil {
 		return nil, err

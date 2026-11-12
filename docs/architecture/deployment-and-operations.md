@@ -289,6 +289,10 @@ to change them. A rejected reload logs a bounded `cause` and, for validation
 and process-lifetime rejections, the `config_field` schema path; see the
 [CLI reference](../reference/cli.md#configuration-reload).
 
+A rollout may raise `server.inline_payload_bytes`, but may lower it only after
+draining open Generate and Compact workflows; see
+[the configuration reference](../reference/configuration.md) for why.
+
 ## Required metrics
 
 Metric labels use bounded configured IDs, never tenant-provided free text.
