@@ -245,6 +245,24 @@ at most one provider read, respecting the saved next-poll time. Completion
 publishes the checkpoint and reconciles cache/budget effects before returning
 the typed response. Workflow timers are responsible for all waits.
 
+A request with a cache policy and no attempt yet is first looked up in the
+response cache, keyed by the route its first attempt would be planned on. A
+hit is published at once, with no attempt, saved budget plan, fill or retry
+hint wait: none of them enter the cache key. Planning for this lookup reads and
+writes nothing. On a miss, or when this lookup fails or cannot plan, the
+request starts its attempt as before; that path plans again under the
+attempt's identity and reports any failure. When its key matches, it does not
+repeat the miss's read before acquiring the fill, and a success published since
+is still found. A request prepared under another configuration, or that
+already has an attempt, is not looked up early. A hit answered this way records
+its route for Langfuse under its own capture, since there is no attempt to
+hold it.
+
+`ResolveCachedV1` is the Prepare step limited to that early answer. The
+`llm.generate.resolve.v1` Activity calls it, so a cached miss leaves the request
+without an attempt, and the request workflow's Prepare step starts the attempt
+once.
+
 Before any budget claim or provider submission, the winning durable execution
 fence starts the cache fill. Losing the start acknowledgement cannot authorize
 another submission. After the 15-minute recovery interval an explicit acquire

@@ -30,6 +30,34 @@ func Prepare(ctx context.Context, responses ResponseRepository, fills FillReposi
 	if err != nil || entry != nil {
 		return Preparation{Entry: entry}, err
 	}
+	return acquireFill(ctx, responses, fills, lookup, lease)
+}
+
+// PrepareAfterMiss is Prepare for a caller whose own Lookup of the same key
+// found no entry earlier in the same invocation; it skips that first lookup.
+// A success published since is still found: an owner or waiter rechecks after
+// acquisition as Prepare does, and any other decision, which observes another
+// attempt's fill without taking it, is followed by the lookup Prepare would
+// have made first.
+func PrepareAfterMiss(ctx context.Context, responses ResponseRepository, fills FillRepository, lookup ResponseLookup, lease FillLease) (Preparation, error) {
+	if ctx == nil || responses == nil || fills == nil || lookup.Key != lease.Key || lookup.Now.Before(lease.AcquiredAt) || !lookup.Now.Before(lease.ExpiresAt) {
+		return Preparation{}, errors.New("invalid cache preparation")
+	}
+	if err := ctx.Err(); err != nil {
+		return Preparation{}, err
+	}
+	result, err := acquireFill(ctx, responses, fills, lookup, lease)
+	if err != nil || result.Entry != nil || result.Fill.Disposition == FillOwned || result.Fill.Disposition == FillWait {
+		return result, err
+	}
+	entry, err := responses.Lookup(ctx, lookup)
+	if err != nil || entry == nil {
+		return result, err
+	}
+	return Preparation{Entry: entry}, nil
+}
+
+func acquireFill(ctx context.Context, responses ResponseRepository, fills FillRepository, lookup ResponseLookup, lease FillLease) (Preparation, error) {
 	decision, err := fills.Acquire(ctx, lease, lookup.Now)
 	if err != nil {
 		return Preparation{}, err
@@ -42,7 +70,7 @@ func Prepare(ctx context.Context, responses ResponseRepository, fills FillReposi
 	}
 	// Publication can race the first lookup and acquisition. An owner must
 	// recheck before spending budget, and a waiter can consume the new success.
-	entry, err = responses.Lookup(ctx, lookup)
+	entry, err := responses.Lookup(ctx, lookup)
 	if err != nil || entry == nil {
 		return result, err
 	}

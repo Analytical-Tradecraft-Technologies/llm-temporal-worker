@@ -66,6 +66,14 @@ manifest and progress bytes are copied, and retained payloads are limited to
 eight records and 16 MiB per invocation. This reduces repeated blob downloads
 without changing authoritative KV reads or conflict checks.
 
+The same store keeps committed checkpoints and encrypted payloads that the
+invocation has read and authenticated (eight checkpoints and 32 payloads,
+within the same 16 MiB). A checkpoint's rows are created once and never
+replaced, and a payload's key is a keyed digest of its content, so neither can
+change while an Activity runs. A missed lookup, another repository and the
+next Activity read storage again. A payload the invocation wrote is read from
+storage once before it is reused.
+
 An immutable blob lost after a successful read may be reused for the remainder
 of that invocation. A later Activity detects the loss normally. This is a local
 read optimization, not storage recovery or a replacement for restore evidence.

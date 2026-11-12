@@ -88,6 +88,18 @@ func (r *Repository) readBlob(ctx context.Context, stream, key string) ([]byte, 
 	if !r.validBlobKey(key) {
 		return nil, ErrCorrupt
 	}
+	reuse := recordReuseFrom(ctx)
+	if plain, ok := reuse.blob(r, stream, key); ok {
+		return plain, nil
+	}
+	plain, err := r.openBlob(ctx, stream, key)
+	if err == nil {
+		reuse.rememberBlob(r, stream, key, plain)
+	}
+	return plain, err
+}
+
+func (r *Repository) openBlob(ctx context.Context, stream, key string) ([]byte, error) {
 	opened, err := r.blobs.Open(ctx, blob.BlobKey(key))
 	if err != nil {
 		return nil, err

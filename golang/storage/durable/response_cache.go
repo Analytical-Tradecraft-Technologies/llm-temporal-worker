@@ -62,19 +62,25 @@ func nilCacheRepository(repository any) bool {
 // resolved the authenticated scope, exact route, semantic key and stable lease.
 // Nil maxAge permits any successful completion age. No activity sleeps here.
 func (c *ResponseCache) PrepareGenerate(ctx context.Context, lease cache.FillLease, maxAge *time.Duration) (CacheDecision, error) {
-	p, err := c.prepare(ctx, lease, maxAge, cache.OperationGenerate)
+	return c.prepareGenerate(ctx, lease, maxAge, false)
+}
+
+// PrepareGenerateAfterMiss is PrepareGenerate after Lookup of lease.Key found
+// no entry earlier in the same invocation. It skips that repeated read.
+func (c *ResponseCache) PrepareGenerateAfterMiss(ctx context.Context, lease cache.FillLease, maxAge *time.Duration) (CacheDecision, error) {
+	return c.prepareGenerate(ctx, lease, maxAge, true)
+}
+
+func (c *ResponseCache) prepareGenerate(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, missed bool) (CacheDecision, error) {
+	p, err := c.prepare(ctx, lease, maxAge, cache.OperationGenerate, missed)
 	if err != nil {
 		return CacheDecision{}, err
 	}
 	d := CacheDecision{Disposition: p.disposition, preparation: p}
 	if p.entry != nil {
-		var response llm.GenerateResponseV1
-		if err := json.Unmarshal(p.entry.Response, &response); err != nil {
-			return CacheDecision{}, fmt.Errorf("%w: invalid cached Generate response", ErrResponseCacheCorrupt)
-		}
-		if response.OperationID != string(p.entry.OriginOperationID) || int64(response.Cache.Variant) != lease.Key.RequestIndex ||
-			(response.Status != llm.ResponseStatusCompleted && response.Status != llm.ResponseStatusToolCalls) || response.Checkpoint.Kind != "generation" || response.Cache.Disposition == "hit" {
-			return CacheDecision{}, fmt.Errorf("%w: cached Generate response does not match its origin", ErrResponseCacheCorrupt)
+		response, err := cachedGenerateResponse(*p.entry, lease.Key)
+		if err != nil {
+			return CacheDecision{}, err
 		}
 		d.Response = &response
 	}
@@ -87,18 +93,24 @@ func (c *ResponseCache) PrepareGenerate(ctx context.Context, lease cache.FillLea
 // PrepareCompact uses the compaction cache domain and requested sample index.
 // Its fingerprint must cover source content and compaction policy versions.
 func (c *ResponseCache) PrepareCompact(ctx context.Context, lease cache.FillLease, maxAge *time.Duration) (CompactCacheDecision, error) {
-	p, err := c.prepare(ctx, lease, maxAge, cache.OperationCompact)
+	return c.prepareCompact(ctx, lease, maxAge, false)
+}
+
+// PrepareCompactAfterMiss is PrepareGenerateAfterMiss for compaction.
+func (c *ResponseCache) PrepareCompactAfterMiss(ctx context.Context, lease cache.FillLease, maxAge *time.Duration) (CompactCacheDecision, error) {
+	return c.prepareCompact(ctx, lease, maxAge, true)
+}
+
+func (c *ResponseCache) prepareCompact(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, missed bool) (CompactCacheDecision, error) {
+	p, err := c.prepare(ctx, lease, maxAge, cache.OperationCompact, missed)
 	if err != nil {
 		return CompactCacheDecision{}, err
 	}
 	d := CompactCacheDecision{Disposition: p.disposition, preparation: p}
 	if p.entry != nil {
-		var response llm.CompactResponseV1
-		if err := json.Unmarshal(p.entry.Response, &response); err != nil {
-			return CompactCacheDecision{}, fmt.Errorf("%w: invalid cached Compact response", ErrResponseCacheCorrupt)
-		}
-		if response.OperationID != string(p.entry.OriginOperationID) || int64(response.Cache.Variant) != lease.Key.RequestIndex || response.Checkpoint.Kind != "compaction" || response.Cache.Disposition == "hit" {
-			return CompactCacheDecision{}, fmt.Errorf("%w: cached Compact response does not match its origin", ErrResponseCacheCorrupt)
+		response, err := cachedCompactResponse(*p.entry, lease.Key)
+		if err != nil {
+			return CompactCacheDecision{}, err
 		}
 		d.Response = &response
 	}
@@ -108,7 +120,72 @@ func (c *ResponseCache) PrepareCompact(ctx context.Context, lease cache.FillLeas
 	return d, nil
 }
 
-func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, kind cache.OperationKind) (*responseCachePreparation, error) {
+func cachedGenerateResponse(entry cache.ResponseEntry, key cache.ResponseKey) (llm.GenerateResponseV1, error) {
+	var response llm.GenerateResponseV1
+	if err := json.Unmarshal(entry.Response, &response); err != nil {
+		return llm.GenerateResponseV1{}, fmt.Errorf("%w: invalid cached Generate response", ErrResponseCacheCorrupt)
+	}
+	if response.OperationID != string(entry.OriginOperationID) || int64(response.Cache.Variant) != key.RequestIndex ||
+		(response.Status != llm.ResponseStatusCompleted && response.Status != llm.ResponseStatusToolCalls) || response.Checkpoint.Kind != "generation" || response.Cache.Disposition == "hit" {
+		return llm.GenerateResponseV1{}, fmt.Errorf("%w: cached Generate response does not match its origin", ErrResponseCacheCorrupt)
+	}
+	return response, nil
+}
+
+func cachedCompactResponse(entry cache.ResponseEntry, key cache.ResponseKey) (llm.CompactResponseV1, error) {
+	var response llm.CompactResponseV1
+	if err := json.Unmarshal(entry.Response, &response); err != nil {
+		return llm.CompactResponseV1{}, fmt.Errorf("%w: invalid cached Compact response", ErrResponseCacheCorrupt)
+	}
+	if response.OperationID != string(entry.OriginOperationID) || int64(response.Cache.Variant) != key.RequestIndex || response.Checkpoint.Kind != "compaction" || response.Cache.Disposition == "hit" {
+		return llm.CompactResponseV1{}, fmt.Errorf("%w: cached Compact response does not match its origin", ErrResponseCacheCorrupt)
+	}
+	return response, nil
+}
+
+// Lookup reads the successful entry for key without acquiring, starting or
+// releasing a fill, so a caller can answer a hit before it persists a new
+// attempt. It validates the entry exactly as PrepareGenerate and
+// PrepareCompact do. A nil entry is a miss; errors are never misses. A caller
+// that then prepares the same key may use the AfterMiss variants.
+func (c *ResponseCache) Lookup(ctx context.Context, key cache.ResponseKey, maxAge *time.Duration) (*cache.ResponseEntry, error) {
+	if ctx == nil || c == nil || c.now == nil || nilCacheRepository(c.responses) ||
+		(key.Operation != cache.OperationGenerate && key.Operation != cache.OperationCompact) || key.ScopeID == "" || key.RequestIndex < 0 ||
+		key.Fingerprint == (cache.Fingerprint{}) || (maxAge != nil && *maxAge <= 0) || !completeCacheRoute(key.Route) {
+		return nil, ErrResponseCacheInvalid
+	}
+	now := c.now().UTC()
+	entry, err := c.responses.Lookup(ctx, cache.ResponseLookup{Key: key, Now: now, MaxAge: maxAge})
+	if err != nil || entry == nil {
+		return nil, err
+	}
+	if err := validCachedEntry(*entry, key, now, maxAge); err != nil {
+		return nil, err
+	}
+	if key.Operation == cache.OperationGenerate {
+		_, err = cachedGenerateResponse(*entry, key)
+	} else {
+		_, err = cachedCompactResponse(*entry, key)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return cloneResponseEntry(entry), nil
+}
+
+func completeCacheRoute(route cache.RouteIdentity) bool {
+	return route.Provider != "" && route.Endpoint != "" && route.Model != "" && route.Revision != "" && route.Compiler != ""
+}
+
+func validCachedEntry(entry cache.ResponseEntry, key cache.ResponseKey, now time.Time, maxAge *time.Duration) error {
+	if entry.Key != key || entry.ID == "" || entry.OriginOperationID == "" || entry.OriginCheckpointID == "" ||
+		entry.CompletedAt.IsZero() || entry.CompletedAt.After(now.Add(cache.MaxCompletionSkew)) || (maxAge != nil && now.Sub(entry.CompletedAt) > *maxAge) {
+		return fmt.Errorf("%w: cached response does not match lookup", ErrResponseCacheCorrupt)
+	}
+	return nil
+}
+
+func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, kind cache.OperationKind, missed bool) (*responseCachePreparation, error) {
 	if ctx == nil || c == nil || c.now == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) ||
 		lease.Key.Operation != kind || lease.Key.ScopeID == "" || lease.Key.RequestIndex < 0 ||
 		lease.Key.Fingerprint == (cache.Fingerprint{}) ||
@@ -116,8 +193,7 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 		(maxAge != nil && *maxAge <= 0) {
 		return nil, ErrResponseCacheInvalid
 	}
-	route := lease.Key.Route
-	if route.Provider == "" || route.Endpoint == "" || route.Model == "" || route.Revision == "" || route.Compiler == "" {
+	if !completeCacheRoute(lease.Key.Route) {
 		return nil, fmt.Errorf("%w: a complete resolved route is required", ErrResponseCacheInvalid)
 	}
 	// The lease was stamped by the worker that quoted the attempt. A clock that
@@ -129,18 +205,23 @@ func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxA
 	if !now.Before(lease.ExpiresAt) {
 		return nil, fmt.Errorf("%w: clock is outside the lease", ErrResponseCacheLeaseExpired)
 	}
-	result, err := cache.Prepare(ctx, c.responses, c.fills, cache.ResponseLookup{Key: lease.Key, Now: now, MaxAge: maxAge}, lease)
+	lookup := cache.ResponseLookup{Key: lease.Key, Now: now, MaxAge: maxAge}
+	var result cache.Preparation
+	var err error
+	if missed {
+		result, err = cache.PrepareAfterMiss(ctx, c.responses, c.fills, lookup, lease)
+	} else {
+		result, err = cache.Prepare(ctx, c.responses, c.fills, lookup, lease)
+	}
 	if err != nil {
 		return nil, err
 	}
 	p := &responseCachePreparation{cache: c, lease: lease, fill: result.Fill, preparedAt: now}
 	if result.Entry != nil {
-		entry := result.Entry
-		if entry.Key != lease.Key || entry.ID == "" || entry.OriginOperationID == "" || entry.OriginCheckpointID == "" ||
-			entry.CompletedAt.IsZero() || entry.CompletedAt.After(now.Add(cache.MaxCompletionSkew)) || (maxAge != nil && now.Sub(entry.CompletedAt) > *maxAge) {
-			return nil, fmt.Errorf("%w: cached response does not match lookup", ErrResponseCacheCorrupt)
+		if err := validCachedEntry(*result.Entry, lease.Key, now, maxAge); err != nil {
+			return nil, err
 		}
-		p.entry = cloneResponseEntry(entry)
+		p.entry = cloneResponseEntry(result.Entry)
 		p.disposition = CacheHit
 		return p, nil
 	}

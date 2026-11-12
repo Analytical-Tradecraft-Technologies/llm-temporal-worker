@@ -26,6 +26,17 @@ func cloudCachePolicy(p PreparedCloudRequest) *llm.CachePolicyV1 {
 	return p.Compact.Cache
 }
 func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, plan cloudstate.BudgetPlan) (*cache.FillLease, error) {
+	key, err := r.cacheKey(ctx, p, plan)
+	if err != nil || key == nil {
+		return nil, err
+	}
+	return &cache.FillLease{Key: *key, OperationID: state.OperationID(p.Record.Request.ID), Attempt: string(attempt.ID), AcquiredAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}, nil
+}
+
+// cacheKey is the response key of p served by plan's route, or nil when p
+// requests no caching. Only the plan's route identity, configuration digest,
+// capability version and compiler version enter it, never its attempt.
+func (r *CloudExecutionRuntime) cacheKey(ctx context.Context, p PreparedCloudRequest, plan cloudstate.BudgetPlan) (*cache.ResponseKey, error) {
 	policy := cloudCachePolicy(p)
 	if policy == nil {
 		return nil, nil
@@ -63,8 +74,7 @@ func (r *CloudExecutionRuntime) cacheLease(ctx context.Context, p PreparedCloudR
 	if err != nil {
 		return nil, executionError(provider.CodeStateCorrupt)
 	}
-	return &cache.FillLease{Key: cache.ResponseKey{ScopeID: p.Preparation.CheckpointScope, Operation: input.Operation, Route: plan.Route.CacheIdentity, Fingerprint: fingerprint, RequestIndex: p.Record.Request.RequestIndex},
-		OperationID: state.OperationID(p.Record.Request.ID), Attempt: string(attempt.ID), AcquiredAt: attempt.CreatedAt, ExpiresAt: attempt.CreatedAt.Add(cache.MaxFillLease)}, nil
+	return &cache.ResponseKey{ScopeID: p.Preparation.CheckpointScope, Operation: input.Operation, Route: plan.Route.CacheIdentity, Fingerprint: fingerprint, RequestIndex: p.Record.Request.RequestIndex}, nil
 }
 
 // cacheSemanticDigest hashes the complete normalized semantic payload at the
@@ -100,10 +110,54 @@ func cacheSemanticDigest(request llm.Request, temperature, topP *llm.DecimalV1, 
 	return request, sha256.Sum256(canonical), nil
 }
 
+// probeCache looks a request that has no attempt yet up in the response
+// cache, keyed by the route its first attempt would be planned on. A hit is
+// published at once, so it creates no attempt, budget plan or fill: none of
+// them enter the key, and a hit needs none of them. found reports that the
+// step ends with result.
+//
+// Anything else returns found=false and leaves the request untouched for the
+// attempt path, which plans, looks up and reports failures exactly as before.
+// missed is the key that was looked up and found empty, so that path need not
+// read it again.
+func (r *CloudExecutionRuntime) probeCache(ctx context.Context, p PreparedCloudRequest) (result llm.ExecutionResultV1, found bool, missed *cache.ResponseKey, err error) {
+	policy := cloudCachePolicy(p)
+	if policy == nil {
+		return llm.ExecutionResultV1{}, false, nil, nil
+	}
+	now := r.now()
+	attempt := BudgetAttempt{OperationID: durable.OperationID(p.Record.Request.ID), GenerationID: r.options.BudgetGeneration, QuotedAt: now, ExpiresAt: now.Add(cache.MaxFillLease)}
+	plan, call, err := r.execution.admission.probe(ctx, p, attempt)
+	if err != nil {
+		return llm.ExecutionResultV1{}, false, nil, ctx.Err()
+	}
+	key, err := r.cacheKey(ctx, p, plan)
+	if err != nil || key == nil {
+		return llm.ExecutionResultV1{}, false, nil, ctx.Err()
+	}
+	helper, err := durable.NewResponseCache(r.capabilities.Responses, r.capabilities.ResponseFills, r.capabilities.Clock)
+	if err != nil {
+		return llm.ExecutionResultV1{}, false, nil, nil
+	}
+	origin, err := helper.Lookup(ctx, *key, cacheMaximumAge(policy))
+	if err != nil {
+		return llm.ExecutionResultV1{}, false, nil, ctx.Err()
+	}
+	if origin == nil {
+		return llm.ExecutionResultV1{}, false, key, nil
+	}
+	r.captureLangfuseCacheHit(ctx, p, call, plan)
+	result, err = r.finishCache(ctx, p, *origin)
+	return result, true, nil, err
+}
+
 // prepareCache returns found when the step ends with status. Otherwise the
 // attempt proceeds: as the fill's owner, or uncached when another attempt's
 // started fill has stalled past cache.StalledFillAfter (#1455).
-func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedCloudRequest, lease cache.FillLease) (status llm.ExecutionResultV1, found, uncached bool, err error) {
+//
+// missed is a key this step already looked up and found empty, if any. When
+// it is the lease's key, the lookup is not repeated before acquisition.
+func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedCloudRequest, lease cache.FillLease, missed *cache.ResponseKey) (status llm.ExecutionResultV1, found, uncached bool, err error) {
 	helper, err := durable.NewResponseCache(r.capabilities.Responses, r.capabilities.ResponseFills, r.capabilities.Clock)
 	if err != nil {
 		return llm.ExecutionResultV1{}, false, false, err
@@ -113,11 +167,20 @@ func (r *CloudExecutionRuntime) prepareCache(ctx context.Context, p PreparedClou
 	var stalled bool
 	// cache.max_age_seconds bounds reuse for Generate and Compact alike, as
 	// the v1 contract states (#1508).
+	maxAge, afterMiss := cacheMaximumAge(cloudCachePolicy(p)), missed != nil && *missed == lease.Key
 	if p.Generate != nil {
-		decision, lookupErr := helper.PrepareGenerate(ctx, lease, cacheMaximumAge(cloudCachePolicy(p)))
+		prepare := helper.PrepareGenerate
+		if afterMiss {
+			prepare = helper.PrepareGenerateAfterMiss
+		}
+		decision, lookupErr := prepare(ctx, lease, maxAge)
 		err, disposition, origin, stalled = lookupErr, decision.Disposition, decision.Entry(), decision.StalledFill()
 	} else {
-		decision, lookupErr := helper.PrepareCompact(ctx, lease, cacheMaximumAge(cloudCachePolicy(p)))
+		prepare := helper.PrepareCompact
+		if afterMiss {
+			prepare = helper.PrepareCompactAfterMiss
+		}
+		decision, lookupErr := prepare(ctx, lease, maxAge)
 		err, disposition, origin, stalled = lookupErr, decision.Disposition, decision.Entry(), decision.StalledFill()
 	}
 	if err != nil {

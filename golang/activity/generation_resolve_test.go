@@ -128,3 +128,56 @@ func TestResolveGenerationFailsWithPlanning(t *testing.T) {
 		t.Fatalf("planning failure: %v after %d preparations", err, len(runtime.prepared))
 	}
 }
+
+// cachedResolveRuntime also offers the cache-only step, which the resolve
+// Activity prefers so that a miss starts no attempt (#1782).
+type cachedResolveRuntime struct {
+	*resolveRuntime
+	resolve  func(llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error)
+	resolved []llm.PrepareExecutionV1
+}
+
+func (r *cachedResolveRuntime) ResolveCachedV1(_ context.Context, request llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+	r.resolved = append(r.resolved, request)
+	return r.resolve(request)
+}
+
+func TestResolveGenerationPrefersCacheOnlyStep(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		resolve  func(llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error)
+		resolved bool
+	}{
+		{name: "hit", resolve: func(r llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+			return completedResolution(r), true, nil
+		}, resolved: true},
+		{name: "miss", resolve: func(llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+			return llm.ExecutionResultV1{}, false, nil
+		}},
+		{name: "error", resolve: func(llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+			return llm.ExecutionResultV1{}, false, errors.New("cache unavailable")
+		}},
+		{name: "other operation", resolve: func(r llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+			result := completedResolution(r)
+			result.Generate.OperationKey = "other"
+			return result, true, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := validGenerateV1Request()
+			request.Cache = &llm.CachePolicyV1{}
+			runtime := &cachedResolveRuntime{resolveRuntime: &resolveRuntime{prepare: func(llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
+				t.Fatal("full preparation instead of the cache-only step")
+				return llm.ExecutionResultV1{}, nil
+			}}, resolve: tc.resolve}
+			resolution, err := (&Activities{V1Runtime: runtime}).ResolveGenerationV1(context.Background(), request)
+			if err != nil || len(runtime.resolved) != 1 || (resolution.Result != nil) != tc.resolved {
+				t.Fatalf("resolution = %+v after %d resolutions: %v", resolution, len(runtime.resolved), err)
+			}
+			want := llm.PrepareExecutionV1{Generate: &request, OriginalGenerate: &llm.GenerationOriginV1{}}
+			if !reflect.DeepEqual(runtime.resolved[0], want) {
+				t.Fatal("cache-only step differs from the request workflow's preparation")
+			}
+		})
+	}
+}

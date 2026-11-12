@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -219,6 +220,44 @@ func (r *CloudExecutionRuntime) captureLangfuseOperation(ctx context.Context, p 
 		warnLangfuseCapture(ctx, "Langfuse operation capture failed", p.Record.Request.ID, langfuseCaptureSave)
 	}
 }
+func langfuseProviderName(endpoint config.EndpointConfig, plan cloudstate.BudgetPlan) string {
+	if _, router := endpoint.Extensions["openrouter"]; router {
+		return "openrouter"
+	}
+	return plan.Route.Provider
+}
+
+// langfuseCacheCapture keys the route capture of a cache hit answered before
+// the request had any attempt (#1782). Attempt IDs never take this form.
+const langfuseCacheCapture = "cache"
+
+// captureLangfuseCacheHit records which route a hit answered before any
+// attempt was keyed by, as an attempt's unused plan did before. It holds no
+// request content: a hit exports no generation.
+func (r *CloudExecutionRuntime) captureLangfuseCacheHit(ctx context.Context, p PreparedCloudRequest, call PlannedProviderCall, plan cloudstate.BudgetPlan) {
+	if r.capabilities.Langfuse == nil {
+		return
+	}
+	endpoint, found := r.capabilities.LangfuseEndpoints[plan.Route.EndpointID]
+	if !found {
+		return
+	}
+	store, ok := r.store.(langfuseRepository)
+	if !ok {
+		return
+	}
+	id := p.Record.Request.ID
+	data, err := json.Marshal(generationCapture{Provider: langfuseProviderName(endpoint, plan), LogicalModel: call.LogicalModel, Plan: plan, Disabled: !endpoint.LangfuseEnabled()})
+	if err != nil {
+		warnLangfuseCapture(ctx, "Langfuse generation capture failed", id, langfuseCaptureEncode)
+		return
+	}
+	bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := store.SaveLangfuseCapture(bounded, p.Record.Request.Scope, id, langfuseCacheCapture, data); err != nil {
+		warnLangfuseCapture(ctx, "Langfuse generation capture failed", id, langfuseCaptureSave)
+	}
+}
 func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *CloudBudgetCall, saved cloudstate.SavedProviderExecution) {
 	if e.capabilities.Langfuse == nil {
 		return
@@ -244,11 +283,7 @@ func (e *CloudProviderExecution) captureLangfuse(ctx context.Context, call *Clou
 		warnLangfuseCapture(ctx, "Langfuse generation capture failed", call.id, langfuseCaptureAttempt)
 		return
 	}
-	providerName := saved.Plan.Route.Provider
-	if _, router := endpoint.Extensions["openrouter"]; router {
-		providerName = "openrouter"
-	}
-	value := generationCapture{Provider: providerName, LogicalModel: call.provider.LogicalModel, Plan: saved.Plan, Disabled: !endpoint.LangfuseEnabled()}
+	value := generationCapture{Provider: langfuseProviderName(endpoint, saved.Plan), LogicalModel: call.provider.LogicalModel, Plan: saved.Plan, Disabled: !endpoint.LangfuseEnabled()}
 	if !value.Disabled {
 		value.Input = langfuseContent(call.provider.Semantic)
 	}
@@ -317,6 +352,18 @@ func (r *CloudExecutionRuntime) ExportLangfuseV1(ctx context.Context, ref llm.Ex
 			return langfuse.ErrExport
 		}
 		if capture.Disabled {
+			continue
+		}
+		if key == langfuseCacheCapture {
+			// A hit answered before any attempt existed. Once an attempt
+			// exists, that attempt served the request instead.
+			endpoint, found := r.capabilities.LangfuseEndpoints[capture.Plan.Route.EndpointID]
+			if lastAttempt != "" || !found || !endpoint.LangfuseEnabled() {
+				continue
+			}
+			eligible, eligibleCache = true, true
+			o.Metadata["provider"] = capture.Provider
+			o.Metadata["endpoint_id"] = capture.Plan.Route.EndpointID
 			continue
 		}
 		saved, err := r.store.LoadProviderExecution(ctx, scope, cloudstate.RequestID(key))

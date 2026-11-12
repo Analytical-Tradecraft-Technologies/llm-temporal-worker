@@ -139,6 +139,35 @@ func (admission *CloudBudgetAdmission) prepareCompact(ctx context.Context, scope
 		})
 }
 
+// probe plans p as its first attempt would be planned, for its cache key
+// only. It reads, saves and reserves nothing: the plan is never persisted,
+// and the attempt that may follow plans again under its own identity.
+func (admission *CloudBudgetAdmission) probe(ctx context.Context, p PreparedCloudRequest, attempt BudgetAttempt) (cloudstate.BudgetPlan, PlannedProviderCall, error) {
+	if ctx == nil || admission == nil || admission.planning == nil {
+		return cloudstate.BudgetPlan{}, PlannedProviderCall{}, budgetPlanningError(provider.CodeConfiguration)
+	}
+	var planned PlannedBudgetCall
+	if p.Generate != nil {
+		prepared, err := p.generateInput(ctx)
+		if err != nil {
+			return cloudstate.BudgetPlan{}, PlannedProviderCall{}, err
+		}
+		if planned, err = admission.planning.Generate(ctx, prepared, attempt); err != nil {
+			return cloudstate.BudgetPlan{}, PlannedProviderCall{}, err
+		}
+	} else {
+		prepared, err := p.compactInput(ctx)
+		if err != nil {
+			return cloudstate.BudgetPlan{}, PlannedProviderCall{}, err
+		}
+		if planned, err = admission.planning.Compact(ctx, prepared, attempt); err != nil {
+			return cloudstate.BudgetPlan{}, PlannedProviderCall{}, err
+		}
+	}
+	plan, err := planned.BudgetPlan(p.Record.Request.Kind)
+	return plan, planned.Provider, err
+}
+
 func (admission *CloudBudgetAdmission) original(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, kind string) (cloudstate.Record, error) {
 	if ctx == nil || admission == nil || isNilCapability(admission.store) || admission.planning == nil || admission.recovery == nil {
 		return cloudstate.Record{}, budgetPlanningError(provider.CodeConfiguration)
