@@ -15,32 +15,7 @@ import (
 // it for new input, and it is deliberately not part of the item codec, which
 // also decodes transcripts stored before the policy existed or was tightened.
 func ValidateMediaURLs(instructions []Instruction, items []Item) error {
-	for index, instruction := range instructions {
-		if err := validateMediaURLParts(instruction.Content); err != nil {
-			return fmt.Errorf("instruction %d: %w", index, err)
-		}
-	}
-	for index, item := range items {
-		var content []Part
-		switch item := item.(type) {
-		case Message:
-			content = item.Content
-		case *Message:
-			if item != nil {
-				content = item.Content
-			}
-		case ToolResult:
-			content = item.Content
-		case *ToolResult:
-			if item != nil {
-				content = item.Content
-			}
-		}
-		if err := validateMediaURLParts(content); err != nil {
-			return fmt.Errorf("item %d: %w", index, err)
-		}
-	}
-	return nil
+	return checkRequestParts(instructions, items, validateMediaURLParts)
 }
 
 // RejectBlobMedia reports the first image or document part that references
@@ -48,8 +23,15 @@ func ValidateMediaURLs(instructions []Instruction, items []Item) error {
 // blob references and no provider adapter accepts one, so request preparation
 // rejects them before routing instead of failing every candidate at compile.
 func RejectBlobMedia(instructions []Instruction, items []Item) error {
+	return checkRequestParts(instructions, items, rejectBlobMediaParts)
+}
+
+// checkRequestParts runs check on the content of every instruction and of
+// every message and tool result item, and names the failing one in the error.
+// Other item kinds carry no parts and are checked as empty.
+func checkRequestParts(instructions []Instruction, items []Item, check func([]Part) error) error {
 	for index, instruction := range instructions {
-		if err := rejectBlobMediaParts(instruction.Content); err != nil {
+		if err := check(instruction.Content); err != nil {
 			return fmt.Errorf("instruction %d: %w", index, err)
 		}
 	}
@@ -69,7 +51,7 @@ func RejectBlobMedia(instructions []Instruction, items []Item) error {
 				content = item.Content
 			}
 		}
-		if err := rejectBlobMediaParts(content); err != nil {
+		if err := check(content); err != nil {
 			return fmt.Errorf("item %d: %w", index, err)
 		}
 	}
