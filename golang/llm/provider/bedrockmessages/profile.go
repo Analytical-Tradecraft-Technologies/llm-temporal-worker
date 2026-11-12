@@ -35,11 +35,11 @@ type Profile struct {
 }
 
 func DefaultProfile(id string) Profile {
-	features := make(map[provider.Feature]provider.Capability, len(allFeatures()))
-	for _, feature := range allFeatures() {
+	features := make(map[provider.Feature]provider.Capability, len(provider.AllFeatures()))
+	for _, feature := range provider.AllFeatures() {
 		features[feature] = provider.Capability{State: provider.CapabilityNative}
 	}
-	features[provider.FeatureStreaming] = unsupportedStreamingCapability(features[provider.FeatureStreaming])
+	features[provider.FeatureStreaming] = provider.UnsupportedStreaming(features[provider.FeatureStreaming])
 	return Profile{
 		ID:                id,
 		CapabilityVersion: defaultCapabilityVersion,
@@ -65,7 +65,7 @@ func NewProfile(profile Profile) (Profile, error) {
 	}
 	copy := profile
 	copy.Capabilities = profile.Capabilities.Clone()
-	copy.Capabilities.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(copy.Capabilities.Features[provider.FeatureStreaming])
+	copy.Capabilities.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(copy.Capabilities.Features[provider.FeatureStreaming])
 	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
 	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
 	if copy.ExpectedBaseURL != "" {
@@ -100,7 +100,7 @@ func (profile Profile) validate() error {
 		return fmt.Errorf("bedrock messages profile %q capability versions conflict", profile.ID)
 	}
 	supported := 0
-	for _, class := range publicServiceClasses() {
+	for _, class := range llm.ServiceClasses() {
 		value, ok := profile.ServiceTiers[class]
 		if !ok {
 			return fmt.Errorf("bedrock messages profile %q must declare service class %q", profile.ID, class)
@@ -126,7 +126,7 @@ func (profile Profile) validate() error {
 			return fmt.Errorf("bedrock messages profile %q capability %q has invalid state %q", profile.ID, feature, capability.State)
 		}
 	}
-	for _, feature := range allFeatures() {
+	for _, feature := range provider.AllFeatures() {
 		if _, ok := profile.Capabilities.Features[feature]; !ok {
 			return fmt.Errorf("bedrock messages profile %q must explicitly declare capability %q", profile.ID, feature)
 		}
@@ -167,7 +167,7 @@ func (profile Profile) capabilities(ctx context.Context, query provider.Capabili
 	}
 	set := profile.Capabilities.Clone()
 	set.Version = profile.capabilityVersion()
-	set.Features[provider.FeatureStreaming] = unsupportedStreamingCapability(set.Features[provider.FeatureStreaming])
+	set.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(set.Features[provider.FeatureStreaming])
 	return set, nil
 }
 
@@ -195,33 +195,6 @@ func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
 		return nil
 	}
 	return &class
-}
-
-func publicServiceClasses() []llm.ServiceClass {
-	return []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
-}
-
-func unsupportedStreamingCapability(capability provider.Capability) provider.Capability {
-	capability.State = provider.CapabilityUnsupported
-	capability.Transform = ""
-	if capability.Reason == "" {
-		capability.Reason = "adapter does not implement OpenStream"
-	}
-	return capability
-}
-
-func allFeatures() []provider.Feature {
-	return []provider.Feature{
-		provider.FeatureText,
-		provider.FeatureImage,
-		provider.FeatureDocument,
-		provider.FeatureToolCall,
-		provider.FeatureStructuredOutput,
-		provider.FeatureReasoning,
-		provider.FeatureContinuation,
-		provider.FeatureStreaming,
-		provider.FeatureUsage,
-	}
 }
 
 func validProviderTier(value string) bool {

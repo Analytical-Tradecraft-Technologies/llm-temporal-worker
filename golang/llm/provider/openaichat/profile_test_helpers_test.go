@@ -3,8 +3,8 @@ package openaichat
 import "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 
 func profileTestCapabilities(version string) provider.CapabilitySet {
-	features := make(map[provider.Feature]provider.Capability, len(allFeatures()))
-	for _, feature := range allFeatures() {
+	features := make(map[provider.Feature]provider.Capability, len(provider.AllFeatures()))
+	for _, feature := range provider.AllFeatures() {
 		state := provider.CapabilityNative
 		if feature == provider.FeatureDocument || feature == provider.FeatureContinuation || feature == provider.FeatureStreaming {
 			state = provider.CapabilityUnsupported

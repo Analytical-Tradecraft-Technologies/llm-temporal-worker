@@ -236,7 +236,7 @@ func (source Source) classes(keep func(string) bool) ([]llm.ServiceClass, []stri
 	classes := make([]llm.ServiceClass, 0, len(source.Tiers))
 	seen := map[string]struct{}{}
 	tiers := make([]string, 0, len(source.Tiers))
-	for _, class := range []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority} {
+	for _, class := range llm.ServiceClasses() {
 		tier, offered := source.Tiers[class]
 		if !offered || !keep(tier) {
 			continue

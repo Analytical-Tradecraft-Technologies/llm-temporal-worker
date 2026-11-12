@@ -227,8 +227,8 @@ func validateCapabilities(set CapabilitySet) (CapabilitySet, error) {
 	if set.Features == nil {
 		return CapabilitySet{}, fmt.Errorf("capability features are required")
 	}
-	knownFeatures := make(map[Feature]struct{}, len(registryFeatures()))
-	for _, feature := range registryFeatures() {
+	knownFeatures := make(map[Feature]struct{}, len(AllFeatures()))
+	for _, feature := range AllFeatures() {
 		knownFeatures[feature] = struct{}{}
 		capability, ok := set.Features[feature]
 		if !ok {
@@ -253,7 +253,7 @@ func validateServiceTiers(tiers map[llm.ServiceClass]string) error {
 	if tiers == nil {
 		return fmt.Errorf("service tier mappings are required")
 	}
-	for _, class := range []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority} {
+	for _, class := range llm.ServiceClasses() {
 		value, ok := tiers[class]
 		if !ok {
 			return fmt.Errorf("service class %q is not declared", class)
@@ -268,10 +268,6 @@ func validateServiceTiers(tiers map[llm.ServiceClass]string) error {
 		}
 	}
 	return nil
-}
-
-func registryFeatures() []Feature {
-	return []Feature{FeatureText, FeatureImage, FeatureDocument, FeatureToolCall, FeatureStructuredOutput, FeatureReasoning, FeatureContinuation, FeatureStreaming, FeatureUsage}
 }
 
 func isNilAdapter(adapter Adapter) bool { return isNilAny(adapter) }

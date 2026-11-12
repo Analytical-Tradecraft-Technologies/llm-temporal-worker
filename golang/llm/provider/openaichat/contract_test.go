@@ -385,7 +385,7 @@ func (observer *chatObserver) OnProgress(context.Context, provider.Progress) {
 
 func testProfile() Profile {
 	features := map[provider.Feature]provider.Capability{}
-	for _, feature := range allFeatures() {
+	for _, feature := range provider.AllFeatures() {
 		state := provider.CapabilityNative
 		if feature == provider.FeatureDocument || feature == provider.FeatureContinuation || feature == provider.FeatureStreaming {
 			state = provider.CapabilityUnsupported
