@@ -30,6 +30,7 @@ current-layout reference.
 │   │   │   │   ├── contract/       Shared adapter contract-test helpers
 │   │   │   │   ├── openaierror/    OpenAI SDK errors to the provider error contract
 │   │   │   │   ├── openaischema/   Output schemas for OpenAI strict structured outputs
+│   │   │   │   ├── openaiwire/     Lowering shared by the Chat and Responses adapters
 │   │   │   │   ├── schemaorder/    JSON Schema serialization in a deliberate order
 │   │   │   │   ├── streamdecode/   Shared SSE and event-stream decoding
 │   │   │   │   ├── streamtest/     Deterministic stream-fragmentation helpers
