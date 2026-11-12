@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -87,3 +88,48 @@ func TestCompletionEventRejectsUnknownReasonForKnownCost(t *testing.T) {
 }
 
 func ptrUSD(value pricing.USD) *pricing.USD { return &value }
+
+func TestJournalEventsRejectBadSharedFields(t *testing.T) {
+	reservation := ReservationEvent{
+		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
+		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
+		AmountUSD: pricing.MustUSD("1"),
+	}
+	completion := CompletionEvent{
+		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
+		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
+		Kind: JournalRelease, ReservedDecreaseUSD: pricing.MustUSD("1"),
+		ActualCostUSD: ptrUSD(pricing.MustUSD("0")), CostStatus: CostExact,
+	}
+	for _, test := range []struct {
+		name        string
+		reservation func(*ReservationEvent)
+		completion  func(*CompletionEvent)
+		want        string
+	}{
+		{"missing window", func(e *ReservationEvent) { e.WindowID = "" }, func(e *CompletionEvent) { e.WindowID = "" }, "window_id"},
+		{"missing timestamp", func(e *ReservationEvent) { e.OccurredAt = time.Time{} }, func(e *CompletionEvent) { e.BucketStart = time.Time{} }, "timestamps are required"},
+		{"negative revision", func(e *ReservationEvent) { e.ReservationRevision = -1 }, func(e *CompletionEvent) { e.ReservationRevision = -1 }, "reservation revision must be non-negative"},
+	} {
+		r := reservation
+		test.reservation(&r)
+		if err := r.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("%s: reservation error = %v", test.name, err)
+		}
+		c := completion
+		test.completion(&c)
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("%s: completion error = %v", test.name, err)
+		}
+	}
+	r := reservation
+	r.OccurredAt = time.Time{}
+	if err := r.Validate(); err == nil || err.Error() != "budget reservation timestamps are required" {
+		t.Fatalf("reservation timestamp error = %v", err)
+	}
+	c := completion
+	c.OccurredAt = time.Time{}
+	if err := c.Validate(); err == nil || err.Error() != "budget completion timestamps are required" {
+		t.Fatalf("completion timestamp error = %v", err)
+	}
+}

@@ -68,23 +68,8 @@ type CompletionEvent struct {
 }
 
 func (event ReservationEvent) Validate() error {
-	if err := validateIdentity(event.EventID, "event_id"); err != nil {
+	if err := validateEventHeader(event.EventID, event.GenerationID, event.OperationID, event.WindowID, event.BucketStart, event.OccurredAt, event.ReservationRevision, "reservation"); err != nil {
 		return err
-	}
-	for name, value := range map[string]string{
-		"generation_id": event.GenerationID,
-		"operation_id":  event.OperationID,
-		"window_id":     event.WindowID,
-	} {
-		if err := validateIdentity(value, name); err != nil {
-			return err
-		}
-	}
-	if event.BucketStart.IsZero() || event.OccurredAt.IsZero() {
-		return fmt.Errorf("budget reservation timestamps are required")
-	}
-	if event.ReservationRevision < 0 {
-		return fmt.Errorf("reservation revision must be non-negative")
 	}
 	if err := event.AmountUSD.Validate(); err != nil {
 		return fmt.Errorf("reservation amount: %w", err)
@@ -96,23 +81,8 @@ func (event ReservationEvent) Validate() error {
 }
 
 func (event CompletionEvent) Validate() error {
-	if err := validateIdentity(event.EventID, "event_id"); err != nil {
+	if err := validateEventHeader(event.EventID, event.GenerationID, event.OperationID, event.WindowID, event.BucketStart, event.OccurredAt, event.ReservationRevision, "completion"); err != nil {
 		return err
-	}
-	for name, value := range map[string]string{
-		"generation_id": event.GenerationID,
-		"operation_id":  event.OperationID,
-		"window_id":     event.WindowID,
-	} {
-		if err := validateIdentity(value, name); err != nil {
-			return err
-		}
-	}
-	if event.BucketStart.IsZero() || event.OccurredAt.IsZero() {
-		return fmt.Errorf("budget completion timestamps are required")
-	}
-	if event.ReservationRevision < 0 {
-		return fmt.Errorf("reservation revision must be non-negative")
 	}
 	if err := validateUSDFields(event.ReservedDecreaseUSD, event.AccountedIncreaseUSD, event.AccountedDecreaseUSD); err != nil {
 		return err
@@ -133,6 +103,31 @@ func (event CompletionEvent) Validate() error {
 	}
 	if err := validateKindDeltas(event); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateEventHeader checks the identity, timestamp and revision fields that
+// reservation and completion events share. label names the event kind in the
+// missing-timestamp error.
+func validateEventHeader(eventID, generationID, operationID, windowID string, bucketStart, occurredAt time.Time, revision int, label string) error {
+	if err := validateIdentity(eventID, "event_id"); err != nil {
+		return err
+	}
+	for name, value := range map[string]string{
+		"generation_id": generationID,
+		"operation_id":  operationID,
+		"window_id":     windowID,
+	} {
+		if err := validateIdentity(value, name); err != nil {
+			return err
+		}
+	}
+	if bucketStart.IsZero() || occurredAt.IsZero() {
+		return fmt.Errorf("budget %s timestamps are required", label)
+	}
+	if revision < 0 {
+		return fmt.Errorf("reservation revision must be non-negative")
 	}
 	return nil
 }
