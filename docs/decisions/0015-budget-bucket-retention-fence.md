@@ -10,7 +10,9 @@ Redis owns monetary reservations and settlement. Unclaimed authorizations can
 expire after their start deadline, but claimed or unresolved paid work cannot
 be refunded by a retention sweep. Operation identities and settlement event
 tombstones must continue to prevent old retries from granting or refunding
-budget again. Automatic cleanup of these records remains deferred.
+budget again. They expire only under an operator-declared
+`operation_key_reuse_horizon`, and never while a claimed or ambiguous
+reservation still needs them (#1543).
 
 See [Redis budget leases](../reference/redis-budget-leases.md) and
 [maintenance](../reference/maintenance.md). Future retention must preserve these

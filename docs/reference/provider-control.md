@@ -133,8 +133,11 @@ corruption, and Redis failures return errors rather than partial state.
 Latest records deliberately have no key TTL. `StaleAfter` and `ExpiresAt`
 determine freshness. Expiry must not clear sticky credit/billing incidents,
 allow older observations to win, or discard a last-known listing after a
-failed refresh. Configuration digests isolate reloads; cleanup of retired
-configuration hashes is a later maintenance task. Persistence uses the same
+failed refresh. Configuration digests isolate reloads. Each worker reports its
+digest as loaded every readiness probe interval, and the status and inventory
+hashes of a digest that no worker has reported for seven days are deleted (see
+[Redis growth and sizing](redis-budget-leases.md#redis-growth-and-sizing)).
+Persistence uses the same
 HA/AOF/no-eviction Redis deployment as the worker's other shared state.
 
 `PersistInventorySnapshot` validates the model digest and atomically replaces

@@ -456,6 +456,7 @@ worker or by Temporal:
 | Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` |
 | Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` |
 | Stuck Activities | `llmtw_heartbeat_age_seconds` |
+| Redis growth toward the sized capacity | `llmtw_budget_operation_records{retention}` against the [sizing formula](../reference/redis-budget-leases.md#redis-growth-and-sizing), and `llmtw_budget_stream_length` above 12,000 for 10 minutes (the Stream `MAXLEN` bound is not applied) |
 | Task queue backlog | Temporal's task-queue backlog metrics for `temporal.task_queue` |
 | Continuation corruption or digest mismatch | `llmtw_activity_failure_total{origin="worker"}`, with the `llm_state_corrupt` Temporal failure type |
 

@@ -72,6 +72,8 @@ type Metrics struct {
 	routeHeldTotal       *prometheus.CounterVec
 	workerPolling        prometheus.Gauge
 	heartbeatAge         prometheus.Gauge
+	operationRecords     *prometheus.GaugeVec
+	budgetStreamLength   prometheus.Gauge
 }
 
 type labelAllowList struct {
@@ -184,6 +186,8 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.routeHeldTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_held_total", Help: "Route candidates provider planning skipped because shared route health holds them."}, []string{"endpoint", "reason"})
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
+	m.operationRecords = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_budget_operation_records", Help: "Durable budget operation records (reuse tombstones) in Redis by retention: expiring after operation_key_reuse_horizon, or persistent."}, []string{"retention"})
+	m.budgetStreamLength = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_budget_stream_length", Help: "Entries in the Redis budget coordination Stream."})
 	collectors := []prometheus.Collector{
 		m.activityTotal, m.activityFailureTotal, m.activityDuration, m.providerAttemptTotal, m.providerDuration,
 		m.serviceClassActual, m.budgetAdmission, m.costExactTotal,
@@ -191,6 +195,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration,
 		m.cacheEvents, m.pendingPolls, m.costStatus, m.langfuseExportFailed,
 		m.routeHeldTotal, m.workerPolling, m.heartbeatAge,
+		m.operationRecords, m.budgetStreamLength,
 	}
 	for _, collector := range collectors {
 		if err := m.registry.Register(collector); err != nil {
@@ -481,6 +486,21 @@ func (metrics *Metrics) SetWorkerPolling(polling bool) {
 	} else {
 		metrics.workerPolling.Set(0)
 	}
+}
+
+// SetBudgetGrowth publishes the latest Redis growth sample. operations counts
+// every live record and persistent the subset with no expiry.
+func (metrics *Metrics) SetBudgetGrowth(operations, persistent, streamLength int64) {
+	if metrics == nil {
+		return
+	}
+	expiring := operations - persistent
+	if expiring < 0 {
+		expiring = 0
+	}
+	metrics.operationRecords.WithLabelValues("expiring").Set(float64(expiring))
+	metrics.operationRecords.WithLabelValues("persistent").Set(float64(persistent))
+	metrics.budgetStreamLength.Set(float64(streamLength))
 }
 
 func (metrics *Metrics) SetHeartbeatAge(age time.Duration) {

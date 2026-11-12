@@ -329,11 +329,12 @@ state:
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_0f563bdf4c8f7c6f
-    admission_version: admission_0f563bdf4c8f7c6f
-    admission_digest: 6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7
+    function_library: llmtw_admission_628f464157f0b550
+    admission_version: admission_628f464157f0b550
+    admission_digest: 1b7248f3703f71f4e27d847e82ade143076f38d0b62e819d807f9ca48ac3d78f
     coordination_stream_enabled: true
     stream_trim_safety: 10m
+    operation_key_reuse_horizon: 0s
     max_connections: 96
     dial_timeout: 2s
     operation_timeout: 3s
@@ -1175,6 +1176,14 @@ Missing history causes readers to reload authoritative state before resuming;
 transport errors and malformed records still fail closed. These checks remain
 read-only and do not change budget authority.
 Stream hints never authorize spending or reconstruct balances.
+
+`operation_key_reuse_horizon` (default `0s`, keep indefinitely) bounds how long
+durable budget operation records survive as reuse tombstones once nothing can
+still settle them. It is the operator's declaration that callers never reuse an
+operation key after that long. A non-zero value must be at least `24h` and at
+least `state.ambiguous_retention`, and requires `maxmemory_policy: noeviction`.
+Claimed and ambiguous records stay persistent regardless. See
+[Redis growth and sizing](redis-budget-leases.md#redis-growth-and-sizing).
 
 When upgrading from a worker that wrote persistent, unbounded coordination
 Streams, apply capacity headroom first if Redis is already over `maxmemory`:

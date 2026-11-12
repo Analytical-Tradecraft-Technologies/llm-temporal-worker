@@ -112,7 +112,7 @@ func TestRedisBudgetMaterializerAcceptsAndReturnsJournalEvents(t *testing.T) {
 	if !result.Accepted || len(result.Events) != 1 || result.Events[0].AmountUSD.Cmp(pricing.MustUSD("0.01")) != 0 {
 		t.Fatalf("accepted result = %#v", result)
 	}
-	if invoker.calls != 1 || len(invoker.args[0]) != 8 || invoker.args[0][0] != "durable_reserve" {
+	if invoker.calls != 1 || len(invoker.args[0]) != 9 || invoker.args[0][0] != "durable_reserve" || invoker.args[0][8] != "0" {
 		t.Fatalf("invocation = %#v", invoker.args)
 	}
 	if result.Replayed {
@@ -217,3 +217,16 @@ func TestRedisBudgetMaterializerRoundsSubsecondExpiryUp(t *testing.T) {
 }
 
 func ptrUSD(value pricing.USD) *pricing.USD { return &value }
+
+func TestOperationKeyReuseHorizonSecondsRoundsUpAndBounds(t *testing.T) {
+	for horizon, want := range map[time.Duration]int64{0: 0, time.Millisecond: 1, 48 * time.Hour: 172800, 48*time.Hour + time.Nanosecond: 172801} {
+		if got, err := OperationKeyReuseHorizonSeconds(horizon); err != nil || got != want {
+			t.Errorf("%v = %d, %v; want %d", horizon, got, err, want)
+		}
+	}
+	for _, horizon := range []time.Duration{-time.Second, MaxOperationKeyReuseHorizon + time.Second} {
+		if _, err := OperationKeyReuseHorizonSeconds(horizon); err == nil {
+			t.Errorf("%v accepted", horizon)
+		}
+	}
+}

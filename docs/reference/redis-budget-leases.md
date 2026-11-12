@@ -209,16 +209,19 @@ already expired, so a release returns not-found and refunds nothing twice. A
 claimed authorization cannot use that release path. A later exact
 cost correction has its own event ID and revision.
 
-Operation records and deduplication tombstones currently have no TTL. Claimed
-and ambiguous reservations also remain until settlement. A claimed provider
+Operation records double as deduplication tombstones. Claimed and ambiguous
+reservations remain until settlement, and their records stay persistent while
+they do. Every other record (unclaimed, released or fully settled) expires
+`state.redis.operation_key_reuse_horizon` after its last change; with the
+default of `0` it is kept indefinitely. See
+[Redis growth and sizing](#redis-growth-and-sizing). A claimed provider
 attempt whose outcome stays unknown after its recovery window (the 15-minute
 start lease) is settled with `finalize_unknown` events at its full reservation
 by the next poll or budget acquisition that observes it, so the conservative
 charge counts through each budget window like confirmed cost and then ages out
 instead of being held forever. A later exact cost is a `resolve_unknown_exact`
-correction, never a second settlement. Automatic cleanup of
-these records is a future task: Redis memory capacity must include their growth.
-This prevents old activity retries from reacquiring or refunding a paid attempt.
+correction, never a second settlement. Within the horizon, tombstones prevent
+old activity retries from reacquiring or refunding a paid attempt.
 There is no SQL journal; lost Redis budget state is rebuilt from the durable
 cloud execution records, never by treating missing reservations as unused
 budget. See [recovery after Redis data loss](#recovery-after-redis-data-loss).
@@ -286,7 +289,9 @@ and is unsuitable here. Publication does not start a background tailer in the
 runtime; wiring adoption and wake-ups remains separate work. The Stream never
 authorizes provider dispatch. Every publication approximately caps history at 10,000 events and refreshes a
 24-hour idle TTL. Redis can evict the Stream under `volatile-lru`; balances,
-operation tombstones and authority markers keep their non-expiring protection.
+operation tombstones and authority markers keep their non-expiring protection
+(an `operation_key_reuse_horizon`, which makes tombstones expire, therefore
+requires `noeviction`).
 A retained-prefix gap triggers an authoritative reload. An absent Stream uses
 `0-0` as its pre-reload checkpoint so events created during reload remain
 replayable. Hints never authorize spending, even after a retention gap.
@@ -302,6 +307,76 @@ the current cursor and original roster registration time. This store contract
 does not itself enable production tailer wiring or Stream retention.
 
 See [durable runtime composition](durable-v1-runtime.md) for workflow wiring.
+
+## Redis growth and sizing
+
+Redis runs `noeviction` with AOF and holds budget authority, so running out of
+memory is an outage. Each kind of growing state has a bound (#1543):
+
+- **Operation records (reuse tombstones).** One record per durable operation,
+  in the `durable-budget-operation` key family. `state.redis.operation_key_reuse_horizon`
+  is the operator's declaration that callers never reuse an operation key after
+  that long. A record that holds no claimed or ambiguous reservation gets an
+  `EXPIRE` of the horizon on every change; a claimed or ambiguous one is
+  persistent until it settles, because a settlement or `resolve_unknown_exact`
+  correction must still find it. The horizon is `0` (keep indefinitely, the
+  retention design's default) or at least `24h` and at least
+  `state.ambiguous_retention`, the longest the worker keeps attempt evidence
+  that can still settle or recover an operation. Cloud attempt records and
+  unknown-cost receipts have no retention today, so the horizon never shortens
+  their protection; it only bounds how long a reused key is refused. A horizon
+  requires `maxmemory_policy: noeviction`, since an expiring tombstone is a
+  volatile key. Records restored by
+  [recovery](#recovery-after-redis-data-loss) and records written before this
+  release stay persistent until their next claim or settlement.
+- **Operation index.** `budget:operations` is a sorted set with one entry per
+  live record, scored by its key expiry in Redis milliseconds (`+inf` while
+  persistent). Mutations prune up to 1,024 expired entries each.
+  `llmtw_budget_operation_records{retention="expiring"|"persistent"}` reports
+  its size every readiness probe interval.
+- **Coordination Stream.** `XADD MAXLEN ~ 10000` plus a refreshed 24-hour idle
+  `EXPIRE` (#1598) bounds it to about 10,000 entries. This release keeps that
+  bound rather than `XTRIM MINID` at the minimum live worker cursor: hints are
+  disposable, readers reload authoritative state after a gap, no runtime tailer
+  publishes cursors yet, and a cursor-based trim would let one stalled worker
+  pin unbounded history. `llmtw_budget_stream_length` reports `XLEN`.
+- **Provider state.** Each worker reports its configuration digest as loaded
+  every readiness probe interval. Status and inventory hashes for a digest that
+  no worker has reported for seven days are deleted (at most 64 digests per
+  pass, counted by `llmtw_maintenance_rows_total{resource="status",outcome="deleted"}`).
+  The current digest is never deleted, and a digest reported again during the
+  pass keeps its state. Digests that no worker of this version ever reported
+  are never deleted; remove them by hand after an upgrade if needed.
+- **Budget buckets and expiry sets.** Bounded by the live windows: settled
+  cost leaves its window and cleanup removes it.
+
+Sizing formula:
+
+```text
+redis_bytes ≈ R × H × (B_record + B_index)
+            + P × B_record                      # claimed or ambiguous, persistent
+            + 10,000 × B_event                  # Stream cap
+            + D × 2 × 32 MiB                    # provider state, worst case
+            + window state + legacy admission records
+```
+
+- `R`: durable operations per second; `H`: `operation_key_reuse_horizon` in
+  seconds (with `0`, use the deployment's lifetime: growth is unbounded).
+- `B_record`: about 1.2 KiB for a one-window operation record, plus about
+  0.4 KiB per additional window, measured with `MEMORY USAGE` by
+  `TestLiveRedisOperationRecordRetention`.
+- `B_index`: about 100 bytes per index entry.
+- `P`: claimed or ambiguous operations awaiting settlement.
+- `B_event`: about 300 bytes per Stream entry, so the Stream stays under about
+  3 MiB.
+- `D`: configuration digests reported loaded within the last seven days.
+
+For example, 100,000 one-window requests a day with a 90-day horizon need
+about 100,000 × 90 × 1.3 KiB ≈ 11 GiB for tombstones. Without a horizon the
+same traffic grows by about 130 MiB a day until an operator sets one. Alert
+when `llmtw_budget_operation_records` approaches the sized capacity, and when
+`llmtw_budget_stream_length` stays above 12,000 (the `MAXLEN` bound is not
+being applied).
 
 ## Verification
 

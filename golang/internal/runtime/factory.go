@@ -205,6 +205,7 @@ type productionClientSet struct {
 	budgets            durablestore.BudgetLeaser
 	v1Capabilities     V1RuntimeCapabilities
 	v1Runtime          activity.V1Runtime
+	redisGrowth        *RedisGrowthMaintainer
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
@@ -612,11 +613,18 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		FunctionVersion: value.State.Redis.AdmissionVersion, GenerationID: redisBudgetGeneration, IncarnationID: durablestore.IncarnationID(redisBudgetGeneration), Clock: clock,
 		CoordinationStreamEnabled: streamEnabled,
 		Initialization:            initialization,
+		OperationKeyReuseHorizon:  time.Duration(value.State.Redis.OperationKeyReuseHorizon),
 	})
 	if err != nil {
 		closeAll()
 		return nil, nil, fmt.Errorf("construct Redis budgets: %w", err)
 	}
+	growthSampler, err := redisstore.NewBudgetGrowthSampler(redisClient, keyOptions, clock)
+	if err != nil {
+		closeAll()
+		return nil, nil, fmt.Errorf("construct Redis growth sampler: %w", err)
+	}
+	redisGrowth := &RedisGrowthMaintainer{sampler: growthSampler, providers: providerState, configDigest: snapshot.Digest(), retireAfter: redisstore.ProviderStateRetireAfter}
 	if syncRuntime != nil {
 		catalogStore, storeErr := redisstore.NewModelCatalogStore(redisClient, keyOptions)
 		if storeErr != nil {
@@ -659,6 +667,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll = func() { langfuseClient.Close(); closeBefore() }
 	}
 	clients := &productionClientSet{
+		redisGrowth:        redisGrowth,
 		probes:             probes,
 		providerControl:    providerControl,
 		queryRepos:         queryRepos,
