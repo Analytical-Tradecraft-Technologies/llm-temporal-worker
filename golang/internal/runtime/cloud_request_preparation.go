@@ -177,21 +177,20 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 	// never leaves a permanent pending record. An existing operation skips this:
 	// it replays its saved result or preparation without reopening the parent.
 	var initial *cloudMaterializedPreparation
-	if _, err := p.store.LookupOperation(ctx, operation); errors.Is(err, contracts.ErrNotFound) {
-		// The configured request limits bound new input only. An operation
-		// admitted under an earlier snapshot keeps replaying its saved result.
+	var validationErr error
+	validateNew := func() error {
 		if err := p.requestLimits.validate(input); err != nil {
-			return PreparedCloudRequest{}, err
+			validationErr = err
+			return err
 		}
 		candidate := cloudstate.Record{Status: cloudstate.StatusRunning, Request: cloudstate.CreateRequest{Scope: scope, Kind: kind, RequestIndex: index, Manifest: manifest, CreatedAt: operation.Now}}
-		initial, err = p.materialize(ctx, candidate, caller, parent, checkpointScope, operation.Now.UTC())
-		if err != nil {
-			return PreparedCloudRequest{}, err
-		}
-	} else if err != nil {
-		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
+		initial, validationErr = p.materialize(ctx, candidate, caller, parent, checkpointScope, operation.Now.UTC())
+		return validationErr
 	}
-	record, err := p.store.BeginOperation(ctx, operation)
+	record, err := beginPreparedOperation(ctx, p.store, operation, validateNew)
+	if validationErr != nil {
+		return PreparedCloudRequest{}, validationErr
+	}
 	if err != nil {
 		return PreparedCloudRequest{}, cloudRuntimeError(err, false)
 	}
@@ -206,6 +205,24 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 		return p.completedAfterError(ctx, record, checkpointScope, err)
 	}
 	return prepared, nil
+}
+
+type validatedOperationStarter interface {
+	BeginOperationValidated(context.Context, cloudstate.Operation, func() error) (cloudstate.Record, error)
+}
+
+func beginPreparedOperation(ctx context.Context, store CloudRequestPreparationStore, operation cloudstate.Operation, validateNew func() error) (cloudstate.Record, error) {
+	if starter, ok := store.(validatedOperationStarter); ok {
+		return starter.BeginOperationValidated(ctx, operation, validateNew)
+	}
+	if _, err := store.LookupOperation(ctx, operation); errors.Is(err, contracts.ErrNotFound) {
+		if err := validateNew(); err != nil {
+			return cloudstate.Record{}, err
+		}
+	} else if err != nil {
+		return cloudstate.Record{}, err
+	}
+	return store.BeginOperation(ctx, operation)
 }
 
 func (p *CloudRequestPreparation) prepareActive(ctx context.Context, record cloudstate.Record, caller llm.RequestContext, parent, checkpointScope string, initial *cloudMaterializedPreparation) (PreparedCloudRequest, error) {
