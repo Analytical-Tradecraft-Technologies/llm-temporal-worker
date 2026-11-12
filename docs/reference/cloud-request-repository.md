@@ -74,6 +74,34 @@ false and preserves existing single-region behavior. Enabling it permits global
 tables only when DynamoDB reports `STRONG` consistency; local tables remain
 allowed.
 
+#### Global tables in `UPDATING`
+
+Upstream design keeps global (MRSC) tables in `UPDATING` from opening.
+DynamoDB reports `UPDATING` for routine global-table maintenance and also while a
+table converts to MRSC, and AWS requires that no data is written during that
+conversion. The table description cannot tell the two apart, so the provider
+opens a global table only when it is `ACTIVE`. `cloudstate.Open` fails with an
+unavailable error, which the factory reports as a cloud request storage
+dependency failure. That has these effects:
+
+- **Running workers stay ready.** Readiness keeps the handle opened earlier, so
+  a provider unavailable status on revalidation is ignored and the bounded
+  table query decides. A worker that started before the update keeps polling
+  Temporal as long as DynamoDB serves that query.
+- **Startup fails.** A worker that starts while its only DynamoDB endpoint is
+  `UPDATING` exits with an error, and Kubernetes restarts it with back-off until
+  the table is `ACTIVE` again. Plan rollouts, scale-ups and node drains outside
+  global-table updates, or configure `failover`.
+- **Reload is rejected.** A configuration reload that has to open storage
+  during the update fails, and the previous snapshot keeps serving.
+- **Failover moves past `UPDATING` endpoints.** With `failover`, startup and
+  readiness try the next configured region, so they succeed when at least one
+  replica is `ACTIVE`. When every replica is `UPDATING`, startup fails as above.
+
+Single-region tables in `UPDATING` open normally, and the worker stays ready
+and polling through more consecutive readiness rounds than the three failures
+that would pause it.
+
 To also handle regional outages, configure worker-owned `failover` settings.
 This fragment illustrates configurable DynamoDB replicas and S3 fallback
 buckets. Region identifiers and resource names are placeholders; replace them
