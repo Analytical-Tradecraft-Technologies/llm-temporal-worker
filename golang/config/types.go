@@ -273,6 +273,12 @@ type RedisConfig struct {
 	// hints can now be trimmed or evicted at any age; readers reload the
 	// authoritative Redis generation on a retained-prefix gap.
 	StreamTrimSafety Duration `yaml:"stream_trim_safety" json:"stream_trim_safety"`
+	// OperationKeyReuseHorizon is the operator's declaration that callers
+	// never reuse an operation key after this long. Settled and unclaimed
+	// durable budget operation records (reuse tombstones) expire this long
+	// after their last change; claimed and ambiguous ones never do. Zero, the
+	// default, keeps every record indefinitely.
+	OperationKeyReuseHorizon Duration `yaml:"operation_key_reuse_horizon,omitempty" json:"operation_key_reuse_horizon,omitempty"`
 }
 
 func (redis RedisConfig) EffectiveMaxMemoryPolicy() string {

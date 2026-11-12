@@ -279,7 +279,8 @@
         "dial_timeout": { "$ref": "#/$defs/duration" }, "operation_timeout": { "$ref": "#/$defs/duration" },
         "required_persistence": { "enum": ["aof_and_rdb", "aof", "rdb"] },
         "coordination_stream_enabled": { "type": "boolean" },
-        "stream_trim_safety": { "$ref": "#/$defs/duration" }
+        "stream_trim_safety": { "$ref": "#/$defs/duration" },
+        "operation_key_reuse_horizon": { "$ref": "#/$defs/duration" }
       },
       "allOf": [{
         "if": { "properties": { "service_mesh": { "const": true } }, "required": ["service_mesh"] },

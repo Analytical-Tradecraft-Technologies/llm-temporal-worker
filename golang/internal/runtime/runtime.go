@@ -245,7 +245,11 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 				}
 				return nil, &engineFactoryError{cause: err}
 			}
-			return &snapshotClients{engine: engine, clients: clients, probes: probes, queryService: queryService, v1Runtime: v1Runtime}, nil
+			var redisGrowth *RedisGrowthMaintainer
+			if source, ok := clients.(redisGrowthSource); ok {
+				redisGrowth = source.RedisGrowth()
+			}
+			return &snapshotClients{engine: engine, clients: clients, probes: probes, queryService: queryService, v1Runtime: v1Runtime, redisGrowth: redisGrowth}, nil
 		},
 		Verify: verifySnapshotDependencies,
 	})
@@ -839,6 +843,7 @@ type snapshotClients struct {
 	probes       []DependencyProbe
 	queryService activity.QueryService
 	v1Runtime    activity.V1Runtime
+	redisGrowth  *RedisGrowthMaintainer
 }
 
 var _ V1RuntimeSource = (*snapshotClients)(nil)
@@ -1067,6 +1072,9 @@ func (runtime *Runtime) startDependencyMonitor() {
 				return
 			case <-ticker.C:
 				_ = runtime.syncDependencyReadiness(monitorContext)
+				// Growth metrics and provider-state retirement are best
+				// effort; a failed pass is retried on the next tick.
+				_ = runtime.syncRedisGrowth(monitorContext)
 			}
 		}
 	}()

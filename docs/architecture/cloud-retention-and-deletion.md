@@ -33,9 +33,10 @@ Non-goals:
   references. No such rule may target worker data, now or later;
 - a cancellation API, SQL migration, SQL fallback or budget journal;
 - Redis key retention. Redis operation records and settlement deduplication
-  entries currently have no TTL (see
-  [state and storage](state-and-storage.md#retention-and-recovery)). Their
-  cleanup belongs to the Redis budget work in #814 and is constrained by #819.
+  entries expire only under `state.redis.operation_key_reuse_horizon`, which
+  is unset (keep indefinitely) by default; claimed and ambiguous records never
+  expire. See [Redis growth and sizing](../reference/redis-budget-leases.md#redis-growth-and-sizing)
+  (#1543). Their wider cleanup is constrained by #819.
 
 ## What exists today
 

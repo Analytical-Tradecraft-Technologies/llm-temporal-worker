@@ -44,6 +44,7 @@ type RedisBudgetMaterializer struct {
 	clock       func() time.Time
 	stream      bool
 	authority   string
+	horizon     int64
 }
 
 // RedisBudgetMaterializerOptions configures one snapshot-owned materializer.
@@ -65,6 +66,10 @@ type RedisBudgetMaterializerOptions struct {
 	// Initialization requires the matching persistent Redis marker inside
 	// every mutation. Production durable workers must supply a Ready receipt.
 	Initialization *budget.Initialization
+	// OperationKeyReuseHorizon is how long a settled or unclaimed operation
+	// record survives its last change as a reuse tombstone. Zero keeps every
+	// record indefinitely. Claimed and ambiguous records are always kept.
+	OperationKeyReuseHorizon time.Duration
 }
 
 func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisBudgetMaterializer, error) {
@@ -101,6 +106,10 @@ func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisB
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
+	horizon, err := OperationKeyReuseHorizonSeconds(options.OperationKeyReuseHorizon)
+	if err != nil {
+		return nil, err
+	}
 	var authority string
 	if value := options.Initialization; value != nil {
 		keys := BudgetKeySpace{space: space}
@@ -115,7 +124,21 @@ func NewRedisBudgetMaterializer(options RedisBudgetMaterializerOptions) (*RedisB
 		clock:     options.Clock,
 		stream:    options.CoordinationStreamEnabled,
 		authority: authority,
+		horizon:   horizon,
 	}, nil
+}
+
+// MaxOperationKeyReuseHorizon bounds the configured horizon so the Function's
+// millisecond index score stays exact.
+const MaxOperationKeyReuseHorizon = 100 * 365 * 24 * time.Hour
+
+// OperationKeyReuseHorizonSeconds converts a horizon to the whole seconds the
+// Function applies with EXPIRE, rounding up so a record never expires early.
+func OperationKeyReuseHorizonSeconds(horizon time.Duration) (int64, error) {
+	if horizon < 0 || horizon > MaxOperationKeyReuseHorizon {
+		return 0, fmt.Errorf("operation key reuse horizon %s is outside [0, %s]", horizon, MaxOperationKeyReuseHorizon)
+	}
+	return int64((horizon + time.Second - 1) / time.Second), nil
 }
 
 var _ durable.BudgetLeaser = (*RedisBudgetMaterializer)(nil)
@@ -457,6 +480,9 @@ func (m *RedisBudgetMaterializer) run(ctx context.Context, keys []string, args .
 		keys = append(keys, m.space.admissionPrefix()+budgetAuthoritySuffix)
 		args = append(args, m.authority)
 	}
+	// The retention envelope is last: the Function strips it first.
+	keys = append(keys, m.space.admissionPrefix()+BudgetOperationsSuffix)
+	args = append(args, strconv.FormatInt(m.horizon, 10))
 	return m.invoke.Run(ctx, m.function, keys, args...)
 }
 

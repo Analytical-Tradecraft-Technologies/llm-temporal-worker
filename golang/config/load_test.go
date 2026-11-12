@@ -353,7 +353,7 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 	redis, _ := state["redis"].(map[string]any)
 	for field, want := range map[string]string{
 		"admission_mode":    "function",
-		"admission_version": "admission_0f563bdf4c8f7c6f",
+		"admission_version": "admission_628f464157f0b550",
 	} {
 		if got, _ := redis[field].(string); got != want {
 			t.Fatalf("state.redis.%s = %q, want %q", field, got, want)
@@ -371,15 +371,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7",
-		"admission_digest: 6FF537912923EC833924A5286D1F1BDCC3B7A40B42E8D677E8C7E79E93CF85A7",
+		"admission_digest: 1b7248f3703f71f4e27d847e82ade143076f38d0b62e819d807f9ca48ac3d78f",
+		"admission_digest: 1B7248F3703F71F4E27D847E82ADE143076F38D0B62E819D807F9CA48AC3D78F",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "1b7248f3703f71f4e27d847e82ade143076f38d0b62e819d807f9ca48ac3d78f"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -526,7 +526,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 1b7248f3703f71f4e27d847e82ade143076f38d0b62e819d807f9ca48ac3d78f", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),
@@ -775,5 +775,31 @@ func TestResponsesAPIListenerBindsTheHostInProduction(t *testing.T) {
 	// Development keeps the shape-only rule.
 	if _, err := config.Load(with("development", "  responses_api_listen_address: 0.0.0.0:8000")); err != nil && strings.Contains(err.Error(), "responses_api") {
 		t.Fatalf("development listener rejected: %v", err)
+	}
+}
+
+func TestLoadValidatesOperationKeyReuseHorizon(t *testing.T) {
+	withHorizon := func(horizon, extra string) []byte {
+		return []byte(strings.Replace(string(exampleYAML(t)), "    stream_trim_safety: 10m\n", "    stream_trim_safety: 10m\n    operation_key_reuse_horizon: "+horizon+"\n"+extra, 1))
+	}
+	loaded, err := config.Load(withHorizon("100d", ""))
+	if err != nil {
+		t.Fatalf("100d horizon: %v", err)
+	}
+	if got, want := time.Duration(loaded.State.Redis.OperationKeyReuseHorizon), 100*24*time.Hour; got != want {
+		t.Fatalf("horizon = %v, want %v", got, want)
+	}
+	if loaded, err := config.Load(exampleYAML(t)); err != nil || loaded.State.Redis.OperationKeyReuseHorizon != 0 {
+		t.Fatalf("default horizon = %v, %v; want 0 (keep indefinitely)", loaded.State.Redis.OperationKeyReuseHorizon, err)
+	}
+	for name, data := range map[string][]byte{
+		"below a day":                 withHorizon("1h", ""),
+		"below ambiguous retention":   withHorizon("30d", ""),
+		"evictable tombstones":        withHorizon("100d", "    maxmemory_policy: volatile-lru\n"),
+		"beyond the Function's bound": withHorizon("40000d", ""),
+	} {
+		if _, err := config.Load(data); err == nil || !strings.Contains(err.Error(), "operation_key_reuse_horizon") {
+			t.Errorf("%s: error = %v, want an operation_key_reuse_horizon error", name, err)
+		}
 	}
 }

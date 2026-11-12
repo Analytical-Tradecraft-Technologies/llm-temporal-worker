@@ -408,6 +408,9 @@ func (state StateConfig) validate(environment string) error {
 		// and should normally be omitted from a development configuration.
 		return nil
 	}
+	if err := validateOperationKeyReuseHorizon(state); err != nil {
+		return err
+	}
 	if err := state.Redis.validate(environment); err != nil {
 		return err
 	}
@@ -1081,6 +1084,42 @@ func (versioning WorkerVersioningConfig) Validate() error {
 	}
 	if strings.ContainsAny(versioning.DeploymentName, ".:") {
 		return fmt.Errorf("temporal.worker.versioning.deployment_name must not contain '.' or ':'")
+	}
+	return nil
+}
+
+// MinOperationKeyReuseHorizon is the shortest non-zero
+// state.redis.operation_key_reuse_horizon. A tombstone must outlive every
+// Temporal Activity retry of the same operation key.
+const MinOperationKeyReuseHorizon = 24 * time.Hour
+
+// MaxOperationKeyReuseHorizon matches the Redis materializer's bound.
+const MaxOperationKeyReuseHorizon = 100 * 365 * 24 * time.Hour
+
+// validateOperationKeyReuseHorizon keeps a reuse tombstone at least as long as
+// the attempt evidence that can still settle or recover it: the ambiguous
+// retention, which validation already makes cover the terminal retention.
+// Cloud attempt records and unknown-cost receipts have no retention today, so
+// a non-zero horizon is the operator's declaration that callers never reuse an
+// operation key after it.
+func validateOperationKeyReuseHorizon(state StateConfig) error {
+	horizon := time.Duration(state.Redis.OperationKeyReuseHorizon)
+	if horizon == 0 {
+		return nil
+	}
+	if horizon < 0 || horizon > MaxOperationKeyReuseHorizon {
+		return fmt.Errorf("state.redis.operation_key_reuse_horizon must be between %s and %s, or 0 to keep records indefinitely", MinOperationKeyReuseHorizon, MaxOperationKeyReuseHorizon)
+	}
+	if horizon < MinOperationKeyReuseHorizon {
+		return fmt.Errorf("state.redis.operation_key_reuse_horizon must be at least %s", MinOperationKeyReuseHorizon)
+	}
+	if horizon < time.Duration(state.AmbiguousRetention) {
+		return fmt.Errorf("state.redis.operation_key_reuse_horizon must cover state.ambiguous_retention")
+	}
+	// An expiring tombstone is a volatile key: a volatile-* eviction policy
+	// could drop it early and let an old retry reserve again.
+	if state.Redis.EffectiveMaxMemoryPolicy() != "noeviction" {
+		return fmt.Errorf("state.redis.operation_key_reuse_horizon requires state.redis.maxmemory_policy noeviction")
 	}
 	return nil
 }

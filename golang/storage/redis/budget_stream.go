@@ -38,7 +38,10 @@ const (
 	BudgetActiveGenerationSuffix = "budget:active-generation"
 	BudgetEventsSuffix           = "budget:events"
 	BudgetWorkersSuffix          = "budget:workers"
-	MaxBudgetStreamEventBytes    = 8 << 10
+	// BudgetOperationsSuffix names the index of durable operation records,
+	// scored by key expiry in Redis milliseconds (+inf while persistent).
+	BudgetOperationsSuffix    = "budget:operations"
+	MaxBudgetStreamEventBytes = 8 << 10
 )
 
 var redisStreamIDPattern = regexp.MustCompile(`^[0-9]+-[0-9]+$`)

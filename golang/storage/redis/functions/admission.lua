@@ -671,6 +671,28 @@ local DURABLE_SCHEMA = 'durable-budget/v1'
 local MAX_DURABLE_RESERVATIONS = 250
 local MAX_DURABLE_EVENTS = 250
 
+-- Production mutations carry an operation-record retention envelope as their
+-- final declared key/value: the budget:operations index and the
+-- operation_key_reuse_horizon in seconds (0 keeps records indefinitely). Strip
+-- it first; the authority and Stream envelopes below are unchanged (#1543).
+local durable_index_key = nil
+local durable_horizon = nil
+if ACTION == 'durable_reserve' or ACTION == 'durable_claim' or ACTION == 'durable_reconcile' then
+    local namespace = string.match(KEYS[1] or '', '^(.*:{[^{}]+}:)durable%-budget%-operation:[a-f0-9]+$')
+    if namespace and KEYS[#KEYS] == namespace .. 'budget:operations' then
+        local horizon = ARGV[#ARGV]
+        if type(horizon) ~= 'string' or not string.match(horizon, '^%d+$') or #horizon > 10 then
+            return {'invalid_request', ''}
+        end
+        local key_type = redis.call('TYPE', KEYS[#KEYS]).ok
+        if key_type ~= 'none' and key_type ~= 'zset' then return {'state_unavailable', ''} end
+        durable_index_key = KEYS[#KEYS]
+        durable_horizon = tonumber(horizon)
+        table.remove(KEYS)
+        table.remove(ARGV)
+    end
+end
+
 -- Production mutations carry their snapshot's authority as a final declared
 -- key/value. Check it in the same invocation as accounting, before even expiry
 -- cleanup. A readiness check outside Redis cannot close this race by itself.
@@ -807,6 +829,37 @@ local function durable_cleanup(bucket_key, expiry_key, now)
         durable_publish('expire', nil, bucket_key, 0, value)
     end
     return true
+end
+
+-- Keep an operation record's key expiry and its budget:operations index entry
+-- in step. A record that still holds a claimed or ambiguous reservation stays
+-- persistent: it must outlive every settlement or resolution. Every other
+-- record is a reuse tombstone that expires operation_key_reuse_horizon after
+-- its last change. Index entries whose expiry has passed are pruned, bounded
+-- like durable_cleanup, so the index cardinality counts live records.
+local function durable_retain(record, now_millis)
+    if not durable_index_key then return end
+    local expired = redis.call('ZRANGEBYSCORE', durable_index_key, '-inf', decimal(now_millis), 'LIMIT', 0, 1024)
+    if #expired > 0 then redis.call('ZREM', durable_index_key, unpack(expired)) end
+    local persistent = durable_horizon == 0 or record.claimed == true and record.status == 'accepted' and (function()
+        for _, reservation in ipairs(record.reservations) do
+            if reservation.status ~= 'finalized' then return true end
+        end
+        return false
+    end)()
+    local member = string.match(KEYS[1], ':([a-f0-9]+)$')
+    if persistent then
+        redis.call('PERSIST', KEYS[1])
+        redis.call('ZADD', durable_index_key, '+inf', member)
+    else
+        redis.call('EXPIRE', KEYS[1], decimal(durable_horizon))
+        redis.call('ZADD', durable_index_key, decimal(now_millis + durable_horizon * 1000), member)
+    end
+end
+
+local function durable_redis_millis()
+    local now = redis.call('TIME')
+    return tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 end
 
 local function durable_encode(record)
@@ -970,7 +1023,9 @@ if ACTION == 'durable_reserve' then
         durable_publish('reserve', durable_operation_hash(), bucket_key, 1, amount)
     end
     local encoded = durable_encode(record)
-    redis.call('SET', KEYS[1], encoded) -- Persistent tombstone prevents lease reuse.
+    -- The tombstone prevents lease reuse until operation_key_reuse_horizon.
+    redis.call('SET', KEYS[1], encoded)
+    durable_retain(record, now_millis)
     return {'created', encoded}
 end
 
@@ -1005,6 +1060,7 @@ if ACTION == 'durable_claim' then
     end
     record.claimed = true
     redis.call('SET', KEYS[1], durable_encode(record))
+    durable_retain(record, millis)
     return {'claimed', ''}
 end
 
@@ -1157,6 +1213,7 @@ if ACTION == 'durable_reconcile' then
     end
     local encoded = durable_encode(record)
     durable_restore_record(KEYS[1], encoded, 0)
+    durable_retain(record, durable_redis_millis())
     return {'ok', encoded}
 end
 
