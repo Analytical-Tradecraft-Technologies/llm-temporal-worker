@@ -483,6 +483,12 @@ func mapTools(request createRequest, settings *llm.SettingsPatchV1, continuation
 			if err := decoder.Decode(&tool); err != nil || tool.Type != "function" {
 				return invalidParam(param, "only function tools are supported; hosted tools are not available through this API")
 			}
+			// Generate tools have no strict mode and every adapter lowers
+			// them non-strict, so a strict tool is refused rather than run
+			// with its schema unenforced (#1525).
+			if tool.Strict != nil && *tool.Strict {
+				return invalidParam(param+".strict", "strict function tools are not supported; set strict to false or omit it")
+			}
 			schema := tool.Parameters
 			if len(schema) == 0 || string(schema) == "null" {
 				schema = json.RawMessage(`{"type":"object","properties":{}}`)

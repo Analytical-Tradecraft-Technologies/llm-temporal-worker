@@ -67,7 +67,7 @@ func TestInputItemsMapToTheTranscript(t *testing.T) {
 			{"type": "function_call_output", "call_id": "call_1", "output": "22C"},
 			{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "It is 22C.", "annotations": []}]}
 		],
-		"tools": [{"type": "function", "name": "weather", "parameters": {"type": "object"}, "strict": true}],
+		"tools": [{"type": "function", "name": "weather", "parameters": {"type": "object"}, "strict": false}],
 		"tool_choice": {"type": "function", "name": "weather"},
 		"parallel_tool_calls": false,
 		"temperature": 0.70,
@@ -116,6 +116,31 @@ func TestInputItemsMapToTheTranscript(t *testing.T) {
 	}
 	if *generate.SettingsPatch.ReasoningEffort.Set != llm.ReasoningEffortHigh || *generate.SettingsPatch.ReasoningSummary.Set != llm.ReasoningSummaryAuto {
 		t.Fatal("reasoning was not mapped")
+	}
+}
+
+func TestFunctionToolStrict(t *testing.T) {
+	for name, strict := range map[string]string{"false": `,"strict":false`, "null": `,"strict":null`, "omitted": ""} {
+		mapped, apiErr := mapBody(t, `{"model":"m","input":"hi","tools":[{"type":"function","name":"weather","parameters":{"type":"object"}`+strict+`}]}`)
+		if apiErr != nil {
+			t.Fatalf("strict %s: %v", name, apiErr)
+		}
+		tools := *mapped.Generate.SettingsPatch.Tools.Set
+		if len(tools) != 1 || tools[0].Name != "weather" {
+			t.Fatalf("strict %s: unexpected tools %+v", name, tools)
+		}
+	}
+	// Generate tools are lowered non-strict, so a strict tool is refused
+	// rather than run with its schema unenforced (#1525).
+	_, apiErr := mapBody(t, `{"model":"m","input":"hi","tools":[
+		{"type":"function","name":"lookup","parameters":{"type":"object"},"strict":false},
+		{"type":"function","name":"weather","parameters":{"type":"object"},"strict":true}
+	]}`)
+	if apiErr == nil {
+		t.Fatal("strict tool was accepted")
+	}
+	if apiErr.Status != 400 || apiErr.Type != "invalid_request_error" || apiErr.Param == nil || *apiErr.Param != "tools[1].strict" {
+		t.Fatalf("unexpected error: %+v", apiErr)
 	}
 }
 
