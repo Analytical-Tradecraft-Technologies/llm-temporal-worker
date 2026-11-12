@@ -329,9 +329,9 @@ state:
       ca_file: /var/run/ca/redis.pem
     admission_hash_tag: admission
     admission_mode: function
-    function_library: llmtw_admission_569c833775078849
-    admission_version: admission_569c833775078849
-    admission_digest: 1ad1c002b53c82eeb7844074a9ced496d291e5964afeece237d3b52133ed5137
+    function_library: llmtw_admission_0f563bdf4c8f7c6f
+    admission_version: admission_0f563bdf4c8f7c6f
+    admission_digest: 6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7
     coordination_stream_enabled: true
     stream_trim_safety: 10m
     max_connections: 96
