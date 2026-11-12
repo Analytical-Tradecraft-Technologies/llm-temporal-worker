@@ -46,6 +46,9 @@ type liveCloudWorkflow struct {
 	observed          sync.Once
 	complete          atomic.Bool
 	cacheWaitObserver func(string)
+	// cacheHitObserver sees each Activity step that resolved a cache hit,
+	// when it returned.
+	cacheHitObserver func(string, time.Time)
 }
 
 type observedCloudRuntime struct {
@@ -57,6 +60,9 @@ func (r *observedCloudRuntime) PrepareExecutionV1(ctx context.Context, request l
 	result, err := r.CloudExecutionRuntime.PrepareExecutionV1(ctx, request)
 	if err == nil {
 		r.observeCacheWait(result)
+		if observe := r.harness.cacheHitObserver; observe != nil && result.State == llm.ExecutionCompleted && result.Generate != nil && result.Generate.Cache.Disposition == "hit" {
+			observe(result.RequestID, time.Now())
+		}
 	}
 	return result, err
 }
@@ -188,12 +194,17 @@ func (h *liveCloudWorkflow) startWorker(t *testing.T) func() {
 
 func (h *liveCloudWorkflow) startWorkerOnQueue(t *testing.T, queue string) func() {
 	t.Helper()
+	return h.startWorkerWithOptions(t, queue, worker.Options{WorkerStopTimeout: time.Second, MaxConcurrentWorkflowTaskExecutionSize: 4})
+}
+
+func (h *liveCloudWorkflow) startWorkerWithOptions(t *testing.T, queue string, options worker.Options) func() {
+	t.Helper()
 	// Reconstruct all invocation-local execution state from the retained stores.
 	runtime, err := h.fixture.cap.NewCloudExecutionRuntime(h.ctx, h.fixture.options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := worker.New(h.client, queue, worker.Options{WorkerStopTimeout: time.Second, MaxConcurrentWorkflowTaskExecutionSize: 4})
+	w := worker.New(h.client, queue, options)
 	workflows.Register(w, activity.PayloadLimits{})
 	a := &activity.Activities{V1Runtime: &observedCloudRuntime{cloudV1Runtime: &cloudV1Runtime{CloudExecutionRuntime: runtime}, harness: h}}
 	if err := a.RegisterForTaskQueue(w, queue); err != nil {

@@ -25,6 +25,7 @@ func TestV1ActivityDescriptorsAreClosedAndTaskQueueBound(t *testing.T) {
 		{TaskQueue: "llm-inference", Name: PollActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 		{TaskQueue: "llm-inference", Name: CompleteActivityName, InputType: referenceV1InputType, OutputType: executionV1OutputType},
 		{TaskQueue: "llm-inference", Name: PlanGenerationActivityName, InputType: generateV1InputType, OutputType: planV1OutputType},
+		{TaskQueue: "llm-inference", Name: ResolveGenerationActivityName, InputType: generateV1InputType, OutputType: resolveV1OutputType},
 		{TaskQueue: "llm-inference", Name: ExportLangfuseActivityName, InputType: referenceV1InputType, OutputType: "none"},
 	}
 	if !reflect.DeepEqual(descriptors, want) {
@@ -53,7 +54,7 @@ func TestRegisterForTaskQueueUsesTheV1SetWhenConfigured(t *testing.T) {
 	if err := activities.RegisterForTaskQueue(registry, "queue-a"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ExportLangfuseActivityName}
+	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ResolveGenerationActivityName, ExportLangfuseActivityName}
 	if !reflect.DeepEqual(registry.names, want) {
 		t.Fatalf("registered names = %v, want %v", registry.names, want)
 	}

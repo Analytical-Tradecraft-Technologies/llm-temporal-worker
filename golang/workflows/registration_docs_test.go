@@ -32,7 +32,7 @@ func TestRegistrationPagesNameEveryWorkflowAndActivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	counts := map[int]string{6: "six", 9: "nine"}
+	counts := map[int]string{6: "six", 10: "ten"}
 	workflowCount, activityCount := counts[len(workflows)], counts[len(descriptors)]
 	if workflowCount == "" || activityCount == "" {
 		t.Fatalf("%d workflows and %d Activities are registered; update the pages and this test", len(workflows), len(descriptors))

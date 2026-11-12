@@ -33,6 +33,7 @@ func publicReplayEnvironment(f *boundedCloudFixture) *testsuite.TestWorkflowEnvi
 	env.RegisterWorkflowWithOptions(workflows.WaitForBudget, workflow.RegisterOptions{Name: workflows.BudgetWorkflowName})
 	env.RegisterWorkflowWithOptions(workflows.ExportLangfuse, workflow.RegisterOptions{Name: workflows.LangfuseExportWorkflowName})
 	env.RegisterActivityWithOptions(activities.PlanGenerationV1, sdkactivity.RegisterOptions{Name: activity.PlanGenerationActivityName})
+	env.RegisterActivityWithOptions(activities.ResolveGenerationV1, sdkactivity.RegisterOptions{Name: activity.ResolveGenerationActivityName})
 	env.RegisterActivityWithOptions(activities.PrepareExecutionV1, sdkactivity.RegisterOptions{Name: activity.PrepareActivityName})
 	env.RegisterActivityWithOptions(activities.AcquireBudgetV1, sdkactivity.RegisterOptions{Name: activity.AcquireBudgetActivityName})
 	env.RegisterActivityWithOptions(activities.GenerateStepV1, sdkactivity.RegisterOptions{Name: activity.GenerateActivityName})
