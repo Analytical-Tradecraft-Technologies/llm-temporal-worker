@@ -183,30 +183,11 @@ func executeHealthcheckCommand(ctx context.Context, args []string, options Comma
 }
 
 func executeConfigCommand(ctx context.Context, args []string, options CommandOptions, printEffective bool) int {
-	flags := flag.NewFlagSet("config", flag.ContinueOnError)
-	flags.SetOutput(options.ErrOut)
-	path := flags.String("config", defaultConfigPath, "configuration YAML path")
-	if err := flags.Parse(args); err != nil {
-		return 2
+	loaded, code := loadCheckedConfig(ctx, "config", args, options)
+	if code != 0 {
+		return code
 	}
-	data, err := readConfig(*path)
-	if err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
-	}
-	snapshot, err := config.Compile(ctx, data, options.Resolver)
-	if err != nil {
-		writeConfigError(options.ErrOut, err)
-		return 1
-	}
-	if err := unsupportedByWorkerBinary(snapshot); err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
-	}
-	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
-	}
+	snapshot := loaded.snapshot
 	if printEffective {
 		_, _ = options.Out.Write(snapshot.Canonical())
 		_, _ = io.WriteString(options.Out, "\n")
@@ -217,29 +198,9 @@ func executeConfigCommand(ctx context.Context, args []string, options CommandOpt
 }
 
 func executeWorkerCommand(ctx context.Context, args []string, options CommandOptions) int {
-	flags := flag.NewFlagSet("worker", flag.ContinueOnError)
-	flags.SetOutput(options.ErrOut)
-	path := flags.String("config", defaultConfigPath, "configuration YAML path")
-	if err := flags.Parse(args); err != nil {
-		return 2
-	}
-	data, err := readConfig(*path)
-	if err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
-	}
-	snapshot, err := config.Compile(ctx, data, options.Resolver)
-	if err != nil {
-		writeConfigError(options.ErrOut, err)
-		return 1
-	}
-	if err := unsupportedByWorkerBinary(snapshot); err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
-	}
-	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
-		writeCommandError(options.ErrOut, err)
-		return 1
+	loaded, code := loadCheckedConfig(ctx, "worker", args, options)
+	if code != 0 {
+		return code
 	}
 	if options.RunWorkerFile == nil && options.RunWorker == nil {
 		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
@@ -247,15 +208,55 @@ func executeWorkerCommand(ctx context.Context, args []string, options CommandOpt
 	}
 	var runErr error
 	if options.RunWorkerFile != nil {
-		runErr = options.RunWorkerFile(ctx, *path, data, options.Out)
+		runErr = options.RunWorkerFile(ctx, loaded.path, loaded.data, options.Out)
 	} else {
-		runErr = options.RunWorker(ctx, data, options.Out)
+		runErr = options.RunWorker(ctx, loaded.data, options.Out)
 	}
 	if runErr != nil {
 		writeCommandError(options.ErrOut, runErr)
 		return 1
 	}
 	return 0
+}
+
+// checkedConfig is a configuration that compiled and that this worker binary
+// can run, with the path and bytes it was read from.
+type checkedConfig struct {
+	path     string
+	data     []byte
+	snapshot *config.Snapshot
+}
+
+// loadCheckedConfig parses the --config flag of the named command, then reads
+// and compiles that configuration and checks this binary can run it. On
+// failure it writes the error to options.ErrOut and returns the nonzero exit
+// code: 2 for invalid flags, 1 otherwise.
+func loadCheckedConfig(ctx context.Context, name string, args []string, options CommandOptions) (checkedConfig, int) {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(options.ErrOut)
+	path := flags.String("config", defaultConfigPath, "configuration YAML path")
+	if err := flags.Parse(args); err != nil {
+		return checkedConfig{}, 2
+	}
+	data, err := readConfig(*path)
+	if err != nil {
+		writeCommandError(options.ErrOut, err)
+		return checkedConfig{}, 1
+	}
+	snapshot, err := config.Compile(ctx, data, options.Resolver)
+	if err != nil {
+		writeConfigError(options.ErrOut, err)
+		return checkedConfig{}, 1
+	}
+	if err := unsupportedByWorkerBinary(snapshot); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return checkedConfig{}, 1
+	}
+	if err := workerruntime.ValidateCLIConfig(snapshot.Config()); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return checkedConfig{}, 1
+	}
+	return checkedConfig{path: *path, data: data, snapshot: snapshot}, 0
 }
 
 func executeBudgetInitializeCommand(ctx context.Context, args []string, options CommandOptions) int {
