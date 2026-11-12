@@ -107,8 +107,11 @@ else
   run_gate fuzz_summary bash -c "cd \"$module_root\" && bash \"$module_root/scripts/run-fuzz.sh\" smoke"
 fi
 
+# The admission benchmark times the production v1 Activities path (prepare,
+# acquire, generate) over memory state; 1000 turns keep one GC pause from
+# deciding the sampled p99.
 printf "release evidence: memory benchmark (elapsed %ss)\n" "$SECONDS"
-if ! bash -c "cd \"$module_root\" && go test ./engine -run '^$' -bench '^BenchmarkGenerateMemoryAdmissionAndCompile$' -benchmem -count=1" >"$temporary/benchmark.output" 2>&1; then
+if ! bash -c "cd \"$module_root\" && go test ./internal/runtime -run '^$' -bench '^BenchmarkV1ActivitiesAdmissionMemory$' -benchmem -count=1 -benchtime=1000x" >"$temporary/benchmark.output" 2>&1; then
   fail "memory admission benchmark failed; inspect the trusted CI step output"
 fi
 python3 "$collector" benchmark-summary \

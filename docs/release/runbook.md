@@ -216,8 +216,12 @@ verifier, scanners, and review tooling. The same member name may still appear
 in separate objects.
 
 The `benchmark-summary.json` artifact records one exact
-`BenchmarkGenerateMemoryAdmissionAndCompile` measurement with its sample count,
-`ns/op`, and sampled `p99_ms/op`. The collector fails closed unless the sampled
+`BenchmarkV1ActivitiesAdmissionMemory` measurement with its sample count,
+`ns/op`, and sampled `p99_ms/op`. That benchmark times the production v1
+Activities path (prepare, acquire and generate of one fresh turn through
+`activity.Activities` and `CloudExecutionRuntime`) over in-memory request,
+payload and budget state with a content-free adapter; see the
+[testing strategy](../testing/strategy.md#local-performance-proxy). The collector fails closed unless the sampled
 memory p99 is strictly below the documented 25 ms target and records
 `target_status: "pass"`. Its `scope` is `memory`; `objective_status` remains
 `measurement_only` because the 75 ms same-region Redis counterpart is not
@@ -241,9 +245,15 @@ this benchmark was added: those bundles may omit `benchmark-summary.json`. New
 recordings are stricter and the recorder requires the benchmark artifact, so all
 new evidence captures the measurement without invalidating historical bundles.
 Retained bundles that include the benchmark but predate `target_status` are also
-accepted through the `benchmark_summary_legacy` schema branch. That compatibility
-branch is verify-only; newly collected summaries always use the current shape,
-and only current summaries assert the strict p99 target in the schema.
+accepted through the `benchmark_summary_legacy` schema branch. Bundles recorded
+before [#1497](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1497)
+name `BenchmarkGenerateMemoryAdmissionAndCompile`, which timed the legacy
+in-process `llm.Engine.Generate` path that no production worker runs; they stay
+verifiable through the `benchmark_summary_legacy_engine` branch but are not
+evidence for the v1 path. These compatibility branches exist only to verify
+retained bundles; newly collected summaries always use the current shape and
+benchmark, and the schema asserts the strict p99 target for current and legacy
+engine summaries.
 
 ## Collect, record, and verify
 

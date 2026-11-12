@@ -72,22 +72,24 @@ build:
 # running the benchmark. It has no operator gates and cannot connect to Redis
 # or a provider.
 redis-benchmark-compile:
-	$(GO) test -tags=redisbenchmark ./engine -run '^TestRedisBenchmark' -bench '^$$'
+	$(GO) test -tags=redisbenchmark ./internal/runtime -run '^TestRedisBenchmark' -bench '^$$'
 
-# Runs an opt-in local performance proxy. It has no Redis server or provider
-# network request, so its p99 output is not an SLO proof.
+# Times the production v1 Activities admission path (prepare, acquire,
+# generate) over in-memory state and a content-free adapter. It has no Redis
+# server or provider network request, so its p99 output is not an SLO proof.
 benchmark:
-	$(GO) test ./engine -run '^$$' -bench '^BenchmarkGenerateMemoryAdmissionAndCompile$$' -benchmem -count=1
+	$(GO) test ./internal/runtime -run '^$$' -bench '^BenchmarkV1ActivitiesAdmissionMemory$$' -benchmem -count=1 -benchtime=1000x
 
-# Measures Generate against an explicitly addressed, already-provisioned Redis
-# deployment. This target is deliberately operator-only: it refuses CI, never
-# starts Redis, and never loads Functions or invokes a live provider.
+# Measures the same v1 Activities admission path with budgets in an explicitly
+# addressed, already-provisioned Redis deployment. This target is deliberately
+# operator-only: it refuses CI, never starts Redis, and never loads Functions or
+# invokes a live provider.
 redis-benchmark:
 	@test "$${LLMTW_REDIS_BENCHMARK:-}" = "1" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK=1" >&2; exit 2; }
 	@test "$${LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION:-}" = "1" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1" >&2; exit 2; }
 	@test -n "$${LLMTW_REDIS_BENCHMARK_ADDR:-}" || { echo "redis-benchmark requires LLMTW_REDIS_BENCHMARK_ADDR" >&2; exit 2; }
 	@test -z "$${CI:-}" || { echo "redis-benchmark refuses CI" >&2; exit 2; }
-	LLMTW_REDIS_BENCHMARK=1 LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1 LLMTW_REDIS_BENCHMARK_ADDR="$${LLMTW_REDIS_BENCHMARK_ADDR}" $(GO) test -tags=redisbenchmark ./engine -run '^$$' -bench '^BenchmarkGenerateRedisAdmissionAndCompile$$' -benchmem -count=1 -benchtime=10s
+	LLMTW_REDIS_BENCHMARK=1 LLMTW_REDIS_BENCHMARK_ALLOW_MUTATION=1 LLMTW_REDIS_BENCHMARK_ADDR="$${LLMTW_REDIS_BENCHMARK_ADDR}" $(GO) test -tags=redisbenchmark ./internal/runtime -run '^$$' -bench '^BenchmarkV1ActivitiesAdmissionRedis$$' -benchmem -count=1 -benchtime=10s
 
 # Runs the offline SLO evidence recorder/verifier contract tests without
 # requiring a protected measurement, provider credentials, Redis, or Docker.

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.temporal.io/sdk/temporal"
@@ -53,25 +54,25 @@ func TestExecutionActivitiesDispatchOnceAndValidateBeforeDispatch(t *testing.T) 
 	reference := llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context}
 	generate := validGenerateV1Request()
 	tests := []struct {
-		name, kind string
-		call       func(*Activities, context.Context) (*llm.ExecutionResultV1, error)
+		name, kind, step string
+		call             func(*Activities, context.Context) (*llm.ExecutionResultV1, error)
 	}{
-		{"prepare", "generate", func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
+		{"prepare", "generate", observability.ExecutionStepPrepare, func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
 			return a.PrepareExecutionV1(c, llm.PrepareExecutionV1{Generate: &generate})
 		}},
-		{"budget", "generate", func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
+		{"budget", "generate", observability.ExecutionStepAcquire, func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
 			return a.AcquireBudgetV1(c, reference)
 		}},
-		{"generate", "generate", func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
+		{"generate", "generate", observability.ExecutionStepGenerate, func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
 			return a.GenerateStepV1(c, generate)
 		}},
-		{"compact", "compact", func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
+		{"compact", "compact", observability.ExecutionStepCompact, func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
 			return a.CompactStepV1(c, validCompactV1Request())
 		}},
-		{"poll", "generate", func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
+		{"poll", "generate", observability.ExecutionStepPoll, func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
 			return a.PollExecutionV1(c, reference)
 		}},
-		{"complete", "generate", func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
+		{"complete", "generate", observability.ExecutionStepComplete, func(a *Activities, c context.Context) (*llm.ExecutionResultV1, error) {
 			return a.CompleteExecutionV1(c, reference)
 		}},
 	}
@@ -79,11 +80,15 @@ func TestExecutionActivitiesDispatchOnceAndValidateBeforeDispatch(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			runtime := &executionRuntimeStub{result: pendingExecution()}
 			runtime.result.Kind = test.kind
-			a := &Activities{V1Runtime: runtime}
+			metrics := newActivityTestMetrics(t)
+			a := &Activities{V1Runtime: runtime, Metrics: metrics}
 			result, err := test.call(a, context.Background())
 			if err != nil || result == nil || runtime.calls != 1 {
 				t.Fatalf("result=%#v err=%v calls=%d", result, err, runtime.calls)
 			}
+			// Each step has its own latency series (#1497); requests rejected
+			// below never reach the runtime and are not observed.
+			defer assertActivityMetricHistogramCount(t, metrics, "llmtw_execution_step_duration_seconds", map[string]string{"step": test.step}, 1)
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			if result, err := test.call(a, ctx); result != nil || err == nil || runtime.calls != 1 {

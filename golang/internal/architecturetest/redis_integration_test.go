@@ -84,7 +84,7 @@ func TestRedisBenchmarkIsOperatorGatedAndExcludedFromCI(t *testing.T) {
 		"LLMTW_REDIS_BENCHMARK_ADDR",
 		"CI",
 		"-tags=redisbenchmark",
-		"BenchmarkGenerateRedisAdmissionAndCompile",
+		"BenchmarkV1ActivitiesAdmissionRedis",
 	} {
 		if !strings.Contains(target, required) {
 			t.Errorf("redis-benchmark is missing required operator guard %q", required)
@@ -98,7 +98,7 @@ func TestRedisBenchmarkIsOperatorGatedAndExcludedFromCI(t *testing.T) {
 	compileTarget := redisBenchmarkCompileTarget(t, string(makefile))
 	for _, required := range []string{
 		// The safety tests run; the benchmark itself never does (#1534).
-		"$(GO) test -tags=redisbenchmark ./engine -run '^TestRedisBenchmark' -bench '^$$'",
+		"$(GO) test -tags=redisbenchmark ./internal/runtime -run '^TestRedisBenchmark' -bench '^$$'",
 	} {
 		if !strings.Contains(compileTarget, required) {
 			t.Errorf("redis-benchmark-compile is missing %q", required)
@@ -239,7 +239,7 @@ func redisBenchmarkTarget(t *testing.T, makefile string) string {
 func redisBenchmarkCompileTarget(t *testing.T, makefile string) string {
 	t.Helper()
 	const start = "redis-benchmark-compile:\n"
-	const end = "\n\n# Measures Generate"
+	const end = "\n\n# Times the production v1 Activities admission path"
 	startOffset := strings.Index(makefile, start)
 	if startOffset < 0 {
 		t.Fatal("Makefile is missing redis-benchmark-compile")

@@ -1,6 +1,6 @@
 //go:build redisbenchmark
 
-package engine
+package runtime
 
 import (
 	"context"
@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
+	"github.com/google/uuid"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -69,10 +72,15 @@ func newRedisBenchmarkKeyOptions() (redisstore.KeyOptions, error) {
 	return redisstore.KeyOptions{Prefix: redisBenchmarkPrefix + hex.EncodeToString(id), HashTag: "admission", KeySecret: secret}, nil
 }
 
-// BenchmarkGenerateRedisAdmissionAndCompile measures the Generate path against
-// an explicitly addressed, operator-provisioned Redis 7+ deployment. It is
-// build-tagged and refuses CI; it neither starts Redis nor loads Functions.
-func BenchmarkGenerateRedisAdmissionAndCompile(b *testing.B) {
+// BenchmarkV1ActivitiesAdmissionRedis measures the same production v1
+// Activities turn as BenchmarkV1ActivitiesAdmissionMemory, with budgets held
+// by the production Redis materializer against an explicitly addressed,
+// operator-provisioned Redis 7+ deployment. It initializes a fresh budget
+// namespace beneath a random key prefix, as a durable production worker
+// requires, and removes that prefix afterwards. Requests and payloads stay in
+// memory. It is build-tagged and refuses CI; it neither starts Redis nor
+// loads Functions.
+func BenchmarkV1ActivitiesAdmissionRedis(b *testing.B) {
 	config, err := redisBenchmarkConfigFromEnv(os.Getenv)
 	if err != nil {
 		b.Fatal(err)
@@ -96,44 +104,32 @@ func BenchmarkGenerateRedisAdmissionAndCompile(b *testing.B) {
 			b.Error(err)
 		}
 	}()
-	store, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{
-		Client:          client,
-		Mode:            redisstore.AdmissionModeFunction,
-		FunctionVersion: redisstore.AdmissionFunctionVersion,
-		Keys:            keys,
-		Clock:           time.Now,
+	f := boundedCloud(b, false)
+	f.now = time.Now().UTC()
+	initializer, err := redisstore.NewRedisBudgetInitializer(client, keys, redisstore.AdmissionModeFunction, redisstore.AdmissionFunctionVersion)
+	if err != nil {
+		b.Fatal(err)
+	}
+	receipt := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: uuid.NewString(), CreatedAt: f.now}
+	if err := initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}); err != nil {
+		b.Fatal(err)
+	}
+	receipt.Ready = true
+	budgets, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
+		Client: client, Keys: keys, Mode: redisstore.AdmissionModeFunction, FunctionVersion: redisstore.AdmissionFunctionVersion,
+		GenerationID: redisBudgetGeneration, IncarnationID: durable.IncarnationID(redisBudgetGeneration), Clock: f.cap.Clock,
+		Initialization: &receipt,
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	adapter := &benchmarkAdapter{fakeAdapter: fakeAdapter{name: "benchmark", response: successfulResponse()}}
-	harness := newHarnessWithAdmission(b, adapter, store, time.Now)
-	requests := make([]requestWithDuration, b.N)
-	for index := range requests {
-		requests[index].request = baseRequest("benchmark-redis-" + fmt.Sprint(index))
+	f.cap.Budgets = budgets
+	if f.cap.Finalizer, err = newCloudFinalizer(f.repository, f.cap.Responses, f.cap.ResponseFills, budgets, f.cap.Clock); err != nil {
+		b.Fatal(err)
 	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for index := range requests {
-		started := time.Now()
-		if _, err := harness.engine.Generate(ctx, requests[index].request); err != nil {
-			b.Fatal(err)
-		}
-		requests[index].duration = time.Since(started)
-	}
-	b.StopTimer()
-	adapter.mu.Lock()
-	recordedCalls := len(adapter.calls)
-	invokes := adapter.invokes
-	adapter.mu.Unlock()
-	if recordedCalls != 0 {
-		b.Fatalf("benchmark adapter retained %d calls", recordedCalls)
-	}
-	if invokes != b.N {
-		b.Fatalf("benchmark adapter invoked %d times, want %d", invokes, b.N)
-	}
-	b.ReportMetric(float64(p99Duration(requests))/float64(time.Millisecond), "p99_ms/op")
+	f.options.BudgetGeneration = redisBudgetGeneration
+	f.restart(b)
+	benchmarkV1ActivitiesAdmission(b, f)
 }
 
 func newRedisBenchmarkClient(address string) *redisclient.Client {

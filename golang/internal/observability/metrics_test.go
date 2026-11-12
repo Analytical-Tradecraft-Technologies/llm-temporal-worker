@@ -354,3 +354,64 @@ func TestLatencyHistogramsResolveMinuteLongObservations(t *testing.T) {
 		}
 	}
 }
+
+// The admission-and-compilation objectives are a 25 ms p99 with memory state
+// and 75 ms with same-region Redis. Every latency histogram, including the
+// per-step v1 execution histogram, must place those targets on exact bucket
+// bounds so production metrics can show whether a step met them (#1497).
+func TestLatencyHistogramsResolveAdmissionObjectives(t *testing.T) {
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Models: []string{"model"}, Outcomes: []string{"success"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, duration := range []time.Duration{20 * time.Millisecond, 60 * time.Millisecond, 90 * time.Millisecond} {
+		metrics.RecordProviderAttempt("endpoint", "model", "standard", "success", duration)
+		metrics.RecordActivity("completed", "none", duration, "total")
+		metrics.RecordExecutionStep(observability.ExecutionStepPrepare, duration)
+	}
+	metrics.RecordExecutionStep("unbounded-step", time.Millisecond)
+	metrics.RecordExecutionStep(observability.ExecutionStepAcquire, -time.Second)
+	families, err := metrics.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, labels := range map[string]map[string]string{
+		"llmtw_provider_duration_seconds":       {"endpoint": "endpoint", "model": "model", "class": "standard"},
+		"llmtw_activity_duration_seconds":       {"phase": "total"},
+		"llmtw_execution_step_duration_seconds": {"step": observability.ExecutionStepPrepare},
+	} {
+		var histogram *dto.Histogram
+		for _, family := range families {
+			for _, metric := range family.GetMetric() {
+				if family.GetName() == name && len(metric.GetLabel()) == len(labels) && labelsMatch(metric, labels) {
+					histogram = metric.GetHistogram()
+				}
+			}
+		}
+		if histogram == nil {
+			t.Fatalf("%s%v has no series", name, labels)
+		}
+		counts := map[float64]uint64{}
+		for _, bucket := range histogram.GetBucket() {
+			counts[bucket.GetUpperBound()] = bucket.GetCumulativeCount()
+		}
+		if counts[0.025] != 1 || counts[0.075] != 2 || counts[0.1] != 3 {
+			t.Fatalf("%s cumulative counts at le=0.025/0.075/0.1 = %d/%d/%d, want 1/2/3", name, counts[0.025], counts[0.075], counts[0.1])
+		}
+	}
+	if got := histogramCount(families, "llmtw_execution_step_duration_seconds", map[string]string{"step": "other"}); got != 1 {
+		t.Fatalf("unknown execution step count = %d, want it bounded to other", got)
+	}
+	if got := histogramCount(families, "llmtw_execution_step_duration_seconds", map[string]string{"step": observability.ExecutionStepAcquire}); got != 1 {
+		t.Fatalf("acquire step count = %d, want 1", got)
+	}
+}
+
+func labelsMatch(metric *dto.Metric, labels map[string]string) bool {
+	for _, label := range metric.GetLabel() {
+		if labels[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+	return true
+}

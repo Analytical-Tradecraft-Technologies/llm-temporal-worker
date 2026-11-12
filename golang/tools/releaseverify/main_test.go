@@ -695,6 +695,7 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	delete(benchmark, "target_status")
+	benchmark["benchmark"] = "BenchmarkGenerateMemoryAdmissionAndCompile"
 	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -710,6 +711,41 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 		"-evidence", filepath.Join(artifactDir, "evidence.json"),
 	}, io.Discard); err != nil {
 		t.Fatalf("verify rejected pre-target_status benchmark summary: %v", err)
+	}
+}
+
+// Bundles recorded before #1497 retain a summary of the legacy engine
+// benchmark. They stay verifiable through their own schema branch, while any
+// other benchmark name is rejected.
+func TestReleaseEvidenceAcceptsRetainedLegacyEngineBenchmarkOnly(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		accepted bool
+	}{
+		{name: "BenchmarkGenerateMemoryAdmissionAndCompile", accepted: true},
+		{name: "BenchmarkGenerateRedisAdmissionAndCompile", accepted: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			artifactDir := newReleaseEvidenceArtifactDirectory(t)
+			subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
+			benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
+			benchmarkData, err := os.ReadFile(benchmarkPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var benchmark map[string]any
+			if err := json.Unmarshal(benchmarkData, &benchmark); err != nil {
+				t.Fatal(err)
+			}
+			benchmark["benchmark"] = test.name
+			if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = run(releaseEvidenceRecordArguments(releaseEvidenceSchemaPath(t), artifactDir, subjects), io.Discard)
+			if (err == nil) != test.accepted {
+				t.Fatalf("record with benchmark %s: error = %v, want accepted %t", test.name, err, test.accepted)
+			}
+		})
 	}
 }
 
@@ -992,7 +1028,7 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 		"fuzz_summary": gateSummary("fuzz_summary"),
 		"benchmark_summary": map[string]any{
 			"schema_version": 1, "kind": "benchmark_summary", "status": "pass",
-			"benchmark": "BenchmarkGenerateMemoryAdmissionAndCompile", "scope": "memory",
+			"benchmark": "BenchmarkV1ActivitiesAdmissionMemory", "scope": "memory",
 			"samples": 4267, "ns_per_op": 255245, "p99_ms_per_op": 0.7286,
 			"target_ms": 25, "target_status": "pass", "objective_status": "measurement_only",
 			"output_sha256": digest, "output_bytes": 256, "redacted": true,
