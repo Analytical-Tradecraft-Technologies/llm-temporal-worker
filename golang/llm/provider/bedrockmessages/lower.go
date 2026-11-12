@@ -119,6 +119,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	} else if request.ToolPolicy.Mode != "" && request.ToolPolicy.Mode != llm.ToolChoiceAuto && request.ToolPolicy.Mode != llm.ToolChoiceNone {
 		return anthropic.MessageNewParams{}, fmt.Errorf("tool policy %q requires at least one tool", request.ToolPolicy.Mode)
 	}
+	if err := anthropicwire.ValidateModelSampling(request.Model, target); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
 	if err := thinkingwire.Validate(target, "Bedrock Messages"); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}

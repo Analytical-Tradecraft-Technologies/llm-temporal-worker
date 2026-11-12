@@ -71,11 +71,15 @@ func (family Family) LowerPart(part llm.Part, lowering PartLowering) (any, error
 	}
 }
 
-// LowerReasoning lowers the reasoning spec to the thinking object. A nil
-// result with no error means the request sends no thinking object.
-func (family Family) LowerReasoning(reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
+// LowerReasoning lowers the reasoning spec for model to the thinking object.
+// A nil result with no error means the request sends no thinking object.
+func (family Family) LowerReasoning(model string, reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
+	// xhigh is an effort level only some models accept; on any other model,
+	// including one the table does not know, it cannot be expressed.
 	if reasoning.Effort == llm.ReasoningEffortExtraHigh {
-		return nil, provider.NewUnsupportedFeatureError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by "+family.Package)
+		if rules, _ := LookupModel(model); !rules.ExtraHighEffort {
+			return nil, provider.NewUnsupportedFeatureError(provider.FeatureReasoning, "xhigh reasoning effort is not supported by "+family.Package)
+		}
 	}
 	if reasoning.Mode == llm.ReasoningModeDisabled {
 		// Disabled wins over an effort the family can express, as on Chat
@@ -144,7 +148,8 @@ func (family Family) LowerReasoning(reasoning llm.ReasoningSpec, strict bool) (m
 
 // ReasoningOutputEffort maps a reasoning effort to output_config.effort, or
 // "" when the effort has no wire value or the mode is disabled, which wins
-// over an effort on every family (#1666).
+// over an effort on every family (#1666). LowerReasoning has already rejected
+// xhigh for a model that does not accept it.
 func ReasoningOutputEffort(reasoning llm.ReasoningSpec) string {
 	if reasoning.Mode == llm.ReasoningModeDisabled {
 		return ""
@@ -156,6 +161,8 @@ func ReasoningOutputEffort(reasoning llm.ReasoningSpec) string {
 		return "medium"
 	case llm.ReasoningEffortHigh:
 		return "high"
+	case llm.ReasoningEffortExtraHigh:
+		return "xhigh"
 	case llm.ReasoningEffortMaximum:
 		return "max"
 	default:
@@ -198,7 +205,7 @@ func (family Family) LowerSamplingAndReasoning(request llm.Request, target map[s
 	if request.Reasoning == nil {
 		return nil
 	}
-	thinking, err := family.LowerReasoning(*request.Reasoning, strict)
+	thinking, err := family.LowerReasoning(request.Model, *request.Reasoning, strict)
 	if err != nil {
 		return err
 	}

@@ -18,15 +18,15 @@ func TestFamilyNamesItsEndpointInErrors(t *testing.T) {
 		{Anthropic, func(f Family) error { return f.LowerSampling(llm.SamplingSpec{Seed: new(int64)}, map[string]any{}) }, "sampling field is not supported by Anthropic Messages"},
 		{Bedrock, func(f Family) error { return f.LowerSampling(llm.SamplingSpec{Seed: new(int64)}, map[string]any{}) }, "sampling field is not supported by Bedrock Messages"},
 		{Bedrock, func(f Family) error {
-			_, err := f.LowerReasoning(llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled}, false)
+			_, err := f.LowerReasoning("claude-contract", llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled}, false)
 			return err
 		}, "enabled Bedrock thinking requires token_budget"},
 		{Anthropic, func(f Family) error {
-			_, err := f.LowerReasoning(llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &small}, false)
+			_, err := f.LowerReasoning("claude-contract", llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &small}, false)
 			return err
 		}, "Anthropic thinking token_budget must be at least 1024"},
 		{Bedrock, func(f Family) error {
-			_, err := f.LowerReasoning(llm.ReasoningSpec{Effort: llm.ReasoningEffortExtraHigh}, false)
+			_, err := f.LowerReasoning("claude-contract", llm.ReasoningSpec{Effort: llm.ReasoningEffortExtraHigh}, false)
 			return err
 		}, "reasoning: xhigh reasoning effort is not supported by bedrockmessages"},
 		{Bedrock, func(f Family) error {

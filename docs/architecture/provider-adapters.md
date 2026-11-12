@@ -295,8 +295,9 @@ A `disabled` reasoning mode wins over any effort on every family. Settings
 patches set mode and effort independently, so a conversation can turn
 reasoning off after an earlier turn chose an effort. Chat and Responses send
 effort `none`, and Anthropic and Bedrock Messages send `thinking.type:
-disabled` with no effort. An effort a family cannot express at all, such as
-`xhigh` on Anthropic, is still rejected.
+disabled` with no effort. An effort the target model cannot express at all,
+such as `xhigh` on a Claude model that has no such level (see the per-model
+table below), is still rejected.
 
 Reasoning controls lower the same way on Anthropic Messages and Bedrock
 Messages:
@@ -321,6 +322,34 @@ Messages:
   reasoning mode a summary preference is not sent and never turns thinking on.
   This is lossless in strict mode too: thinking is opt-in, so a request with
   no `thinking` object returns no thinking blocks to summarize or omit.
+
+### Per-model Claude rules
+
+Some request settings are accepted by the Messages API in general but refused
+by particular Claude models with a 400. Anthropic Messages and Bedrock Messages
+share one model table (`llm/provider/internal/anthropicwire/models.go`) and
+reject such a request at compile as a non-retryable `unsupported_capability`
+in strict and best-effort mode alike, so it is never admitted, reserved and
+dispatched only to fail. Nothing is dropped silently: a caller that wants the
+model's default sampling omits the field.
+
+The table matches the model by its first-party ID after removing a Bedrock
+region or `anthropic.` prefix, an `@` or `:` suffix, a `-vN` version and an
+eight-digit date, so `us.anthropic.claude-sonnet-4-5-20250929-v1:0` and
+`claude-sonnet-4-5` follow the same row. A model the table does not know keeps
+the previous behaviour: sampling fields are sent as given and `xhigh` is
+rejected. The rows come from each model's migration guide, for API version
+`2023-06-01`, which both adapters send:
+
+| Models | `temperature` / `top_p` / `top_k` | `xhigh` effort |
+| --- | --- | --- |
+| Opus 4.1, 4.5, 4.6; Sonnet 4.5, 4.6; Haiku 4.5 | any one value each, but not `temperature` with `top_p` | rejected |
+| Sonnet 5 | `temperature` only at its default `1`; `top_p` and `top_k` rejected | sent |
+| Haiku 5.5 | `temperature` only at `1` and `top_p` only at `0.99`, never both; `top_k` rejected | sent |
+| Opus 4.7, 4.8, 5, 5.5; Sonnet 5.5; Fable 5, 5.1, 5.2; Mythos 5, 5.1, 5.2 | every sampling field rejected | sent |
+
+`xhigh` maps to `output_config.effort: xhigh`. Haiku 5.5 has further thinking
+and Priority Tier rules on the Anthropic route (`anthropicmessages/haiku55.go`).
 
 ## Response lifting
 
