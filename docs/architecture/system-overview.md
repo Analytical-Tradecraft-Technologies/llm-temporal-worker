@@ -1,6 +1,6 @@
 # System Overview
 
-The production worker runs six Temporal workflows and nine activities. The
+The production worker runs six Temporal workflows and ten activities. The
 workflows orchestrate durable steps and timers; activities perform authorization,
 cloud storage, Redis accounting and provider I/O. Provider-specific SDK types
 stay behind adapters. See the exact names in the

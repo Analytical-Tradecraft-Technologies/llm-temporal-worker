@@ -227,13 +227,7 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 			// for the child to start costs one workflow task. Histories that
 			// already scheduled the export Activity keep running it inline.
 			if workflow.GetVersion(ctx, asyncExportChange, workflow.DefaultVersion, 1) != workflow.DefaultVersion {
-				child := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-					ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false,
-					WorkflowExecutionTimeout: exportWorkflowTimeout,
-				})
-				if err := workflow.ExecuteChildWorkflow(child, LangfuseExportWorkflowName, ref).GetChildWorkflowExecution().Get(ctx, nil); err != nil {
-					workflow.GetLogger(ctx).Warn("Langfuse export not started", "request_id", ref.RequestID)
-				}
+				startLangfuseExport(ctx, ref)
 				return
 			}
 			if err := workflow.ExecuteActivity(exportCtx, activity.ExportLangfuseActivityName, ref).Get(exportCtx, nil); err != nil {
@@ -309,6 +303,18 @@ func ExecuteRequest(ctx workflow.Context, input llm.PrepareExecutionV1) (returne
 			// are finished here, so Continue-As-New cannot abandon an in-flight call.
 			return llm.ExecutionResultV1{}, workflow.NewContinueAsNewError(ctx, RequestWorkflowName, input)
 		}
+	}
+}
+
+// startLangfuseExport hands the export to an abandoned child and waits only
+// for it to start: a parent that closed first would leave it unstarted.
+func startLangfuseExport(ctx workflow.Context, ref llm.ExecutionReferenceV1) {
+	child := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON, WaitForCancellation: false,
+		WorkflowExecutionTimeout: exportWorkflowTimeout,
+	})
+	if err := workflow.ExecuteChildWorkflow(child, LangfuseExportWorkflowName, ref).GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Warn("Langfuse export not started", "request_id", ref.RequestID)
 	}
 }
 

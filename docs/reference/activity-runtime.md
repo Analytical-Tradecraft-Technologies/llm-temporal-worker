@@ -1,6 +1,6 @@
 # v1 Activity runtime boundary
 
-The worker registers nine exact names on its configured Temporal task queue:
+The worker registers ten exact names on its configured Temporal task queue:
 
 | Name | Input | Output |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ The worker registers nine exact names on its configured Temporal task queue:
 | `llm.poll.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 | `llm.complete.v1` | `llm.ExecutionReferenceV1` | `llm.ExecutionResultV1` |
 | `llm.generate.plan.v1` | `llm.GenerateRequestV1` | `llm.GenerationPlanV1` |
+| `llm.generate.resolve.v1` | `llm.GenerateRequestV1` | `llm.GenerationResolutionV1` |
 | `llm.ExportLangfuse.v1` | `llm.ExecutionReferenceV1` | none |
 
 The Go adapter exposes these same bindings through
@@ -23,7 +24,7 @@ Temporal worker or adding any handler to its registry. The registry is still
 bound to one queue by
 the Temporal worker itself, so descriptors are an inspection and startup
 guard rather than a second payload codec. A configured v1 runtime registers
-all nine descriptors in the order above; the checked-in
+all ten descriptors in the order above; the checked-in
 development fixture may retain only the legacy Generate helper while the
 durable runtime is intentionally absent.
 
@@ -64,6 +65,16 @@ dispatched.
 only whether the inherited context needs compaction. It performs no writes,
 budget reservation, or provider calls. The public generation workflow uses
 this decision to run the compaction child before generation.
+
+`llm.generate.resolve.v1` returns the same plan in `GenerationResolutionV1`.
+When the request has a cache policy and the plan needs no compaction, it then
+runs the request workflow's preparation step on the same request within the
+same Activity attempt. If preparation returns a completed result, such as an
+exact cache hit or the replay of a completed operation, the resolution carries
+that result, including its reference capability; otherwise it carries none.
+A preparation error or any other state is not reported: the request workflow
+repeats the idempotent preparation and handles it. The public workflow
+schedules this Activity instead of `llm.generate.plan.v1` for new runs.
 
 ## Bounded execution results
 
@@ -338,11 +349,11 @@ seconds; zero and null are invalid. Omitting `cache` still disables reuse.
 ## Worker registration
 
 Worker startup registers six workflows on the configured task queue, shared
-with the nine v1 activities:
+with the ten v1 activities:
 
 | Workflow | Kind | Role |
 | --- | --- | --- |
-| `llm.generate.workflow.v1` | public | One Generate turn; plans compaction first |
+| `llm.generate.workflow.v1` | public | One Generate turn; plans compaction first and answers a request it finds complete |
 | `llm.compact.workflow.v1` | public | One Compact |
 | `llm.query.workflow.v1` | public | One persisted-state query |
 | `llm.request.execute.v1` | internal | Prepare, acquire, generate or poll, and complete one request |

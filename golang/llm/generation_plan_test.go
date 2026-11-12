@@ -44,3 +44,32 @@ func TestGenerationPlanEffectiveParentWire(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerationResolutionClosedWire(t *testing.T) {
+	plan := GenerationResolutionV1{}
+	data, err := json.Marshal(plan)
+	if err != nil || string(data) != `{"plan":{"compact_before_generate":false}}` {
+		t.Fatalf("plan-only resolution = %s, %v", data, err)
+	}
+	var decoded GenerationResolutionV1
+	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(decoded, plan) {
+		t.Fatalf("round trip: %v", err)
+	}
+	pending := ExecutionResultV1{RequestID: "llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5", Kind: "generate", State: ExecutionBudgetRequired}
+	parent := CheckpointHandle("ckp_v1.saved")
+	for name, invalid := range map[string]GenerationResolutionV1{
+		"pending result":         {Result: &pending},
+		"result with compaction": {Plan: GenerationPlanV1{CompactBeforeGenerate: true, EffectiveParent: &parent}, Result: &pending},
+	} {
+		if _, err := json.Marshal(invalid); err == nil {
+			t.Errorf("%s marshalled", name)
+		}
+	}
+	for _, input := range []string{`null`, `{}`, `{"plan":null}`, `{"plan":{"compact_before_generate":false},"result":null}`, `{"plan":{"compact_before_generate":false},"extra":1}`,
+		`{"plan":{"compact_before_generate":false},"result":{"request_id":"llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5","kind":"generate","state":"budget_required"}}`} {
+		decoded = plan
+		if err := json.Unmarshal([]byte(input), &decoded); err == nil {
+			t.Errorf("accepted %s", input)
+		}
+	}
+}

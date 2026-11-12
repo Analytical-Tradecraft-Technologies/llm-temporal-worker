@@ -27,6 +27,9 @@ type executionMemoryTable struct {
 	trace   func(string)
 	// Operation counters, read by the storage-cost benchmark (#1112).
 	gets, queries, writes uint64
+	// latency, when set, delays every operation before it takes the lock,
+	// so concurrent callers overlap like requests to a remote store.
+	latency time.Duration
 }
 
 func cloneExecutionItem(item kv.KeyValueItem) kv.KeyValueItem {
@@ -43,6 +46,7 @@ func cloneExecutionItem(item kv.KeyValueItem) kv.KeyValueItem {
 }
 
 func (s *executionMemoryTable) Get(ctx context.Context, key kv.KeyValueKey) (kv.KeyValueRecord, error) {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -66,6 +70,7 @@ func (s *executionMemoryTable) Replace(ctx context.Context, item kv.KeyValueItem
 }
 
 func (s *executionMemoryTable) write(ctx context.Context, op string, item kv.KeyValueItem, version kv.KeyValueVersion) (kv.KeyValueVersion, error) {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -100,6 +105,7 @@ func (s *executionMemoryTable) write(ctx context.Context, op string, item kv.Key
 }
 
 func (s *executionMemoryTable) Delete(ctx context.Context, key kv.KeyValueKey, version kv.KeyValueVersion) error {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -119,6 +125,7 @@ type executionTestCursor struct {
 }
 
 func (s *executionMemoryTable) QueryPartition(ctx context.Context, query kv.KeyValueQuery) (kv.KeyValueQueryPage, error) {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -166,9 +173,11 @@ type executionMemoryBlobs struct {
 	trace  func(string)
 	// Operation and byte counters, read by the storage-cost benchmark (#1112).
 	opens, openBytes, creates, createBytes uint64
+	latency                                time.Duration
 }
 
 func (s *executionMemoryBlobs) Create(ctx context.Context, key blob.BlobKey, body io.Reader, size int64) error {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -200,6 +209,7 @@ func (s *executionMemoryBlobs) Create(ctx context.Context, key blob.BlobKey, bod
 	return after
 }
 func (s *executionMemoryBlobs) Open(ctx context.Context, key blob.BlobKey) (blob.BlobReadResult, error) {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -218,6 +228,7 @@ func (s *executionMemoryBlobs) Open(ctx context.Context, key blob.BlobKey) (blob
 	return blob.BlobReadResult{Body: io.NopCloser(bytes.NewReader(append([]byte(nil), data...))), Size: int64(len(data))}, nil
 }
 func (s *executionMemoryBlobs) Delete(ctx context.Context, key blob.BlobKey) error {
+	pauseStorage(s.latency)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -248,4 +259,11 @@ func (c executionStorageCounts) plus(o executionStorageCounts) executionStorageC
 
 func (c executionStorageCounts) minus(o executionStorageCounts) executionStorageCounts {
 	return executionStorageCounts{c.gets - o.gets, c.queries - o.queries, c.writes - o.writes, c.opens - o.opens, c.openBytes - o.openBytes, c.creates - o.creates, c.createBytes - o.createBytes}
+}
+
+// pauseStorage models one round trip to a remote store.
+func pauseStorage(latency time.Duration) {
+	if latency > 0 {
+		time.Sleep(latency)
+	}
 }

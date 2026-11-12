@@ -54,14 +54,14 @@ func runReencoded(t *testing.T, limits activity.PayloadLimits, input converter.R
 	env.SetDataConverter(activity.BoundedDataConverter(limits))
 	Register(env, limits)
 	var run reencodeRun
-	env.RegisterActivityWithOptions(func(_ context.Context, request llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
+	registerPlanner(env, func(_ context.Context, request llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
 		run.planned = true
 		if request.Parent == nil {
 			return llm.GenerationPlanV1{}, nil
 		}
 		issued := llm.CheckpointHandle(strings.Repeat("y", llm.CheckpointHandleMaxCodePoints))
 		return llm.GenerationPlanV1{CompactBeforeGenerate: true, EffectiveParent: &issued}, nil
-	}, sdkactivity.RegisterOptions{Name: activity.PlanGenerationActivityName})
+	})
 	env.RegisterActivityWithOptions(func(context.Context, llm.PrepareExecutionV1) (*llm.ExecutionResultV1, error) {
 		run.prepared = true
 		return nil, temporal.NewNonRetryableApplicationError("prepared", "test_prepared", nil)

@@ -50,7 +50,12 @@ separate real Temporal/Redis evidence.
 ## Public workflows and compaction planning
 
 `llm.generate.workflow.v1` accepts a Generate v1 request and returns a Generate v1
-response. It calls `llm.generate.plan.v1` first. When required, it runs
+response. It calls `llm.generate.resolve.v1` first (histories from before
+that Activity call `llm.generate.plan.v1`). A cached request that needs no
+compaction is prepared in that Activity; when preparation finds it complete,
+for example an exact cache hit, the workflow checks the result as it checks the
+request workflow's, starts the Langfuse export child, and returns without
+starting `llm.request.execute.v1`. Otherwise, when required, it runs
 `llm.compact.workflow.v1` as a child, uses the returned checkpoint as the Generate
 parent, and delegates generation to `llm.request.execute.v1`. Append, settings
 patch, operation key, and final-answer cache freshness are preserved. A failed
@@ -80,8 +85,8 @@ Planning performs no writes, reservations, claims, or provider requests. It
 returns only a boolean; materialized history stays out of its activity result.
 The public and internal workflow implementations are registered through
 `workflows.Register`: six workflows, including the query workflow and the
-Langfuse export child. The activity registry registers nine v1 activities,
-including planning and the Langfuse export (see the
+Langfuse export child. The activity registry registers ten v1 activities,
+including planning, resolution and the Langfuse export (see the
 [Activity runtime](activity-runtime.md#worker-registration) tables). See the [implementation boundary](mvp-v1-status.md) for the
 complete list and remaining optional capabilities.
 

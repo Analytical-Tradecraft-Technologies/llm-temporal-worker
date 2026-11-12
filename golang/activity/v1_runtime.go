@@ -292,6 +292,10 @@ func (activities *Activities) planGenerationV1Temporal(ctx context.Context, inpu
 	return rawV1Activity(activities, activities.PlanGenerationV1)(ctx, input)
 }
 
+func (activities *Activities) resolveGenerationV1Temporal(ctx context.Context, input converter.RawValue) (*llm.GenerationResolutionV1, error) {
+	return rawV1Activity(activities, activities.ResolveGenerationV1)(ctx, input)
+}
+
 // RegisterV1 installs the bounded execution steps and the read-only query.
 // Generate and Compact retain their v1 names, but now return a step result.
 // A runtime lacking ExecutionRuntime fails closed rather than blocking on an
@@ -308,6 +312,7 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	registry.RegisterActivityWithOptions(activities.pollV1Temporal, sdkactivity.RegisterOptions{Name: PollActivityName})
 	registry.RegisterActivityWithOptions(activities.completeV1Temporal, sdkactivity.RegisterOptions{Name: CompleteActivityName})
 	registry.RegisterActivityWithOptions(activities.planGenerationV1Temporal, sdkactivity.RegisterOptions{Name: PlanGenerationActivityName})
+	registry.RegisterActivityWithOptions(activities.resolveGenerationV1Temporal, sdkactivity.RegisterOptions{Name: ResolveGenerationActivityName})
 	registry.RegisterActivityWithOptions(activities.exportLangfuseTemporal, sdkactivity.RegisterOptions{Name: ExportLangfuseActivityName})
 }
 

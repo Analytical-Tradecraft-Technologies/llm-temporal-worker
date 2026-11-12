@@ -38,12 +38,12 @@ func TestActivityRuntimeListsEveryActivityAndWorkflow(t *testing.T) {
 	if !slices.Equal(documented, want) {
 		t.Fatalf("activity-runtime.md tables list %v, want the registered %v", documented, want)
 	}
-	for _, phrase := range []string{"registers nine exact names", "all nine descriptors", "registers six workflows"} {
+	for _, phrase := range []string{"registers ten exact names", "all ten descriptors", "registers six workflows"} {
 		if !regexp.MustCompile(regexp.QuoteMeta(phrase)).Match(data) {
 			t.Fatalf("activity-runtime.md lacks %q", phrase)
 		}
 	}
-	if len(descriptors) != 9 || len(want)-len(descriptors) != 6 {
+	if len(descriptors) != 10 || len(want)-len(descriptors) != 6 {
 		t.Fatalf("the worker now registers %d activities and %d workflows; update activity-runtime.md, internal-workflows.md and mvp-v1-status.md", len(descriptors), len(want)-len(descriptors))
 	}
 }

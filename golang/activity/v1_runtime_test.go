@@ -116,7 +116,7 @@ func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 	registry := &v1Registry{}
 	activities := &Activities{V1Runtime: &v1RuntimeStub{}}
 	activities.Register(registry)
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ExportLangfuseActivityName}
+	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ResolveGenerationActivityName, ExportLangfuseActivityName}
 	if fmt.Sprint(registry.names) != fmt.Sprint(want) {
 		t.Fatalf("registered names = %v, want %v", registry.names, want)
 	}
@@ -127,6 +127,7 @@ func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 		case func(context.Context, converter.RawValue) (*llm.ExecutionResultV1, error),
 			func(context.Context, converter.RawValue) (*llm.QueryResponseV1, error),
 			func(context.Context, converter.RawValue) (*llm.GenerationPlanV1, error),
+			func(context.Context, converter.RawValue) (*llm.GenerationResolutionV1, error),
 			func(context.Context, converter.RawValue) error:
 		default:
 			t.Fatalf("%s registration has type %T, want a raw-payload handler", registry.names[index], registered)

@@ -1,6 +1,6 @@
 # Temporal Worker
 
-The worker registers six workflows and nine activities on its configured task
+The worker registers six workflows and ten activities on its configured task
 queue. Public callers normally start `llm.generate.workflow.v1` or
 `llm.compact.workflow.v1` and receive a final typed response. Application tool
 execution and agent loops remain the caller's responsibility.
@@ -9,7 +9,7 @@ execution and agent loops remain the caller's responsibility.
 
 | Workflow | Role |
 | --- | --- |
-| `llm.generate.workflow.v1` | Plan compaction, run its child when needed, then generate |
+| `llm.generate.workflow.v1` | Plan compaction, run its child when needed, then generate; return a request planning found complete at once |
 | `llm.query.workflow.v1` | Public typed control-plane query through one authorized activity attempt |
 | `llm.compact.workflow.v1` | Standalone or child compaction through shared execution |
 | `llm.request.execute.v1` | Internal cache, budget, submit, poll and completion orchestration |
@@ -19,6 +19,7 @@ execution and agent loops remain the caller's responsibility.
 | Activity | Role |
 | --- | --- |
 | `llm.generate.plan.v1` | Authorize and inspect inherited context for compaction |
+| `llm.generate.resolve.v1` | Plan, then prepare a cached request that needs no compaction and return it when complete |
 | `llm.request.prepare.v1` | Prepare or recover a durable request and eligible cached result |
 | `llm.budget.acquire.v1` | Attempt budget acquisition once |
 | `llm.generate.v1` | Claim and submit/resume a generation attempt |

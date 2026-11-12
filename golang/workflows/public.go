@@ -111,7 +111,16 @@ func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateR
 	original := input
 	version := workflow.GetVersion(ctx, "public-generation-binding-v1", workflow.DefaultVersion, 1)
 	var plan llm.GenerationPlanV1
-	if err := workflow.ExecuteActivity(ctx, activity.PlanGenerationActivityName, input).Get(ctx, &plan); err != nil {
+	if version >= 1 && workflow.GetVersion(ctx, resolvedGenerationChange, workflow.DefaultVersion, 1) >= 1 {
+		var resolution llm.GenerationResolutionV1
+		if err := workflow.ExecuteActivity(ctx, activity.ResolveGenerationActivityName, input).Get(ctx, &resolution); err != nil {
+			return nil, err
+		}
+		if resolution.Result != nil {
+			return completeResolved(ctx, input, *resolution.Result)
+		}
+		plan = resolution.Plan
+	} else if err := workflow.ExecuteActivity(ctx, activity.PlanGenerationActivityName, input).Get(ctx, &plan); err != nil {
 		return nil, err
 	}
 	if version >= 1 && plan.EffectiveParent != nil {
@@ -139,6 +148,23 @@ func Generate(ctx workflow.Context, input llm.GenerateRequestV1) (*llm.GenerateR
 	if err != nil {
 		return nil, err
 	}
+	return result.Generate, nil
+}
+
+// resolvedGenerationChange plans with the Activity that also prepares a
+// cached request, so a request that is already complete, such as an exact
+// cache hit, skips the request workflow.
+const resolvedGenerationChange = "resolved-generation-v1"
+
+// completeResolved returns a Generate that planning found complete. It checks
+// the result as executeChild checks the request workflow's, and starts the
+// Langfuse export the request workflow would have started.
+func completeResolved(ctx workflow.Context, input llm.GenerateRequestV1, result llm.ExecutionResultV1) (*llm.GenerateResponseV1, error) {
+	prepared := llm.PrepareExecutionV1{Generate: &input, OriginalGenerate: &llm.GenerationOriginV1{Parent: input.Parent}}
+	if result.State != llm.ExecutionCompleted || result.Capability == "" || checkResult(result, "generate", "") != nil || !responseMatches(prepared, result) {
+		return nil, invalidState()
+	}
+	startLangfuseExport(ctx, llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: input.Context, Capability: result.Capability})
 	return result.Generate, nil
 }
 
