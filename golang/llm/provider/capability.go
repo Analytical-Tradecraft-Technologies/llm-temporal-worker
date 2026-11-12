@@ -39,6 +39,24 @@ func (state CapabilityState) Valid() bool {
 	}
 }
 
+// AllFeatures returns every governed capability feature in canonical order.
+// Each call returns a new slice the caller may keep or modify.
+func AllFeatures() []Feature {
+	return []Feature{FeatureText, FeatureImage, FeatureDocument, FeatureToolCall, FeatureStructuredOutput, FeatureReasoning, FeatureContinuation, FeatureStreaming, FeatureUsage}
+}
+
+// UnsupportedStreaming marks a streaming capability unsupported for an
+// adapter that does not implement OpenStream. A reason already declared by
+// the profile is kept.
+func UnsupportedStreaming(capability Capability) Capability {
+	capability.State = CapabilityUnsupported
+	capability.Transform = ""
+	if capability.Reason == "" {
+		capability.Reason = "adapter does not implement OpenStream"
+	}
+	return capability
+}
+
 // ToolResultErrorTransform names the reviewed emulation used by endpoint
 // families whose wire contract has no tool-result error field (OpenAI
 // Responses function_call_output and Chat Completions tool messages). A tool

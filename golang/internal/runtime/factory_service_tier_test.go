@@ -267,7 +267,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 		t.Fatal(err)
 	}
 	features := map[string]routing.Capability{}
-	for _, feature := range allProviderFeatures {
+	for _, feature := range provider.AllFeatures() {
 		features[string(feature)] = routing.Capability{State: routing.CapabilityNative}
 	}
 	for _, feature := range []provider.Feature{provider.FeatureStreaming, provider.FeatureContinuation} {

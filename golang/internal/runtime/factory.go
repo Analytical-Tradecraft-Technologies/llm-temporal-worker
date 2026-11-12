@@ -1446,8 +1446,8 @@ func providerCapabilities(value routing.CapabilitySet) provider.CapabilitySet {
 }
 
 func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
-	copy := provider.CapabilitySet{Version: value.Version, Features: make(map[provider.Feature]provider.Capability, len(allProviderFeatures))}
-	for _, feature := range allProviderFeatures {
+	copy := provider.CapabilitySet{Version: value.Version, Features: make(map[provider.Feature]provider.Capability, len(provider.AllFeatures()))}
+	for _, feature := range provider.AllFeatures() {
 		copy.Features[feature] = provider.Capability{State: provider.CapabilityUnknown, Reason: "catalog did not declare this capability"}
 	}
 	// Usage accounting is intrinsic to every production adapter: each one lifts
@@ -1459,8 +1459,6 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 	}
 	return copy
 }
-
-var allProviderFeatures = []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage}
 
 // openRouterUpstreams is the allowed-endpoint table of a configuration's
 // model sync. Without model sync no endpoint has been checked against the

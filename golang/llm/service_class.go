@@ -24,6 +24,12 @@ func (class ServiceClass) Valid() bool {
 	}
 }
 
+// ServiceClasses returns the public service classes from cheapest to most
+// expensive. Each call returns a new slice the caller may keep or modify.
+func ServiceClasses() []ServiceClass {
+	return []ServiceClass{ServiceClassEconomy, ServiceClassStandard, ServiceClassPriority}
+}
+
 // NormalizeServiceClass makes omission deterministic and rejects all values
 // outside the public three-value enum. There is deliberately no
 // provider-default value.

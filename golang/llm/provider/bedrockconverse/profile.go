@@ -34,8 +34,8 @@ type Profile struct {
 }
 
 func DefaultProfile(id string) Profile {
-	features := make(map[provider.Feature]provider.Capability, len(allFeatures()))
-	for _, feature := range allFeatures() {
+	features := make(map[provider.Feature]provider.Capability, len(provider.AllFeatures()))
+	for _, feature := range provider.AllFeatures() {
 		state := provider.CapabilityUnsupported
 		reason := "not verified for the generic Bedrock Converse boundary"
 		if feature == provider.FeatureText || feature == provider.FeatureToolCall || feature == provider.FeatureUsage {
@@ -103,7 +103,7 @@ func (profile Profile) validate() error {
 		return fmt.Errorf("bedrock converse profile %q capability versions conflict", profile.ID)
 	}
 	supported := 0
-	for _, class := range publicServiceClasses() {
+	for _, class := range llm.ServiceClasses() {
 		value, ok := profile.ServiceTiers[class]
 		// An empty tier marks a class the endpoint does not offer, as in the
 		// Chat and Anthropic profiles; providerTier then reports it unsupported.
@@ -123,7 +123,7 @@ func (profile Profile) validate() error {
 			return fmt.Errorf("bedrock converse profile %q has invalid capability %q", profile.ID, feature)
 		}
 	}
-	for _, feature := range allFeatures() {
+	for _, feature := range provider.AllFeatures() {
 		if _, ok := profile.Capabilities.Features[feature]; !ok {
 			return fmt.Errorf("bedrock converse profile %q must explicitly declare capability %q", profile.ID, feature)
 		}
@@ -182,10 +182,6 @@ func (profile Profile) actualClass(tier string) *llm.ServiceClass {
 	return &class
 }
 
-func publicServiceClasses() []llm.ServiceClass {
-	return []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}
-}
-
 func validServiceTier(value string) bool {
 	switch types.ServiceTierType(value) {
 	case types.ServiceTierTypeFlex, types.ServiceTierTypeDefault, types.ServiceTierTypePriority:
@@ -193,10 +189,6 @@ func validServiceTier(value string) bool {
 	default:
 		return false
 	}
-}
-
-func allFeatures() []provider.Feature {
-	return []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall, provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage}
 }
 
 func cloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {
