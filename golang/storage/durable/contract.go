@@ -26,6 +26,10 @@ var (
 	ErrLeaseExpired     = errors.New("budget lease expired before dispatch")
 	ErrAlreadyClaimed   = errors.New("budget lease already claimed; recover the attempt or acquire fresh budget")
 	ErrReconcilePending = errors.New("redis reconciliation is pending")
+	// ErrReservationNotFound is wrapped by every BudgetMaterializer's
+	// not-found error, so the shared conformance suite can assert the same
+	// outcome for the reference model and Redis.
+	ErrReservationNotFound = errors.New("budget reservation is not known")
 )
 
 var redisPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)

@@ -204,7 +204,9 @@ stays accounted until its outcome is resolved.
 
 Settlement event IDs deduplicate retries, including a lost Redis response.
 Changing an already recorded event is rejected. An unused authorization can be
-released; a claimed authorization cannot use that release path. A later exact
+released before its start deadline; after the deadline (by Redis `TIME`) it has
+already expired, so a release returns not-found and refunds nothing twice. A
+claimed authorization cannot use that release path. A later exact
 cost correction has its own event ID and revision.
 
 Operation records and deduplication tombstones currently have no TTL. Claimed

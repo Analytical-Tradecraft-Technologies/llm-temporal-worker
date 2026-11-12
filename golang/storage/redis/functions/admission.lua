@@ -1008,6 +1008,14 @@ if ACTION == 'durable_reconcile' then
     end
     if #KEYS ~= 1 + 2 * #record.reservations or #events > #record.reservations then return {'invalid_request', ''} end
     if type(record.events) ~= 'table' then record.events = {} end
+    -- An expiry member at or before Redis TIME is expired even if no later
+    -- reservation has run durable_cleanup yet, so settling it is not_found
+    -- whatever unrelated traffic did, as in the reference model (#1675).
+    local reconcile_time = redis.call('TIME')
+    local reconcile_seconds = durable_int(reconcile_time[1])
+    local reconcile_micros = durable_int(reconcile_time[2])
+    if not reconcile_seconds or not reconcile_micros then return {'state_unavailable', ''} end
+    local reconcile_millis = reconcile_seconds * 1000 + math.floor(reconcile_micros / 1000)
     -- Validate and stage the complete batch before mutating any aggregate. A
     -- later conflict must not leave earlier events in the batch applied.
     local staged = {}
@@ -1077,11 +1085,12 @@ if ACTION == 'durable_reconcile' then
                 local bucket_key = KEYS[1 + (reservation_index - 1) * 2 + 1]
                 local expiry_key = KEYS[1 + (reservation_index - 1) * 2 + 2]
                 local bucket = reservation.bucket
-                -- Expiry cleanup may already have removed this operation. Never
-                -- subtract another operation's contribution from the same bucket.
-                if old_total > 0 and (not record.claimed or old_reserved == 0) and
-                    not redis.call('ZSCORE', expiry_key, durable_expiry_member(record.fingerprint, bucket, decimal(old_total))) then
-                    return {'not_found', ''}
+                -- Expiry cleanup may already have removed this operation, or its
+                -- member may be due for removal. Never subtract another
+                -- operation's contribution from the same bucket.
+                if old_total > 0 and (not record.claimed or old_reserved == 0) then
+                    local expiry = durable_int(redis.call('ZSCORE', expiry_key, durable_expiry_member(record.fingerprint, bucket, decimal(old_total))))
+                    if not expiry or expiry <= reconcile_millis then return {'not_found', ''} end
                 end
                 if not durable_int(reservation.window_expires_millis) then return {'state_unavailable', ''} end
                 local current = durable_int(redis.call('HGET', bucket_key, durable_bucket_field(bucket)) or '0')
