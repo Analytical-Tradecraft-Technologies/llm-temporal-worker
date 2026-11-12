@@ -21,7 +21,7 @@ var (
 	ErrReferenceMaterializerConflict = errors.New("reference budget materializer idempotency conflict")
 	ErrReferenceGenerationMismatch   = errors.New("reference budget materializer generation mismatch")
 	ErrReferenceIncarnationMismatch  = errors.New("reference budget materializer incarnation mismatch")
-	ErrReferenceReservationNotFound  = errors.New("reference budget reservation is not known")
+	ErrReferenceReservationNotFound  = fmt.Errorf("reference %w", ErrReservationNotFound)
 	ErrReferenceReservationFinalized = errors.New("reference budget reservation is already finalized")
 )
 

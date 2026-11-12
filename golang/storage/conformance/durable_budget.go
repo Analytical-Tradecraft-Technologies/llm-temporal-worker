@@ -20,7 +20,7 @@ import (
 // model share (#1498), so a lifecycle rule tested for only one of them belongs
 // here.
 func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (durable.BudgetMaterializer, func() time.Time, func(time.Duration))) {
-	for _, scenario := range []string{"reserved", "accounted", "batch", "concurrent", "concurrent-overlapping", "isolation", "expiry", "expired-lease", "claim-expiry", "finalize-unknown", "duplicate-settlement"} {
+	for _, scenario := range []string{"reserved", "accounted", "batch", "concurrent", "concurrent-overlapping", "isolation", "expiry", "expired-lease", "claim-expiry", "finalize-unknown", "duplicate-settlement", "release", "release-after-deadline", "release-after-deadline-reserved", "retain-ambiguous", "reconcile-before-claim"} {
 		t.Run(scenario, func(t *testing.T) {
 			m, clock, advance := newMaterializer(t)
 			ctx := context.Background()
@@ -41,14 +41,18 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				_, err := m.(durable.BudgetLeaser).Claim(ctx, durable.ClaimRequest{OperationID: result.OperationID, GenerationID: "rolling-gen", IncarnationID: "rolling-inc"})
 				return err
 			}
-			// settle reconciles every window of result with one event kind,
-			// releasing the reservation and accounting amount in its place.
-			settle := func(result durable.ReserveResult, kind budget.JournalEventKind, amount string) durable.ReconcileRequest {
+			// completion builds one event per window of result at revision
+			// (the reservation's own revision plus step). Unknown-cost kinds
+			// carry a reason code; the others carry the exact cost.
+			completion := func(result durable.ReserveResult, kind budget.JournalEventKind, step int, reservedDecrease bool, amount string) durable.ReconcileRequest {
 				cost := pricing.MustUSD(amount)
 				request := durable.ReconcileRequest{OperationID: result.OperationID, GenerationID: "rolling-gen", IncarnationID: "rolling-inc"}
 				for index, event := range result.Events {
-					completion := budget.CompletionEvent{EventID: fmt.Sprintf("%s-settle-%d", result.OperationID, index), OperationID: string(result.OperationID), GenerationID: "rolling-gen", WindowID: event.WindowID, BucketStart: event.BucketStart, ReservationRevision: event.ReservationRevision + 1, Kind: kind, ReservedDecreaseUSD: event.AmountUSD, AccountedIncreaseUSD: cost, OccurredAt: now}
-					if kind == budget.JournalFinalizeUnknown {
+					completion := budget.CompletionEvent{EventID: fmt.Sprintf("%s-%s-%d", result.OperationID, kind, index), OperationID: string(result.OperationID), GenerationID: "rolling-gen", WindowID: event.WindowID, BucketStart: event.BucketStart, ReservationRevision: event.ReservationRevision + step, Kind: kind, AccountedIncreaseUSD: cost, OccurredAt: now}
+					if reservedDecrease {
+						completion.ReservedDecreaseUSD = event.AmountUSD
+					}
+					if kind == budget.JournalFinalizeUnknown || kind == budget.JournalRetainAmbiguous {
 						completion.CostStatus, completion.UnknownReasonCode = budget.CostUnknown, "provider_cost_unknown"
 					} else {
 						completion.CostStatus, completion.ActualCostUSD = budget.CostExact, &cost
@@ -56,6 +60,20 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 					request.Events = append(request.Events, completion)
 				}
 				return request
+			}
+			// settle reconciles every window of result with one event kind,
+			// releasing the reservation and accounting amount in its place.
+			settle := func(result durable.ReserveResult, kind budget.JournalEventKind, amount string) durable.ReconcileRequest {
+				return completion(result, kind, 1, true, amount)
+			}
+			// lease reserves amount with a start deadline one second out.
+			lease := func(id, amount string) durable.ReserveResult {
+				t.Helper()
+				result, err := m.Accept(ctx, durable.ReserveRequest{OperationID: durable.OperationID(id), GenerationID: "rolling-gen", ExpiresAt: now.Add(time.Second), Reservations: []admission.WindowReservation{reservation(0, amount)}})
+				if err != nil || !result.Accepted {
+					t.Fatalf("%s: %#v, %v", id, result, err)
+				}
+				return result
 			}
 			reconcile := func(request durable.ReconcileRequest) {
 				t.Helper()
@@ -193,14 +211,6 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 			case "claim-expiry":
 				// An unclaimed lease past its deadline can no longer start and
 				// gives its capacity back; a claimed one keeps holding it.
-				lease := func(id, amount string) durable.ReserveResult {
-					t.Helper()
-					result, err := m.Accept(ctx, durable.ReserveRequest{OperationID: durable.OperationID(id), GenerationID: "rolling-gen", ExpiresAt: now.Add(time.Second), Reservations: []admission.WindowReservation{reservation(0, amount)}})
-					if err != nil || !result.Accepted {
-						t.Fatalf("%s: %#v, %v", id, result, err)
-					}
-					return result
-				}
 				unused := lease("unused", "0.40")
 				started := lease("started", "0.60")
 				if err := claim(started); err != nil {
@@ -242,6 +252,75 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				accept("remainder", true, reservation(0, "0.70"))
 				reconcile(completed)
 				accept("no-double-refund", false, reservation(0, "0.01"))
+			case "release":
+				// An unclaimed lease may be released, once; a claimed one may
+				// not use the release path.
+				started := accept("started", true, reservation(0, "0.40"))
+				if err := claim(started); err != nil {
+					t.Fatal(err)
+				}
+				unused := accept("unused", true, reservation(0, "0.60"))
+				accept("held", false, reservation(0, "0.01"))
+				if err := m.Reconcile(ctx, settle(started, budget.JournalRelease, "0")); err == nil {
+					t.Fatal("a claimed lease was released")
+				}
+				release := settle(unused, budget.JournalRelease, "0")
+				reconcile(release)
+				reconcile(release)
+				accept("refunded", true, reservation(0, "0.60"))
+				reconcile(release)
+				accept("no-double-refund", false, reservation(0, "0.01"))
+			case "release-after-deadline", "release-after-deadline-reserved":
+				// Past its start deadline an unclaimed lease has expired, so a
+				// release finds nothing to refund. The outcome must not depend on
+				// whether an unrelated reservation has cleaned the window since.
+				expired := lease("expired", "0.60")
+				advance(1100 * time.Millisecond)
+				if scenario == "release-after-deadline-reserved" {
+					accept("replacement", true, reservation(0, "1"))
+				}
+				if err := m.Reconcile(ctx, settle(expired, budget.JournalRelease, "0")); !errorsIs(err, durable.ErrReservationNotFound) {
+					t.Fatalf("release after the start deadline = %v, want ErrReservationNotFound", err)
+				}
+				if scenario == "release-after-deadline-reserved" {
+					accept("no-double-refund", false, reservation(0, "0.01"))
+				} else {
+					accept("expired-capacity", true, reservation(0, "1"))
+					accept("full", false, reservation(0, "0.01"))
+				}
+			case "retain-ambiguous":
+				// retain_ambiguous holds the whole reservation without charging
+				// it; only resolve_unknown_exact may settle it afterwards.
+				first := accept("ambiguous", true, reservation(0, "0.60"))
+				if err := claim(first); err != nil {
+					t.Fatal(err)
+				}
+				retain := completion(first, budget.JournalRetainAmbiguous, 1, false, "0")
+				reconcile(retain)
+				reconcile(retain)
+				accept("held", false, reservation(0, "0.41"))
+				if err := m.Reconcile(ctx, completion(first, budget.JournalFinalizeExact, 2, true, "0.25")); err == nil {
+					t.Fatal("finalize_exact settled an ambiguous reservation")
+				}
+				resolve := completion(first, budget.JournalResolveUnknownExact, 2, true, "0.25")
+				reconcile(resolve)
+				reconcile(resolve)
+				accept("remainder", true, reservation(0, "0.75"))
+				accept("full", false, reservation(0, "0.01"))
+			case "reconcile-before-claim":
+				// Settlement other than release needs a claim first, and the
+				// refused attempt leaves the reservation untouched.
+				first := accept("unclaimed", true, reservation(0, "0.60"))
+				if err := m.Reconcile(ctx, settle(first, budget.JournalFinalizeExact, "0.60")); !errorsIs(err, durable.ErrClaimRequired) {
+					t.Fatalf("settle before claim = %v, want ErrClaimRequired", err)
+				}
+				accept("still-held", false, reservation(0, "0.41"))
+				if err := claim(first); err != nil {
+					t.Fatal(err)
+				}
+				reconcile(settle(first, budget.JournalFinalizeExact, "0.30"))
+				accept("remainder", true, reservation(0, "0.70"))
+				accept("full", false, reservation(0, "0.01"))
 			}
 		})
 	}

@@ -73,8 +73,9 @@ All claims in this section describe current code.
   anything. It records `events[event_id] = fingerprint`: an identical replay
   is a no-op, and a different fingerprint under the same ID returns
   `conflict`. A reservation already `finalized` returns `finalized`. When the
-  window's expiry entry has already been cleaned up, it returns `not_found`
-  rather than subtract another operation's contribution.
+  window's expiry entry has already been cleaned up, or its expiry is at or
+  before Redis `TIME`, it returns `not_found` rather than subtract another
+  operation's contribution.
 - `RedisBudgetMaterializer.Reconcile` in
   [`budget_materializer.go`](../../golang/storage/redis/budget_materializer.go)
   maps these statuses to `ErrRedisBudgetConflict`,

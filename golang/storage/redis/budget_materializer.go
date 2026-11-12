@@ -22,7 +22,7 @@ var (
 	ErrRedisBudgetConflict             = errors.New("Redis durable budget idempotency conflict")
 	ErrRedisBudgetGenerationMismatch   = errors.New("Redis durable budget generation mismatch")
 	ErrRedisBudgetIncarnationMismatch  = errors.New("Redis durable budget incarnation mismatch")
-	ErrRedisBudgetReservationNotFound  = errors.New("Redis durable budget reservation is not known")
+	ErrRedisBudgetReservationNotFound  = fmt.Errorf("Redis durable %w", durable.ErrReservationNotFound)
 	ErrRedisBudgetReservationFinalized = errors.New("Redis durable budget reservation is already finalized")
 )
 
