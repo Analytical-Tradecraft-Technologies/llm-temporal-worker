@@ -148,3 +148,33 @@ func TestItemCodecKeepsStoredMediaURLsOutsideTheRequestPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestMediaChecksNameEveryPartCarrier(t *testing.T) {
+	blocked := ImagePart{URL: "http://127.0.0.1/a.png"}
+	blob := DocumentPart{Blob: &BlobRef{Digest: "d"}}
+	var nilMessage *Message
+	for _, test := range []struct {
+		name         string
+		instructions []Instruction
+		items        []Item
+		want         string
+	}{
+		{"instruction", []Instruction{{}, {Content: []Part{TextPart{Text: "a"}, blocked}}}, nil, "instruction 1: part 1: image url"},
+		{"message", nil, []Item{Message{Actor: ActorHuman, Content: []Part{blocked}}}, "item 0: part 0: image url"},
+		{"message pointer", nil, []Item{nilMessage, &Message{Actor: ActorHuman, Content: []Part{blocked}}}, "item 1: part 0: image url"},
+		{"tool result", nil, []Item{ToolResult{CallID: "c", Content: []Part{blocked}}}, "item 0: part 0: image url"},
+		{"tool result pointer", nil, []Item{&ToolResult{CallID: "c", Content: []Part{blocked}}}, "item 0: part 0: image url"},
+	} {
+		err := ValidateMediaURLs(test.instructions, test.items)
+		if err == nil || !strings.HasPrefix(err.Error(), test.want) {
+			t.Fatalf("%s: ValidateMediaURLs = %v, want prefix %q", test.name, err, test.want)
+		}
+	}
+	err := RejectBlobMedia(nil, []Item{nilMessage, ToolResult{CallID: "c", Content: []Part{TextPart{Text: "a"}, blob}}})
+	if err == nil || err.Error() != "item 1: part 1: document blob references are not supported; send inline bytes or a URL" {
+		t.Fatalf("RejectBlobMedia = %v", err)
+	}
+	if err := RejectBlobMedia([]Instruction{{Content: []Part{blocked}}}, []Item{Message{Actor: ActorHuman, Content: []Part{blocked}}}); err != nil {
+		t.Fatalf("RejectBlobMedia rejected URL media: %v", err)
+	}
+}
