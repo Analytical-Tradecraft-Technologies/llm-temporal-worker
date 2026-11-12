@@ -203,15 +203,6 @@ func validationSchema(call provider.Call, wire json.RawMessage) json.RawMessage 
 	return wire
 }
 
-// outputSchema is the caller's json_schema output schema, kept on the call so
-// the lift validates against it rather than the lowered wire schema.
-func outputSchema(request llm.Request) json.RawMessage {
-	if request.Output == nil || request.Output.Format.Kind != llm.OutputKindJSONSchema {
-		return nil
-	}
-	return append(json.RawMessage(nil), request.Output.Format.Schema...)
-}
-
 // finalModelText returns the text of the last model message. A response can
 // carry commentary messages before the final answer, and only the final answer
 // is the document the requested format describes.

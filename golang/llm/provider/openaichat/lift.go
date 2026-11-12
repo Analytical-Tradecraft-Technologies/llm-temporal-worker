@@ -163,15 +163,6 @@ func validationSchema(call provider.Call, wire json.RawMessage) json.RawMessage 
 	return wire
 }
 
-// outputSchema is the caller's json_schema output schema, kept on the call so
-// the lift validates against it rather than the lowered wire schema.
-func outputSchema(request llm.Request) json.RawMessage {
-	if request.Output == nil || request.Output.Format.Kind != llm.OutputKindJSONSchema {
-		return nil
-	}
-	return append(json.RawMessage(nil), request.Output.Format.Schema...)
-}
-
 func firstModelText(output []llm.Item) (string, bool) {
 	for _, item := range output {
 		message, ok := item.(llm.Message)

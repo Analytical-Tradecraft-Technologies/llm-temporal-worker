@@ -135,17 +135,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := ctx.Err(); err != nil {
 		return provider.Result{}, dispatchContextError(err)
 	}
-	if call.Family != provider.FamilyBedrockConverse || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
-	}
-	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*bedrockruntime.ConverseInput); pointerOK && pointer != nil {
-			params, ok = *pointer, true
-		}
-	}
-	if !ok {
-		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+	params, err := provider.DispatchParams[bedrockruntime.ConverseInput](call, provider.FamilyBedrockConverse, adapter.endpointID)
+	if err != nil {
+		return provider.Result{}, err
 	}
 	if observer == nil {
 		observer = provider.NopObserver{}

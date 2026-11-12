@@ -179,7 +179,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		OperationKey: normalized.OperationKey,
 		ServiceClass: serviceClass,
 		SDKParams:    params,
-		OutputSchema: outputSchema(normalized),
+		OutputSchema: provider.OutputSchema(normalized),
 		Metadata:     metadata,
 	}, nil
 }
@@ -191,18 +191,9 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err := ctx.Err(); err != nil {
 		return provider.Result{}, provider.NewDispatchContextError(err)
 	}
-	if call.Family != provider.FamilyOpenAIChat || call.EndpointID != adapter.endpointID {
-		return provider.Result{}, provider.NewDispatchError("call does not belong to this adapter", provider.DispatchNotDispatched)
-	}
-	params, ok := call.SDKParams.(openai.ChatCompletionNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*openai.ChatCompletionNewParams); pointerOK && pointer != nil {
-			params = *pointer
-			ok = true
-		}
-	}
-	if !ok {
-		return provider.Result{}, provider.NewDispatchError("call SDK parameters have unexpected type", provider.DispatchNotDispatched)
+	params, err := provider.DispatchParams[openai.ChatCompletionNewParams](call, provider.FamilyOpenAIChat, adapter.endpointID)
+	if err != nil {
+		return provider.Result{}, err
 	}
 	// Encode the ordered schemas before the possible-write boundary, so a
 	// failure here is a definite non-dispatch.
