@@ -278,31 +278,10 @@ func (worker *TemporalWorker) Pause() {
 }
 
 // Resume restarts Temporal polling after a dependency monitor has proved that
-// every required dependency is healthy again.
+// every required dependency is healthy again. It has the same guards as Start:
+// a stopping, draining or already started worker is refused.
 func (worker *TemporalWorker) Resume() error {
-	if worker == nil {
-		return fmt.Errorf("Temporal worker is not initialized")
-	}
-	worker.mu.Lock()
-	if worker.stopping {
-		worker.mu.Unlock()
-		return ErrWorkerStopping
-	}
-	if worker.drainDone != nil {
-		worker.mu.Unlock()
-		return ErrWorkerDraining
-	}
-	if worker.started || worker.starting {
-		worker.mu.Unlock()
-		return fmt.Errorf("Temporal worker is already started")
-	}
-	worker.paused = false
-	worker.starting = true
-	worker.startAuthorized = false
-	worker.startDone = make(chan struct{})
-	controller := worker.controller
-	worker.mu.Unlock()
-	return worker.startController(controller)
+	return worker.Start()
 }
 
 func (worker *TemporalWorker) startController(controller *boundController) error {
