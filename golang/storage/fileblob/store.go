@@ -194,28 +194,11 @@ func (store *Store) Get(ctx context.Context, tenant string, ref blob.Ref) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(path)
+	file, info, err := openRegular(path, "blob", blob.ErrNotFound)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, blob.ErrNotFound
-		}
-		return nil, fmt.Errorf("inspect blob: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return nil, blob.ErrNotFound
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, blob.ErrNotFound
-		}
-		return nil, fmt.Errorf("open blob: %w", err)
+		return nil, err
 	}
 	defer file.Close()
-	info, err = file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, blob.ErrNotFound
-	}
 	if info.Size() != ref.ByteLength || info.Size() > store.maxBytes {
 		return nil, blob.ErrDigestMismatch
 	}
@@ -245,29 +228,42 @@ func (store *Store) objectPath(prefix, digest string) (string, error) {
 	return cleanPath, nil
 }
 
-func (store *Store) readExisting(path string, ref blob.Ref) ([]byte, error) {
+// openRegular opens the regular file at path. A missing file is
+// blob.ErrNotFound; a path that is not a regular file, or is replaced by one
+// that is not between the check and the open, is notRegular. Other failures
+// name the blob as label. The caller closes the file.
+func openRegular(path, label string, notRegular error) (*os.File, os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, blob.ErrNotFound
+			return nil, nil, blob.ErrNotFound
 		}
-		return nil, fmt.Errorf("inspect existing blob: %w", err)
+		return nil, nil, fmt.Errorf("inspect %s: %w", label, err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, blob.ErrConflict
+		return nil, nil, notRegular
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, blob.ErrNotFound
+			return nil, nil, blob.ErrNotFound
 		}
-		return nil, fmt.Errorf("open existing blob: %w", err)
+		return nil, nil, fmt.Errorf("open %s: %w", label, err)
 	}
-	defer file.Close()
 	info, err = file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, blob.ErrConflict
+		file.Close()
+		return nil, nil, notRegular
 	}
+	return file, info, nil
+}
+
+func (store *Store) readExisting(path string, ref blob.Ref) ([]byte, error) {
+	file, info, err := openRegular(path, "existing blob", blob.ErrConflict)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, store.maxBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read existing blob: %w", err)
