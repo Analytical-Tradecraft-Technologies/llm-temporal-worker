@@ -64,19 +64,9 @@ func (message Message) MarshalJSON() ([]byte, error) {
 }
 
 func decodeMessage(data []byte) (Message, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodeItemObject(data, ItemKindMessage, "kind", "actor", "content")
 	if err != nil {
 		return Message{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "actor", "content"); err != nil {
-		return Message{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return Message{}, err
-	}
-	if ItemKind(kind) != ItemKindMessage {
-		return Message{}, fmt.Errorf("item kind %q is not %q", kind, ItemKindMessage)
 	}
 	actorValue, err := requiredString(fields, "actor")
 	if err != nil {
@@ -125,19 +115,9 @@ func (call ToolCall) MarshalJSON() ([]byte, error) {
 }
 
 func decodeToolCall(data []byte) (ToolCall, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodeItemObject(data, ItemKindToolCall, "kind", "id", "name", "arguments")
 	if err != nil {
 		return ToolCall{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "id", "name", "arguments"); err != nil {
-		return ToolCall{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return ToolCall{}, err
-	}
-	if ItemKind(kind) != ItemKindToolCall {
-		return ToolCall{}, fmt.Errorf("item kind %q is not %q", kind, ItemKindToolCall)
 	}
 	id, err := requiredString(fields, "id")
 	if err != nil {
@@ -233,19 +213,9 @@ func (result ToolResult) MarshalJSON() ([]byte, error) {
 }
 
 func decodeToolResult(data []byte) (ToolResult, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodeItemObject(data, ItemKindToolResult, "kind", "call_id", "name", "content", "is_error")
 	if err != nil {
 		return ToolResult{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "call_id", "name", "content", "is_error"); err != nil {
-		return ToolResult{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return ToolResult{}, err
-	}
-	if ItemKind(kind) != ItemKindToolResult {
-		return ToolResult{}, fmt.Errorf("item kind %q is not %q", kind, ItemKindToolResult)
 	}
 	callID, err := requiredString(fields, "call_id")
 	if err != nil {
@@ -301,19 +271,9 @@ func opaqueBytes(value []byte) []byte {
 }
 
 func decodeProviderState(data []byte) (ProviderState, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodeItemObject(data, ItemKindProviderState, "kind", "provider", "endpoint_family", "media_type", "opaque")
 	if err != nil {
 		return ProviderState{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "provider", "endpoint_family", "media_type", "opaque"); err != nil {
-		return ProviderState{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return ProviderState{}, err
-	}
-	if ItemKind(kind) != ItemKindProviderState {
-		return ProviderState{}, fmt.Errorf("item kind %q is not %q", kind, ItemKindProviderState)
 	}
 	provider, err := requiredString(fields, "provider")
 	if err != nil {
@@ -370,19 +330,9 @@ func (reference Reference) MarshalJSON() ([]byte, error) {
 }
 
 func decodeReference(data []byte) (Reference, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodeItemObject(data, ItemKindReference, "kind", "uri", "metadata")
 	if err != nil {
 		return Reference{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "uri", "metadata"); err != nil {
-		return Reference{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return Reference{}, err
-	}
-	if ItemKind(kind) != ItemKindReference {
-		return Reference{}, fmt.Errorf("item kind %q is not %q", kind, ItemKindReference)
 	}
 	uri, err := requiredString(fields, "uri")
 	if err != nil {
@@ -404,6 +354,36 @@ func decodeReference(data []byte) (Reference, error) {
 		}
 	}
 	return Reference{URI: uri, Metadata: metadata}, nil
+}
+
+// decodeItemObject splits a verified item object, rejects fields outside
+// allowed and requires its kind to be want.
+func decodeItemObject(data []byte, want ItemKind, allowed ...string) (map[string]json.RawMessage, error) {
+	return decodeKindedObject(data, "item", want, allowed)
+}
+
+// decodePartObject splits a verified part object, rejects fields outside
+// allowed and requires its kind to be want.
+func decodePartObject(data []byte, want PartKind, allowed ...string) (map[string]json.RawMessage, error) {
+	return decodeKindedObject(data, "part", want, allowed)
+}
+
+func decodeKindedObject[K ~string](data []byte, noun string, want K, allowed []string) (map[string]json.RawMessage, error) {
+	fields, err := decodeVerifiedObject(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkUnknownFields(fields, allowed...); err != nil {
+		return nil, err
+	}
+	kind, err := requiredString(fields, "kind")
+	if err != nil {
+		return nil, err
+	}
+	if K(kind) != want {
+		return nil, fmt.Errorf("%s kind %q is not %q", noun, kind, want)
+	}
+	return fields, nil
 }
 
 // decodeItem and the item, part and blob decoders it dispatches to decode
@@ -532,19 +512,9 @@ func writeParts(output *bytes.Buffer, parts []Part) error {
 }
 
 func decodeTextPart(data []byte) (TextPart, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodePartObject(data, PartKindText, "kind", "text")
 	if err != nil {
 		return TextPart{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "text"); err != nil {
-		return TextPart{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return TextPart{}, err
-	}
-	if PartKind(kind) != PartKindText {
-		return TextPart{}, fmt.Errorf("part kind %q is not %q", kind, PartKindText)
 	}
 	text, err := requiredString(fields, "text")
 	if err != nil {
@@ -683,19 +653,9 @@ func marshalMediaPart(kind PartKind, label string, source mediaSource, extraFiel
 // decodeMediaPart decodes and validates a media part, returning its source
 // and the value of extraField.
 func decodeMediaPart(data []byte, kind PartKind, label, extraField string) (mediaSource, string, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodePartObject(data, kind, "kind", "url", "bytes", "blob", "media_type", extraField)
 	if err != nil {
 		return mediaSource{}, "", err
-	}
-	if err := checkUnknownFields(fields, "kind", "url", "bytes", "blob", "media_type", extraField); err != nil {
-		return mediaSource{}, "", err
-	}
-	kindValue, err := requiredString(fields, "kind")
-	if err != nil {
-		return mediaSource{}, "", err
-	}
-	if PartKind(kindValue) != kind {
-		return mediaSource{}, "", fmt.Errorf("part kind %q is not %q", kindValue, kind)
 	}
 	urlValue, _, err := optionalString(fields, "url")
 	if err != nil {
@@ -745,19 +705,9 @@ func (part JSONPart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeJSONPart(data []byte) (JSONPart, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodePartObject(data, PartKindJSON, "kind", "value")
 	if err != nil {
 		return JSONPart{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "value"); err != nil {
-		return JSONPart{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return JSONPart{}, err
-	}
-	if PartKind(kind) != PartKindJSON {
-		return JSONPart{}, fmt.Errorf("part kind %q is not %q", kind, PartKindJSON)
 	}
 	value, err := requireField(fields, "value")
 	if err != nil {
@@ -786,19 +736,9 @@ func (part RefusalPart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeRefusalPart(data []byte) (RefusalPart, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodePartObject(data, PartKindRefusal, "kind", "text", "provider_code")
 	if err != nil {
 		return RefusalPart{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "text", "provider_code"); err != nil {
-		return RefusalPart{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return RefusalPart{}, err
-	}
-	if PartKind(kind) != PartKindRefusal {
-		return RefusalPart{}, fmt.Errorf("part kind %q is not %q", kind, PartKindRefusal)
 	}
 	text, err := requiredString(fields, "text")
 	if err != nil {
@@ -835,19 +775,9 @@ func (part ProviderStatePart) MarshalJSON() ([]byte, error) {
 }
 
 func decodeProviderStatePart(data []byte) (ProviderStatePart, error) {
-	fields, err := decodeVerifiedObject(data)
+	fields, err := decodePartObject(data, PartKindProviderState, "kind", "provider", "endpoint_family", "media_type", "opaque")
 	if err != nil {
 		return ProviderStatePart{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "provider", "endpoint_family", "media_type", "opaque"); err != nil {
-		return ProviderStatePart{}, err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return ProviderStatePart{}, err
-	}
-	if PartKind(kind) != PartKindProviderState {
-		return ProviderStatePart{}, fmt.Errorf("part kind %q is not %q", kind, PartKindProviderState)
 	}
 	provider, err := requiredString(fields, "provider")
 	if err != nil {
