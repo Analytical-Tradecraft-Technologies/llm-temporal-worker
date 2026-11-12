@@ -26,8 +26,10 @@ import (
 )
 
 // DocumentSchema versions the stored Document. A reader rejects any other
-// value instead of guessing at a different shape.
-const DocumentSchema = "openrouter-catalog/v2"
+// value instead of guessing at a different shape. Version 3 moved the fetch
+// time out of the stored bytes, so the digest covers only catalog content
+// (#1555).
+const DocumentSchema = "openrouter-catalog/v3"
 
 // Document bounds. OpenRouter lists a few hundred models with a handful of
 // endpoints each; the bounds leave room for growth while keeping one stored
@@ -43,9 +45,16 @@ const (
 )
 
 // Document is one complete OpenRouter catalog observation.
+//
+// The encoded Document, and therefore its Digest, holds only catalog content:
+// an unchanged OpenRouter catalog encodes to the same bytes on every refresh,
+// so workers neither reinstall it nor change the synced price version.
 type Document struct {
-	Schema    string    `json:"schema"`
-	FetchedAt time.Time `json:"fetched_at"`
+	Schema string `json:"schema"`
+	// FetchedAt is when the content was fetched. It is metadata, not content:
+	// it is not encoded, and the Store keeps it beside the body. A decoded
+	// Document has it zero until the caller sets it from the Store.
+	FetchedAt time.Time `json:"-"`
 	Models    []Model   `json:"models"`
 	// Providers are the upstream providers OpenRouter lists, with the
 	// countries it publishes for each.
@@ -146,9 +155,6 @@ func (document *Document) Normalize() {
 func (document Document) Validate() error {
 	if document.Schema != DocumentSchema {
 		return fmt.Errorf("model catalog schema %q is not %q", document.Schema, DocumentSchema)
-	}
-	if document.FetchedAt.IsZero() {
-		return fmt.Errorf("model catalog fetched_at is required")
 	}
 	if len(document.Models) == 0 || len(document.Models) > MaxModels {
 		return fmt.Errorf("model catalog must list between 1 and %d models", MaxModels)
@@ -346,7 +352,8 @@ func DecodeDocument(data []byte) (Document, error) {
 	return document, nil
 }
 
-// Digest is the lowercase hex SHA-256 of canonical Document bytes.
+// Digest is the lowercase hex SHA-256 of canonical Document bytes. Since the
+// bytes exclude FetchedAt, equal catalog content has an equal digest.
 func Digest(encoded []byte) string {
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:])

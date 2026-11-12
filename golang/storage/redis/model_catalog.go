@@ -56,7 +56,7 @@ func NewModelCatalogStore(client redisclient.UniversalClient, keys KeyOptions) (
 // The keys name the Document schema, so workers on different schemas during a
 // rolling deploy each refresh and read their own Document instead of
 // rejecting each other's.
-const modelCatalogSchemaKey = "openrouter-v2"
+const modelCatalogSchemaKey = "openrouter-v3"
 
 func (store *ModelCatalogStore) catalogKey() string {
 	return store.space.admissionKey("model-catalog", modelCatalogSchemaKey)

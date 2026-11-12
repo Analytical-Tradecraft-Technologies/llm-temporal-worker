@@ -18,7 +18,9 @@ type Store interface {
 	Latest(ctx context.Context) (digest string, fetchedAt time.Time, body []byte, found bool, err error)
 	// Publish replaces the published Document only when fetchedAt is later
 	// than the published one, so a slow fetch can never overwrite a newer
-	// one. It reports whether the Document was published.
+	// one. It reports whether the Document was published. Republishing the
+	// same digest only advances fetchedAt: the content, and so every
+	// worker's installed catalog, is unchanged.
 	Publish(ctx context.Context, digest string, fetchedAt time.Time, body []byte) (bool, error)
 	// AcquireRefresh takes the refresh lease for ttl under token, reporting
 	// false when another worker holds it.
