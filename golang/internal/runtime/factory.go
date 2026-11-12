@@ -207,9 +207,13 @@ type productionClientSet struct {
 	v1Capabilities     V1RuntimeCapabilities
 	v1Runtime          activity.V1Runtime
 	redisGrowth        *RedisGrowthMaintainer
+	// routes is the snapshot's compiled route catalog, kept to report when
+	// its earliest priced window ends once the snapshot is published.
+	routes routing.Catalog
 }
 
 var _ V1RuntimeSource = (*productionClientSet)(nil)
+var _ catalogPriceExpirySource = (*productionClientSet)(nil)
 var _ CheckpointCapabilitiesSource = (*productionClientSet)(nil)
 var _ BudgetSource = (*productionClientSet)(nil)
 var _ V1RuntimeCapabilitiesSource = (*productionClientSet)(nil)
@@ -408,6 +412,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			}
 		}
 		set.v1Capabilities.composition = precomposed
+		set.routes = engineSnapshot.Routes
 		return factory.attachV1Runtime(ctx, snapshot, engineValue, set)
 	}
 	redisClient, redisOwned, err := factory.buildRedis(ctx, value)
@@ -669,6 +674,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	}
 	clients := &productionClientSet{
 		redisGrowth:        redisGrowth,
+		routes:             engineSnapshot.Routes,
 		probes:             probes,
 		providerControl:    providerControl,
 		queryRepos:         queryRepos,

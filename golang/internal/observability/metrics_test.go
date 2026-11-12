@@ -2,6 +2,7 @@ package observability_test
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,6 +91,10 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordAmbiguous("endpoint-a")
 	metrics.RecordRouteHeld("endpoint-a", observability.RouteHeldCircuitOpen)
 	metrics.RecordRouteHeld("endpoint-a", "unbounded-reason")
+	metrics.RecordRouteHealthTransition("endpoint-a", observability.RouteHealthCircuitOpen)
+	metrics.RecordRouteHealthTransition("unconfigured-endpoint", "unbounded-transition")
+	expiry := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	metrics.SetCatalogPriceExpiry(expiry)
 	metrics.RecordContinuation("continue")
 	metrics.RecordConfigReload("success")
 	metrics.RecordMaintenance("cache", "eligible", 0, time.Second)
@@ -120,7 +125,8 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		"llmtw_heartbeat_age_seconds", "llmtw_maintenance_rows_total",
 		"llmtw_maintenance_failures_total", "llmtw_maintenance_duration_seconds",
 		"llmtw_cache_events_total", "llmtw_provider_poll_total", "llmtw_cost_status_total",
-		"llmtw_route_held_total",
+		"llmtw_route_held_total", "llmtw_route_health_transition_total",
+		"llmtw_catalog_price_expiry_timestamp_seconds",
 	}
 	seen := make(map[string]bool, len(families))
 	for _, family := range families {
@@ -136,6 +142,25 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	}
 	if got := metricValue(families, "llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "other"}); got != 1 {
 		t.Fatalf("route held with an unknown reason = %v, want it bounded to other", got)
+	}
+	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-a", "to": "circuit_open"}); got != 1 {
+		t.Fatalf("route circuit openings = %v, want 1", got)
+	}
+	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-a", "to": "degraded"}); got != 0 {
+		t.Fatalf("pre-registered degraded transitions = %v, want 0", got)
+	}
+	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "other", "to": "other"}); got != 1 {
+		t.Fatalf("unknown endpoint and transition = %v, want both bounded to other", got)
+	}
+	if got := metricValue(families, "llmtw_catalog_price_expiry_timestamp_seconds", nil); got != float64(expiry.Unix()) {
+		t.Fatalf("catalog price expiry = %v, want %v", got, expiry.Unix())
+	}
+	metrics.SetCatalogPriceExpiry(time.Time{})
+	if families, err = metrics.Gather(); err != nil {
+		t.Fatal(err)
+	}
+	if got := metricValue(families, "llmtw_catalog_price_expiry_timestamp_seconds", nil); !math.IsInf(got, 1) {
+		t.Fatalf("catalog price expiry without a bound = %v, want +Inf", got)
 	}
 	if got := metricValue(families, "llmtw_worker_polling", nil); got != 0 {
 		t.Fatalf("worker polling = %v, want 0 after stop", got)
@@ -309,6 +334,11 @@ func TestExtendAllowedLabelsIdentifiersIntroducedByReload(t *testing.T) {
 			t.Errorf("policy %q admissions = %v, want %v", policy, got, want)
 		}
 	}
+	// A reloaded endpoint's route health transitions are exported before its
+	// first flip.
+	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-b", "to": "circuit_open"}); got != 0 || !hasSeries(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-b", "to": "circuit_open"}) {
+		t.Errorf("reloaded endpoint transition series missing (value %v)", got)
+	}
 	var disabled *observability.Metrics
 	disabled.ExtendAllowed(observability.AllowedValues{Policies: []string{"policy-c"}})
 }
@@ -414,4 +444,26 @@ func labelsMatch(metric *dto.Metric, labels map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func hasSeries(families []*dto.MetricFamily, name string, labels map[string]string) bool {
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+	series:
+		for _, metric := range family.GetMetric() {
+			for key, want := range labels {
+				found := false
+				for _, label := range metric.GetLabel() {
+					found = found || (label.GetName() == key && label.GetValue() == want)
+				}
+				if !found {
+					continue series
+				}
+			}
+			return true
+		}
+	}
+	return false
 }

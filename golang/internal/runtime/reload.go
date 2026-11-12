@@ -58,6 +58,7 @@ func (runtime *Runtime) reloadFile(ctx context.Context, path string, accept func
 		version = current.Config.ConfigVersion()
 	}
 	runtime.Metrics.RecordConfigReload("success")
+	publishCatalogPriceExpiry(runtime.Metrics, runtime.App.Current(), time.Now())
 	message := "configuration reloaded"
 	if cleanupIncomplete {
 		message = "configuration reloaded; previous snapshot cleanup did not finish before reload returned"

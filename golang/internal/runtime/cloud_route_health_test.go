@@ -160,10 +160,17 @@ type keyedHealthFixture struct {
 	records map[[4]string]control.RouteStatus
 }
 
-func (h *keyedHealthFixture) RecordProviderStatus(_ context.Context, o control.StatusObservation) error {
+func (h *keyedHealthFixture) RecordProviderStatus(ctx context.Context, o control.StatusObservation) error {
+	_, _, _, err := h.RecordProviderStatusTransition(ctx, o)
+	return err
+}
+
+// RecordProviderStatusTransition reports the record before and after the
+// observation, as the Redis store's compare-and-swap does.
+func (h *keyedHealthFixture) RecordProviderStatusTransition(_ context.Context, o control.StatusObservation) (control.RouteStatus, control.RouteStatus, bool, error) {
 	event, err := control.NewStatusEvent(o)
 	if err != nil {
-		return err
+		return control.RouteStatus{}, control.RouteStatus{}, false, err
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -171,11 +178,13 @@ func (h *keyedHealthFixture) RecordProviderStatus(_ context.Context, o control.S
 		h.records = map[[4]string]control.RouteStatus{}
 	}
 	key := [4]string{o.RouteID, o.EndpointID, o.Model, o.ProviderTier}
-	status := h.records[key]
-	if status.Apply(event) {
-		h.records[key] = status
+	before := h.records[key]
+	status := before
+	if !status.Apply(event) {
+		return control.RouteStatus{}, control.RouteStatus{}, false, nil
 	}
-	return nil
+	h.records[key] = status
+	return before, status, true, nil
 }
 
 func (h *keyedHealthFixture) GetRouteStatus(_ context.Context, digest [32]byte, route, endpoint, model, tier string) (control.RouteStatus, error) {
@@ -440,5 +449,104 @@ func TestCloudRouteHealthHoldsAuthenticationFailureForSnapshot(t *testing.T) {
 	replacement.configDigest = sha256.Sum256([]byte("replacement"))
 	if blocked(&replacement) {
 		t.Fatal("an authentication failure blocked the route in a replacement snapshot")
+	}
+}
+
+// A route circuit opening is reported by the worker whose observation opened
+// it, so an operator sees it even when no request is later turned away. Each
+// flip of the shared record is counted once, and a circuit opening logs a
+// warning.
+func TestCloudRouteHealthTransitionsAreCountedAndLogged(t *testing.T) {
+	now := time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
+	digest := sha256.Sum256([]byte("config"))
+	account := [32]byte{7}
+	candidate := routing.Candidate{RouteID: "primary", EndpointID: "openai-direct", Provider: "openai", Family: "responses", Model: "gpt-5-mini", ProviderTier: "default", EndpointAccountHMAC: account}
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"openai-direct", "idle-endpoint"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &logs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithLogger(observability.WithMetrics(context.Background(), metrics), logger)
+	shared := &keyedHealthFixture{}
+	execution := &CloudProviderExecution{statusRecorder: shared}
+	operation := 0
+	record := func(failure *cloudstate.ExecutionFailure) {
+		t.Helper()
+		operation++
+		now = now.Add(time.Second)
+		stage := cloudstate.ExecutionSucceeded
+		if failure != nil {
+			stage = cloudstate.ExecutionFailed
+		}
+		execution.recordRouteStatus(ctx, cloudstate.SavedProviderExecution{
+			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
+				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
+			Execution: cloudstate.ProviderExecution{Stage: stage, CompletedAt: now, Failure: failure},
+		})
+	}
+	flips := func(to string) float64 {
+		t.Helper()
+		return cloudMetricTotal(t, metrics, "llmtw_route_health_transition_total", "endpoint", "openai-direct", "to", to)
+	}
+	want := func(step string, unavailable, degraded, open, closed float64) {
+		t.Helper()
+		got := [4]float64{flips(observability.RouteHealthUnavailable), flips(observability.RouteHealthDegraded), flips(observability.RouteHealthCircuitOpen), flips(observability.RouteHealthCircuitClosed)}
+		if got != [4]float64{unavailable, degraded, open, closed} {
+			t.Fatalf("%s: unavailable, degraded, circuit_open, circuit_closed = %v, want %v", step, got, [4]float64{unavailable, degraded, open, closed})
+		}
+	}
+	// Every transition series of a configured endpoint exists before its first
+	// flip, so increase() sees the first circuit opening.
+	if got := cloudMetricTotal(t, metrics, "llmtw_route_health_transition_total", "endpoint", "idle-endpoint"); got != 0 {
+		t.Fatalf("idle endpoint transitions = %v, want 0", got)
+	}
+	if !strings.Contains(metricsText(t, metrics), `llmtw_route_health_transition_total{endpoint="idle-endpoint",to="circuit_open"} 0`) {
+		t.Fatal("transition series of a configured endpoint are not exported before the first flip")
+	}
+	record(nil)
+	want("success", 0, 0, 0, 0)
+	unavailable := &cloudstate.ExecutionFailure{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchRejected}
+	record(unavailable)
+	want("first failure", 1, 0, 0, 0)
+	record(unavailable)
+	want("second failure", 1, 0, 0, 0)
+	if strings.Contains(logs.String(), "route circuit opened") {
+		t.Fatalf("circuit open logged before the threshold: %s", logs.String())
+	}
+	record(unavailable)
+	want("third failure", 1, 0, 1, 0)
+	if !strings.Contains(logs.String(), "route circuit opened") || !strings.Contains(logs.String(), `"route_id":"primary"`) || !strings.Contains(logs.String(), `"endpoint":"openai-direct"`) {
+		t.Fatalf("circuit open was not logged with its route: %s", logs.String())
+	}
+	// A further failure while held is not another opening.
+	record(&cloudstate.ExecutionFailure{Code: provider.CodeProviderRateLimited, Dispatch: provider.DispatchRejected})
+	want("rate limit while held", 1, 1, 1, 0)
+	now = now.Add(time.Minute)
+	record(nil)
+	want("probe success", 1, 1, 1, 1)
+	// A credential rejection opens the circuit at once.
+	record(&cloudstate.ExecutionFailure{Code: provider.CodeAuthentication, Dispatch: provider.DispatchRejected})
+	want("authentication failure", 2, 1, 2, 1)
+}
+
+func TestRouteHealthTransitionsCountReopeningAfterLapsedHold(t *testing.T) {
+	now := time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
+	lapsed := control.RouteStatus{Availability: control.AvailabilityUnavailable, Circuit: control.CircuitOpen, ObservedAt: now, StaleAfter: now.Add(30 * time.Second)}
+	reopened := control.RouteStatus{Availability: control.AvailabilityUnavailable, Circuit: control.CircuitOpen, ObservedAt: now.Add(time.Minute), StaleAfter: now.Add(90 * time.Second)}
+	if got := routeHealthTransitions(lapsed, reopened); len(got) != 1 || got[0] != observability.RouteHealthCircuitOpen {
+		t.Fatalf("failure after a lapsed hold = %v, want circuit_open", got)
+	}
+	extended := reopened
+	extended.ObservedAt = now.Add(10 * time.Second)
+	if got := routeHealthTransitions(lapsed, extended); len(got) != 0 {
+		t.Fatalf("failure within a hold = %v, want no flip", got)
+	}
+	closed := control.RouteStatus{Availability: control.AvailabilityAvailable, Circuit: control.CircuitClosed, ObservedAt: now.Add(time.Minute)}
+	if got := routeHealthTransitions(lapsed, closed); len(got) != 1 || got[0] != observability.RouteHealthCircuitClosed {
+		t.Fatalf("success after a lapsed hold = %v, want circuit_closed", got)
 	}
 }
