@@ -917,11 +917,7 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache"); err != nil {
 		return err
 	}
-	version, err := requiredString(fields, "api_version")
-	if err != nil || version != APIVersion {
-		return fmt.Errorf("api_version %q is unsupported", version)
-	}
-	key, err := requiredString(fields, "operation_key")
+	version, key, err := decodeContractHeader(fields, APIVersion)
 	if err != nil {
 		return err
 	}
@@ -1274,11 +1270,7 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "service", "usage", "cost", "diagnostics"); err != nil {
 		return err
 	}
-	version, err := requiredString(fields, "api_version")
-	if err != nil || version != APIVersion {
-		return fmt.Errorf("api_version %q is unsupported", version)
-	}
-	key, err := requiredString(fields, "operation_key")
+	version, key, err := decodeContractHeader(fields, APIVersion)
 	if err != nil {
 		return err
 	}
@@ -1302,31 +1294,19 @@ func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("output: %w", err)
 	}
-	checkpointRaw, err := requireField(fields, "checkpoint")
-	if err != nil {
-		return err
-	}
 	var checkpoint CheckpointMetadata
-	if err := json.Unmarshal(checkpointRaw, &checkpoint); err != nil {
+	if err := decodeRequiredJSON(fields, "checkpoint", &checkpoint); err != nil {
 		return err
 	}
 	if checkpoint.Kind != "generation" && checkpoint.Kind != "cache_replay" {
 		return fmt.Errorf("invalid generation checkpoint kind %q", checkpoint.Kind)
 	}
-	cacheRaw, err := requireField(fields, "cache")
-	if err != nil {
-		return err
-	}
 	var cache CacheDispositionV1
-	if err := json.Unmarshal(cacheRaw, &cache); err != nil {
-		return err
-	}
-	costRaw, err := requireField(fields, "cost")
-	if err != nil {
+	if err := decodeRequiredJSON(fields, "cache", &cache); err != nil {
 		return err
 	}
 	var cost CostV1
-	if err := json.Unmarshal(costRaw, &cost); err != nil {
+	if err := decodeRequiredJSON(fields, "cost", &cost); err != nil {
 		return err
 	}
 	if err := cost.validate(); err != nil {
@@ -1478,11 +1458,7 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "policy", "model", "service_class", "cache"); err != nil {
 		return err
 	}
-	version, err := requiredString(fields, "api_version")
-	if err != nil || version != CompactAPIVersion {
-		return fmt.Errorf("api_version %q is unsupported", version)
-	}
-	key, err := requiredString(fields, "operation_key")
+	version, key, err := decodeContractHeader(fields, CompactAPIVersion)
 	if err != nil {
 		return err
 	}
@@ -1626,11 +1602,7 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "diagnostics"); err != nil {
 		return err
 	}
-	version, err := requiredString(fields, "api_version")
-	if err != nil || version != CompactAPIVersion {
-		return fmt.Errorf("api_version %q is unsupported", version)
-	}
-	key, err := requiredString(fields, "operation_key")
+	version, key, err := decodeContractHeader(fields, CompactAPIVersion)
 	if err != nil {
 		return err
 	}
@@ -1653,20 +1625,12 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 	if checkpoint.Parent == nil || !checkpoint.Parent.valid() {
 		return fmt.Errorf("compact checkpoint parent is invalid")
 	}
-	cacheRaw, err := requireField(fields, "cache")
-	if err != nil {
-		return err
-	}
 	var cache CacheDispositionV1
-	if err := json.Unmarshal(cacheRaw, &cache); err != nil {
-		return err
-	}
-	costRaw, err := requireField(fields, "cost")
-	if err != nil {
+	if err := decodeRequiredJSON(fields, "cache", &cache); err != nil {
 		return err
 	}
 	var cost CostV1
-	if err := json.Unmarshal(costRaw, &cost); err != nil {
+	if err := decodeRequiredJSON(fields, "cost", &cost); err != nil {
 		return err
 	}
 	result := CompactResponseV1{APIVersion: version, OperationKey: key, OperationID: id, Checkpoint: checkpoint, Cache: cache, Cost: cost}
@@ -1734,11 +1698,7 @@ func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "kind", "query"); err != nil {
 		return err
 	}
-	version, err := requiredString(fields, "api_version")
-	if err != nil || version != QueryAPIVersion {
-		return fmt.Errorf("api_version %q is unsupported", version)
-	}
-	key, err := requiredString(fields, "operation_key")
+	version, key, err := decodeContractHeader(fields, QueryAPIVersion)
 	if err != nil {
 		return err
 	}
@@ -2018,11 +1978,7 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "operation_key", "query_execution_id", "kind", "observed_at", "source", "freshness", "complete", "next_cursor", "result", "cost_status", "actual_cost_usd", "cost_method", "cost_unknown_reason_code"); err != nil {
 		return err
 	}
-	version, err := requiredString(fields, "api_version")
-	if err != nil || version != QueryAPIVersion {
-		return fmt.Errorf("api_version %q is unsupported", version)
-	}
-	key, err := requiredString(fields, "operation_key")
+	version, key, err := decodeContractHeader(fields, QueryAPIVersion)
 	if err != nil {
 		return err
 	}
@@ -2257,4 +2213,28 @@ func (policy *CachePolicyV1) SampleIndex() int64 {
 		return 0
 	}
 	return int64(policy.Variant)
+}
+
+// decodeContractHeader reads the api_version and operation_key every v1
+// contract object starts with. A missing or different api_version is
+// reported as unsupported.
+func decodeContractHeader(fields map[string]json.RawMessage, apiVersion string) (string, string, error) {
+	version, err := requiredString(fields, "api_version")
+	if err != nil || version != apiVersion {
+		return "", "", fmt.Errorf("api_version %q is unsupported", version)
+	}
+	key, err := requiredString(fields, "operation_key")
+	if err != nil {
+		return "", "", err
+	}
+	return version, key, nil
+}
+
+// decodeRequiredJSON unmarshals the required field name into target.
+func decodeRequiredJSON(fields map[string]json.RawMessage, name string, target any) error {
+	raw, err := requireField(fields, name)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, target)
 }
