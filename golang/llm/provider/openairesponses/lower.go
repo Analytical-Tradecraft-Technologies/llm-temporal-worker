@@ -1,12 +1,12 @@
 package openairesponses
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaiwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 
 	"github.com/openai/openai-go/v3/packages/param"
@@ -221,7 +221,7 @@ func lowerItem(item llm.Item) (map[string]any, error) {
 			"arguments": string(value.Arguments),
 		}, nil
 	case llm.ToolResult:
-		output, err := lowerToolResultContent(value.Content)
+		output, err := openaiwire.ToolResultText(value.Content)
 		if err != nil {
 			return nil, err
 		}
@@ -382,7 +382,7 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 		}
 		return map[string]any{"type": "input_text", "text": string(value.Value)}, nil
 	case llm.ImagePart:
-		url, err := mediaURL(value.URL, value.Bytes, value.MediaType)
+		url, err := openaiwire.MediaURL(value.URL, value.Bytes, value.MediaType)
 		if err != nil {
 			return nil, fmt.Errorf("image: %w", err)
 		}
@@ -418,16 +418,6 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported part %T", part)
 	}
-}
-
-func mediaURL(rawURL string, data []byte, mediaType string) (string, error) {
-	if rawURL != "" {
-		return rawURL, nil
-	}
-	if len(data) == 0 {
-		return "", fmt.Errorf("blob-backed media is not available to adapter")
-	}
-	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
 // documentExtensions maps a document media type to the extension of the
@@ -490,28 +480,8 @@ func mediaFile(rawURL string, data []byte, mediaType string) (string, string, er
 	if rawURL != "" {
 		return rawURL, "", nil
 	}
-	if len(data) == 0 {
-		return "", "", fmt.Errorf("blob-backed media is not available to adapter")
-	}
-	return "", "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
-}
-
-func lowerToolResultContent(content []llm.Part) (string, error) {
-	var builder strings.Builder
-	for index, part := range content {
-		switch value := part.(type) {
-		case llm.TextPart:
-			builder.WriteString(value.Text)
-		case llm.JSONPart:
-			if !json.Valid(value.Value) {
-				return "", fmt.Errorf("tool result part %d is invalid JSON", index)
-			}
-			builder.Write(value.Value)
-		default:
-			return "", fmt.Errorf("tool result part %d kind %q cannot be represented as text", index, part.PartKind())
-		}
-	}
-	return builder.String(), nil
+	fileData, err := openaiwire.MediaURL("", data, mediaType)
+	return "", fileData, err
 }
 
 func lowerTools(tools []llm.Tool) ([]any, error) {
