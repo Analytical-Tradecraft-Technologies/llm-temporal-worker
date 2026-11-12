@@ -68,12 +68,15 @@ this decision to run the compaction child before generation.
 
 `llm.generate.resolve.v1` returns the same plan in `GenerationResolutionV1`.
 When the request has a cache policy and the plan needs no compaction, it then
-runs the request workflow's preparation step on the same request within the
-same Activity attempt. If preparation returns a completed result, such as an
-exact cache hit or the replay of a completed operation, the resolution carries
-that result, including its reference capability; otherwise it carries none.
-A preparation error or any other state is not reported: the request workflow
-repeats the idempotent preparation and handles it. The public workflow
+prepares the request as the request workflow's preparation step does, within
+the same Activity attempt, but returns only a result that needs no attempt: an
+exact cache hit or the replay of a completed operation. The resolution carries
+that result, including its reference capability; otherwise it carries none and
+the request is left without an attempt, budget plan or cache fill, which the
+request workflow's preparation step then starts once. A runtime without
+`activity.CachedExecutionRuntime` runs the full preparation step instead and
+reports only a completed result. An error or any other state is not reported:
+the request workflow repeats the idempotent preparation and handles it. The public workflow
 schedules this Activity instead of `llm.generate.plan.v1` for new runs.
 
 ## Bounded execution results

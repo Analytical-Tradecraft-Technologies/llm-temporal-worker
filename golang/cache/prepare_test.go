@@ -175,3 +175,73 @@ func TestStalledFill(t *testing.T) {
 		}
 	}
 }
+
+// PrepareAfterMiss follows a caller's own miss (#1782). It skips only that
+// first lookup: a success published since is still found, by the recheck an
+// owner or waiter makes and by the lookup that follows any other decision.
+func TestPrepareAfterMissSkipsOnlyTheRepeatedLookup(t *testing.T) {
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	key := ResponseKey{ScopeID: "scope", Fingerprint: Fingerprint{1}}
+	lease := FillLease{Key: key, OperationID: state.OperationID("operation"), Attempt: "attempt", AcquiredAt: now, ExpiresAt: now.Add(time.Minute)}
+	lookup := ResponseLookup{Key: key, Now: now}
+	errStorage := errors.New("storage unavailable")
+	for _, test := range []struct {
+		name       string
+		published  bool
+		decision   FillDisposition
+		fail       bool
+		wantHit    bool
+		wantEvents []string
+	}{
+		{"owner", false, FillOwned, false, false, []string{"acquire", "lookup"}},
+		{"waiter", false, FillWait, false, false, []string{"acquire", "lookup"}},
+		{"published since, owner", true, FillOwned, false, true, []string{"acquire", "lookup", "release"}},
+		{"published since, waiter", true, FillWait, false, true, []string{"acquire", "lookup"}},
+		{"recovery", false, FillRecoveryNeeded, false, false, []string{"acquire", "lookup"}},
+		{"published since, finished fill", true, FillAttemptFinished, false, true, []string{"acquire", "lookup"}},
+		{"published since, recovery", true, FillRecoveryNeeded, false, true, []string{"acquire", "lookup"}},
+		{"lookup after recovery failed", false, FillRecoveryNeeded, true, false, []string{"acquire", "lookup"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var events []string
+			responses := prepareResponses{lookup: func(got ResponseLookup) (*ResponseEntry, error) {
+				events = append(events, "lookup")
+				if test.fail {
+					return nil, errStorage
+				}
+				if test.published {
+					return &ResponseEntry{Key: key, ID: "entry"}, nil
+				}
+				return nil, nil
+			}}
+			fills := prepareFills{
+				acquire: func(FillLease) (FillDecision, error) {
+					events = append(events, "acquire")
+					return FillDecision{Disposition: test.decision, Record: FillRecord{Lease: lease}}, nil
+				},
+				release: func(FillLease, time.Time) error { events = append(events, "release"); return nil },
+			}
+			result, err := PrepareAfterMiss(context.Background(), responses, fills, lookup, lease)
+			if test.fail != errors.Is(err, errStorage) || (err != nil && !test.fail) {
+				t.Fatal(err)
+			}
+			if (result.Entry != nil) != test.wantHit || (!test.wantHit && !test.fail && result.Fill.Disposition != test.decision) {
+				t.Fatalf("result = %+v", result)
+			}
+			if !reflect.DeepEqual(events, test.wantEvents) {
+				t.Fatalf("events: %v", events)
+			}
+		})
+	}
+	responses := prepareResponses{lookup: func(ResponseLookup) (*ResponseEntry, error) { t.Fatal("unexpected IO"); return nil, nil }}
+	bad := lease
+	bad.Key.ScopeID = "other"
+	if _, err := PrepareAfterMiss(context.Background(), responses, prepareFills{}, lookup, bad); err == nil {
+		t.Fatal("wrong key")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := PrepareAfterMiss(ctx, responses, prepareFills{}, lookup, lease); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}

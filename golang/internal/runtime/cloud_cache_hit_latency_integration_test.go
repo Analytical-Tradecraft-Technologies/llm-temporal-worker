@@ -28,6 +28,11 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
+// cacheHitGenerateStorageBound bounds the storage calls of one warm hit
+// through the public Generate workflow: planning, resolution and the
+// Langfuse export. It was 150 before #1782.
+const cacheHitGenerateStorageBound = 82
+
 // TestCloudWorkflowCacheHitLatency measures exact cache hits through the
 // public Generate workflow on a real Temporal server and Redis. It primes the
 // cache once, then submits equivalent requests under new operation keys and
@@ -104,6 +109,7 @@ func TestCloudWorkflowCacheHitLatency(t *testing.T) {
 		phase := summarizeCacheBench(name, runs)
 		n := float64(count)
 		phase.StoragePerRun = map[string]float64{"kv_get": float64(used.gets) / n, "kv_query": float64(used.queries) / n, "kv_write": float64(used.writes) / n, "blob_get": float64(used.opens) / n, "blob_put": float64(used.creates) / n}
+		phase.StorageCallsPerRun = float64(storageCalls(used)) / n
 		return phase
 	}
 	warm := func(int, *llm.GenerateRequestV1) {}
@@ -117,6 +123,9 @@ func TestCloudWorkflowCacheHitLatency(t *testing.T) {
 	for _, phase := range report.Phases {
 		if phase.Hits != phase.Runs {
 			t.Fatalf("%s: %d of %d runs were cache hits", phase.Name, phase.Hits, phase.Runs)
+		}
+		if phase.StorageCallsPerRun > cacheHitGenerateStorageBound {
+			t.Fatalf("%s: %.1f storage calls per hit, budget %d", phase.Name, phase.StorageCallsPerRun, cacheHitGenerateStorageBound)
 		}
 	}
 	coldBefore := f.submits.Load()
@@ -296,6 +305,8 @@ type cacheBenchPhase struct {
 	// StoragePerRun is the mean KV and blob operations per run, every
 	// Activity included.
 	StoragePerRun map[string]float64
+	// StorageCallsPerRun is their sum.
+	StorageCallsPerRun float64
 }
 
 func summarizeCacheBench(name string, runs []cacheBenchRun) cacheBenchPhase {

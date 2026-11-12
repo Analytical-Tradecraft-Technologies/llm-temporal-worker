@@ -60,11 +60,23 @@ func (r *observedCloudRuntime) PrepareExecutionV1(ctx context.Context, request l
 	result, err := r.CloudExecutionRuntime.PrepareExecutionV1(ctx, request)
 	if err == nil {
 		r.observeCacheWait(result)
-		if observe := r.harness.cacheHitObserver; observe != nil && result.State == llm.ExecutionCompleted && result.Generate != nil && result.Generate.Cache.Disposition == "hit" {
-			observe(result.RequestID, time.Now())
-		}
+		r.observeCacheHit(result)
 	}
 	return result, err
+}
+
+func (r *observedCloudRuntime) ResolveCachedV1(ctx context.Context, request llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+	result, found, err := r.CloudExecutionRuntime.ResolveCachedV1(ctx, request)
+	if err == nil && found {
+		r.observeCacheHit(result)
+	}
+	return result, found, err
+}
+
+func (r *observedCloudRuntime) observeCacheHit(result llm.ExecutionResultV1) {
+	if observe := r.harness.cacheHitObserver; observe != nil && result.State == llm.ExecutionCompleted && result.Generate != nil && result.Generate.Cache.Disposition == "hit" {
+		observe(result.RequestID, time.Now())
+	}
 }
 
 func (r *observedCloudRuntime) observeCacheWait(result llm.ExecutionResultV1) {

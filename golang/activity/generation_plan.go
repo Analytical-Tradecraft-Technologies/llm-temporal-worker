@@ -77,7 +77,18 @@ func (activities *Activities) resolvedGeneration(ctx context.Context, input llm.
 	if _, err := marshalBounded(request, activities.payloadLimits()); err != nil {
 		return nil
 	}
-	result, err := runtime.PrepareExecutionV1(ctx, request)
+	var result llm.ExecutionResultV1
+	var err error
+	if cached, ok := runtime.(CachedExecutionRuntime); ok {
+		// A miss leaves no attempt, so the request workflow starts one once.
+		var found bool
+		result, found, err = cached.ResolveCachedV1(ctx, request)
+		if !found {
+			return nil
+		}
+	} else {
+		result, err = runtime.PrepareExecutionV1(ctx, request)
+	}
 	if err != nil || result.State != llm.ExecutionCompleted || result.Kind != "generate" || result.Capability == "" || !executionResponseMatchesRequest(request, result) {
 		return nil
 	}

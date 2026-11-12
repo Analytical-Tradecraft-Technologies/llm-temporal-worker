@@ -17,7 +17,7 @@ for cached results, durable progress, provider execution and completion, and
 | Activity | Responsibility |
 | --- | --- |
 | `llm.generate.plan.v1` | Inspect authorized context and decide whether compaction is needed |
-| `llm.generate.resolve.v1` | Plan, and return a cached request that preparation finds complete |
+| `llm.generate.resolve.v1` | Plan, and return a stored result or exact cache hit without starting an attempt |
 | `llm.request.prepare.v1` | Prepare or reload the durable request and eligible cached work |
 | `llm.budget.acquire.v1` | Try acquisition once or recover existing work |
 | `llm.generate.v1` | Claim authorization and submit/resume generation |

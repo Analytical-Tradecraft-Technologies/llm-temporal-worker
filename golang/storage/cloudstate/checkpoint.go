@@ -58,6 +58,10 @@ func (s *checkpointStore) Get(ctx context.Context, scope string, id state.Checkp
 	if !safeText(scope, 512) || !safeText(string(id), 256) {
 		return state.DurableCheckpoint{}, ErrInvalid
 	}
+	reuse := recordReuseFrom(ctx)
+	if pointer, data, ok := reuse.checkpoint(s.repository, scope, id); ok {
+		return s.decode(scope, id, pointer, data)
+	}
 	pointer, err := s.readPointer(ctx, s.key("id", s.identity(scope, "id", string(id))))
 	if err != nil {
 		return state.DurableCheckpoint{}, err
@@ -75,6 +79,15 @@ func (s *checkpointStore) Get(ctx context.Context, scope string, id state.Checkp
 	if err != nil {
 		return state.DurableCheckpoint{}, err
 	}
+	checkpoint, err := s.decode(scope, id, pointer, data)
+	if err != nil {
+		return state.DurableCheckpoint{}, err
+	}
+	reuse.rememberCheckpoint(s.repository, scope, id, pointer, data)
+	return checkpoint, nil
+}
+
+func (s *checkpointStore) decode(scope string, id state.CheckpointID, pointer checkpointPointer, data []byte) (state.DurableCheckpoint, error) {
 	var envelope checkpointEnvelope
 	if json.Unmarshal(data, &envelope) != nil || envelope.Version != checkpointFormat {
 		return state.DurableCheckpoint{}, ErrCorrupt

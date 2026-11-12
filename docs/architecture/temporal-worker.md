@@ -19,7 +19,7 @@ execution and agent loops remain the caller's responsibility.
 | Activity | Role |
 | --- | --- |
 | `llm.generate.plan.v1` | Authorize and inspect inherited context for compaction |
-| `llm.generate.resolve.v1` | Plan, then prepare a cached request that needs no compaction and return it when complete |
+| `llm.generate.resolve.v1` | Plan, then prepare a cached request that needs no compaction and return its stored result or exact cache hit, starting no attempt |
 | `llm.request.prepare.v1` | Prepare or recover a durable request and eligible cached result |
 | `llm.budget.acquire.v1` | Attempt budget acquisition once |
 | `llm.generate.v1` | Claim and submit/resume a generation attempt |

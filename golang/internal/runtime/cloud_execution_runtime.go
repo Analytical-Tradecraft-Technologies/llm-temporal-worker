@@ -75,6 +75,7 @@ type CloudExecutionRuntime struct {
 }
 
 var _ activity.ExecutionRuntime = (*CloudExecutionRuntime)(nil)
+var _ activity.CachedExecutionRuntime = (*CloudExecutionRuntime)(nil)
 
 func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, options CloudExecutionOptions) (*CloudExecutionRuntime, error) {
 	if options.MaxAttempts < 0 || !options.RequestLimits.valid() {
@@ -157,7 +158,51 @@ func (r *CloudExecutionRuntime) CompleteExecutionV1(ctx context.Context, ref llm
 		return r.referenceStep(ctx, ref, cloudComplete)
 	})
 }
+
+// ResolveCachedV1 is PrepareExecutionV1 for a result that needs no attempt:
+// the request's stored result, or an exact cache hit. It prepares the request
+// as PrepareExecutionV1 does. Otherwise it reports found=false and leaves the
+// request without an attempt, budget plan or fill, so the request's own
+// Prepare step creates them once (#1782).
+func (r *CloudExecutionRuntime) ResolveCachedV1(ctx context.Context, input llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
+	found := false
+	result, err := tracedStep(ctx, "resolve", func(ctx context.Context) (llm.ExecutionResultV1, error) {
+		return r.preparedStep(ctx, input, func(ctx context.Context, p PreparedCloudRequest) (llm.ExecutionResultV1, error) {
+			result, hit, err := r.resolveCached(ctx, p)
+			found = hit && err == nil
+			return result, err
+		})
+	})
+	if err != nil || !found {
+		return llm.ExecutionResultV1{}, false, err
+	}
+	return result, true, nil
+}
+
+// resolveCached returns p's stored result or exact cache hit while p has no
+// attempt. Anything else is found=false, for the request's own steps.
+func (r *CloudExecutionRuntime) resolveCached(ctx context.Context, p PreparedCloudRequest) (llm.ExecutionResultV1, bool, error) {
+	if done, found, err := r.replay(ctx, p); found || err != nil {
+		return done, found, err
+	}
+	if p.Generate == nil || p.Preparation.ConfigDigest != r.preparation.digest {
+		return llm.ExecutionResultV1{}, false, nil
+	}
+	root := p.Record.Request
+	if _, err := r.store.LoadRequestAttempt(ctx, root.Scope, root.ID); !errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
+		return llm.ExecutionResultV1{}, false, nil
+	}
+	result, found, _, err := r.probeCache(ctx, p)
+	return result, found, err
+}
+
 func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.PrepareExecutionV1, step cloudStep) (llm.ExecutionResultV1, error) {
+	return r.preparedStep(ctx, input, func(ctx context.Context, p PreparedCloudRequest) (llm.ExecutionResultV1, error) {
+		return r.advance(ctx, p, step)
+	})
+}
+
+func (r *CloudExecutionRuntime) preparedStep(ctx context.Context, input llm.PrepareExecutionV1, advance func(context.Context, PreparedCloudRequest) (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
 	if r == nil {
 		return llm.ExecutionResultV1{}, executionError(provider.CodeConfiguration)
 	}
@@ -172,7 +217,7 @@ func (r *CloudExecutionRuntime) prepareStep(ctx context.Context, input llm.Prepa
 		return llm.ExecutionResultV1{}, err
 	}
 	r.captureLangfuseOperation(ctx, prepared)
-	result, err := r.advance(ctx, prepared, step)
+	result, err := advance(ctx, prepared)
 	r.indexResponseResult(ctx, prepared, result, err)
 	return r.preparation.withCapability(result, err, prepared.Record)
 }
@@ -327,7 +372,15 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		return llm.ExecutionResultV1{}, providerPlanningError(provider.CodeStateUnavailable, provider.PhasePlan, provider.RetrySameOperation)
 	}
 	attempt, err := r.store.LoadRequestAttempt(ctx, root.Scope, root.ID)
+	// probed is a cache key this step looked up and found empty.
+	var probed *cache.ResponseKey
 	if errors.Is(err, cloudstate.ErrRequestAttemptMissing) {
+		// Nothing has been attempted, so a cache hit needs no attempt (#1782).
+		result, found, missed, probeErr := r.probeCache(ctx, p)
+		if probeErr != nil || found {
+			return result, probeErr
+		}
+		probed = missed
 		attempt, err = r.store.BeginRequestAttempt(ctx, root.Scope, root.ID, "", r.now())
 	}
 	if err != nil {
@@ -455,7 +508,7 @@ func (r *CloudExecutionRuntime) advanceAttempt(ctx context.Context, p PreparedCl
 		}
 		var status llm.ExecutionResultV1
 		var found bool
-		status, found, uncached, err = r.prepareCache(ctx, p, *lease)
+		status, found, uncached, err = r.prepareCache(ctx, p, *lease, probed)
 		if err != nil || found {
 			return status, err
 		}

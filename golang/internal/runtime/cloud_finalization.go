@@ -157,17 +157,26 @@ func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, ki
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
 	scope := cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}
-	record, err := f.requests.BeginOperation(ctx, cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: input, Now: f.clock()})
+	var id cloudstate.RequestID
+	if known != nil && known.scope == scope && checkpoint != nil {
+		// This step already began and validated this operation's record, so
+		// it is not looked up again. Saving the plan still reads the record
+		// and checks that its operation key names it and the checkpoint.
+		id = known.id
+	} else {
+		record, beginErr := f.requests.BeginOperation(ctx, cloudstate.Operation{Scope: scope, Kind: kind, Key: key, RequestIndex: index, Manifest: input, Now: f.clock()})
+		id, err = record.Request.ID, beginErr
+	}
 	if err == nil {
-		err = f.verifyProviderFinalization(ctx, scope, record.Request.ID, kind, handoff.CheckpointScope, payload, known)
+		err = f.verifyProviderFinalization(ctx, scope, id, kind, handoff.CheckpointScope, payload, known)
 	}
 	if err == nil {
 		if checkpoint == nil {
-			err = f.store.SaveFinalizationHandoff(ctx, scope, record.Request.ID, handoff, f.clock())
+			err = f.store.SaveFinalizationHandoff(ctx, scope, id, handoff, f.clock())
 		} else {
-			err = f.plans.SaveCheckpointFinalization(ctx, scope, record.Request.ID, cloudstate.CheckpointFinalization{Checkpoint: *checkpoint, Handoff: handoff}, f.clock())
+			err = f.plans.SaveCheckpointFinalization(ctx, scope, id, cloudstate.CheckpointFinalization{Checkpoint: *checkpoint, Handoff: handoff}, f.clock())
 			if err == nil {
-				_, err = f.plans.ResumeCheckpointFinalization(ctx, scope, record.Request.ID, f.clock())
+				_, err = f.plans.ResumeCheckpointFinalization(ctx, scope, id, f.clock())
 			}
 		}
 	}

@@ -78,6 +78,7 @@ type cloudV1Runtime struct {
 
 var _ activity.V1Runtime = (*cloudV1Runtime)(nil)
 var _ activity.ExecutionRuntime = (*cloudV1Runtime)(nil)
+var _ activity.CachedExecutionRuntime = (*cloudV1Runtime)(nil)
 var _ activity.GenerationPlanningRuntime = (*cloudV1Runtime)(nil)
 
 func (r *cloudV1Runtime) QueryV1(ctx context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {

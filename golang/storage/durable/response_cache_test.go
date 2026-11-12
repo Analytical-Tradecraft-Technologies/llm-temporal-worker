@@ -348,3 +348,69 @@ func TestResponseCacheRejectsMissingDependenciesAndChangedDecisions(t *testing.T
 		t.Fatal("empty origin")
 	}
 }
+
+// Lookup answers a hit before any attempt or fill exists (#1782). It never
+// touches fills, validates entries exactly as Prepare does, returns detached
+// copies and reports a miss as nil and a storage failure as an error.
+func TestResponseCacheLookupReadsWithoutFills(t *testing.T) {
+	for _, kind := range []cache.OperationKind{cache.OperationGenerate, cache.OperationCompact} {
+		events := []string{}
+		c, lease, responses, fills := cacheRunnerFixture(t, kind, &events)
+		fills.acquire = func(context.Context, cache.FillLease) (cache.FillDecision, error) {
+			t.Fatal("lookup acquired a fill")
+			return cache.FillDecision{}, nil
+		}
+		entry := cacheTemplate(t, kind, lease)
+		age := time.Hour
+		responses.lookup = func(_ context.Context, got cache.ResponseLookup) (*cache.ResponseEntry, error) {
+			if got.Key != lease.Key || got.MaxAge != &age || !got.Now.Equal(lease.AcquiredAt) {
+				t.Fatalf("lookup %+v", got)
+			}
+			return &entry, nil
+		}
+		found, err := c.Lookup(context.Background(), lease.Key, &age)
+		if err != nil || found == nil || found.ID != entry.ID {
+			t.Fatalf("%v %v", found, err)
+		}
+		found.Response[0] = '!'
+		if entry.Response[0] != '{' {
+			t.Fatal("lookup aliases mutable storage")
+		}
+		responses.lookup = func(context.Context, cache.ResponseLookup) (*cache.ResponseEntry, error) { return nil, nil }
+		if found, err := c.Lookup(context.Background(), lease.Key, nil); found != nil || err != nil {
+			t.Fatalf("miss = %v %v", found, err)
+		}
+		failure := errors.New("unavailable")
+		responses.lookup = func(context.Context, cache.ResponseLookup) (*cache.ResponseEntry, error) { return nil, failure }
+		if _, err := c.Lookup(context.Background(), lease.Key, nil); !errors.Is(err, failure) {
+			t.Fatal(err)
+		}
+		for _, edit := range []func(*cache.ResponseEntry){
+			func(e *cache.ResponseEntry) { e.Key.ScopeID = "other" }, func(e *cache.ResponseEntry) { e.ID = "" },
+			func(e *cache.ResponseEntry) { e.CompletedAt = e.CompletedAt.Add(time.Hour) },
+			func(e *cache.ResponseEntry) { e.CompletedAt = e.CompletedAt.Add(-2 * time.Hour) },
+			func(e *cache.ResponseEntry) { e.OriginOperationID = "different" }, func(e *cache.ResponseEntry) { e.Response = []byte(`{}`) },
+		} {
+			corrupt := cacheTemplate(t, kind, lease)
+			edit(&corrupt)
+			responses.lookup = func(context.Context, cache.ResponseLookup) (*cache.ResponseEntry, error) { return &corrupt, nil }
+			if _, err := c.Lookup(context.Background(), lease.Key, &age); !errors.Is(err, ErrResponseCacheCorrupt) {
+				t.Fatalf("corrupt entry: %v", err)
+			}
+		}
+		invalid := lease.Key
+		invalid.Route.Compiler = ""
+		zero := time.Duration(0)
+		for _, key := range []cache.ResponseKey{invalid, {}} {
+			if _, err := c.Lookup(context.Background(), key, nil); !errors.Is(err, ErrResponseCacheInvalid) {
+				t.Fatal(err)
+			}
+		}
+		if _, err := c.Lookup(context.Background(), lease.Key, &zero); !errors.Is(err, ErrResponseCacheInvalid) {
+			t.Fatal(err)
+		}
+		if len(events) != 0 {
+			t.Fatal(events)
+		}
+	}
+}

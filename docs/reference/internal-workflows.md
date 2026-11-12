@@ -52,8 +52,8 @@ separate real Temporal/Redis evidence.
 `llm.generate.workflow.v1` accepts a Generate v1 request and returns a Generate v1
 response. It calls `llm.generate.resolve.v1` first (histories from before
 that Activity call `llm.generate.plan.v1`). A cached request that needs no
-compaction is prepared in that Activity; when preparation finds it complete,
-for example an exact cache hit, the workflow checks the result as it checks the
+compaction is prepared in that Activity, which returns its stored result or an
+exact cache hit without starting an attempt; when it finds one, the workflow checks the result as it checks the
 request workflow's, starts the Langfuse export child, and returns without
 starting `llm.request.execute.v1`. Otherwise, when required, it runs
 `llm.compact.workflow.v1` as a child, uses the returned checkpoint as the Generate

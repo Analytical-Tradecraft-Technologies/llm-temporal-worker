@@ -29,6 +29,15 @@ type ExecutionRuntime interface {
 	CompleteExecutionV1(context.Context, llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error)
 }
 
+// CachedExecutionRuntime is an optional ExecutionRuntime extension. It
+// prepares a Generate request as PrepareExecutionV1 does, but returns a result
+// only when one needs no attempt: the request's stored result or an exact
+// cache hit. Otherwise found is false and the runtime has left the request for
+// its own steps, without starting an attempt.
+type CachedExecutionRuntime interface {
+	ResolveCachedV1(context.Context, llm.PrepareExecutionV1) (result llm.ExecutionResultV1, found bool, err error)
+}
+
 func (activities *Activities) PrepareExecutionV1(ctx context.Context, request llm.PrepareExecutionV1) (*llm.ExecutionResultV1, error) {
 	kind := "compact"
 	if request.Generate != nil {
