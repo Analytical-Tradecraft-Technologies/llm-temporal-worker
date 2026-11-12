@@ -142,7 +142,7 @@ func (h *admissionHarness) Run(ctx context.Context, _ string, keys []string, arg
 	case "fail":
 		incurred, _ := parseMicro(args[3])
 		attempt, _ := decodeAttempt([]byte(args[4]))
-		err = h.store.Fail(ctx, admission.FailRequest{OperationID: current.ID, DispatchToken: args[1], Certainty: admission.DispatchCertainty(args[2]), Incurred: incurred, Attempt: attempt})
+		err = h.store.Fail(ctx, admission.FailRequest{OperationID: current.ID, DispatchToken: args[1], Certainty: admission.DispatchCertainty(args[2]), Incurred: incurred, Attempt: attempt, Retryable: len(args) > 7 && args[7] == "1"})
 	default:
 		return []any{"invalid_request", ""}, nil
 	}

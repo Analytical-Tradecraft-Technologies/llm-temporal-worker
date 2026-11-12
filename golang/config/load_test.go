@@ -353,7 +353,7 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 	redis, _ := state["redis"].(map[string]any)
 	for field, want := range map[string]string{
 		"admission_mode":    "function",
-		"admission_version": "admission_569c833775078849",
+		"admission_version": "admission_0f563bdf4c8f7c6f",
 	} {
 		if got, _ := redis[field].(string); got != want {
 			t.Fatalf("state.redis.%s = %q, want %q", field, got, want)
@@ -371,15 +371,15 @@ func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
 func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 	data := strings.Replace(
 		string(exampleYAML(t)),
-		"admission_digest: 1ad1c002b53c82eeb7844074a9ced496d291e5964afeece237d3b52133ed5137",
-		"admission_digest: 1AD1C002B53C82EEB7844074A9CED496D291E5964AFEECE237D3B52133ED5137",
+		"admission_digest: 6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7",
+		"admission_digest: 6FF537912923EC833924A5286D1F1BDCC3B7A40B42E8D677E8C7E79E93CF85A7",
 		1,
 	)
 	loaded, err := config.Load([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := loaded.State.Redis.AdmissionDigest, "1ad1c002b53c82eeb7844074a9ced496d291e5964afeece237d3b52133ed5137"; got != want {
+	if got, want := loaded.State.Redis.AdmissionDigest, "6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
 }
@@ -526,7 +526,7 @@ func TestLoadRejectsUnsafeValuesAndReferences(t *testing.T) {
 		"readiness timeout ordering": strings.Replace(string(exampleYAML(t)), "readiness_probe_timeout: 2s", "readiness_probe_timeout: 6s", 1),
 		"retention":                  strings.Replace(string(exampleYAML(t)), "ambiguous_retention: 90d", "ambiguous_retention: 1d", 1),
 		"admission mode":             strings.Replace(string(exampleYAML(t)), "admission_mode: function", "admission_mode: automatic", 1),
-		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 1ad1c002b53c82eeb7844074a9ced496d291e5964afeece237d3b52133ed5137", "admission_digest: invalid", 1),
+		"admission digest":           strings.Replace(string(exampleYAML(t)), "admission_digest: 6ff537912923ec833924a5286d1f1bdcc3b7a40b42e8d677e8c7e79e93cf85a7", "admission_digest: invalid", 1),
 		"stream trim safety":         strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 31d", 1),
 		"stream trim safety minimum": strings.Replace(string(exampleYAML(t)), "stream_trim_safety: 10m", "stream_trim_safety: 1ns", 1),
 		"overflow":                   strings.Replace(string(exampleYAML(t)), "max_connections: 96", "max_connections: 999999999999999999999999", 1),

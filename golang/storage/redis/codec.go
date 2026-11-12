@@ -52,6 +52,10 @@ type operationWire struct {
 	Created      string                   `json:"created_at"`
 	Updated      string                   `json:"updated_at"`
 	Expires      time.Time                `json:"expires_at"`
+	// Retryable marks a definite failure the next identical Begin reopens;
+	// Reopens counts those reopenings so each gets a distinct token.
+	Retryable bool  `json:"retryable,omitempty"`
+	Reopens   int64 `json:"reopens,omitempty"`
 }
 
 // attemptWire is deliberately explicit. The public admission structs do not
@@ -112,6 +116,7 @@ func encodeOperation(operation admission.Operation) ([]byte, error) {
 		Attempt: encodeAttemptWire(operation.Attempt), Token: operation.DispatchToken,
 		Lease: operation.LeaseUntil, Created: formatRedisTime(operation.CreatedAt),
 		Updated: formatRedisTime(operation.UpdatedAt), Expires: operation.ExpiresAt,
+		Retryable: operation.Retryable,
 	}
 	for index, reservation := range operation.Reservations {
 		wire.Reservations[index] = reservationWire{
@@ -159,6 +164,7 @@ func decodeOperation(data []byte) (admission.Operation, error) {
 		ReservedMicroUSD: reserved, IncurredMicroUSD: incurred, FinalMicroUSD: final,
 		ConfigVersion: wire.Config, PriceVersion: wire.Price, Attempt: decodeAttemptWire(wire.Attempt),
 		DispatchToken: wire.Token, LeaseUntil: wire.Lease, ExpiresAt: wire.Expires,
+		Retryable: wire.Retryable,
 	}
 	operation.CreatedAt, err = parseRedisTime(wire.Created)
 	if err != nil {

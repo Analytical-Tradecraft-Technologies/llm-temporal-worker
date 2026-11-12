@@ -376,18 +376,29 @@ if ACTION == 'begin' then
         return {'invalid_request', ''}
     end
     local existing_key = redis.call('GET', KEYS[1])
+    local reopened = nil
     if existing_key then
         local existing, encoded = get_record(existing_key)
         if existing then
             if existing.request_digest ~= incoming.request_digest then
                 return {'conflict', ''}
             end
-            return {'existing', encoded}
+            -- A definite, retryable rejection released its reservation without
+            -- reaching the provider, so the identical request may reserve again
+            -- under the same operation instead of meeting a terminal conflict
+            -- (#790, #1674). Any other surviving record is returned as is.
+            if existing.state ~= 'definite_failed' or existing.retryable ~= true or
+                existing.id ~= incoming.id or existing_key ~= KEYS[3] then
+                return {'existing', encoded}
+            end
+            reopened = existing
         end
-        if encoded == 'invalid_record' then
-            return {'state_unavailable', ''}
+        if not reopened then
+            if encoded == 'invalid_record' then
+                return {'state_unavailable', ''}
+            end
+            redis.call('DEL', KEYS[1])
         end
-        redis.call('DEL', KEYS[1])
     end
     local reservations = incoming.reservations
     if type(reservations) ~= 'table' or #reservations > MAX_RESERVATIONS or #KEYS ~= 3 + #reservations then
@@ -407,6 +418,13 @@ if ACTION == 'begin' then
     local now = now_string()
     incoming.created_at = now
     incoming.updated_at = now
+    if reopened then
+        -- A fresh token fences any holder of the failed attempt's token.
+        local reopens = (reopened.reopens and integer(reopened.reopens) or 0) + 1
+        incoming.reopens = reopens
+        incoming.dispatch_token = incoming.dispatch_token .. '-reopen-' .. decimal(reopens)
+        incoming.created_at = reopened.created_at
+    end
     local encoded = set_record(KEYS[3], incoming, ttl)
     redis.call('SET', KEYS[1], KEYS[3])
     redis.call('SET', KEYS[2], KEYS[3])
@@ -544,7 +562,8 @@ if ACTION == 'complete' then
 end
 
 if ACTION == 'fail' then
-    if not valid_invocation(2, nil, 7) or not bounded_string(ARGV[2], 512, true) then
+    if not valid_invocation(2, nil, 8) or not bounded_string(ARGV[2], 512, true) or
+        (ARGV[8] ~= '0' and ARGV[8] ~= '1') then
         return {'invalid_request', ''}
     end
     local record, response = operation_status(KEYS[2], ARGV[2])
@@ -575,6 +594,12 @@ if ACTION == 'fail' then
         record.state = 'definite_failed'
         record.final_micro_usd = decimal(incurred)
         record.reserved_micro_usd = '0'
+        -- Only a free definite failure may be reopened by the next Begin.
+        if ARGV[8] == '1' and incurred == 0 then
+            record.retryable = true
+        else
+            record.retryable = nil
+        end
     else
         record.state = 'ambiguous'
         record.final_micro_usd = record.reserved_micro_usd

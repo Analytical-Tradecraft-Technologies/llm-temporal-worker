@@ -259,6 +259,11 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 	if operation.State.Terminal() {
 		return nil
 	}
+	// Only a dispatched attempt can fail, as in the Redis Function: the engine
+	// marks an unused reservation dispatching before it closes it (#1674).
+	if operation.State != admission.StateDispatching && operation.State != admission.StateProviderPending {
+		return admission.ErrInvalidTransition
+	}
 	if err := admission.ValidateOutcome(admission.AttemptOutcome{Certainty: request.Certainty, Incurred: request.Incurred}); err != nil {
 		return err
 	}

@@ -275,7 +275,11 @@ func (store *AdmissionStore) Fail(ctx context.Context, request admission.FailReq
 	if err != nil {
 		return err
 	}
-	return store.settle(ctx, request.OperationID, "fail", request.DispatchToken, string(request.Certainty), strconv.FormatInt(int64(request.Incurred), 10), string(attempt), "0", "0")
+	retryable := "0"
+	if request.Retryable {
+		retryable = "1"
+	}
+	return store.settle(ctx, request.OperationID, "fail", request.DispatchToken, string(request.Certainty), strconv.FormatInt(int64(request.Incurred), 10), string(attempt), "0", "0", retryable)
 }
 
 // settle runs a terminal Function action against an existing operation. The

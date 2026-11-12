@@ -56,6 +56,9 @@ func Run(t *testing.T, factory StoreFactory) {
 	t.Run("ambiguous reservations are retained", func(t *testing.T) {
 		testAmbiguity(t, factory)
 	})
+	t.Run("only dispatched attempts fail and retryable definite failures reopen", func(t *testing.T) {
+		testFailureTransitions(t, factory)
+	})
 	t.Run("continuations are immutable and integrity bound", func(t *testing.T) {
 		testContinuations(t, factory)
 	})
@@ -235,6 +238,94 @@ func testLedger(t *testing.T, factory StoreFactory) {
 	completedContinuation, err := stores.Admission.Get(ctx, continued.ID)
 	if err != nil || completedContinuation.State != admission.StateCompleted || completedContinuation.FinalMicroUSD != 8 {
 		t.Fatalf("completed continuation = %#v, %v", completedContinuation, err)
+	}
+}
+
+// testFailureTransitions pins the legacy failure rules the engine drives
+// (#790, #1674): Fail needs a dispatched attempt, and only a definite failure
+// recorded as Retryable with no incurred cost reopens on an identical Begin,
+// with a fresh reservation and a dispatch token that fences the failed one.
+func testFailureTransitions(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	stores := factory.stores(t)
+	ctx := context.Background()
+	now := stores.Now()
+	fail := func(operation admission.Operation, certainty admission.DispatchCertainty, incurred int, retryable bool) {
+		t.Helper()
+		if err := stores.Admission.Fail(ctx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: certainty, Incurred: admissionAmount(incurred), Attempt: admission.AttemptFacts{RouteID: "primary", AttemptNumber: 1}, Retryable: retryable}); err != nil {
+			t.Fatalf("fail %q: %v", operation.ID, err)
+		}
+	}
+	get := func(id string) admission.Operation {
+		t.Helper()
+		operation, err := stores.Admission.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("get %q: %v", id, err)
+		}
+		return operation
+	}
+
+	reserved := begin(t, stores.Admission, beginRequest("fail-reserved", "fail-reserved-policy", 4, 10, now))
+	if err := stores.Admission.Fail(ctx, admission.FailRequest{OperationID: reserved.ID, DispatchToken: reserved.DispatchToken, Certainty: admission.Rejected, Retryable: true}); !errors.Is(err, admission.ErrInvalidTransition) {
+		t.Fatalf("fail from reserved = %v, want invalid transition", err)
+	}
+	if current := get(reserved.ID); current.State != admission.StateReserved || current.ReservedMicroUSD != admissionAmount(4) || current.Retryable {
+		t.Fatalf("reserved operation after refused fail = %#v", current)
+	}
+
+	request := beginRequest("reopen", "reopen-policy", 10, 10, now)
+	first := begin(t, stores.Admission, request)
+	dispatch(t, stores.Admission, first, now)
+	fail(first, admission.Rejected, 0, true)
+	if failed := get(first.ID); failed.State != admission.StateDefiniteFailed || !failed.Retryable || failed.ReservedMicroUSD != 0 {
+		t.Fatalf("retryable failure = %#v", failed)
+	}
+	conflicting := request
+	conflicting.RequestDigest = admission.Digest([]byte("different"))
+	if _, err := stores.Admission.Begin(ctx, conflicting); !errors.Is(err, admission.ErrOperationConflict) {
+		t.Fatalf("different digest = %v, want conflict", err)
+	}
+	reopened, err := stores.Admission.Begin(ctx, request)
+	if err != nil || reopened.Denied != nil || reopened.Existing || reopened.Operation.State != admission.StateReserved || reopened.Operation.ReservedMicroUSD != admissionAmount(10) || reopened.Operation.Retryable {
+		t.Fatalf("reopen = %#v, %v", reopened, err)
+	}
+	if reopened.Operation.DispatchToken == first.DispatchToken || !reopened.Operation.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("reopened token %q (first %q), created %v (first %v)", reopened.Operation.DispatchToken, first.DispatchToken, reopened.Operation.CreatedAt, first.CreatedAt)
+	}
+	// The reopened attempt holds the window again.
+	if denied, err := stores.Admission.Begin(ctx, beginRequest("reopen-competitor", "reopen-policy", 1, 10, now)); err != nil || denied.Denied == nil {
+		t.Fatalf("competitor while reopened = %#v, %v; want denied", denied, err)
+	}
+	if err := stores.Admission.MarkDispatching(ctx, admission.DispatchRequest{OperationID: first.ID, DispatchToken: first.DispatchToken, LeaseUntil: now.Add(time.Minute)}); !errors.Is(err, admission.ErrInvalidToken) {
+		t.Fatalf("stale token = %v, want invalid token", err)
+	}
+	dispatch(t, stores.Admission, reopened.Operation, now)
+	fail(reopened.Operation, admission.NotDispatched, 0, false)
+	if again, err := stores.Admission.Begin(ctx, request); err != nil || !again.Existing || again.Operation.State != admission.StateDefiniteFailed {
+		t.Fatalf("begin after a non-retryable failure = %#v, %v; want the terminal operation", again, err)
+	}
+
+	// A failure that incurred cost or may have reached the provider never
+	// reopens, whatever the caller's Retryable flag says.
+	for _, terminal := range []struct {
+		id        string
+		certainty admission.DispatchCertainty
+		incurred  int
+		state     admission.OperationState
+	}{
+		{id: "charged", certainty: admission.Rejected, incurred: 1, state: admission.StateDefiniteFailed},
+		{id: "ambiguous-retryable", certainty: admission.Ambiguous, state: admission.StateAmbiguous},
+	} {
+		request := beginRequest(terminal.id, terminal.id+"-policy", 4, 10, now)
+		operation := begin(t, stores.Admission, request)
+		dispatch(t, stores.Admission, operation, now)
+		fail(operation, terminal.certainty, terminal.incurred, true)
+		if current := get(operation.ID); current.Retryable {
+			t.Fatalf("%s recorded as retryable: %#v", terminal.id, current)
+		}
+		if again, err := stores.Admission.Begin(ctx, request); err != nil || !again.Existing || again.Operation.State != terminal.state {
+			t.Fatalf("%s begin again = %#v, %v; want the terminal operation", terminal.id, again, err)
+		}
 	}
 }
 

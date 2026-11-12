@@ -177,9 +177,12 @@ to every retry. A `definite_failed` operation whose last attempt was a definite,
 retryable rejection (for example HTTP 429 with `Retry-After`) incurred nothing
 and released its reservation, so the identical request under the same operation
 key reserves again and dispatches; any other `definite_failed` operation stays
-terminal. The in-process admission store used by memory mode, the only mode that
-runs this engine Activity, implements the reopen; the legacy Redis admission
-store keeps such operations terminal. Terminal operation records outlive the maximum Temporal retry
+terminal. The reopen issues a fresh dispatch token that fences the failed
+attempt's token. `Fail` is accepted only for a dispatched attempt; the engine
+marks an unused reservation `dispatching` before it closes it. The in-process
+admission store used by memory mode and the legacy Redis admission Function both
+implement these rules, and the shared `conformance.Run` suite tests them against
+memory and live Redis in Function and Lua modes. Terminal operation records outlive the maximum Temporal retry
 and retention horizon configured for the worker.
 
 The system offers durable at-most-once automatic submission after a possible
