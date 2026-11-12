@@ -160,8 +160,8 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 	}
 }
 
-// provider_status is accepted on a failed result so a later worker can report
-// the upstream HTTP status, and rejected in any other state or out of range.
+// provider_status carries the upstream HTTP status on a failed result, and is
+// rejected in any other state or out of range.
 func TestExecutionResultAcceptsProviderStatusOnlyOnFailure(t *testing.T) {
 	failed := `{"request_id":"` + requestID + `","kind":"generate","state":"failed","failure_code":"provider_error","error_code":"provider_unavailable","dispatch":"accepted","provider_status":502}`
 	var decoded llm.ExecutionResultV1

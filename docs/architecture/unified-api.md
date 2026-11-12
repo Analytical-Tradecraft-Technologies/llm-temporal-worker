@@ -36,6 +36,28 @@ the item, part, and blob decoders beneath that entry point split the values
 they are handed without scanning them again, so decode cost is linear in the
 record size rather than multiplied by its nesting depth.
 
+### Schema evolution
+
+Workers decode internal records, such as `ExecutionResultV1` passed between
+Activities and workflows, against a closed field list, so a field an older
+worker does not know makes it reject the whole record. During a rolling deploy
+a record written by a new worker can be read by an old one, so an additive
+field ships in two releases:
+
+1. **Accept.** The first release adds the optional field to the Go decoder, the
+   JSON schema and every client decoder (the OCaml codec included), with tests
+   that decode it, and starts saving whatever durable state the field is built
+   from. It never writes the field to a record another worker may read.
+2. **Emit.** Once every running worker is on the first release or later, the
+   next release starts writing the field. Rolling back is safe to any release
+   from step 1 on, and never to one before it.
+
+A field is ready for step 2 when the oldest worker still running decodes it.
+Do not combine the two steps in one release, and do not skip a release between
+them during an upgrade. `provider_status` on failed execution results and
+public failure details followed this pattern: #1492 accepted and saved it, and
+#1546 reports it.
+
 > This chapter describes the current pre-release v1 shape. The staged target,
 > unimplemented delta, cache, exact USD, Compact, and Query contracts replace
 > it in place before the first release and are defined in
