@@ -299,7 +299,7 @@ func TestWorkflowMultiNodeBuilderMatchesBuildCloudShape(t *testing.T) {
 			t.Fatalf("the merge-queue builder and Build Cloud must use the same Buildx release (%s)", pin)
 		}
 	}
-	for _, scenario := range []string{"success", "single-node", "checksum", "credentialed", "no-emulation"} {
+	for _, scenario := range []string{"success", "single-node", "checksum", "credentialed", "no-emulation", "no-fix-binary"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "bin")
@@ -311,7 +311,12 @@ func TestWorkflowMultiNodeBuilderMatchesBuildCloudShape(t *testing.T) {
 				t.Fatal(err)
 			}
 			if scenario != "no-emulation" {
-				if err := os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte("enabled\n"), 0o600); err != nil {
+				flags := "POF"
+				if scenario == "no-fix-binary" {
+					flags = "PO"
+				}
+				registration := "enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: " + flags + "\noffset 0\n"
+				if err := os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte(registration), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -360,7 +365,7 @@ fi
 			}
 			assertFakeCommandFollowsChecksum(t, calls, "install")
 			for _, want := range []string{
-				"sudo apt-get install --yes qemu-user-static",
+				"sudo apt-get install --yes qemu-user-binfmt",
 				"docker context create llmtw-multinode-42-1-arm64",
 				"docker buildx create --name llmtw-multinode-42-1 --driver docker-container --driver-opt image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea --platform linux/amd64 --node llmtw-multinode-42-1-amd64",
 				"docker buildx create --name llmtw-multinode-42-1 --append --driver docker-container --driver-opt image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea --platform linux/arm64 --node llmtw-multinode-42-1-arm64 llmtw-multinode-42-1-arm64",

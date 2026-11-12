@@ -36,12 +36,20 @@ install -m 0755 "${download}" "${DOCKER_CONFIG}/cli-plugins/docker-buildx"
 rm -f -- "${download}"
 
 # The arm64 node runs on this amd64 runner under QEMU user emulation from
-# Ubuntu's archive; its fix-binary registration works inside BuildKit.
+# Ubuntu's archive. Since Ubuntu 26.04, qemu-user-static is only a virtual
+# package; qemu-user-binfmt registers the (now static) qemu-user binaries.
+# BuildKit runs in a container that cannot see the runner's /usr/bin, so the
+# registration must use the fix-binary (F) flag to work inside it.
 sudo apt-get update
-sudo apt-get install --yes qemu-user-static
+sudo apt-get install --yes qemu-user-binfmt
 binfmt_misc="${LLMTW_BINFMT_MISC_DIR:-/proc/sys/fs/binfmt_misc}"
 if [[ ! -e "${binfmt_misc}/qemu-aarch64" ]]; then
   echo "arm64 emulation is not registered with binfmt_misc" >&2
+  exit 1
+fi
+if ! grep -Eq '^flags: [A-Z]*F' "${binfmt_misc}/qemu-aarch64"; then
+  echo "arm64 emulation is registered without the fix-binary flag, so it will not work inside BuildKit:" >&2
+  cat "${binfmt_misc}/qemu-aarch64" >&2
   exit 1
 fi
 
