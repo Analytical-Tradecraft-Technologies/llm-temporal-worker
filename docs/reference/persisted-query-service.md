@@ -31,30 +31,24 @@ invalidates outstanding cursors, which are short-lived, so a page never resumes
 under another snapshot; no extra secret is needed. Provider status, model inventory and credit status read the snapshot's
 Redis provider state.
 
-Budget status reads the active Redis budget generation through the built-in
-`redis.NewRedisBudgetStatusReader` when `state.redis.admission_mode` is
-`function`. The worker never loads Redis code, so before every budget read the
-CLI runs `FUNCTION LIST LIBRARYNAME llmtw_budget_status_v3 WITHCODE` and
-requires that exact library code (the digest of
-`redis.BudgetStatusFunctionLibrarySource()`) with its `budget_status_v3`
-Function, and then requires a published active budget generation. The worker
-does not publish that generation itself (see the reader contract below). When either
-is missing, or the library code differs, `budget_status` returns the typed
-unsupported-query error (`unsupported_capability`, not retryable). An operator
-can load the library or publish a generation without a configuration reload.
-`FUNCTION LIST` is keyless, so with Redis Cluster the CLI runs it on every
-master (`ForEachMaster`; every shard for a Ring client). Every master must
-hold the exact library before the read is attempted. This check does not
-depend on which master owns the budget key's slot, so it stays valid after a
-resharding moves that slot. A cluster with no reachable master fails as
-`state_unavailable`.
-A Redis failure during these checks or during the read is a retryable
-`state_unavailable` error. Neither path invents a value. In `lua` admission mode
-nothing provisions the budget script by SHA, so `budget_status` stays
-unsupported. The query honours `policy_key` and `include_windows=false`. The
-latter returns the generation provenance with an empty `windows` array. It is
-a single bounded snapshot, so `page_size` and `cursor` are rejected as unknown
-fields, and the response is always complete with no `next_cursor`.
+Budget status is a typed unsupported-query error (`unsupported_capability`, not
+retryable) in the production CLI, and stays one until a reader over the durable
+budget ledger exists
+([#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817)).
+The CLI composes no budget reader and never touches Redis for this query.
+Admission accounts spend in the `durable-budget:` and `durable-budget-expiry:`
+keys written by the durable materializer. The only built-in reader,
+`redis.NewRedisBudgetStatusReader`, instead reads generation-scoped `budget:v2:`
+window hashes and their `budget:v2-expiry:` indexes, which nothing in the worker
+writes. Loading the `llmtw_budget_status_v3` Function and publishing a budget
+generation therefore does **not** make `budget_status` reflect spend: without
+the v2 hashes the read fails, and hand-seeded v2 hashes would report figures
+unrelated to the authoritative ledger, such as zero usage for a window that is
+spending ([#1500](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1500)).
+Earlier releases composed that reader in the CLI; do not seed v2 hashes to
+enable it. The durable ledger keeps one combined charge per window bucket, so
+it cannot fill the separate `reserved_cost_usd` and `accounted_cost_usd` fields
+without a different projection; that design belongs to #817.
 
 Spend summary stays a typed unsupported-query error until a durable cloud spend
 reader exists. Refresh requests (`refresh_if_older_than_seconds` > 0) are
@@ -114,7 +108,10 @@ repositories remain a permanent unsupported-capability response rather than
 an empty result.
 
 Budget status is composed through the separate
-`ProductionFactoryOptions.BudgetStatusReaderFactory` seam. The factory invokes
+`ProductionFactoryOptions.BudgetStatusReaderFactory` seam. The production CLI
+leaves it nil (see above), and a library caller that supplies
+`runtime.NewRedisBudgetStatusReaderFactory()` gets the v2 window reader, whose
+figures are disjoint from the durable-budget ledger. The factory invokes
 it once for each immutable snapshot and passes the exact Redis client,
 generation port, key space, Function mode, and clock owned by that snapshot.
 `runtime.NewRedisBudgetStatusReaderFactory()` adapts the built-in
@@ -134,7 +131,7 @@ versioned Redis generation/window reader through `BudgetStatus`. The storage
 package provides `redis.NewRedisBudgetStatusReader`. A library caller of
 `NewProductionEngineFactory` must supply
 `ProductionFactoryOptions.BudgetStatusReaderFactory`; the production CLI
-supplies its Function-checking factory itself (see above). The production factory
+supplies none (see above). The production factory
 then supplies the snapshot-owned Redis client, generation port, key space, and
 approved Function version needed for the bounded read. A nil factory or
 incomplete Redis capability leaves `budget_status` unsupported; after a reader
@@ -210,6 +207,12 @@ horizon. A non-refresh read in the same second just before a refresh can make
 that refresh's first page omit the new listing; the next query sees it.
 
 ## Versioned budget-status reader contract
+
+This contract describes the v2 window reader that exists in the storage
+package. No materializer writes its window hashes: admission accounts in the
+durable-budget ledger instead, so the reader is not composed in production and
+its figures never reflect that ledger (#1500). The contract is kept for a
+future projection; a reader over the authoritative keys is tracked in #817.
 
 The existing durable Redis v1 hashes are not a `BudgetStatus` source. Their
 aggregate fields do not distinguish reserved from accounted amounts, their
@@ -343,6 +346,10 @@ factory, _ := runtime.NewProductionEngineFactory(runtime.ProductionFactoryOption
     BudgetStatusReaderFactory: runtime.NewRedisBudgetStatusReaderFactory(),
 })
 ```
+
+`NewRedisBudgetStatusReaderFactory()` reads only the v2 window hashes described
+above, which nothing in the worker writes; omit it unless the deployment
+materializes that projection itself.
 
 The builder receives the same immutable snapshot used to construct the worker;
 it must not resolve credentials or mutate that snapshot. The budget reader

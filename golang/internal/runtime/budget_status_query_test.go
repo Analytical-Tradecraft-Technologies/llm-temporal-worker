@@ -18,21 +18,16 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
-	redisclient "github.com/redis/go-redis/v9"
 )
 
 type cliBudgetGeneration struct {
 	pointer  redisstore.ActiveBudgetGeneration
 	manifest redisstore.BudgetManifest
-	missing  bool
 	reads    int
 }
 
 func (fake *cliBudgetGeneration) ActiveGeneration(context.Context) (redisstore.ActiveBudgetGeneration, error) {
 	fake.reads++
-	if fake.missing {
-		return redisstore.ActiveBudgetGeneration{}, fmt.Errorf("%w: %w", redisstore.ErrBudgetManifestInvalid, redisstore.ErrBudgetActiveGenerationMissing)
-	}
 	return fake.pointer, nil
 }
 
@@ -54,42 +49,17 @@ func (fake *cliBudgetInvoker) Run(context.Context, string, []string, ...any) ([]
 	return fake.result, nil
 }
 
-type cliBudgetFunctions struct {
-	libraries []redisclient.Library
-	err       error
-	calls     int
-}
-
-func (fake *cliBudgetFunctions) FunctionList(ctx context.Context, query redisclient.FunctionListQuery) *redisclient.FunctionListCmd {
-	fake.calls++
-	command := redisclient.NewFunctionListCmd(ctx)
-	if query.LibraryNamePattern != redisstore.BudgetStatusFunctionLibrary || !query.WithCode {
-		command.SetErr(errors.New("unexpected FUNCTION LIST query"))
-		return command
-	}
-	command.SetVal(fake.libraries)
-	command.SetErr(fake.err)
-	return command
-}
-
-func provisionedBudgetLibrary() []redisclient.Library {
-	return []redisclient.Library{{Name: redisstore.BudgetStatusFunctionLibrary, Engine: "LUA", Code: redisstore.BudgetStatusFunctionLibrarySource(), Functions: []redisclient.Function{{Name: redisstore.BudgetStatusFunctionVersion}}}}
-}
-
 type cliBudgetFixture struct {
 	generation *cliBudgetGeneration
 	invoker    *cliBudgetInvoker
-	functions  *cliBudgetFunctions
-	// masters, when set, replaces the single node with a cluster-shaped
-	// fan-out over every master, as ForEachMaster does in production.
-	masters []*cliBudgetFunctions
-	service activity.QueryService
-	now     time.Time
+	service    activity.QueryService
+	now        time.Time
 }
 
-// newCLIBudgetFixture composes budget_status exactly as the production CLI
-// does: the trusted-Temporal query builder over the CLI budget reader, which
-// wraps the versioned Redis reader. Only the Redis commands are faked.
+// newCLIBudgetFixture composes budget_status as a library deployment that
+// supplies BudgetStatusReaderFactory does: the trusted-Temporal query builder
+// over the versioned Redis reader. Only the Redis Function call is faked. The
+// production CLI composes no budget reader (#1500).
 func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 	t.Helper()
 	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
@@ -127,24 +97,12 @@ func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 	f := &cliBudgetFixture{
 		generation: &cliBudgetGeneration{pointer: pointer, manifest: manifest},
 		invoker:    &cliBudgetInvoker{result: []any{"ok", string(payload)}},
-		functions:  &cliBudgetFunctions{libraries: provisionedBudgetLibrary()},
 		now:        now,
 	}
 	clock := func() time.Time { return f.now }
-	nodes := func(ctx context.Context, fn func(context.Context, budgetFunctionLister) error) error {
-		if f.masters == nil {
-			return fn(ctx, f.functions)
-		}
-		for _, master := range f.masters {
-			if err := fn(ctx, master); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	reader, err := newCLIBudgetStatusReader(nodes, redisstore.BudgetStatusReaderOptions{Invoker: f.invoker, Generation: f.generation, Keys: keys, Mode: redisstore.AdmissionModeFunction, Clock: clock})
-	if err != nil || reader == nil {
-		t.Fatal("CLI budget reader was not composed", err)
+	reader, err := redisstore.NewRedisBudgetStatusReader(redisstore.BudgetStatusReaderOptions{Invoker: f.invoker, Generation: f.generation, Keys: keys, Mode: redisstore.AdmissionModeFunction, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
 	}
 	value := trustedTemporalTestConfig(t)
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{Clock: clock, Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
@@ -211,8 +169,8 @@ func TestCLIBudgetStatusAllowedScopeReadsRedisGeneration(t *testing.T) {
 	if first["policy_key"] != "policy-a" || first["available_usd"] != "0.700000000000000000" || second["available_usd"] != "1.700000000000000000" {
 		t.Fatalf("windows = %v, %v", first, second)
 	}
-	if f.functions.calls != 1 || f.invoker.calls != 1 {
-		t.Fatalf("Function checks %d, reads %d", f.functions.calls, f.invoker.calls)
+	if f.invoker.calls != 1 {
+		t.Fatalf("Function reads = %d, want 1", f.invoker.calls)
 	}
 	// policy_key narrows the coherent snapshot to one policy's windows.
 	response, err = f.query("project", `{"policy_key":"policy-b"}`)
@@ -233,7 +191,7 @@ func TestCLIBudgetStatusDeniesOtherScopeBeforeRedis(t *testing.T) {
 			t.Fatalf("project %q = %v, want authorization denial", project, err)
 		}
 	}
-	if f.functions.calls != 0 || f.generation.reads != 0 || f.invoker.calls != 0 {
+	if f.generation.reads != 0 || f.invoker.calls != 0 {
 		t.Fatal("denied query touched Redis")
 	}
 }
@@ -260,7 +218,7 @@ func TestCLIBudgetStatusIsOneCompleteSnapshot(t *testing.T) {
 			t.Fatalf("filter %s = %v, want request validation failure", filter, err)
 		}
 	}
-	if f.functions.calls != 0 || f.invoker.calls != 0 {
+	if f.generation.reads != 0 || f.invoker.calls != 0 {
 		t.Fatal("rejected page request touched Redis")
 	}
 	response, err := f.query("project", `{}`)
@@ -269,101 +227,6 @@ func TestCLIBudgetStatusIsOneCompleteSnapshot(t *testing.T) {
 	}
 	if !response.Complete || response.NextCursor != nil {
 		t.Fatalf("budget snapshot complete=%v next=%v", response.Complete, response.NextCursor)
-	}
-}
-
-func TestCLIBudgetStatusUnsupportedWithoutProvisionedState(t *testing.T) {
-	for name, change := range map[string]func(*cliBudgetFixture){
-		"absent library": func(f *cliBudgetFixture) { f.functions.libraries = nil },
-		"different code": func(f *cliBudgetFixture) { f.functions.libraries[0].Code += "\n-- changed" },
-		"missing function": func(f *cliBudgetFixture) {
-			f.functions.libraries[0].Functions = []redisclient.Function{{Name: "budget_status_v2"}}
-		},
-		"no generation": func(f *cliBudgetFixture) { f.generation.missing = true },
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := newCLIBudgetFixture(t)
-			change(f)
-			_, err := f.query("project", `{}`)
-			requireUnsupportedBudget(t, err)
-			if f.invoker.calls != 0 {
-				t.Fatal("unprovisioned state reached the budget Function")
-			}
-		})
-	}
-	// A Redis failure while checking is a retryable outage, not unsupported.
-	f := newCLIBudgetFixture(t)
-	f.functions.err = errors.New("connection refused")
-	_, err := f.query("project", `{}`)
-	var classified *provider.Error
-	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable {
-		t.Fatalf("error = %v, want state unavailable", err)
-	}
-}
-
-// FUNCTION LIST is keyless, so in Redis Cluster it reaches an arbitrary
-// master while FCALL reaches the slot owner. Every master must hold the
-// library, or the check fails closed.
-func TestCLIBudgetStatusClusterRequiresFunctionOnEveryMaster(t *testing.T) {
-	provisioned := func() *cliBudgetFunctions { return &cliBudgetFunctions{libraries: provisionedBudgetLibrary()} }
-	f := newCLIBudgetFixture(t)
-	f.masters = []*cliBudgetFunctions{provisioned(), provisioned(), provisioned()}
-	if _, err := f.query("project", `{}`); err != nil {
-		t.Fatal(err)
-	}
-	for index, master := range f.masters {
-		if master.calls != 1 {
-			t.Fatalf("master %d checked %d times", index, master.calls)
-		}
-	}
-	for _, missing := range []int{0, 2} {
-		f := newCLIBudgetFixture(t)
-		f.masters = []*cliBudgetFunctions{provisioned(), provisioned(), provisioned()}
-		f.masters[missing].libraries = nil
-		_, err := f.query("project", `{}`)
-		requireUnsupportedBudget(t, err)
-		if f.invoker.calls != 0 {
-			t.Fatal("partially provisioned cluster reached the budget Function")
-		}
-	}
-	// A topology with no masters proves nothing and must not pass.
-	f = newCLIBudgetFixture(t)
-	f.masters = []*cliBudgetFunctions{}
-	_, err := f.query("project", `{}`)
-	var classified *provider.Error
-	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable || f.invoker.calls != 0 {
-		t.Fatalf("empty cluster = %v, want state unavailable without a read", err)
-	}
-}
-
-func TestCLIBudgetStatusNodeFanOutMatchesClient(t *testing.T) {
-	cluster := redisclient.NewClusterClient(&redisclient.ClusterOptions{Addrs: []string{"127.0.0.1:0"}})
-	ring := redisclient.NewRing(&redisclient.RingOptions{Addrs: map[string]string{"a": "127.0.0.1:0"}})
-	single := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
-	t.Cleanup(func() { _, _, _ = cluster.Close(), ring.Close(), single.Close() })
-	for name, client := range map[string]redisclient.Scripter{"cluster": cluster, "ring": ring, "single": single} {
-		if budgetFunctionNodesFor(client) == nil {
-			t.Fatalf("%s client has no Function check", name)
-		}
-	}
-}
-
-func TestCLIBudgetStatusFactoryRequiresFunctionMode(t *testing.T) {
-	factory := cliBudgetStatusReaderFactory()
-	client := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
-	t.Cleanup(func() { _ = client.Close() })
-	generation := &cliBudgetGeneration{}
-	keys, err := redisstore.NewBudgetKeySpace(redisstore.KeyOptions{Prefix: "worker", HashTag: "budget", KeySecret: bytes.Repeat([]byte{8}, 32)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := factory(context.Background(), nil, redisstore.BudgetStatusReaderOptions{Client: client, Generation: generation, Keys: keys, Mode: redisstore.AdmissionModeLua})
-	if err != nil || reader != nil {
-		t.Fatalf("Lua mode reader = %v, %v; want unsupported", reader, err)
-	}
-	reader, err = factory(context.Background(), nil, redisstore.BudgetStatusReaderOptions{Client: client, Generation: generation, Keys: keys, Mode: redisstore.AdmissionModeFunction})
-	if err != nil || reader == nil {
-		t.Fatalf("Function mode reader = %v, %v", reader, err)
 	}
 }
 

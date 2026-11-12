@@ -147,9 +147,10 @@ type ProductionFactoryOptions struct {
 	// BudgetStatusReaderFactory is an optional per-snapshot Redis composition
 	// seam. When supplied, the factory receives the exact Redis client,
 	// generation port, and key space owned by the snapshot being built. A nil
-	// reader leaves budget_status unsupported. The default is intentionally nil
-	// until a deployment opts into the versioned Redis reader and its preloaded
-	// Function contract.
+	// reader leaves budget_status unsupported. The default, and the production
+	// CLI's choice, is nil: the built-in versioned reader reads budget:v2
+	// window hashes that nothing writes, not the durable-budget ledger that
+	// admission spends through (#1500).
 	BudgetStatusReaderFactory BudgetStatusReaderFactory
 	// DurableCompositionFactory is an optional Task 19 binding for the complete
 	// snapshot-owned cloud/Redis durable state composition. It is not

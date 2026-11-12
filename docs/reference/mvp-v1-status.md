@@ -88,9 +88,13 @@ the request's attempt limit.
 
 - The production CLI composes authenticated control queries. Provider status,
   model inventory and credit status read Redis provider state. Budget status
-  reads the active Redis budget generation once the `llmtw_budget_status_v3`
-  Function is loaded and a generation is published; the worker publishes
-  neither. See [persisted queries](persisted-query-service.md). Spend summary
+  is typed unsupported: admission accounts in the `durable-budget:` ledger, and
+  the only built-in reader reads `budget:v2` window hashes that nothing writes,
+  so loading `llmtw_budget_status_v3` and publishing a generation does not make
+  it reflect spend
+  ([#1500](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1500)).
+  A reader over the durable ledger is still needed. See
+  [persisted queries](persisted-query-service.md). Spend summary
   (which needs a durable cloud spend reader), provider management refresh, and
   Temporal-level query evidence remain tracked in
   [#817](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/817).

@@ -211,7 +211,11 @@ PostgreSQL budget tables. `PersistedQueryOptions.BudgetStatus` remains the
 low-level snapshot-scoped reader seam and must bind the requested instant to
 active generation/manifest/Stream provenance. The versioned window-hash field
 reader and its bounded Function read are implemented by the storage adapter;
-a manifest-only adapter is still rejected.
+a manifest-only adapter is still rejected. That storage adapter reads
+`budget:v2` window hashes that nothing in the worker writes, not the
+durable-budget ledger admission uses, so the production CLI composes no budget
+reader and `budget_status` stays unsupported (see
+[persisted queries](persisted-query-service.md)).
 Current query capabilities and composition requirements are described in the
 [persisted query service](persisted-query-service.md).
 `QueryService.Audit` is the storage-neutral seam for audit observation: it

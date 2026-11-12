@@ -93,13 +93,12 @@ func newCLIEngineFactory(options ProductionFactoryOptions) (EngineFactory, error
 		if next.options.QueryServiceBuilder == nil {
 			next.options.QueryServiceBuilder = trustedTemporalQueryBuilder(&next, value)
 		}
-		// budget_status reads the active Redis budget generation through the
-		// separately provisioned Function. The reader checks for the Function
-		// and a published generation per query and stays typed unsupported
-		// without them.
-		if next.options.BudgetStatusReaderFactory == nil {
-			next.options.BudgetStatusReaderFactory = cliBudgetStatusReaderFactory()
-		}
+		// budget_status is deliberately left without a reader. The only
+		// built-in reader reads budget:v2 window hashes that nothing in the
+		// worker writes; admission accounts in the durable-budget ledger, so
+		// that reader could only report fabricated zero usage (#1500). The
+		// query stays typed unsupported until a reader over the durable
+		// ledger exists (#817).
 		return next.Build(ctx, snapshot)
 	}), nil
 }
