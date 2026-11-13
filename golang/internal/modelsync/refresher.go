@@ -76,7 +76,7 @@ func (refresher *Refresher) Sync(ctx context.Context) (bool, error) {
 	if digest == "" || digest == refresher.installed {
 		return refresher.installed != "", nil
 	}
-	latest, _, body, found, err := refresher.Store.Latest(ctx)
+	latest, fetchedAt, body, found, err := refresher.Store.Latest(ctx)
 	if err != nil {
 		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "store"})
 		return refresher.installed != "", err
@@ -93,6 +93,9 @@ func (refresher *Refresher) Sync(ctx context.Context) (bool, error) {
 		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "decode"})
 		return refresher.installed != "", err
 	}
+	// The fetch time is Store metadata, not part of the digested body. It is
+	// the time of the latest fetch that published this content.
+	document.FetchedAt = fetchedAt.UTC()
 	if err := refresher.Install(document); err != nil {
 		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "install"})
 		return refresher.installed != "", err
@@ -141,7 +144,7 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 		return err
 	}
 	// The fetch carries forward entries of models whose endpoint lookup
-	// fails. A published Document that cannot be verified or decoded only
+	// fails or is over the lookup cap. A published Document that cannot be verified or decoded only
 	// loses that carry-forward; the fetch still proceeds.
 	var previous Document
 	if found && Digest(body) == latest {
@@ -161,14 +164,25 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "encode"})
 		return err
 	}
+	fetched := document.FetchedAt
+	if fetched.IsZero() {
+		fetched = refresher.now()
+	}
+	// The digest covers content only, so an unchanged catalog republishes
+	// the same digest: the Store records the later fetch time, which keeps
+	// other workers from refetching, and no worker reinstalls it (#1555).
 	digest := Digest(encoded)
-	published, err := refresher.Store.Publish(ctx, digest, document.FetchedAt, encoded)
+	published, err := refresher.Store.Publish(ctx, digest, fetched.UTC(), encoded)
 	if err != nil {
 		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "store"})
 		return err
 	}
 	if published {
-		refresher.observe(Event{Step: "refresh", Outcome: OutcomePublished, Digest: digest})
+		event := Event{Step: "refresh", Outcome: OutcomePublished, Digest: digest}
+		if found && digest == latest {
+			event.Cause = "unchanged"
+		}
+		refresher.observe(event)
 	}
 	_, err = refresher.Sync(ctx)
 	return err

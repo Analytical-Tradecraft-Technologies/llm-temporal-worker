@@ -34,6 +34,22 @@ prices.
   doubling to 5 minutes, so a fresh deployment whose boot-time fetch fails
   gains its catalog within minutes rather than an hour. Only OpenRouter API data is stored; rules and
   endpoint configuration are applied by each worker on install.
+- **The digest covers content, not the fetch.** The stored document
+  (`openrouter-catalog/v3`) holds only the sorted model, endpoint and provider
+  content; the fetch time is kept beside it in the store. An unchanged catalog
+  therefore republishes the same digest: the store records the later fetch
+  time, so other workers still skip refetching, but no worker reinstalls it
+  and the synced price version stays the same. The Redis key names the schema,
+  so workers on v2 and v3 keep separate documents during a rolling deploy.
+- **Bounded, conditional fetches.** Each worker keeps the OpenRouter responses
+  that carried an `ETag` and revalidates them with `If-None-Match`, so an
+  unchanged list costs a `304`. One fetch looks up `/endpoints` for at most
+  512 models the previous document already lists; models it does not list are
+  always looked up. Known models whose `/models` entry changed go first, then
+  a rotation from a random start; the rest keep their published endpoints and
+  prices (with zero retention re-read from `/endpoints/zdr`) until a later
+  refresh reaches them. The cap exceeds today's catalog, so it only takes
+  effect as OpenRouter grows.
 - **Text models only.** A model whose output is not text-only (image, audio
   and music generators) is never routable, on OpenRouter or directly; models
   that merely accept media input stay. OpenRouter alias (`~`), variant (`:`)

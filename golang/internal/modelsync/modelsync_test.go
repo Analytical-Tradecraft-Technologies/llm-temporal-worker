@@ -807,17 +807,29 @@ func TestRefresherFetchesOnceAcrossWorkersAndInstallsEverywhere(t *testing.T) {
 	if fetches != 1 || installed[1] != 1 || installed[2] != 1 {
 		t.Fatalf("fetches = %d installed = %v, want one fetch installed by both", fetches, installed)
 	}
-	// Once the interval has passed, the next timer refetches.
+	digest, _ := store.LatestDigest(context.Background())
+	// Once the interval has passed, the next timer refetches. The catalog is
+	// unchanged, so the content digest is too: the Store records the later
+	// fetch time and no worker reinstalls (#1555).
 	now = now.Add(50 * time.Minute)
 	if err := second.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if fetches != 2 || installed[2] != 2 {
-		t.Fatalf("fetches = %d installed = %v after the interval, want a second fetch installed", fetches, installed)
+	if fetches != 2 || installed[1] != 1 || installed[2] != 1 {
+		t.Fatalf("fetches = %d installed = %v after the interval, want a second fetch and no reinstall", fetches, installed)
 	}
-	// Polling an unchanged publication does not reinstall it.
-	if _, err := second.Sync(context.Background()); err != nil || installed[2] != 2 {
+	again, fetchedAt, _, _, _ := store.Latest(context.Background())
+	if again != digest || !fetchedAt.Equal(now) {
+		t.Fatalf("republished digest %s at %v, want %s at %v", again, fetchedAt, digest, now)
+	}
+	// Polling an unchanged publication does not reinstall it, and the fresh
+	// fetch time keeps the first worker from refetching.
+	now = now.Add(10 * time.Minute)
+	if _, err := first.Sync(context.Background()); err != nil || installed[1] != 1 {
 		t.Fatalf("Sync() reinstalled an unchanged Document: %v %v", installed, err)
+	}
+	if err := first.Refresh(context.Background()); err != nil || fetches != 2 {
+		t.Fatalf("Refresh() = %v with %d fetches, want the republished fetch time to count as fresh", err, fetches)
 	}
 }
 

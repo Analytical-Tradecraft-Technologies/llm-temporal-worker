@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +31,11 @@ const (
 	// OpenRouter answers 429 or 5xx.
 	endpointLookupAttempts    = 3
 	defaultEndpointRetryDelay = 500 * time.Millisecond
+	// defaultMaxEndpointLookups caps one fetch's /endpoints lookups of models
+	// the previous Document already lists (#1555). It exceeds the few hundred
+	// text models OpenRouter lists today, so each is still revalidated every
+	// refresh; past it, the lookups rotate across refreshes.
+	defaultMaxEndpointLookups = 512
 )
 
 // Fetcher reads OpenRouter's public model and endpoint lists.
@@ -48,6 +55,17 @@ type Fetcher struct {
 	// providers whose published location could not be read. A dropped model
 	// or provider is otherwise only visible as a no_route planning failure.
 	OnSkipped func([]SkippedModel)
+	// Cache, when set, keeps the OpenRouter responses that carried an ETag
+	// and revalidates them with If-None-Match on later fetches, so an
+	// unchanged list costs a 304 instead of its body. Share one Cache across
+	// a process's fetches; nil fetches every response in full.
+	Cache *ResponseCache
+	// MaxEndpointLookups caps how many models the previous Document already
+	// lists get an /endpoints lookup in one fetch; zero uses 512. Models the
+	// previous Document does not list are always looked up. Known models
+	// whose /models entry changed go first, then a rotation from a random
+	// start; the rest keep their previously published endpoints and prices.
+	MaxEndpointLookups int
 }
 
 // SkippedModel names a listed OpenRouter model, one of its endpoints, or a
@@ -102,6 +120,11 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 	if concurrency <= 0 {
 		concurrency = defaultFetchConcurrency
 	}
+	published := make(map[string]Model, len(previous.Models))
+	for _, model := range previous.Models {
+		published[model.ID] = model
+	}
+	lookup := fetcher.selectLookups(listed, published)
 	type result struct {
 		model   Model
 		ok      bool
@@ -127,10 +150,15 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 			}
 		}()
 	}
+	lookups := 0
 	for index := range listed {
+		if !lookup[index] {
+			continue
+		}
 		if ctx.Err() != nil {
 			break
 		}
+		lookups++
 		work <- index
 	}
 	close(work)
@@ -139,20 +167,20 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		return Document{}, err
 	}
 	document := Document{Schema: DocumentSchema, FetchedAt: clock().UTC(), Models: make([]Model, 0, len(listed)), Providers: providers}
-	published := make(map[string]Model, len(previous.Models))
-	for _, model := range previous.Models {
-		published[model.ID] = model
-	}
 	failures := 0
 	for index, value := range results {
 		switch {
+		case !lookup[index]:
+			// Over the lookup cap: keep the published endpoints until a later
+			// refresh's rotation reaches this model.
+			document.Models = append(document.Models, carryForward(listed[index], published[listed[index].ID], retention))
 		case value.err != nil:
 			failures++
 			// A transient lookup failure must not drop a routable model for a
 			// whole refresh period; only a model /models no longer lists or
 			// whose lookup returns no usable endpoint is removed.
 			if model, found := published[listed[index].ID]; found {
-				document.Models = append(document.Models, model)
+				document.Models = append(document.Models, carryForward(listed[index], model, retention))
 			}
 		case value.ok:
 			document.Models = append(document.Models, value.model)
@@ -161,8 +189,8 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 			skipped = append(skipped, SkippedModel{ID: listed[index].ID, Cause: SkipEndpointPrice})
 		}
 	}
-	if len(listed) > 0 && float64(failures) > float64(len(listed))*maxEndpointFailureRatio {
-		return Document{}, fmt.Errorf("OpenRouter endpoint lookup failed for %d of %d models", failures, len(listed))
+	if lookups > 0 && float64(failures) > float64(lookups)*maxEndpointFailureRatio {
+		return Document{}, fmt.Errorf("OpenRouter endpoint lookup failed for %d of %d models", failures, lookups)
 	}
 	if len(document.Models) > MaxModels {
 		return Document{}, fmt.Errorf("OpenRouter lists more than %d priced models", MaxModels)
@@ -176,6 +204,69 @@ func (fetcher Fetcher) Fetch(ctx context.Context, previous Document) (Document, 
 		fetcher.OnSkipped(skipped)
 	}
 	return document, nil
+}
+
+// selectLookups reports which listed models get an /endpoints lookup in this
+// fetch. A model previous does not list is always looked up, since it has no
+// endpoints to keep. Of the others at most MaxEndpointLookups are: first those
+// whose /models entry differs from the published one, then the rest in ID
+// order from a random start, so successive refreshes rotate through them.
+func (fetcher Fetcher) selectLookups(listed []Model, published map[string]Model) []bool {
+	budget := fetcher.MaxEndpointLookups
+	if budget <= 0 {
+		budget = defaultMaxEndpointLookups
+	}
+	lookup := make([]bool, len(listed))
+	var rest []int
+	for index, model := range listed {
+		previous, known := published[model.ID]
+		switch {
+		case !known:
+			lookup[index] = true
+		case budget > 0 && !sameListing(model, previous):
+			lookup[index] = true
+			budget--
+		default:
+			rest = append(rest, index)
+		}
+	}
+	if budget >= len(rest) {
+		for _, index := range rest {
+			lookup[index] = true
+		}
+		return lookup
+	}
+	sort.Slice(rest, func(i, j int) bool { return listed[rest[i]].ID < listed[rest[j]].ID })
+	start := rand.IntN(len(rest))
+	for offset := range budget {
+		lookup[rest[(start+offset)%len(rest)]] = true
+	}
+	return lookup
+}
+
+// sameListing reports whether a model's /models entry matches the published
+// model, ignoring order. A difference suggests its endpoints changed too.
+func sameListing(listed, published Model) bool {
+	sameSet := func(left, right []string) bool {
+		left, right = append([]string(nil), left...), append([]string(nil), right...)
+		sort.Strings(left)
+		sort.Strings(right)
+		return slices.Equal(left, right)
+	}
+	return listed.ContextLength == published.ContextLength && listed.MaxCompletionTokens == published.MaxCompletionTokens &&
+		sameSet(listed.InputModalities, published.InputModalities) && sameSet(listed.SupportedParameters, published.SupportedParameters)
+}
+
+// carryForward keeps a model's published endpoints under its current /models
+// entry. Zero retention is re-read from this fetch's /endpoints/zdr list,
+// which is fetched in full every time.
+func carryForward(listed, published Model, retention map[[2]string]struct{}) Model {
+	model := listed
+	model.Endpoints = append([]Endpoint(nil), published.Endpoints...)
+	for index := range model.Endpoints {
+		_, model.Endpoints[index].ZeroRetention = retention[[2]string{model.ID, model.Endpoints[index].Tag}]
+	}
+	return model
 }
 
 // dropUnlistedProviders clears the provider of every endpoint naming one the
@@ -657,6 +748,10 @@ func (fetcher Fetcher) get(ctx context.Context, path string, target any) error {
 	if fetcher.APIKey != "" {
 		request.Header.Set("Authorization", "Bearer "+fetcher.APIKey)
 	}
+	cached, revalidate := fetcher.Cache.lookup(request.URL.String())
+	if revalidate {
+		request.Header.Set("If-None-Match", cached.etag)
+	}
 	response, err := fetcher.Client.Do(request)
 	if err != nil {
 		return err
@@ -666,15 +761,22 @@ func (fetcher Fetcher) get(ctx context.Context, path string, target any) error {
 	if err != nil {
 		return err
 	}
-	if response.StatusCode != http.StatusOK {
+	switch {
+	case response.StatusCode == http.StatusNotModified && revalidate:
+		data = cached.body
+	case response.StatusCode != http.StatusOK:
 		return statusError{code: response.StatusCode}
-	}
-	if len(data) > maxResponseBytes {
+	case len(data) > maxResponseBytes:
 		return fmt.Errorf("OpenRouter response exceeds %d bytes", maxResponseBytes)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode OpenRouter response: %w", err)
+	}
+	// Cache only a full response that decoded, so a malformed body is never
+	// replayed for its ETag.
+	if etag := response.Header.Get("ETag"); etag != "" && response.StatusCode == http.StatusOK {
+		fetcher.Cache.store(request.URL.String(), etag, data)
 	}
 	return nil
 }

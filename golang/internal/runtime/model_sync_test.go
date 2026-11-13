@@ -119,6 +119,17 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	if err != nil || len(plan.Candidates) != 1 || plan.Candidates[0].PriceVersion != "" {
 		t.Fatalf("plan = %+v, err = %v; want one unpinned candidate", plan.Candidates, err)
 	}
+	// A later fetch of the same content keeps the price version, which is
+	// derived from catalog content only (#1555).
+	document.FetchedAt = document.FetchedAt.Add(time.Hour)
+	if err := syncRuntime.install(&document); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, _ := syncRuntime.Current(context.Background())
+	if sameQuote, err := unchanged.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
+		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()}); err != nil || sameQuote.Entry.Version != quote.Entry.Version {
+		t.Fatalf("unchanged catalog quote version = %q, err = %v; want %q", sameQuote.Entry.Version, err, quote.Entry.Version)
+	}
 	// A later refresh with new prices replaces the snapshot; an earlier
 	// captured snapshot is unchanged.
 	document.FetchedAt = document.FetchedAt.Add(time.Hour)

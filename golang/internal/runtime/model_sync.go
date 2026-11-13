@@ -297,7 +297,10 @@ func (syncer *modelSyncRuntime) start(ctx context.Context, value config.Config, 
 	minimum, maximum := value.ModelSync.RefreshIntervalMin, value.ModelSync.RefreshIntervalMax
 	syncer.refresher = &modelsync.Refresher{
 		Store: store,
-		Fetch: modelsync.Fetcher{Client: httpClient, BaseURL: value.Endpoints[value.ModelSync.OpenRouter.Endpoint].BaseURL, APIKey: apiKey, OnSkipped: skipped}.Fetch,
+		// One response cache per worker, so a later fetch this worker wins
+		// revalidates OpenRouter's lists with If-None-Match.
+		Fetch: modelsync.Fetcher{Client: httpClient, BaseURL: value.Endpoints[value.ModelSync.OpenRouter.Endpoint].BaseURL, APIKey: apiKey, OnSkipped: skipped,
+			Cache: &modelsync.ResponseCache{}}.Fetch,
 		Install: func(document modelsync.Document) error {
 			return syncer.install(&document)
 		},
