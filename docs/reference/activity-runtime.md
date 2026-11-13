@@ -127,13 +127,15 @@ may have reached the provider. A provider failure also carries `error_code`, the
 stable provider error code (for example `invalid_argument`,
 `provider_rate_limited` or `permission_denied`), and `dispatch`, its dispatch certainty. The public
 workflows raise a non-retryable `ApplicationError` whose type is the failure
-code and whose details hold `{"error_code", "dispatch"}`, so callers can tell an
-invalid request from an outage without the provider's message. Failures saved
-before these fields existed carry no details. Results and failure details also
-accept an optional `provider_status`, the upstream HTTP status (100-599), and
-the worker saves it with each failure. This release does not yet report it:
-results are decoded against a closed field list, so it is emitted only once
-every running worker accepts the field.
+code and whose details hold `{"error_code", "dispatch", "provider_status"}`, so
+callers can tell an invalid request from an outage without the provider's
+message. `provider_status` is the upstream HTTP status (100-599), present when
+the provider reported one, so a caller can tell a 429 from a 503. Failures saved
+before these fields existed carry no details, and failures saved before the
+status was recorded carry no `provider_status`. The field was added in two
+releases, following the
+[schema evolution procedure](../architecture/unified-api.md#schema-evolution):
+one release accepted and saved it, and the next reports it.
 A planning failure's `llm_invalid_argument` details may carry `reason`, the
 first closed-vocabulary planning cause such as `model_not_in_catalog`.
 Retrying failed or unknown paid work requires a separate

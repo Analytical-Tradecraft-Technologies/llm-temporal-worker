@@ -347,11 +347,12 @@ func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
 }
 
 // A failed request reaches the workflow caller with the provider failure's
-// stable code and dispatch as error details, not a bare provider_error (#1001).
+// stable code, dispatch and upstream HTTP status as error details, not a bare
+// provider_error (#1001, #1546).
 func TestExecuteRequestFailureCarriesProviderDetails(t *testing.T) {
 	failed := step(activity.PollActivityName, llm.ExecutionFailed)
 	failed.alter = func(v *llm.ExecutionResultV1) {
-		v.FailureCode, v.ErrorCode, v.Dispatch = "provider_rejected", "provider_rate_limited", "rejected"
+		v.FailureCode, v.ErrorCode, v.Dispatch, v.ProviderStatus = "provider_rejected", "provider_rate_limited", "rejected", 429
 	}
 	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionPending), failed)
 	f.env.ExecuteWorkflow(RequestWorkflowName, f.input)
@@ -360,7 +361,7 @@ func TestExecuteRequestFailureCarriesProviderDetails(t *testing.T) {
 		t.Fatalf("workflow error = %v, want provider_rejected with details", f.env.GetWorkflowError())
 	}
 	var details ExecutionFailureDetails
-	if err := application.Details(&details); err != nil || details.ErrorCode != "provider_rate_limited" || details.Dispatch != "rejected" {
+	if err := application.Details(&details); err != nil || details.ErrorCode != "provider_rate_limited" || details.Dispatch != "rejected" || details.ProviderStatus != 429 {
 		t.Fatalf("details = %+v, %v", details, err)
 	}
 }
@@ -373,6 +374,7 @@ func TestFailureDetailsWireShape(t *testing.T) {
 		want  string
 	}{
 		{ExecutionFailureDetails{ErrorCode: "permission_denied", Dispatch: "rejected"}, `{"error_code":"permission_denied","dispatch":"rejected"}`},
+		{ExecutionFailureDetails{ErrorCode: "provider_unavailable", Dispatch: "accepted", ProviderStatus: 502}, `{"error_code":"provider_unavailable","dispatch":"accepted","provider_status":502}`},
 		{activity.SafeErrorDetails{OperationID: "op-1", Code: "permission_denied", Phase: "dispatch", Dispatch: "rejected", ProviderRequestID: "req-1"},
 			`{"operation_id":"op-1","code":"permission_denied","phase":"dispatch","dispatch":"rejected","provider_request_id":"req-1"}`},
 		{activity.SafeErrorDetails{Code: "provider_rate_limited", Phase: "dispatch", Dispatch: "not_dispatched", RetryAfterMillis: 1500},
