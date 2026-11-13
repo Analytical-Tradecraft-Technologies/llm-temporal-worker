@@ -2,7 +2,10 @@ package redis
 
 // This file contains the read-only v2 budget-status boundary. It is kept
 // separate from the durable materializer because v1 aggregate hashes are not
-// a coherent query snapshot and must never be reinterpreted as one.
+// a coherent query snapshot and must never be reinterpreted as one. Nothing
+// in the worker writes the v2 window hashes: admission accounts in the
+// durable-budget ledger, so this reader never reflects that spend and the
+// production CLI does not compose it (#1500).
 
 import (
 	"context"
@@ -281,19 +284,48 @@ func (reader *RedisBudgetStatusReader) ReadBudgetStatus(ctx context.Context, que
 		if query.PolicyKey != nil && string(*query.PolicyKey) != member.PolicyID {
 			continue
 		}
-		limit, _ := parseNano(value.LimitNanoUSD)
-		reserved, _ := parseNano(value.ReservedNanoUSD)
-		accounted, _ := parseNano(value.AccountedNanoUSD)
-		available := limit - reserved - accounted
-		limitUSD, _ := pricing.USDFromNano(pricing.NanoUSD(limit))
-		reservedUSD, _ := pricing.USDFromNano(pricing.NanoUSD(reserved))
-		accountedUSD, _ := pricing.USDFromNano(pricing.NanoUSD(accounted))
-		availableUSD, _ := pricing.USDFromNano(pricing.NanoUSD(available))
+		window, err := budgetStatusWindow(member, value)
+		if err != nil {
+			return control.BudgetStatusResult{}, fmt.Errorf("%w: member %d: %v", ErrBudgetStatusUnavailable, index, err)
+		}
 		if include {
-			result.Windows = append(result.Windows, control.BudgetWindow{PolicyKey: control.PolicyKey(member.PolicyID), WindowKey: control.WindowKey(member.WindowID), CoverageStart: member.CoverageStart, CoverageEnd: member.CoverageEnd, LimitUSD: control.DecimalUSD(limitUSD.String()), ReservedCostUSD: control.DecimalUSD(reservedUSD.String()), AccountedCostUSD: control.DecimalUSD(accountedUSD.String()), AvailableUSD: control.DecimalUSD(availableUSD.String())})
+			result.Windows = append(result.Windows, window)
 		}
 	}
 	return result, nil
+}
+
+// budgetStatusWindow converts one validated member to exact USD. Every
+// conversion is checked: a value that cannot be represented, or a window
+// whose reserved and accounted cost exceed its limit, fails the read. The
+// wire contract has no negative available_usd, so an over-spent window is
+// refused rather than reported as zero availability (#1500).
+func budgetStatusWindow(member BudgetManifestMember, value BudgetStatusWindowRecord) (control.BudgetWindow, error) {
+	limit, err := parseNano(value.LimitNanoUSD)
+	if err != nil {
+		return control.BudgetWindow{}, fmt.Errorf("limit: %v", err)
+	}
+	reserved, err := parseNano(value.ReservedNanoUSD)
+	if err != nil {
+		return control.BudgetWindow{}, fmt.Errorf("reserved: %v", err)
+	}
+	accounted, err := parseNano(value.AccountedNanoUSD)
+	if err != nil {
+		return control.BudgetWindow{}, fmt.Errorf("accounted: %v", err)
+	}
+	if reserved > limit || accounted > limit-reserved {
+		return control.BudgetWindow{}, errors.New("reserved and accounted cost exceed the limit")
+	}
+	amounts := [4]int64{limit, reserved, accounted, limit - reserved - accounted}
+	var decimals [4]control.DecimalUSD
+	for index, amount := range amounts {
+		usd, err := pricing.USDFromNano(pricing.NanoUSD(amount))
+		if err != nil {
+			return control.BudgetWindow{}, err
+		}
+		decimals[index] = control.DecimalUSD(usd.String())
+	}
+	return control.BudgetWindow{PolicyKey: control.PolicyKey(member.PolicyID), WindowKey: control.WindowKey(member.WindowID), CoverageStart: member.CoverageStart, CoverageEnd: member.CoverageEnd, LimitUSD: decimals[0], ReservedCostUSD: decimals[1], AccountedCostUSD: decimals[2], AvailableUSD: decimals[3]}, nil
 }
 
 // requestMiss reports a manifest-derived miss as typed only when the manifest

@@ -68,7 +68,9 @@ type BudgetStatusReaderFactory func(context.Context, *config.Snapshot, redisstor
 // NewRedisBudgetStatusReaderFactory adapts the storage implementation to the
 // runtime query seam. Deployments may wrap or replace it when they need an
 // explicitly controlled Function invoker, but must return nil on unavailable
-// state.
+// state. The reader reads budget:v2 window hashes that the worker never
+// writes; its figures are unrelated to the durable-budget ledger admission
+// uses, so the production CLI does not compose it (#1500).
 func NewRedisBudgetStatusReaderFactory() BudgetStatusReaderFactory {
 	return func(_ context.Context, _ *config.Snapshot, options redisstore.BudgetStatusReaderOptions) (BudgetStatusReader, error) {
 		return redisstore.NewRedisBudgetStatusReader(options)

@@ -345,3 +345,34 @@ func TestRedisBudgetStatusReaderEncodesWindowSelection(t *testing.T) {
 		})
 	}
 }
+
+// An over-spent window has no valid wire form (available_usd is
+// nonnegative), so it must fail the read instead of collapsing to zero
+// availability (#1500).
+func TestBudgetStatusWindowRefusesOverspendInsteadOfZero(t *testing.T) {
+	member := BudgetManifestMember{PolicyID: "policy", WindowID: "window"}
+	record := func(limit, reserved, accounted string) BudgetStatusWindowRecord {
+		return BudgetStatusWindowRecord{LimitNanoUSD: limit, ReservedNanoUSD: reserved, AccountedNanoUSD: accounted}
+	}
+	window, err := budgetStatusWindow(member, record("1000000000", "200000000", "100000000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window.LimitUSD != "1.000000000000000000" || window.ReservedCostUSD != "0.200000000000000000" || window.AccountedCostUSD != "0.100000000000000000" || window.AvailableUSD != "0.700000000000000000" {
+		t.Fatalf("window = %+v", window)
+	}
+	if window, err := budgetStatusWindow(member, record("1000000000", "600000000", "400000000")); err != nil || window.AvailableUSD != "0.000000000000000000" {
+		t.Fatalf("exactly spent window = %+v, %v; want available 0", window, err)
+	}
+	for name, value := range map[string]BudgetStatusWindowRecord{
+		"reserved over limit":  record("1000000000", "1000000001", "0"),
+		"accounted over limit": record("1000000000", "0", "1000000001"),
+		"combined over limit":  record("1000000000", "600000000", "400000001"),
+		"malformed limit":      record("01", "0", "0"),
+		"unsafe accounted":     record("1000000000", "0", "9007199254740992"),
+	} {
+		if window, err := budgetStatusWindow(member, value); err == nil {
+			t.Fatalf("%s = %+v, want refusal", name, window)
+		}
+	}
+}
