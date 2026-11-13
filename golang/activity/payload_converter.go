@@ -1,10 +1,12 @@
 package activity
 
 import (
+	"context"
 	"fmt"
 
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/workflow"
 )
 
 // BoundedDataConverter wraps Temporal's default converter with the same
@@ -14,8 +16,83 @@ import (
 // It intentionally applies to every payload owned by this worker, including
 // Activity results and workflow arguments, so no registration path can bypass
 // the boundary.
+//
+// Inside a workflow run that pinned its start-time limit (see
+// WithPinnedPayloadLimits), the converter applies the pinned limit instead,
+// so lowering the configured limit does not change what replay decodes or
+// encodes (#1511).
 func BoundedDataConverter(limits PayloadLimits) converter.DataConverter {
+	return WrappedBoundedDataConverter(limits, nil)
+}
+
+// WrappedBoundedDataConverter is BoundedDataConverter with wrap, for example a
+// payload codec, applied around the bounded converter. Pinning rebuilds the
+// whole stack around a converter bounded by the pinned limit; the SDK's
+// CodecDataConverter does not pass the workflow context on to the converter
+// it wraps, so the pinning has to happen outside it.
+func WrappedBoundedDataConverter(limits PayloadLimits, wrap func(converter.DataConverter) converter.DataConverter) converter.DataConverter {
+	if wrap == nil {
+		wrap = func(dataConverter converter.DataConverter) converter.DataConverter { return dataConverter }
+	}
+	return &pinnableDataConverter{DataConverter: wrap(newBoundedDataConverter(limits)), limits: limits, wrap: wrap}
+}
+
+func newBoundedDataConverter(limits PayloadLimits) *boundedDataConverter {
 	return &boundedDataConverter{delegate: converter.GetDefaultDataConverter(), limits: limits}
+}
+
+// pinnableDataConverter is the worker's outermost converter. The SDK binds it
+// to the workflow context for every payload a workflow encodes or decodes
+// (Activity and child arguments and results, side effects, continue-as-new
+// arguments), which is where a pinned start-time limit is read.
+type pinnableDataConverter struct {
+	converter.DataConverter
+	limits PayloadLimits
+	wrap   func(converter.DataConverter) converter.DataConverter
+}
+
+var _ converter.ContextAware = (*pinnableDataConverter)(nil)
+
+func (dataConverter *pinnableDataConverter) WithWorkflowContext(ctx converter.WorkflowContext) converter.DataConverter {
+	pinned, ok := pinnedPayloadLimits(ctx)
+	if !ok || pinned.inlineBytes() == dataConverter.limits.inlineBytes() {
+		return dataConverter
+	}
+	return dataConverter.wrap(newBoundedDataConverter(pinned))
+}
+
+// WithContext keeps the configured limit for Activities and clients: a new
+// Activity execution always runs under the limit the worker has now.
+func (dataConverter *pinnableDataConverter) WithContext(context.Context) converter.DataConverter {
+	return dataConverter
+}
+
+type pinnedPayloadLimitsKey struct{}
+
+// WithPinnedPayloadLimits returns a workflow context whose payloads the
+// worker's converter bounds by limits instead of the configured limit. A
+// workflow pins the limit it recorded when its run started, so a history
+// replays with the payload checks it was recorded under even after the
+// worker restarts with a smaller server.inline_payload_bytes.
+func WithPinnedPayloadLimits(ctx workflow.Context, limits PayloadLimits) workflow.Context {
+	return workflow.WithValue(ctx, pinnedPayloadLimitsKey{}, PayloadLimits{MaxInlineBytes: limits.inlineBytes()})
+}
+
+// WorkflowPayloadLimits is the limit pinned on ctx, or fallback when the run
+// pinned none.
+func WorkflowPayloadLimits(ctx workflow.Context, fallback PayloadLimits) PayloadLimits {
+	if pinned, ok := pinnedPayloadLimits(ctx); ok {
+		return pinned
+	}
+	return fallback
+}
+
+func pinnedPayloadLimits(ctx converter.WorkflowContext) (PayloadLimits, bool) {
+	if ctx == nil {
+		return PayloadLimits{}, false
+	}
+	pinned, ok := ctx.Value(pinnedPayloadLimitsKey{}).(PayloadLimits)
+	return pinned, ok
 }
 
 type boundedDataConverter struct {
@@ -27,6 +104,9 @@ func (converter *boundedDataConverter) ToPayload(value interface{}) (*commonpb.P
 	payload, err := converter.delegate.ToPayload(value)
 	if err != nil {
 		return nil, err
+	}
+	if preEncoded(value) {
+		return payload, nil
 	}
 	if err := converter.check(payload); err != nil {
 		return nil, err
@@ -49,8 +129,13 @@ func (converter *boundedDataConverter) ToPayloads(values ...interface{}) (*commo
 	if err != nil {
 		return nil, err
 	}
-	if err := converter.checkAll(payloads); err != nil {
-		return nil, err
+	for index, payload := range payloads.GetPayloads() {
+		if index < len(values) && preEncoded(values[index]) {
+			continue
+		}
+		if err := converter.check(payload); err != nil {
+			return nil, err
+		}
 	}
 	return payloads, nil
 }
@@ -77,6 +162,36 @@ func (converter *boundedDataConverter) FromPayloads(payloads *commonpb.Payloads,
 func deferredDecode(valuePtr interface{}) bool {
 	_, ok := valuePtr.(*converter.RawValue)
 	return ok
+}
+
+// preEncoded reports a value that is already a payload, which the default
+// converter passes through unchanged. Only EncodeBoundedPayload builds one, and
+// it has already applied the limit that governs that payload; the worker's
+// converter must not apply its configured limit again (see
+// EncodeBoundedPayload).
+func preEncoded(value interface{}) bool {
+	_, ok := value.(converter.RawValue)
+	return ok
+}
+
+// EncodeBoundedPayload encodes value the way the worker's converter does and
+// applies limits to it, returning the payload as a converter.RawValue that the
+// worker's converter passes through unchanged (a codec, if configured, still
+// encodes it).
+//
+// A workflow returns its result through it. The SDK binds the converter for a
+// workflow's return value to the workflow's root context before workflow code
+// runs, so that converter cannot see a limit the run pinned (see
+// WithPinnedPayloadLimits); encoding the result in workflow code under the
+// pinned limit keeps completion the same on replay after the configured limit
+// is lowered (#1511). The error for an oversize value is the one the worker's
+// converter returns.
+func EncodeBoundedPayload(limits PayloadLimits, value any) (converter.RawValue, error) {
+	payload, err := newBoundedDataConverter(limits).ToPayload(value)
+	if err != nil {
+		return converter.RawValue{}, err
+	}
+	return converter.NewRawValue(payload), nil
 }
 
 // DecodeBoundedPayload applies the inline limit and the strict contract decode

@@ -142,10 +142,10 @@ func (factory DefaultTemporalClientFactory) New(ctx context.Context, value confi
 // ciphertext reaches Temporal. Any key that cannot be resolved or used fails
 // client construction rather than falling back to plaintext.
 func (factory DefaultTemporalClientFactory) dataConverter(ctx context.Context, value config.Config) (converter.DataConverter, error) {
-	bounded := activity.BoundedDataConverter(activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes})
+	limits := activity.PayloadLimits{MaxInlineBytes: value.Server.InlinePayloadBytes}
 	codecConfig := value.Temporal.PayloadCodec
 	if codecConfig == nil {
-		return bounded, nil
+		return activity.BoundedDataConverter(limits), nil
 	}
 	if codecConfig.Kind != config.PayloadCodecAES256GCM {
 		return nil, &payloadCodecError{safe: "Temporal payload codec kind is unsupported"}
@@ -165,19 +165,21 @@ func (factory DefaultTemporalClientFactory) dataConverter(ctx context.Context, v
 		}
 		keys = append(keys, temporalcodec.Key{ID: key.ID, Secret: secret, Primary: key.Primary})
 	}
-	// Bound ciphertext by the inline limit so an oversized payload is
-	// rejected before it is decrypted; the bounded converter still checks
-	// the decrypted plaintext.
-	inlineBytes := value.Server.InlinePayloadBytes
-	if inlineBytes <= 0 {
-		inlineBytes = activity.DefaultInlineBytes
-	}
-	codec, err := temporalcodec.NewAESGCMWithOptions(keys, temporalcodec.Options{MaxPayloadBytes: inlineBytes})
+	// Bound ciphertext by the largest inline limit any configuration allows,
+	// so an oversized payload is rejected before it is decrypted. The bound
+	// cannot be the configured limit: the SDK decrypts a workflow's recorded
+	// input before workflow code can apply the limit pinned when the run
+	// started, and a history recorded under a larger limit must still replay
+	// after the limit is lowered (#1511). The bounded converter, and the
+	// workflow and Activity decoders, still check the decrypted plaintext.
+	codec, err := temporalcodec.NewAESGCMWithOptions(keys, temporalcodec.Options{MaxPayloadBytes: config.TemporalBlobLimitBytes})
 	if err != nil {
 		// NewAESGCM errors name only key IDs and lengths, never key bytes.
 		return nil, &payloadCodecError{safe: "construct Temporal payload codec: " + err.Error(), cause: err}
 	}
-	return converter.NewCodecDataConverter(bounded, codec), nil
+	return activity.WrappedBoundedDataConverter(limits, func(bounded converter.DataConverter) converter.DataConverter {
+		return converter.NewCodecDataConverter(bounded, codec)
+	}), nil
 }
 
 // payloadCodecError is a payload codec configuration failure. Its message

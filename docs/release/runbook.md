@@ -536,3 +536,14 @@ does not create or modify that environment, configure a registry, establish an
 OIDC trust relationship, or add credentials.
 
 The protected job always exits nonzero after preflight. It does not sign, publish, push, create a tag, or create a release. Consequently an unavailable or unconfigured registry fails closed rather than becoming a silent skip or a claimed release. Do not treat a successful preflight, an environment approval, or this workflow definition as evidence that any image was signed or published; a separately authorized follow-up must implement those irreversible operations.
+
+## Configuration changes in a rollout
+
+Lowering `server.inline_payload_bytes` takes a drained rollout. Stop starting
+new Generate and Compact workflows and let every open one finish before
+workers with the smaller limit poll the task queue. Raising it needs no
+drain. Open runs replay under the limit recorded when they started, but each
+new Activity execution applies the worker's current limit, so an open request
+whose next Activity argument exceeds the new limit fails with
+`llm_invalid_argument`. See the
+[configuration reference](../reference/configuration.md) for details.

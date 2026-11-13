@@ -7,11 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/temporalcodec"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/workflow"
 )
 
 func dialPayloadConverter(t *testing.T, factory DefaultTemporalClientFactory, value config.Config) (converter.DataConverter, error) {
@@ -141,8 +143,11 @@ func TestTemporalFactoryFailsClosedOnPayloadCodecErrors(t *testing.T) {
 	}
 }
 
-// The client codec rejects ciphertext above the inline-derived ceiling before
-// decrypting it, and the bounded converter still checks the plaintext.
+// The client codec rejects ciphertext above the ceiling derived from the
+// largest configurable inline limit before decrypting it, and the bounded
+// converter still checks the plaintext against the configured limit. The
+// ceiling is not the configured limit, so a history recorded under a larger
+// limit can still be decrypted on replay (#1511).
 func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
 	secret := bytes.Repeat([]byte{4}, 32)
 	value := codecConfig(codecKey("k1", "KEY", true))
@@ -157,7 +162,7 @@ func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
 	writer := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), unbounded)
 	var decoded string
 
-	oversized, err := writer.ToPayload(strings.Repeat("x", temporalcodec.MaxCiphertextBytes(value.Server.InlinePayloadBytes)))
+	oversized, err := writer.ToPayload(strings.Repeat("x", temporalcodec.MaxCiphertextBytes(config.TemporalBlobLimitBytes)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,13 +170,53 @@ func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
 		t.Fatalf("oversized ciphertext = %v, want a pre-decryption size error", err)
 	}
 
-	// Within the ciphertext ceiling but above the plaintext limit.
-	overInline, err := writer.ToPayload(strings.Repeat("x", value.Server.InlinePayloadBytes+16))
+	// Within the ciphertext ceiling but above the plaintext limit, including
+	// a payload the inline-derived ceiling used to refuse before decrypting.
+	overInline, err := writer.ToPayload(strings.Repeat("x", temporalcodec.MaxCiphertextBytes(value.Server.InlinePayloadBytes)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := dataConverter.FromPayload(overInline, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is") {
 		t.Fatalf("over-limit plaintext = %v, want the bounded converter's error", err)
+	}
+}
+
+// rootWorkflowContext stands in for a workflow context with no values.
+type rootWorkflowContext struct{ workflow.Context }
+
+func (rootWorkflowContext) Value(any) any { return nil }
+
+// A workflow run started under a larger inline limit pinned that limit. With
+// the codec configured, the worker restarted with a smaller limit still
+// decrypts and decodes that run's recorded payloads and re-encrypts the ones
+// it encodes again on replay (#1511).
+func TestTemporalFactoryCodecHonoursPinnedWorkflowLimit(t *testing.T) {
+	secret := bytes.Repeat([]byte{5}, 32)
+	value := codecConfig(codecKey("k1", "KEY", true))
+	dataConverter, err := dialPayloadConverter(t, DefaultTemporalClientFactory{SecretResolver: codecSecrets(map[string][]byte{"KEY": secret})}, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aware, ok := dataConverter.(converter.ContextAware)
+	if !ok {
+		t.Fatal("client data converter is not context aware")
+	}
+	pinned := aware.WithWorkflowContext(activity.WithPinnedPayloadLimits(rootWorkflowContext{}, activity.PayloadLimits{MaxInlineBytes: 8 * value.Server.InlinePayloadBytes}))
+	recorded := strings.Repeat("x", 4*value.Server.InlinePayloadBytes)
+
+	payload, err := pinned.ToPayload(recorded)
+	if err != nil {
+		t.Fatalf("pinned ToPayload: %v", err)
+	}
+	if encoding := string(payload.GetMetadata()[converter.MetadataEncoding]); encoding != temporalcodec.EncodingEncrypted {
+		t.Fatalf("pinned payload encoding = %q, want encrypted", encoding)
+	}
+	var decoded string
+	if err := pinned.FromPayload(payload, &decoded); err != nil || decoded != recorded {
+		t.Fatalf("pinned FromPayload = %v", err)
+	}
+	if err := dataConverter.FromPayload(payload, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is") {
+		t.Fatalf("configured FromPayload = %v, want the configured plaintext limit", err)
 	}
 }
 

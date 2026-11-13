@@ -37,6 +37,10 @@ const (
 	// exportRetryChange gives the export workflow's Activity room to retry a
 	// saturated in-flight limit (#1459).
 	exportRetryChange = "langfuse-export-retry-v1"
+	// pinnedPayloadLimitChange records the inline payload limit in force when
+	// a run started, so replay after the limit is lowered decodes the same
+	// input and encodes the same commands (#1511).
+	pinnedPayloadLimitChange = "pinned-inline-payload-limit-v1"
 )
 
 // RegisterInternal registers implementation workflows, not client entry points.
@@ -55,18 +59,57 @@ func RegisterInternal(registry worker.WorkflowRegistry, limits activity.PayloadL
 // Letting the SDK decode a typed argument before workflow code runs would fail
 // an invalid or oversize input as an untyped, retryable wrapper error whose
 // message echoes decoder text (and therefore caller values) into history.
-// Decoding here is a pure function of the recorded input, so it is
-// deterministic on replay, and the wire format is unchanged: callers still
-// send the typed v1 JSON record.
-func rawWorkflow[T, R any](limits activity.PayloadLimits, run func(workflow.Context, T) (R, error)) func(workflow.Context, converter.RawValue) (R, error) {
-	return func(ctx workflow.Context, raw converter.RawValue) (R, error) {
-		input, ok := activity.DecodeBoundedPayload[T](limits, raw)
+// Decoding here is a pure function of the recorded input and the limit
+// recorded when the run started (see pinPayloadLimits), so it is deterministic
+// on replay, and the wire format is unchanged: callers still send the typed
+// v1 JSON record.
+//
+// The result is encoded here too, under the same recorded limit, and returned
+// as an encoded payload. The SDK encodes a returned value with a converter it
+// binds before workflow code runs, which cannot see the recorded limit, so a
+// smaller configured limit would otherwise fail on replay the completion the
+// run already recorded. The payload bytes are those the SDK would write, so
+// callers still receive the typed v1 JSON record.
+func rawWorkflow[T, R any](limits activity.PayloadLimits, run func(workflow.Context, T) (R, error)) func(workflow.Context, converter.RawValue) (converter.RawValue, error) {
+	return func(ctx workflow.Context, raw converter.RawValue) (converter.RawValue, error) {
+		ctx, pinned := pinPayloadLimits(ctx, limits)
+		input, ok := activity.DecodeBoundedPayload[T](pinned, raw)
 		if !ok {
-			var zero R
-			return zero, invalidInput()
+			return converter.RawValue{}, invalidInput()
 		}
-		return run(ctx, input)
+		result, err := run(ctx, input)
+		if err != nil {
+			return converter.RawValue{}, err
+		}
+		return activity.EncodeBoundedPayload(pinned, result)
 	}
+}
+
+// pinPayloadLimits records the worker's inline payload limit when a run
+// starts and bounds the run's own payloads by it from then on: the input
+// decode, the re-encoding check, the result encoding, and through the
+// worker's converter every Activity and child argument and result. server.inline_payload_bytes changes
+// only with a restart, after which open runs replay from history; without the
+// recorded value a smaller limit would refuse an input or result the run
+// already accepted, and replay would fail with a non-determinism error. New
+// Activity executions still decode under the worker's current limit and fail
+// over it with a typed, non-retryable llm_invalid_argument.
+//
+// Runs recorded before this change carry no marker and keep the current
+// limit, so their replay is unchanged.
+func pinPayloadLimits(ctx workflow.Context, current activity.PayloadLimits) (workflow.Context, activity.PayloadLimits) {
+	if workflow.GetVersion(ctx, pinnedPayloadLimitChange, workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		return ctx, current
+	}
+	var recorded int
+	err := workflow.SideEffect(ctx, func(workflow.Context) any { return current.InlineBytes() }).Get(&recorded)
+	if err != nil || recorded <= 0 {
+		// The value is an int this code recorded; failing to read it back
+		// keeps the limit the worker has now.
+		return ctx, current
+	}
+	pinned := activity.PayloadLimits{MaxInlineBytes: recorded}
+	return activity.WithPinnedPayloadLimits(ctx, pinned), pinned
 }
 
 // BudgetRequest includes the expected operation kind so a corrupt/misrouted
