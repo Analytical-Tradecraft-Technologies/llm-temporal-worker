@@ -140,6 +140,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	if err := lowerExtensions(profile, request.Extensions, requestMap); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
+	if err := anthropicwire.ValidateModelSampling(request.Model, requestMap); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
 	if err := validateHaiku55Wire(request.Model, requestMap); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}

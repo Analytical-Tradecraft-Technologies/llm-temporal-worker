@@ -25,26 +25,14 @@ func validateHaiku55Request(request llm.Request) error {
 
 // Validate the final document too. Extensions cannot supply these
 // request-owned fields, so this is a backstop for the lowered wire itself.
+// The sampling rules are in the shared model table
+// (anthropicwire.ValidateModelSampling), which runs first.
 func validateHaiku55Wire(model string, wire map[string]any) error {
 	if model != haiku55Model {
 		return nil
 	}
 	unsupported := func(message string) error {
 		return provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "Haiku 5.5 "+message)
-	}
-	temperature, hasTemperature := wire["temperature"]
-	topP, hasTopP := wire["top_p"]
-	if hasTemperature && hasTopP {
-		return unsupported("does not support combining temperature and top_p")
-	}
-	if hasTemperature && temperature != float64(1) {
-		return unsupported("only supports temperature=1")
-	}
-	if hasTopP && topP != float64(0.99) {
-		return unsupported("only supports top_p=0.99")
-	}
-	if _, hasTopK := wire["top_k"]; hasTopK {
-		return unsupported("does not support top_k")
 	}
 	if value, exists := wire["thinking"]; exists {
 		thinking, ok := value.(map[string]any)

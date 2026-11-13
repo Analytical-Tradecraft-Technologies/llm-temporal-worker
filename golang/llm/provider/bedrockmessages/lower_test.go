@@ -159,7 +159,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "adaptive", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive}, wantType: "adaptive"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := wire.LowerReasoning(test.reasoning, true)
+			got, err := wire.LowerReasoning("claude-contract", test.reasoning, true)
 			if err != nil || got["type"] != test.wantType {
 				t.Fatalf("wire.LowerReasoning() = %#v, %v", got, err)
 			}
@@ -175,7 +175,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 		{name: "unknown mode", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningMode("future")}, want: "not supported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := wire.LowerReasoning(test.reasoning, true)
+			_, err := wire.LowerReasoning("claude-contract", test.reasoning, true)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("wire.LowerReasoning() = %v, want substring %q", err, test.want)
 			}
