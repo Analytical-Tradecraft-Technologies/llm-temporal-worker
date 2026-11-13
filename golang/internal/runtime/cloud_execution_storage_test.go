@@ -20,11 +20,15 @@ import (
 // These linearizable test doubles deliberately share no repository caches.
 // Hooks inject failures before or after the backend has committed a mutation.
 type executionMemoryTable struct {
-	mu      sync.Mutex
-	rows    map[kv.KeyValueKey]kv.KeyValueRecord
-	version uint64
-	hook    func(string, kv.KeyValueItem) (before, after error)
-	trace   func(string)
+	mu   sync.Mutex
+	rows map[kv.KeyValueKey]kv.KeyValueRecord
+	// partitions indexes rows by partition key so QueryPartition costs what
+	// one partition holds, like DynamoDB, rather than every row: the
+	// admission benchmark (#1497) writes thousands of requests.
+	partitions map[string]map[kv.KeyValueKey]struct{}
+	version    uint64
+	hook       func(string, kv.KeyValueItem) (before, after error)
+	trace      func(string)
 	// Operation counters, read by the storage-cost benchmark (#1112).
 	gets, queries, writes uint64
 	// latency, when set, delays every operation before it takes the lock,
@@ -98,6 +102,13 @@ func (s *executionMemoryTable) write(ctx context.Context, op string, item kv.Key
 	s.version++
 	next := kv.KeyValueVersion(fmt.Sprint(s.version))
 	s.rows[item.Key()] = kv.KeyValueRecord{Item: cloneExecutionItem(item), Version: next, LastModifiedAt: time.Now().UTC()}
+	if s.partitions == nil {
+		s.partitions = map[string]map[kv.KeyValueKey]struct{}{}
+	}
+	if s.partitions[item.Key().PartitionKey] == nil {
+		s.partitions[item.Key().PartitionKey] = map[kv.KeyValueKey]struct{}{}
+	}
+	s.partitions[item.Key().PartitionKey][item.Key()] = struct{}{}
 	if after != nil {
 		return "", after
 	}
@@ -116,6 +127,7 @@ func (s *executionMemoryTable) Delete(ctx context.Context, key kv.KeyValueKey, v
 		return contracts.ErrConflict
 	}
 	delete(s.rows, key)
+	delete(s.partitions[key.PartitionKey], key)
 	return nil
 }
 
@@ -145,8 +157,8 @@ func (s *executionMemoryTable) QueryPartition(ctx context.Context, query kv.KeyV
 		cursor = parsed
 	}
 	var keys []kv.KeyValueKey
-	for key := range s.rows {
-		if key.PartitionKey == query.PartitionKey && strings.HasPrefix(key.SortKey, query.SortKeyPrefix) && key.SortKey > cursor.Last {
+	for key := range s.partitions[query.PartitionKey] {
+		if strings.HasPrefix(key.SortKey, query.SortKeyPrefix) && key.SortKey > cursor.Last {
 			keys = append(keys, key)
 		}
 	}

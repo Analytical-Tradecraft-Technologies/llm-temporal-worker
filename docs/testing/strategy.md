@@ -35,21 +35,31 @@ the Docker, Compose, or Kubernetes gates shown below.
 
 ## Local performance proxy
 
-Run the opt-in in-memory `Generate` benchmark with:
+Run the opt-in v1 Activities admission benchmark with:
 
 ```sh
 make benchmark
 ```
 
+`BenchmarkV1ActivitiesAdmissionMemory` (in `golang/internal/runtime`) measures
+the production v1 durable path: the `llm.request.prepare.v1`,
+`llm.budget.acquire.v1` and `llm.generate.v1` Activities of one fresh Generate
+turn, called through the `activity.Activities` methods those registrations
+dispatch to (without Temporal payload decoding), over the
+`CloudExecutionRuntime` that production workers compose. Request rows and payloads use in-memory stores,
+budgets use the in-memory reference materializer, and the adapter is
+content-free. Each timed turn has a fresh operation key, so it covers request
+compilation and checkpoint replay, request and payload writes, budget planning
+and reservation, provider planning and adapter compilation, and the result
+write, rather than a replay. The completion step runs untimed after each turn.
 It emits Go's aggregate allocation and throughput metrics plus a sampled
-`p99_ms/op` for deterministic successful `Generate` calls using the in-memory
-admission store and a content-free adapter. Inputs are prebuilt and each timed
-call has a fresh operation key, so the path includes normalization, planning,
-pricing, memory admission, and adapter compilation rather than an operation
-replay.
+`p99_ms/op` over 1000 turns.
 
-This is a local proxy, not a Redis or provider performance SLO proof: it makes
-no Redis connection or provider network request, and it is deliberately not a
+It does not measure the legacy in-process `llm.Engine.Generate` path, which
+only development memory mode runs; no benchmark of that path is kept.
+
+This is a local proxy, not a Redis, DynamoDB, S3 or provider performance SLO
+proof: it makes no network request, and it is deliberately not a
 normal CI gate because runner scheduling and hardware change latency samples.
 Do not compare its p99 output with the service objectives until repeatable,
 controlled memory and same-region Redis evidence is available.
@@ -68,7 +78,10 @@ an explicit legacy schema branch; collection never emits that legacy shape.
 
 ## Controlled Redis measurement
 
-For a controlled, same-region Redis measurement, an operator may run:
+`BenchmarkV1ActivitiesAdmissionRedis` times the same v1 Activities turn with
+budgets held by the production Redis materializer; request rows and payloads
+stay in memory. For a controlled, same-region Redis measurement, an operator
+may run:
 
 ```sh
 LLMTW_REDIS_BENCHMARK=1 \
@@ -81,9 +94,10 @@ This is deliberately not a normal CI target: it refuses any `CI` environment,
 requires both explicit operator gates and an explicit Redis address, and does
 not start Redis, load a Redis Function, or invoke a live provider. The target
 requires a dedicated non-production Redis 7+ deployment with the exact
-preloaded admission Function (its digest-derived `llmtw_admission_<tag>` / `admission_<tag>` names). It creates state
-only beneath a randomly generated bounded key prefix and cleans up only keys
-under that prefix; it never flushes a database.
+preloaded admission Function (its digest-derived `llmtw_admission_<tag>` / `admission_<tag>` names). It initializes a
+fresh budget namespace, as a durable production worker requires, only beneath a
+randomly generated bounded key prefix and cleans up only keys under that
+prefix; it never flushes a database.
 
 The reported `p99_ms/op` is a measurement to retain with the deployment,
 region, Redis configuration, sample count, and run timestamp. The benchmark
@@ -93,6 +107,25 @@ build-tagged code and runs its `TestRedisBenchmark*` safety tests (CI refusal
 and operator gates, the exact preloaded Function check, unique bounded key
 options and disabled retries) with the benchmark itself disabled; it has no
 Redis address, operator gate, provider call, or Docker dependency.
+
+## Production admission latency
+
+Production metrics observe the same objectives without a benchmark.
+`llmtw_execution_step_duration_seconds{step}` times each v1 durable execution
+Activity (`prepare`, `acquire`, `generate`, `compact`, `poll`, `complete`), and
+every latency histogram has bucket bounds at exactly 25 ms and 75 ms. The
+`prepare` and `acquire` steps are admission and compilation only, so their
+fraction within a target is read directly, for example:
+
+```promql
+sum(rate(llmtw_execution_step_duration_seconds_bucket{step="acquire",le="0.075"}[5m]))
+/
+sum(rate(llmtw_execution_step_duration_seconds_count{step="acquire"}[5m]))
+```
+
+The `generate` step also contains the provider call, so its admission share is
+not separable from production metrics; the benchmarks above are the evidence
+for it.
 `make compose-live-integration` runs every `composeliveintegration` test in
 `integration/compose`, including the Docker-free healthcheck, readiness-timing
 and metrics-scrape contract tests beside the live lifecycle test.

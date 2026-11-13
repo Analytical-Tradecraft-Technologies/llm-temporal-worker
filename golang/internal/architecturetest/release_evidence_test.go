@@ -2002,8 +2002,13 @@ func TestReleaseEvidenceCollectorRunsFuzzGateFromModuleRoot(t *testing.T) {
 func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T) {
 	root := repositoryRoot(t)
 	collector := readRepositoryFile(t, root, "scripts", "release", "collect.sh")
-	if !strings.Contains(collector, "BenchmarkGenerateMemoryAdmissionAndCompile") {
-		t.Fatal("release evidence collector does not run the memory admission benchmark")
+	// The gate must time the production v1 Activities path, never the
+	// legacy in-process engine that no production worker runs (#1497).
+	if !strings.Contains(collector, "go test ./internal/runtime -run '^$' -bench '^BenchmarkV1ActivitiesAdmissionMemory$'") {
+		t.Fatal("release evidence collector does not run the v1 Activities memory admission benchmark")
+	}
+	if strings.Contains(collector, "BenchmarkGenerateMemoryAdmissionAndCompile") {
+		t.Fatal("release evidence collector still runs the legacy engine benchmark")
 	}
 	pythonCollector := readRepositoryFile(t, root, "scripts", "release", "collect.py")
 	for _, required := range []string{"benchmark-summary", "p99_ms_per_op", "target_status", "measurement_only"} {
@@ -2025,7 +2030,7 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 			inputPath := filepath.Join(t.TempDir(), "benchmark.out")
 			outputPath := filepath.Join(t.TempDir(), "benchmark-summary.json")
 			input := "goos: linux\n" +
-				"BenchmarkGenerateMemoryAdmissionAndCompile" + suffix + "    4267    255245 ns/op         0.7286 p99_ms/op  350632 B/op    4851 allocs/op\n" +
+				"BenchmarkV1ActivitiesAdmissionMemory" + suffix + "    4267    255245 ns/op         0.7286 p99_ms/op  350632 B/op    4851 allocs/op\n" +
 				"PASS\n"
 			writeReleaseArtifact(t, inputPath, []byte(input))
 			command := exec.Command(
@@ -2044,7 +2049,7 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 				t.Fatalf("benchmark summary p99 = %#v", document["p99_ms_per_op"])
 			}
 
-			writeReleaseArtifact(t, inputPath, []byte(input+"BenchmarkGenerateMemoryAdmissionAndCompile"+suffix+" 1 1 ns/op 1 p99_ms/op\n"))
+			writeReleaseArtifact(t, inputPath, []byte(input+"BenchmarkV1ActivitiesAdmissionMemory"+suffix+" 1 1 ns/op 1 p99_ms/op\n"))
 			if err := os.Remove(outputPath); err != nil {
 				t.Fatal(err)
 			}
@@ -2055,8 +2060,20 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 				t.Fatalf("benchmark collector retained output after rejecting multiple measurements: %v", err)
 			}
 
+			// Output of the legacy engine benchmark is not the v1
+			// Activities measurement and must not be retained (#1497).
+			legacyInput := "goos: linux\n" +
+				"BenchmarkGenerateMemoryAdmissionAndCompile" + suffix + "    4267    255245 ns/op         0.7286 p99_ms/op\nPASS\n"
+			writeReleaseArtifact(t, inputPath, []byte(legacyInput))
+			if output, err := command.CombinedOutput(); err == nil {
+				t.Fatalf("benchmark collector accepted legacy engine benchmark output:\n%s", output)
+			}
+			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+				t.Fatalf("benchmark collector retained output for the legacy engine benchmark: %v", err)
+			}
+
 			targetInput := "goos: linux\n" +
-				"BenchmarkGenerateMemoryAdmissionAndCompile" + suffix + " 1 1 ns/op 25 p99_ms/op\nPASS\n"
+				"BenchmarkV1ActivitiesAdmissionMemory" + suffix + " 1 1 ns/op 25 p99_ms/op\nPASS\n"
 			writeReleaseArtifact(t, inputPath, []byte(targetInput))
 			if output, err := command.CombinedOutput(); err == nil {
 				t.Fatalf("benchmark collector accepted a p99 at the strict target boundary:\n%s", output)
@@ -2115,7 +2132,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		"test_summary":          releaseEvidenceGateSummary("test_summary"),
 		"race_summary":          releaseEvidenceGateSummary("race_summary"),
 		"fuzz_summary":          releaseEvidenceGateSummary("fuzz_summary"),
-		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkGenerateMemoryAdmissionAndCompile","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"target_status":"pass","objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
+		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkV1ActivitiesAdmissionMemory","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"target_status":"pass","objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
 		"fixture_manifest":      `{"schema_version":1,"kind":"fixture_manifest","status":"pass","version":1,"fixtures":[{"profile":"openai-responses","upstream_url":"https://platform.openai.com/docs/api-reference/responses","upstream_date":"2026-07-14","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"redacted":true}`,
 		"redis_summary":         `{"schema_version":1,"kind":"redis_summary","status":"pass","service":"redis","state":"running","health":"healthy","redacted":true}`,
 		"temporal_summary":      `{"schema_version":1,"kind":"temporal_summary","status":"pass","service":"temporal","state":"running","health":"healthy","redacted":true}`,

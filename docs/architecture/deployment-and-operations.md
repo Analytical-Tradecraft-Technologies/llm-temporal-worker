@@ -308,8 +308,12 @@ and policy, so a request waiting for capacity contributes one `denied` per
 retry. The Generate or Compact step's replay of the reservation its acquire
 step made is not counted again; an acquire retry that recovers a committed
 reservation whose reply was lost is counted. `llmtw_activity_duration_seconds` and
-`llmtw_provider_duration_seconds` use buckets from 0.1 s to 600 s so
-minute-long calls stay in finite buckets. The three maintenance series are
+`llmtw_provider_duration_seconds` use buckets from 5 ms to 600 s so
+minute-long calls stay in finite buckets and the 25 ms and 75 ms
+admission-and-compilation objectives are exact bucket bounds.
+`llmtw_execution_step_duration_seconds{step}` uses the same buckets for each v1
+durable execution Activity; see
+[production admission latency](../testing/strategy.md#production-admission-latency). The three maintenance series are
 registered but never emitted: no worker path runs a retention pass, because
 cloud cleanup is unimplemented
 ([#818](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/818)).
@@ -326,6 +330,10 @@ The series are:
   `authorization.allowed_scopes`, counts as `caller`; a provider's own
   permission or credit denial counts as `provider`;
 - `llmtw_activity_duration_seconds{phase}`;
+- `llmtw_execution_step_duration_seconds{step}` where `step` is `prepare`,
+  `acquire`, `generate`, `compact`, `poll` or `complete`, one observation per
+  v1 durable execution Activity attempt whatever its outcome; `other` is a
+  bounded defensive fallback;
 - `llmtw_provider_attempt_total{endpoint,model,class,outcome}`;
 - `llmtw_provider_duration_seconds{endpoint,model,class}`;
 - `llmtw_service_class_actual_total{requested,actual,endpoint}`, where `actual` is

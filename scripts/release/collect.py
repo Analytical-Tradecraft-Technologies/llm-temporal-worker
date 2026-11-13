@@ -33,7 +33,9 @@ SAFE_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 NUMERIC_DOTTED_HOST = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 SAFE_HTTPS_PATH = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@/-]*$")
 GATE_KINDS = {"test_summary", "race_summary", "fuzz_summary"}
-BENCHMARK_NAME = "BenchmarkGenerateMemoryAdmissionAndCompile"
+# The production v1 Activities path (prepare, acquire, generate) over memory
+# state, not the legacy in-process engine that no production worker runs.
+BENCHMARK_NAME = "BenchmarkV1ActivitiesAdmissionMemory"
 MEMORY_TARGET_MS = 25
 BENCHMARK_LINE = re.compile(
     rf"^{BENCHMARK_NAME}(?:-[0-9]+)?\s+([0-9]+)\s+([0-9]+(?:\.[0-9]+)?)\s+ns/op\s+"
@@ -340,7 +342,9 @@ def command_fixture_manifest(args: argparse.Namespace) -> None:
 def command_benchmark_summary(args: argparse.Namespace) -> None:
     """Retain only the bounded, in-memory benchmark measurement.
 
-    The summary is deliberately a measurement artifact rather than an SLO
+    The benchmark times the PrepareExecutionV1, AcquireBudgetV1 and
+    GenerateStepV1 Activities of one fresh v1 Generate turn over in-memory
+    state and a content-free adapter.  The summary is deliberately a measurement artifact rather than an SLO
     assertion.  It proves that the release workflow ran the memory benchmark
     and preserves its p99 sample, while Redis and provider latency remain
     separate protected measurements.

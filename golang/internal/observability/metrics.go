@@ -70,6 +70,7 @@ type Metrics struct {
 	costStatus           *prometheus.CounterVec
 	langfuseExportFailed *prometheus.CounterVec
 	routeHeldTotal       *prometheus.CounterVec
+	executionStep        *prometheus.HistogramVec
 	workerPolling        prometheus.Gauge
 	heartbeatAge         prometheus.Gauge
 	operationRecords     *prometheus.GaugeVec
@@ -99,6 +100,26 @@ var routeHeldReasons = map[string]struct{}{
 	RouteHeldCircuitOpen:     {},
 	RouteHeldCreditExhausted: {},
 	RouteHeldBillingIssue:    {},
+}
+
+// Execution steps are the v1 durable Activities that
+// llmtw_execution_step_duration_seconds times, one series per step.
+const (
+	ExecutionStepPrepare  = "prepare"
+	ExecutionStepAcquire  = "acquire"
+	ExecutionStepGenerate = "generate"
+	ExecutionStepCompact  = "compact"
+	ExecutionStepPoll     = "poll"
+	ExecutionStepComplete = "complete"
+)
+
+var executionSteps = map[string]struct{}{
+	ExecutionStepPrepare:  {},
+	ExecutionStepAcquire:  {},
+	ExecutionStepGenerate: {},
+	ExecutionStepCompact:  {},
+	ExecutionStepPoll:     {},
+	ExecutionStepComplete: {},
 }
 
 var langfuseExportFailureReasons = map[string]struct{}{
@@ -158,9 +179,12 @@ func (metrics *Metrics) ExtendAllowed(allowed AllowedValues) {
 }
 
 // latencyBuckets cover provider calls and v1 Activities, which routinely run
-// from well under a second to several minutes; the Prometheus defaults stop
-// at 10 s and would put every longer observation in +Inf.
-var latencyBuckets = []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 450, 600}
+// from a few milliseconds to several minutes; the Prometheus defaults stop at
+// 10 s and would put every longer observation in +Inf. The 25 ms and 75 ms
+// bounds are the admission-and-compilation p99 objectives (docs/scope.md), so
+// the fraction of execution steps within each target is read exactly from one
+// bucket rather than interpolated (#1497).
+var latencyBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 450, 600}
 
 func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m := &Metrics{registry: prometheus.NewRegistry(), allowed: allowed.lists()}
@@ -184,6 +208,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.costStatus = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_status_total", Help: "Exact and unknown cost accounting events; amounts remain in the durable ledger."}, []string{"endpoint", "model", "class", "status", "method"})
 	m.langfuseExportFailed = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_langfuse_export_failures_total", Help: "Failed Langfuse export Activity attempts by bounded reason."}, []string{"reason"})
 	m.routeHeldTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_held_total", Help: "Route candidates provider planning skipped because shared route health holds them."}, []string{"endpoint", "reason"})
+	m.executionStep = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_execution_step_duration_seconds", Help: "v1 durable execution step Activity duration by step.", Buckets: latencyBuckets}, []string{"step"})
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	m.operationRecords = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_budget_operation_records", Help: "Durable budget operation records (reuse tombstones) in Redis by retention: expiring after operation_key_reuse_horizon, or persistent."}, []string{"retention"})
@@ -194,7 +219,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 		m.operationState, m.ambiguousTotal, m.continuationTotal, m.configReloadTotal,
 		m.maintenanceRows, m.maintenanceFailures, m.maintenanceDuration,
 		m.cacheEvents, m.pendingPolls, m.costStatus, m.langfuseExportFailed,
-		m.routeHeldTotal, m.workerPolling, m.heartbeatAge,
+		m.routeHeldTotal, m.executionStep, m.workerPolling, m.heartbeatAge,
 		m.operationRecords, m.budgetStreamLength,
 	}
 	for _, collector := range collectors {
@@ -468,6 +493,19 @@ func (metrics *Metrics) RecordRouteHeld(endpoint, reason string) {
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
 	metrics.routeHeldTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(reason, routeHeldReasons)).Inc()
+}
+
+// RecordExecutionStep observes one v1 durable execution step Activity
+// attempt, whatever its outcome. Step is restricted to the fixed vocabulary.
+// Prepare and acquire are pure admission and compilation work; generate and
+// compact also include the provider call.
+func (metrics *Metrics) RecordExecutionStep(step string, duration time.Duration) {
+	if metrics == nil {
+		return
+	}
+	metrics.mu.RLock()
+	defer metrics.mu.RUnlock()
+	metrics.executionStep.WithLabelValues(metrics.builtIn(step, executionSteps)).Observe(nonNegativeDuration(duration).Seconds())
 }
 
 func nonNegativeDuration(duration time.Duration) time.Duration {

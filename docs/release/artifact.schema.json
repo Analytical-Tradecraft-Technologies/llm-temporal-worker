@@ -6,6 +6,7 @@
     { "$ref": "#/$defs/gate_summary" },
     { "$ref": "#/$defs/benchmark_summary" },
     { "$ref": "#/$defs/benchmark_summary_legacy" },
+    { "$ref": "#/$defs/benchmark_summary_legacy_engine" },
     { "$ref": "#/$defs/worker_error_summary" },
     { "$ref": "#/$defs/fixture_manifest" },
     { "$ref": "#/$defs/redis_summary" },
@@ -128,6 +129,44 @@
       }
     },
     "benchmark_summary": {
+      "description": "The v1 Activities admission benchmark: PrepareExecutionV1, AcquireBudgetV1 and GenerateStepV1 of one fresh Generate turn over in-memory state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "status",
+        "benchmark",
+        "scope",
+        "samples",
+        "ns_per_op",
+        "p99_ms_per_op",
+        "target_ms",
+        "target_status",
+        "objective_status",
+        "output_sha256",
+        "output_bytes",
+        "redacted"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "benchmark_summary" },
+        "status": { "const": "pass" },
+        "benchmark": { "const": "BenchmarkV1ActivitiesAdmissionMemory" },
+        "scope": { "const": "memory" },
+        "samples": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "ns_per_op": { "type": "number", "minimum": 0 },
+        "p99_ms_per_op": { "type": "number", "minimum": 0, "exclusiveMaximum": 25 },
+        "target_ms": { "const": 25 },
+        "target_status": { "const": "pass" },
+        "objective_status": { "const": "measurement_only" },
+        "output_sha256": { "$ref": "#/$defs/sha256" },
+        "output_bytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "redacted": { "$ref": "#/$defs/redacted" }
+      }
+    },
+    "benchmark_summary_legacy_engine": {
+      "description": "Retained summaries of the legacy in-process engine benchmark, which timed llm.Engine.Generate rather than the production v1 Activities path (#1497). Collection never emits this shape; new bundles must use benchmark_summary.",
       "type": "object",
       "additionalProperties": false,
       "required": [

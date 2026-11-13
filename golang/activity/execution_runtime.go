@@ -3,7 +3,9 @@ package activity
 import (
 	"context"
 	"encoding/json"
+	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -43,37 +45,37 @@ func (activities *Activities) PrepareExecutionV1(ctx context.Context, request ll
 	if request.Generate != nil {
 		kind = "generate"
 	}
-	return executionStep(ctx, activities, request, kind, "", func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, kind, "", observability.ExecutionStepPrepare, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.PrepareExecutionV1(ctx, request)
 	})
 }
 func (activities *Activities) AcquireBudgetV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "", request.RequestID, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepAcquire, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.AcquireBudgetV1(ctx, request)
 	})
 }
 func (activities *Activities) GenerateStepV1(ctx context.Context, request llm.GenerateRequestV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "generate", "", func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "generate", "", observability.ExecutionStepGenerate, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.GenerateStepV1(ctx, request)
 	})
 }
 func (activities *Activities) CompactStepV1(ctx context.Context, request llm.CompactRequestV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "compact", "", func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "compact", "", observability.ExecutionStepCompact, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.CompactStepV1(ctx, request)
 	})
 }
 func (activities *Activities) PollExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "", request.RequestID, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepPoll, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.PollExecutionV1(ctx, request)
 	})
 }
 func (activities *Activities) CompleteExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "", request.RequestID, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
+	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepComplete, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
 		return runtime.CompleteExecutionV1(ctx, request)
 	})
 }
 
-func executionStep[T any](ctx context.Context, activities *Activities, request T, kind, requestID string, dispatch func(context.Context, ExecutionRuntime) (llm.ExecutionResultV1, error)) (*llm.ExecutionResultV1, error) {
+func executionStep[T any](ctx context.Context, activities *Activities, request T, kind, requestID, step string, dispatch func(context.Context, ExecutionRuntime) (llm.ExecutionResultV1, error)) (*llm.ExecutionResultV1, error) {
 	marshal := func(value T, limits PayloadLimits) ([]byte, error) { return marshalBounded(value, limits) }
 	if err := validateV1Request(ctx, marshal, request, activities); err != nil {
 		return nil, err
@@ -86,6 +88,11 @@ func executionStep[T any](ctx context.Context, activities *Activities, request T
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
 	var response llm.ExecutionResultV1
+	// Time the step around the same runV1 boundary as the phase="total"
+	// Activity duration, so prepare and acquire latency is observable on its
+	// own against the admission-and-compilation objectives (#1497).
+	started := time.Now()
+	defer func() { activities.Metrics.RecordExecutionStep(step, time.Since(started)) }()
 	err := activities.runV1(ctx, func(ctx context.Context) error {
 		var err error
 		response, err = dispatch(ctx, runtime)
