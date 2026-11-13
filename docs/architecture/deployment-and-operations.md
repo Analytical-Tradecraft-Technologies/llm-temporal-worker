@@ -359,6 +359,12 @@ The series are:
   provider planning skipped because shared route health holds it, where
   `reason` is `circuit_open`, `credit_exhausted` or `billing_issue`. It counts
   even when another route serves the request;
+- `llmtw_route_health_transition_total{endpoint,to}`, one per flip of a shared
+  route health record, where `to` is `unavailable`, `degraded`,
+  `circuit_open` or `circuit_closed` (see [Alerts](#alerts));
+- `llmtw_catalog_price_expiry_timestamp_seconds`, the Unix time at which the
+  earliest current priced window of the served snapshot's routes ends, or
+  `+Inf` when none ends, evaluated at scrape time (see [Alerts](#alerts));
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
@@ -467,6 +473,9 @@ worker or by Temporal:
 | Failed configuration reload | `llmtw_config_reload_total{outcome="failure"}` and its `config_field` log |
 | Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` |
 | Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` |
+| Route circuit opened, even on a route with no traffic | `llmtw_route_health_transition_total{endpoint,to="circuit_open"}` and the `route circuit opened; planning holds the route` warning (`endpoint`, `route_id`, `model`) |
+| Route turned unavailable or degraded | `llmtw_route_health_transition_total{endpoint,to="unavailable"\|"degraded"}`; `to="circuit_closed"` counts recoveries |
+| Priced route approaching or past its catalog `effective_until` | `llmtw_catalog_price_expiry_timestamp_seconds - time()` below the catalog renewal lead time; negative once a route's price has lapsed |
 | Stuck Activities | `llmtw_heartbeat_age_seconds` |
 | Redis growth toward the sized capacity | `llmtw_budget_operation_records{retention}` against the [sizing formula](../reference/redis-budget-leases.md#redis-growth-and-sizing), and `llmtw_budget_stream_length` above 12,000 for 10 minutes (the Stream `MAXLEN` bound is not applied) |
 | Task queue backlog | Temporal's task-queue backlog metrics for `temporal.task_queue` |
@@ -477,12 +486,28 @@ on them directly (#1538):
 
 - reservation underestimation (reservation versus settled cost);
 - provider authentication failures as distinct from other provider-origin
-  failures (rate limits, 5xx);
-- the moment a route circuit opens: `llmtw_route_held_total` counts the
-  requests a held route turns away, so a held route with no traffic shows
-  nothing;
-- a priced route approaching or passing its catalog `effective_until`; it
-  surfaces only as `no_route` once it expires.
+  failures (rate limits, 5xx).
+
+Route health transitions are counted by the worker whose observation changed
+the shared Redis record, so the sum across workers counts each flip once.
+`circuit_open` counts every time the record starts holding the route,
+including again after an earlier hold lapsed; `unavailable` and `degraded`
+count availability changes into that state. Every series of a configured
+endpoint is exported at zero before its first flip. Memory state keeps no
+shared route health, and the legacy engine Activity records route health
+without these transitions.
+
+The catalog expiry gauge is evaluated on every scrape against the snapshot
+the worker is serving, so it follows reloads and also priced windows that open
+or close between reloads: a route priced only from a future date counts once
+its window opens. It is the earliest end of the current priced window over
+the snapshot's routes; windows are merged, so a following window that starts
+where one ends extends it, and a route whose coverage resumes after a gap
+reports the resumed window's end. A route whose price has already lapsed keeps its
+past end, so the gauge stays in the past after a restart. It is `+Inf` when no
+route's price expires. Routes added by model sync have no priced windows and
+do not contribute. The alert names no route: find it in the snapshot's price
+catalog.
 
 ## Local stack
 

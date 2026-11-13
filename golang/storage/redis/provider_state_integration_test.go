@@ -97,6 +97,76 @@ func TestLiveRedisProviderStatusConcurrency(t *testing.T) {
 	}
 }
 
+// Workers count a route health flip from the record their own
+// compare-and-swap replaced, so concurrent failures that open a circuit are
+// seen opening it exactly once.
+func TestLiveRedisProviderStatusTransitionSeenOnce(t *testing.T) {
+	store, client, now := liveProviderStore(t)
+	ctx := context.Background()
+	secondClient := redisclient.NewClient(client.Options())
+	defer secondClient.Close()
+	second, err := NewProviderStateStore(ProviderStateOptions{Client: secondClient, Keys: KeyOptions{Prefix: store.space.prefix, HashTag: store.space.tag, KeySecret: store.space.secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := now.Add(-time.Minute)
+	failure := func(i int) control.StatusObservation {
+		return providerTestEvent(t, at.Add(time.Duration(i)*time.Millisecond), "route", func(o *control.StatusObservation) {
+			o.Availability = control.AvailabilityUnavailable
+			o.ExpiresAt = now.Add(time.Hour)
+			o.EvidenceDigest = sha256.Sum256([]byte(fmt.Sprintf("failure-%d", i)))
+		}).StatusObservation
+	}
+	// Two failures in order leave the circuit one failure short of opening.
+	// Apply drops an observation that is not newer than the record, so racing
+	// these too would let a late timestamp that lands first discard the rest
+	// and leave the circuit closed.
+	for i := 0; i < 2; i++ {
+		_, after, ok, err := store.RecordProviderStatusTransition(ctx, failure(i))
+		if err != nil || !ok || after.Circuit == control.CircuitOpen {
+			t.Fatalf("priming failure %d: applied=%v circuit=%v err=%v", i, ok, after.Circuit, err)
+		}
+	}
+	// Every racing failure is newer than the primed record, so whichever
+	// compare-and-swap wins first opens the circuit; later ones may apply or
+	// be stale, but none may report the opening again.
+	var opened, applied atomic.Int32
+	var wg sync.WaitGroup
+	for i := 2; i < 34; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			worker := store
+			if i%2 == 0 {
+				worker = second
+			}
+			before, after, ok, err := worker.RecordProviderStatusTransition(ctx, failure(i))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if !ok {
+				if before != (control.RouteStatus{}) || after != (control.RouteStatus{}) {
+					t.Errorf("stale observation returned records: %#v %#v", before, after)
+				}
+				return
+			}
+			applied.Add(1)
+			if before.Circuit != control.CircuitOpen && after.Circuit == control.CircuitOpen {
+				opened.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if applied.Load() < 1 || opened.Load() != 1 {
+		t.Fatalf("applied %d racing observations, saw the circuit open %d times; want it seen once", applied.Load(), opened.Load())
+	}
+	status, err := store.GetRouteStatus(ctx, sha256.Sum256([]byte("provider-config")), "route", "endpoint", "", "")
+	if err != nil || status.Circuit != control.CircuitOpen {
+		t.Fatalf("circuit not open: %#v %v", status, err)
+	}
+}
+
 func TestLiveRedisProviderStickyEvidenceAndIsolation(t *testing.T) {
 	store, client, now := liveProviderStore(t)
 	ctx := context.Background()

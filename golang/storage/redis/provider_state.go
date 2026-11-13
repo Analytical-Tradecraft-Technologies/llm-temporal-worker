@@ -138,16 +138,38 @@ func applyProviderEvent(record providerStatusRecord, event control.StatusEvent) 
 }
 
 func (store *ProviderStateStore) PersistStatusEvent(ctx context.Context, event control.StatusEvent) (bool, error) {
+	_, _, applied, err := store.persistStatusEvent(ctx, event)
+	return applied, err
+}
+
+// RecordProviderStatusTransition records an observation like
+// RecordProviderStatus and also returns the shared route record before and
+// after it. The record is replaced by compare-and-swap, so of all workers
+// recording concurrently exactly one sees each change: the caller can count a
+// flip of the shared record without double counting across workers. When the
+// observation is stale, applied is false and both records are zero.
+func (store *ProviderStateStore) RecordProviderStatusTransition(ctx context.Context, observation control.StatusObservation) (before, after control.RouteStatus, applied bool, err error) {
+	event, err := control.NewStatusEvent(observation)
+	if err != nil {
+		return control.RouteStatus{}, control.RouteStatus{}, false, err
+	}
+	return store.persistStatusEvent(ctx, event)
+}
+
+func (store *ProviderStateStore) persistStatusEvent(ctx context.Context, event control.StatusEvent) (control.RouteStatus, control.RouteStatus, bool, error) {
 	validated, err := control.NewStatusEvent(event.StatusObservation)
 	if err != nil {
-		return false, err
+		return control.RouteStatus{}, control.RouteStatus{}, false, err
 	}
 	if validated.EventDigest != event.EventDigest {
-		return false, errors.New("status event digest mismatch")
+		return control.RouteStatus{}, control.RouteStatus{}, false, errors.New("status event digest mismatch")
 	}
 	key := store.key("status", event.ConfigDigest)
 	field := store.routeField(event.RouteID, event.EndpointID, event.Model, event.ProviderTier)
-	return store.update(ctx, key, field, func(previous string) (string, bool, error) {
+	// update may rebuild the record after a lost compare-and-swap; the last
+	// build is the one written.
+	var before, after control.RouteStatus
+	applied, err := store.update(ctx, key, field, func(previous string) (string, bool, error) {
 		var record providerStatusRecord
 		if previous != "" {
 			if err := decodeProviderStatus(previous, event.ConfigDigest, &record); err != nil {
@@ -158,9 +180,14 @@ func (store *ProviderStateStore) PersistStatusEvent(ctx context.Context, event c
 		if !applied {
 			return "", false, nil
 		}
+		before, after = record.Status, next.Status
 		data, err := json.Marshal(next)
 		return string(data), true, err
 	})
+	if err != nil || !applied {
+		return control.RouteStatus{}, control.RouteStatus{}, false, err
+	}
+	return before, after, true, nil
 }
 
 func decodeProviderStatus(raw string, digest [32]byte, record *providerStatusRecord) error {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
@@ -123,5 +124,66 @@ func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cl
 	}
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	_ = e.statusRecorder.RecordProviderStatus(finalCtx, o)
+	recorder, ok := e.statusRecorder.(routeStatusTransitionRecorder)
+	if !ok {
+		_ = e.statusRecorder.RecordProviderStatus(finalCtx, o)
+		return
+	}
+	before, after, applied, err := recorder.RecordProviderStatusTransition(finalCtx, o)
+	if err != nil || !applied {
+		return
+	}
+	reportRouteHealthTransitions(ctx, before, after)
+}
+
+// routeStatusTransitionRecorder is a shared route health store that reports
+// the record before and after an observation, so the one worker whose
+// observation changed it can report the flip.
+type routeStatusTransitionRecorder interface {
+	RecordProviderStatusTransition(ctx context.Context, observation control.StatusObservation) (before, after control.RouteStatus, applied bool, err error)
+}
+
+// routeHealthTransitions names the flips one applied observation made to a
+// shared route record. An availability flip counts when the record turns
+// unavailable or degraded from any other availability. The circuit opens when
+// the record starts holding the route, including again after an earlier hold
+// lapsed, and closes when a held record (lapsed or not) is closed by a
+// success.
+func routeHealthTransitions(before, after control.RouteStatus) []string {
+	flips := make([]string, 0, 2)
+	if after.Availability != before.Availability {
+		switch after.Availability {
+		case control.AvailabilityUnavailable:
+			flips = append(flips, observability.RouteHealthUnavailable)
+		case control.AvailabilityDegraded:
+			flips = append(flips, observability.RouteHealthDegraded)
+		}
+	}
+	wasHeld := before.Circuit == control.CircuitOpen && after.ObservedAt.Before(before.StaleAfter)
+	held := after.Circuit == control.CircuitOpen && after.ObservedAt.Before(after.StaleAfter)
+	switch {
+	case held && !wasHeld:
+		flips = append(flips, observability.RouteHealthCircuitOpen)
+	case before.Circuit == control.CircuitOpen && after.Circuit != control.CircuitOpen:
+		flips = append(flips, observability.RouteHealthCircuitClosed)
+	}
+	return flips
+}
+
+func reportRouteHealthTransitions(ctx context.Context, before, after control.RouteStatus) {
+	metrics, logger := observability.MetricsFromContext(ctx), observability.LoggerFromContext(ctx)
+	for _, flip := range routeHealthTransitions(before, after) {
+		metrics.RecordRouteHealthTransition(after.EndpointID, flip)
+		// Only allow-listed log fields survive; all are configured identifiers.
+		attrs := []slog.Attr{
+			slog.String("endpoint", after.EndpointID), slog.String("route_id", after.RouteID),
+			slog.String("model", after.Model), slog.String("status", flip),
+		}
+		switch flip {
+		case observability.RouteHealthCircuitOpen:
+			logger.Warn(ctx, "route circuit opened; planning holds the route", attrs...)
+		case observability.RouteHealthCircuitClosed:
+			logger.Info(ctx, "route circuit closed", attrs...)
+		}
+	}
 }
