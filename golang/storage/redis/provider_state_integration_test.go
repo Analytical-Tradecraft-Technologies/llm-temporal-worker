@@ -110,9 +110,29 @@ func TestLiveRedisProviderStatusTransitionSeenOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := now.Add(-time.Minute)
+	failure := func(i int) control.StatusObservation {
+		return providerTestEvent(t, at.Add(time.Duration(i)*time.Millisecond), "route", func(o *control.StatusObservation) {
+			o.Availability = control.AvailabilityUnavailable
+			o.ExpiresAt = now.Add(time.Hour)
+			o.EvidenceDigest = sha256.Sum256([]byte(fmt.Sprintf("failure-%d", i)))
+		}).StatusObservation
+	}
+	// Two failures in order leave the circuit one failure short of opening.
+	// Apply drops an observation that is not newer than the record, so racing
+	// these too would let a late timestamp that lands first discard the rest
+	// and leave the circuit closed.
+	for i := 0; i < 2; i++ {
+		_, after, ok, err := store.RecordProviderStatusTransition(ctx, failure(i))
+		if err != nil || !ok || after.Circuit == control.CircuitOpen {
+			t.Fatalf("priming failure %d: applied=%v circuit=%v err=%v", i, ok, after.Circuit, err)
+		}
+	}
+	// Every racing failure is newer than the primed record, so whichever
+	// compare-and-swap wins first opens the circuit; later ones may apply or
+	// be stale, but none may report the opening again.
 	var opened, applied atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
+	for i := 2; i < 34; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -120,12 +140,7 @@ func TestLiveRedisProviderStatusTransitionSeenOnce(t *testing.T) {
 			if i%2 == 0 {
 				worker = second
 			}
-			failure := providerTestEvent(t, at.Add(time.Duration(i)*time.Millisecond), "route", func(o *control.StatusObservation) {
-				o.Availability = control.AvailabilityUnavailable
-				o.ExpiresAt = now.Add(time.Hour)
-				o.EvidenceDigest = sha256.Sum256([]byte(fmt.Sprintf("failure-%d", i)))
-			})
-			before, after, ok, err := worker.RecordProviderStatusTransition(ctx, failure.StatusObservation)
+			before, after, ok, err := worker.RecordProviderStatusTransition(ctx, failure(i))
 			if err != nil {
 				t.Error(err)
 				return
@@ -143,8 +158,8 @@ func TestLiveRedisProviderStatusTransitionSeenOnce(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if applied.Load() < 3 || opened.Load() != 1 {
-		t.Fatalf("applied %d observations, saw the circuit open %d times; want it seen once", applied.Load(), opened.Load())
+	if applied.Load() < 1 || opened.Load() != 1 {
+		t.Fatalf("applied %d racing observations, saw the circuit open %d times; want it seen once", applied.Load(), opened.Load())
 	}
 	status, err := store.GetRouteStatus(ctx, sha256.Sum256([]byte("provider-config")), "route", "endpoint", "", "")
 	if err != nil || status.Circuit != control.CircuitOpen {
