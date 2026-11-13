@@ -130,7 +130,7 @@ which applies them per request rather than carrying them across
 | `input_file` | Document part from `file_url` or a base64 `file_data` URL |
 | `instructions` | `settings_patch.instructions` |
 | `previous_response_id` | `parent`: the checkpoint the previous completed response published |
-| `tools` (function only) | `settings_patch.tools` |
+| `tools` (function only, `strict` `false` or omitted) | `settings_patch.tools` |
 | `tool_choice`, `parallel_tool_calls` | `settings_patch.tool_policy` |
 | `temperature`, `top_p` | Exact decimal settings |
 | `max_output_tokens`, `text.format` | `settings_patch.output` |
@@ -151,7 +151,9 @@ request, mapped back the same way.
 | `auto` | unset |
 
 The API rejects with `400` what it cannot honour, rather than ignoring it:
-`stream: true`, hosted tools, `reasoning` and `item_reference` input items
+`stream: true`, hosted tools, function tools with `strict: true` (generate
+tools have no strict mode, so the schema would not be enforced; send `false`
+or omit it), `reasoning` and `item_reference` input items
 (continue with `previous_response_id` instead), `file_id`, non-empty
 `metadata`, `include`, `truncation` other than `disabled`, `text.verbosity`,
 the `scale` tier, and any unknown field. `user`, `safety_identifier`,

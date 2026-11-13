@@ -494,6 +494,8 @@ func lowerTools(tools []llm.Tool) ([]any, error) {
 		if err := schemaorder.Decode(tool.InputSchema, &schema); err != nil {
 			return nil, fmt.Errorf("tool %q input schema: %w", tool.Name, err)
 		}
+		// Generate tools carry no strict mode, so they are always sent
+		// non-strict; the Responses listener refuses strict tools (#1525).
 		entry := map[string]any{"type": "function", "name": tool.Name, "description": tool.Description, "parameters": schema, "strict": false}
 		if len(tool.OutputSchema) > 0 {
 			var outputSchema map[string]any
