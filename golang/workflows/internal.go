@@ -63,22 +63,32 @@ func RegisterInternal(registry worker.WorkflowRegistry, limits activity.PayloadL
 // recorded when the run started (see pinPayloadLimits), so it is deterministic
 // on replay, and the wire format is unchanged: callers still send the typed
 // v1 JSON record.
-func rawWorkflow[T, R any](limits activity.PayloadLimits, run func(workflow.Context, T) (R, error)) func(workflow.Context, converter.RawValue) (R, error) {
-	return func(ctx workflow.Context, raw converter.RawValue) (R, error) {
+//
+// The result is encoded here too, under the same recorded limit, and returned
+// as an encoded payload. The SDK encodes a returned value with a converter it
+// binds before workflow code runs, which cannot see the recorded limit, so a
+// smaller configured limit would otherwise fail on replay the completion the
+// run already recorded. The payload bytes are those the SDK would write, so
+// callers still receive the typed v1 JSON record.
+func rawWorkflow[T, R any](limits activity.PayloadLimits, run func(workflow.Context, T) (R, error)) func(workflow.Context, converter.RawValue) (converter.RawValue, error) {
+	return func(ctx workflow.Context, raw converter.RawValue) (converter.RawValue, error) {
 		ctx, pinned := pinPayloadLimits(ctx, limits)
 		input, ok := activity.DecodeBoundedPayload[T](pinned, raw)
 		if !ok {
-			var zero R
-			return zero, invalidInput()
+			return converter.RawValue{}, invalidInput()
 		}
-		return run(ctx, input)
+		result, err := run(ctx, input)
+		if err != nil {
+			return converter.RawValue{}, err
+		}
+		return activity.EncodeBoundedPayload(pinned, result)
 	}
 }
 
 // pinPayloadLimits records the worker's inline payload limit when a run
 // starts and bounds the run's own payloads by it from then on: the input
-// decode, the re-encoding check, and through the worker's converter every
-// Activity and child argument and result. server.inline_payload_bytes changes
+// decode, the re-encoding check, the result encoding, and through the
+// worker's converter every Activity and child argument and result. server.inline_payload_bytes changes
 // only with a restart, after which open runs replay from history; without the
 // recorded value a smaller limit would refuse an input or result the run
 // already accepted, and replay would fail with a non-determinism error. New

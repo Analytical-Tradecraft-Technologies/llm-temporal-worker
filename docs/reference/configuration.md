@@ -695,8 +695,8 @@ which the new workers replay every open workflow from its history.
 
 Each workflow run records the limit in force when it started (the
 `pinned-inline-payload-limit-v1` version marker and a side effect) and keeps
-using it for its own input, the Activity and child arguments it encodes, and
-the results it decodes, so replay after a restart with a smaller limit makes
+using it for its own input, the Activity and child arguments it encodes, the
+results it decodes, and the result it returns, so replay after a restart with a smaller limit makes
 the same decisions and does not fail with a non-determinism error. The limit
 still protects each new Activity execution: an Activity whose argument exceeds
 the worker's current limit fails with a typed, non-retryable

@@ -105,6 +105,9 @@ func (converter *boundedDataConverter) ToPayload(value interface{}) (*commonpb.P
 	if err != nil {
 		return nil, err
 	}
+	if preEncoded(value) {
+		return payload, nil
+	}
 	if err := converter.check(payload); err != nil {
 		return nil, err
 	}
@@ -126,8 +129,13 @@ func (converter *boundedDataConverter) ToPayloads(values ...interface{}) (*commo
 	if err != nil {
 		return nil, err
 	}
-	if err := converter.checkAll(payloads); err != nil {
-		return nil, err
+	for index, payload := range payloads.GetPayloads() {
+		if index < len(values) && preEncoded(values[index]) {
+			continue
+		}
+		if err := converter.check(payload); err != nil {
+			return nil, err
+		}
 	}
 	return payloads, nil
 }
@@ -154,6 +162,36 @@ func (converter *boundedDataConverter) FromPayloads(payloads *commonpb.Payloads,
 func deferredDecode(valuePtr interface{}) bool {
 	_, ok := valuePtr.(*converter.RawValue)
 	return ok
+}
+
+// preEncoded reports a value that is already a payload, which the default
+// converter passes through unchanged. Only EncodeBoundedPayload builds one, and
+// it has already applied the limit that governs that payload; the worker's
+// converter must not apply its configured limit again (see
+// EncodeBoundedPayload).
+func preEncoded(value interface{}) bool {
+	_, ok := value.(converter.RawValue)
+	return ok
+}
+
+// EncodeBoundedPayload encodes value the way the worker's converter does and
+// applies limits to it, returning the payload as a converter.RawValue that the
+// worker's converter passes through unchanged (a codec, if configured, still
+// encodes it).
+//
+// A workflow returns its result through it. The SDK binds the converter for a
+// workflow's return value to the workflow's root context before workflow code
+// runs, so that converter cannot see a limit the run pinned (see
+// WithPinnedPayloadLimits); encoding the result in workflow code under the
+// pinned limit keeps completion the same on replay after the configured limit
+// is lowered (#1511). The error for an oversize value is the one the worker's
+// converter returns.
+func EncodeBoundedPayload(limits PayloadLimits, value any) (converter.RawValue, error) {
+	payload, err := newBoundedDataConverter(limits).ToPayload(value)
+	if err != nil {
+		return converter.RawValue{}, err
+	}
+	return converter.NewRawValue(payload), nil
 }
 
 // DecodeBoundedPayload applies the inline limit and the strict contract decode
