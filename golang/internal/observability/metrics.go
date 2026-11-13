@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -73,7 +74,8 @@ type Metrics struct {
 	routeHeldTotal       *prometheus.CounterVec
 	executionStep        *prometheus.HistogramVec
 	routeHealthFlips     *prometheus.CounterVec
-	priceExpiry          prometheus.Gauge
+	priceExpiry          prometheus.GaugeFunc
+	priceExpirySource    atomic.Pointer[CatalogPriceExpirySource]
 	workerPolling        prometheus.Gauge
 	heartbeatAge         prometheus.Gauge
 	operationRecords     *prometheus.GaugeVec
@@ -246,8 +248,7 @@ func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m.routeHeldTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_held_total", Help: "Route candidates provider planning skipped because shared route health holds them."}, []string{"endpoint", "reason"})
 	m.executionStep = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_execution_step_duration_seconds", Help: "v1 durable execution step Activity duration by step.", Buckets: latencyBuckets}, []string{"step"})
 	m.routeHealthFlips = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_health_transition_total", Help: "Flips of the shared route health record, counted once by the worker whose observation made them."}, []string{"endpoint", "to"})
-	m.priceExpiry = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_catalog_price_expiry_timestamp_seconds", Help: "Unix time at which the earliest current priced window of a published route ends, or ended; +Inf when no published route's price expires."})
-	m.priceExpiry.Set(math.Inf(1))
+	m.priceExpiry = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "llmtw_catalog_price_expiry_timestamp_seconds", Help: "Unix time at which the earliest current priced window of a published route ends, or ended; +Inf when no published route's price expires."}, m.catalogPriceExpiry)
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
 	m.operationRecords = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "llmtw_budget_operation_records", Help: "Durable budget operation records (reuse tombstones) in Redis by retention: expiring after operation_key_reuse_horizon, or persistent."}, []string{"retention"})
@@ -561,20 +562,40 @@ func (metrics *Metrics) RecordRouteHealthTransition(endpoint, to string) {
 	metrics.routeHealthFlips.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(to, routeHealthTransitions)).Inc()
 }
 
-// SetCatalogPriceExpiry records when the earliest current priced window of the
-// published snapshot's routes ends. A zero time means no route's price
-// expires and exports +Inf, so "expiry - time() < threshold" never fires for
-// it. A time in the past means a route's price has already lapsed.
-func (metrics *Metrics) SetCatalogPriceExpiry(until time.Time) {
+// CatalogPriceExpirySource reports, at now, when the earliest current priced
+// window of the published snapshot's routes ends. A zero time means no route's
+// price expires. A time at or before now means a route's price has lapsed.
+type CatalogPriceExpirySource func(now time.Time) time.Time
+
+// SetCatalogPriceExpirySource sets what the catalog expiry gauge reads. The
+// gauge evaluates it on every scrape rather than when a snapshot is published,
+// because priced windows start and end with time: a route priced only in the
+// future becomes routable when its window opens, with no reload, and its
+// expiry must show from then on. A nil source exports +Inf.
+func (metrics *Metrics) SetCatalogPriceExpirySource(source CatalogPriceExpirySource) {
 	if metrics == nil {
 		return
 	}
-	if until.IsZero() {
-		metrics.priceExpiry.Set(math.Inf(1))
+	if source == nil {
+		metrics.priceExpirySource.Store(nil)
 		return
 	}
+	metrics.priceExpirySource.Store(&source)
+}
+
+// catalogPriceExpiry is the gauge value: +Inf when no route's price expires,
+// so "expiry - time() < threshold" never fires for it.
+func (metrics *Metrics) catalogPriceExpiry() float64 {
+	source := metrics.priceExpirySource.Load()
+	if source == nil {
+		return math.Inf(1)
+	}
+	until := (*source)(time.Now())
+	if until.IsZero() {
+		return math.Inf(1)
+	}
 	// Unix seconds, not UnixNano, so a far-future bound cannot overflow.
-	metrics.priceExpiry.Set(float64(until.Unix()) + float64(until.Nanosecond())/float64(time.Second))
+	return float64(until.Unix()) + float64(until.Nanosecond())/float64(time.Second)
 }
 
 func nonNegativeDuration(duration time.Duration) time.Duration {

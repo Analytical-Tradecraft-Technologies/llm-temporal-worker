@@ -94,7 +94,7 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.RecordRouteHealthTransition("endpoint-a", observability.RouteHealthCircuitOpen)
 	metrics.RecordRouteHealthTransition("unconfigured-endpoint", "unbounded-transition")
 	expiry := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
-	metrics.SetCatalogPriceExpiry(expiry)
+	metrics.SetCatalogPriceExpirySource(func(time.Time) time.Time { return expiry })
 	metrics.RecordContinuation("continue")
 	metrics.RecordConfigReload("success")
 	metrics.RecordMaintenance("cache", "eligible", 0, time.Second)
@@ -155,7 +155,7 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	if got := metricValue(families, "llmtw_catalog_price_expiry_timestamp_seconds", nil); got != float64(expiry.Unix()) {
 		t.Fatalf("catalog price expiry = %v, want %v", got, expiry.Unix())
 	}
-	metrics.SetCatalogPriceExpiry(time.Time{})
+	metrics.SetCatalogPriceExpirySource(func(time.Time) time.Time { return time.Time{} })
 	if families, err = metrics.Gather(); err != nil {
 		t.Fatal(err)
 	}

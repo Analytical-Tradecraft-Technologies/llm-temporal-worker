@@ -293,7 +293,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if metrics != nil {
 		liveMetrics.Store(metrics)
 	}
-	publishCatalogPriceExpiry(metrics, application.Current(), time.Now())
+	exportCatalogPriceExpiry(metrics, application)
 	dynamic := &snapshotEngine{application: application}
 	identity := options.Identity
 	if identity == "" {

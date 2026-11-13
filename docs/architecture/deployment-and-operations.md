@@ -363,8 +363,8 @@ The series are:
   route health record, where `to` is `unavailable`, `degraded`,
   `circuit_open` or `circuit_closed` (see [Alerts](#alerts));
 - `llmtw_catalog_price_expiry_timestamp_seconds`, the Unix time at which the
-  earliest current priced window of the published snapshot's routes ends, or
-  `+Inf` when none ends (see [Alerts](#alerts));
+  earliest current priced window of the served snapshot's routes ends, or
+  `+Inf` when none ends, evaluated at scrape time (see [Alerts](#alerts));
 - `llmtw_config_reload_total{outcome}` where `outcome` is `success` or `failure`;
 - `llmtw_worker_polling` (1 while the Temporal worker is polling, otherwise 0);
 - `llmtw_heartbeat_age_seconds` (age of the most recent Activity heartbeat,
@@ -497,10 +497,13 @@ endpoint is exported at zero before its first flip. Memory state keeps no
 shared route health, and the legacy engine Activity records route health
 without these transitions.
 
-The catalog expiry gauge is set when a snapshot is published, at startup and
-after each reload. It is the earliest end of the current priced window over
+The catalog expiry gauge is evaluated on every scrape against the snapshot
+the worker is serving, so it follows reloads and also priced windows that open
+or close between reloads: a route priced only from a future date counts once
+its window opens. It is the earliest end of the current priced window over
 the snapshot's routes; windows are merged, so a following window that starts
-where one ends extends it. A route whose price has already lapsed keeps its
+where one ends extends it, and a route whose coverage resumes after a gap
+reports the resumed window's end. A route whose price has already lapsed keeps its
 past end, so the gauge stays in the past after a restart. It is `+Inf` when no
 route's price expires. Routes added by model sync have no priced windows and
 do not contribute. The alert names no route: find it in the snapshot's price

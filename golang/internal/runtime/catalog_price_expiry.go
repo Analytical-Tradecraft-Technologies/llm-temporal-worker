@@ -66,16 +66,27 @@ func routePriceExpiry(windows []routing.PriceWindow, now time.Time) time.Time {
 	return lapsed
 }
 
-// publishCatalogPriceExpiry sets the catalog expiry gauge from the published
-// snapshot. It runs after the initial snapshot is published and after every
-// reload, so the gauge never describes a snapshot that was rejected.
-func publishCatalogPriceExpiry(metrics *observability.Metrics, snapshot *app.RuntimeSnapshot, now time.Time) {
-	if metrics == nil || snapshot == nil {
+// snapshotCatalogPriceExpiry is the catalog expiry of a published snapshot at
+// now, or zero when it has no route catalog or no route's price expires.
+func snapshotCatalogPriceExpiry(snapshot *app.RuntimeSnapshot, now time.Time) time.Time {
+	if snapshot == nil {
+		return time.Time{}
+	}
+	if source, ok := snapshot.Clients.(catalogPriceExpirySource); ok {
+		return source.CatalogPriceExpiry(now)
+	}
+	return time.Time{}
+}
+
+// exportCatalogPriceExpiry points the catalog expiry gauge at whichever
+// snapshot the application is serving when Prometheus scrapes. Reading the
+// current snapshot follows reloads without a hook, and evaluating at scrape
+// time follows priced windows that open or close between reloads.
+func exportCatalogPriceExpiry(metrics *observability.Metrics, application *app.App) {
+	if metrics == nil || application == nil {
 		return
 	}
-	var expiry time.Time
-	if source, ok := snapshot.Clients.(catalogPriceExpirySource); ok {
-		expiry = source.CatalogPriceExpiry(now)
-	}
-	metrics.SetCatalogPriceExpiry(expiry)
+	metrics.SetCatalogPriceExpirySource(func(now time.Time) time.Time {
+		return snapshotCatalogPriceExpiry(application.Current(), now)
+	})
 }
