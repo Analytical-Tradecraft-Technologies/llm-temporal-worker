@@ -30,22 +30,8 @@ func TestCloudExecutionRuntimeUnknownOutcomeSettlesAfterRecoveryWindow(t *testin
 		t.Run(step, func(t *testing.T) {
 			f := boundedCloud(t, false, singleReservationLimits)
 			original := f.adapter.invoke
-			f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-				f.submits.Add(1)
-				if err := o.BeforePossibleWrite(ctx); err != nil {
-					return provider.Result{}, err
-				}
-				return provider.Result{}, errors.New("lost paid response")
-			}
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionPending)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-			first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			ctx, v, ref, scope, first := startUnknownOutcome(t, f)
+			var err error
 			// Inside the recovery window the claim is retained as it is.
 			v, err = f.runtime.PollExecutionV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionPending)
@@ -124,22 +110,7 @@ func assertUnknownWorkCharged(t *testing.T, saved cloudstate.SavedProviderExecut
 // to a compatible worker. A drained rollout must not hold the claim forever.
 func TestCloudExecutionRuntimeSettlesExpiredUnknownAcrossConfigRollout(t *testing.T) {
 	f := boundedCloud(t, false, singleReservationLimits)
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx, _, ref, scope, first := startUnknownOutcome(t, f)
 	f.now = f.now.Add(16 * time.Minute)
 	rolledOut := f.cap
 	rolledOut.ConfigDigest = [32]byte{42}
@@ -213,22 +184,8 @@ func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing
 func TestCloudReloadSettlesUnknownWorkOnSyncedRoute(t *testing.T) {
 	digest := syncedEndpointDigest(t, nil)
 	f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, digest) })
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx, v, ref, scope, first := startUnknownOutcome(t, f)
+	var err error
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
@@ -520,4 +477,35 @@ func crashAfterPossibleWrite(t *testing.T, f *boundedCloudFixture) llm.Execution
 	source.value.ConfigDigest = f.cap.ConfigDigest
 	bindReloadEndpoints(source, [32]byte{32})
 	return ref
+}
+
+// loseResponsesAfterWrite makes every adapter call fail after the
+// possible-write boundary, as a lost paid response does, counting each
+// submission.
+func loseResponsesAfterWrite(f *boundedCloudFixture) {
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		f.submits.Add(1)
+		if err := o.BeforePossibleWrite(ctx); err != nil {
+			return provider.Result{}, err
+		}
+		return provider.Result{}, errors.New("lost paid response")
+	}
+}
+
+// startUnknownOutcome loses the paid response of one Generate step and
+// returns the pending step, its execution reference, the request scope and
+// the request's first attempt.
+func startUnknownOutcome(t *testing.T, f *boundedCloudFixture) (context.Context, llm.ExecutionResultV1, llm.ExecutionReferenceV1, cloudstate.Scope, cloudstate.RequestAttempt) {
+	t.Helper()
+	loseResponsesAfterWrite(f)
+	ctx := context.Background()
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionPending)
+	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctx, v, ref, scope, first
 }

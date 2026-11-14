@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -59,18 +57,7 @@ func assertRecoveryError(t *testing.T, err error, code provider.Code, retry prov
 func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testing.T) {
 	capabilities, _, _, request, replay, compact := planningFixture()
 	var httpCalls atomic.Int32
-	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key",
-		HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
-			httpCalls.Add(1)
-			return nil, errors.New("unexpected HTTP request")
-		})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := offlineResponsesAdapter(t, &httpCalls)
 	capabilities.Adapters = engine.AdapterMap{"endpoint": adapter}
 	planning, err := capabilities.NewProviderPlanning(context.Background())
 	if err != nil {

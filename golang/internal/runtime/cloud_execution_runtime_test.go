@@ -289,22 +289,7 @@ func TestCloudExecutionRuntimeUnknownRetryGetsNewBudget(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	original := f.adapter.invoke
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx, v, ref, scope, first := startUnknownOutcome(t, f)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || saved.Execution.Claim == nil || saved.Execution.Settled {
 		t.Fatal("unknown paid claim was lost", err)

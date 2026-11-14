@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -14,13 +13,7 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.options.MaxAttempts = 2
 	f.restart(t)
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
+	loseResponsesAfterWrite(f)
 	ctx := context.Background()
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	var ref llm.ExecutionReferenceV1

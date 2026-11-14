@@ -114,13 +114,7 @@ func TestCloudUnknownFillTransientFillReadIsRetryable(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	original := f.adapter.invoke
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
+	loseResponsesAfterWrite(f)
 	ctx := context.Background()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)

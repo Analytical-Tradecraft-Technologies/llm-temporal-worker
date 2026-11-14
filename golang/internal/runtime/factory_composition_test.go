@@ -128,6 +128,16 @@ func TestProductionFactoryRejectsPhaseFactoriesWithoutCompositionBeforeLoadingEn
 }
 
 func TestProductionFactoryRejectsInvalidAutomaticCompositionBeforeLoadingEngine(t *testing.T) {
+	assertCompositionRejectedBeforeEngine(t, durablestore.Composition{}, "validate durable composition", "invalid")
+}
+
+// assertCompositionRejectedBeforeEngine builds the example configuration with
+// an automatic durable composition factory that returns composition, and
+// checks Build fails with wantError before any external work: no snapshot,
+// secret, Redis or port factory is touched. label names the composition in
+// the failure messages.
+func assertCompositionRejectedBeforeEngine(t *testing.T, composition durablestore.Composition, wantError, label string) {
+	t.Helper()
 	data, err := os.ReadFile("../../config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -163,70 +173,23 @@ func TestProductionFactoryRejectsInvalidAutomaticCompositionBeforeLoadingEngine(
 		},
 		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
 			compositionCalled = true
-			return durablestore.Composition{}, nil
+			return composition, nil
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _, err = factory.Build(context.Background(), snapshot)
-	if !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "validate durable composition") {
-		t.Fatalf("Build() error = %v, want invalid automatic-composition failure", err)
+	if !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), wantError) {
+		t.Fatalf("Build() error = %v, want %s automatic-composition failure", err, label)
 	}
 	if !compositionCalled || loaded || resolverCalled || redisCalled || generateCalled || compactCalled {
-		t.Fatalf("invalid composition reached external work: composition=%t snapshot=%t provider=%t redis=%t generate=%t compact=%t", compositionCalled, loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
+		t.Fatalf("%s composition reached external work: composition=%t snapshot=%t provider=%t redis=%t generate=%t compact=%t", label, compositionCalled, loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
 	}
 }
 
 func TestProductionFactoryRejectsMismatchedAutomaticCompositionBeforeLoadingEngine(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
-	loaded := false
-	resolverCalled, redisCalled := false, false
-	compositionCalled := false
-	generateCalled, compactCalled := false, false
-	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
-			resolverCalled = true
-			return nil, nil
-		}),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
-			loaded = true
-			return engine.Snapshot{}, nil
-		}),
-		RedisFactory: func(context.Context, config.RedisConfig, string, string) (redis.UniversalClient, error) {
-			redisCalled = true
-			return nil, errors.New("Redis must not be constructed")
-		},
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
-			generateCalled = true
-			return validBuilderGeneratePorts(nil), nil
-		},
-		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
-			compactCalled = true
-			return validCompactPorts(), nil
-		},
-		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
-			compositionCalled = true
-			return validCapabilityComposition(), nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = factory.Build(context.Background(), snapshot)
-	if !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "config digest does not match") {
-		t.Fatalf("Build() error = %v, want mismatched automatic-composition failure", err)
-	}
-	if !compositionCalled || loaded || resolverCalled || redisCalled || generateCalled || compactCalled {
-		t.Fatalf("mismatched composition reached external work: composition=%t snapshot=%t provider=%t redis=%t generate=%t compact=%t", compositionCalled, loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
-	}
+	assertCompositionRejectedBeforeEngine(t, validCapabilityComposition(), "config digest does not match", "mismatched")
 }
 
 func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t *testing.T) {
