@@ -63,10 +63,7 @@ func (h *continuationHarness) Put(_ context.Context, keys []string, value, handl
 func TestContinuationKeysShareAdmissionHashSlot(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
-	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, harness, harness, now)
 	root, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)
@@ -118,10 +115,7 @@ func testContinuation(t *testing.T, now time.Time) state.Continuation {
 func TestContinuationCreateGetAndTenantBinding(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
-	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, harness, harness, now)
 	root, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)
@@ -141,10 +135,7 @@ func TestContinuationCreateGetAndTenantBinding(t *testing.T) {
 func TestContinuationStoreRoundTripsNilTranscriptForRootAndChild(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
-	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, harness, harness, now)
 	rootValue := testContinuation(t, now)
 	if rootValue.Transcript != nil {
 		t.Fatal("test must exercise nil transcript persistence")
@@ -192,10 +183,7 @@ func TestContinuationStoreRoundTripsNilTranscriptForRootAndChild(t *testing.T) {
 func TestContinuationChildIsImmutableAndOperationIdempotent(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
-	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, harness, harness, now)
 	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)
@@ -222,10 +210,7 @@ func TestContinuationChildIsImmutableAndOperationIdempotent(t *testing.T) {
 func TestContinuationOperationKeyIsScopedToTenantAndParent(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
-	store, err := NewContinuationStore(ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, harness, harness, now)
 	parentA, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)

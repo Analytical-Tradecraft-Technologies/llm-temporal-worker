@@ -174,30 +174,12 @@ func TestRequestPreparationPreservesOtherProgressAndRejectsReplacement(t *testin
 }
 
 func TestRequestPreparationUncertainWritesRepairWithoutChangingInput(t *testing.T) {
-	for _, stage := range []string{"blob", "event", "index-before", "index-after"} {
+	for _, stage := range uncertainWriteStages {
 		t.Run(stage, func(t *testing.T) {
 			r, table, blobs, record, plan := preparationFixture(t)
-			fault, fired := &contracts.StorageError{Kind: contracts.ErrOutcomeUnknown}, false
-			blobs.hook = func(blob.BlobKey) (error, error) {
-				if stage == "blob" && !fired {
-					fired = true
-					return nil, fault
-				}
-				return nil, nil
-			}
-			table.hook = func(action string, item kv.KeyValueItem) (error, error) {
-				if !fired && (stage == "event" && action == "create" && strings.Contains(item.PartitionKey, "/request/") ||
-					strings.HasPrefix(stage, "index") && action == "replace" && strings.Contains(item.PartitionKey, "/pending/")) {
-					fired = true
-					if stage == "index-before" {
-						return fault, nil
-					}
-					return nil, fault
-				}
-				return nil, nil
-			}
+			fired := injectUncertainWrite(stage, table, blobs)
 			ctx := context.Background()
-			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, plan); err == nil || !fired {
+			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, plan); err == nil || !*fired {
 				t.Fatalf("fault not observed: %v", err)
 			}
 			table.hook, blobs.hook = nil, nil
