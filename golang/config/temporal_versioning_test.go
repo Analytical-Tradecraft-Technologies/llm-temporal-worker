@@ -3,7 +3,6 @@ package config_test
 import (
 	"encoding/json"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 	"os"
 	"strings"
 	"testing"
@@ -127,14 +126,7 @@ func TestTemporalVersioningRejectsIdentitiesTemporalRejects(t *testing.T) {
 }
 func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {
 	withoutTemporalControllerEnvironment(t)
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {
 		t.Fatal(err)

@@ -2,13 +2,11 @@ package config_test
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 // replaceExample returns the shipped example with one exact replacement and
@@ -216,14 +214,7 @@ func TestLoadAcceptsNullListsAndTheRenderedEffectiveConfiguration(t *testing.T) 
 	if _, err := config.Load(rendered); err != nil {
 		t.Fatalf("rendered effective configuration no longer loads: %v", err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(rendered); err != nil {
 		t.Fatalf("schema rejects a model without a tenant restriction: %v", err)
 	}

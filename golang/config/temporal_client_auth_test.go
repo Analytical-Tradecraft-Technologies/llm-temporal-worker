@@ -2,12 +2,10 @@ package config_test
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 // Production needs an encrypted, client-authenticated Temporal connection
@@ -55,14 +53,7 @@ func TestLoadRequiresAuthenticatedTemporalTransportInProduction(t *testing.T) {
 // The public schema mirrors the Temporal credential rules so tooling that
 // validates against it rejects what startup would reject.
 func TestConfigSchemaMirrorsTemporalCredentialRules(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for name, test := range map[string]struct {
 		mutate func(*config.Config)
 		valid  bool

@@ -107,13 +107,7 @@ func TestPreferProviderCacheAffinityMovesExactRouteWithoutAuthorizingIt(t *testi
 	accountA := [32]byte{3}
 	accountB := [32]byte{4}
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
-		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountB, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := twoAccountCatalog(t, accountA, accountB)
 	request := llm.Request{OperationKey: "affinity", Model: "logical", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant"}}
 	preferred, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog, Now: now, Affinity: &AffinityPreferences{Soft: ProviderCacheAffinitySet{affinityForRoute("second", "ep-second", "openai", "openai_responses", "us-east-1", accountB, "lineage", "revision", now)}}})
 	if err != nil {
@@ -138,13 +132,7 @@ func TestPreferProviderCacheAffinityHardPinRejectsFallback(t *testing.T) {
 	accountA := [32]byte{6}
 	accountB := [32]byte{7}
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
-		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountB, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := twoAccountCatalog(t, accountA, accountB)
 	request := llm.Request{OperationKey: "hard-affinity", Model: "logical", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant"}}
 	hard := affinityForRoute("second", "ep-second", "openai", "openai_responses", "us-east-1", accountB, "lineage", "revision", now)
 	hard.HardPinned = true
@@ -210,4 +198,19 @@ func affinityForRoute(routeID, endpoint, providerName, family, region string, ac
 		Region: region, EndpointFamily: family, ModelLineage: lineage, RouteModelRevision: revision, CacheEpoch: "epoch-1",
 		LastSuccessAt: now.Add(-time.Minute),
 	}
+}
+
+// twoAccountCatalog compiles one logical model with two standard-class
+// OpenAI Responses routes, "first" and "second", that differ only in their
+// endpoint and account.
+func twoAccountCatalog(t *testing.T, accountA, accountB [32]byte) Catalog {
+	t.Helper()
+	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountB, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
 }

@@ -3,12 +3,10 @@ package config_test
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 const payloadCodecYAML = `  payload_codec:
@@ -146,14 +144,7 @@ func TestPayloadCodecWorkloadIdentityPath(t *testing.T) {
 }
 
 func TestConfigSchemaAcceptsPayloadCodec(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	loaded, err := config.Load(withPayloadCodec(t, payloadCodecYAML))
 	if err != nil {
 		t.Fatal(err)
