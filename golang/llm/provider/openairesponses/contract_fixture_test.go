@@ -266,7 +266,7 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 				t.Fatal(err)
 			}
 			for split := 1; split < len(wire); split++ {
-				got, err := DecodeStream(&responseChunkReader{chunks: [][]byte{wire[:split], {}, wire[split:]}})
+				got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
 				if err != nil {
 					t.Fatalf("split %d: %v", split, err)
 				}
@@ -275,7 +275,7 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 				}
 			}
 			for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 17, 11)} {
-				got, err := DecodeStream(&responseChunkReader{chunks: chunks})
+				got, err := DecodeStream(streamtest.NewChunkReader(chunks))
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -1,7 +1,6 @@
-package bedrockmessages
+package messagestest
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -10,9 +9,19 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
-// The v1 contract sets only reasoning effort and summary, never the mode.
-// Neither may turn thinking on or make the request uncompilable.
-func TestCompileModelessReasoningNeverEnablesThinking(t *testing.T) {
+func compileReasoning(t *testing.T, compile Compile, reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
+	t.Helper()
+	call, err := compile(t, llm.Request{OperationKey: "v1-reasoning", Model: ContractModel, Reasoning: &reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}}, strict)
+	if err != nil {
+		return nil, err
+	}
+	return Wire(t, call.SDKParams), nil
+}
+
+// ModelessReasoningNeverEnablesThinking checks that the reasoning effort and
+// summary the v1 contract sets, never the mode, neither turn thinking on nor
+// make the request uncompilable.
+func ModelessReasoningNeverEnablesThinking(t *testing.T, compile Compile) {
 	for _, test := range []struct {
 		name       string
 		reasoning  llm.ReasoningSpec
@@ -30,8 +39,8 @@ func TestCompileModelessReasoningNeverEnablesThinking(t *testing.T) {
 		{name: "explicit default effort", reasoning: llm.ReasoningSpec{Effort: llm.ReasoningEffortProviderDefault, Summary: llm.ReasoningSummaryNone}},
 	} {
 		for _, strict := range []bool{true, false} {
-			t.Run(test.name+portabilityName(strict), func(t *testing.T) {
-				wire, err := compileReasoning(t, test.reasoning, strict)
+			t.Run(test.name+PortabilityName(strict), func(t *testing.T) {
+				wire, err := compileReasoning(t, compile, test.reasoning, strict)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -53,8 +62,10 @@ func TestCompileModelessReasoningNeverEnablesThinking(t *testing.T) {
 	}
 }
 
-func TestCompileReasoningSummaryMapsToThinkingDisplay(t *testing.T) {
-	budget := 2048
+// ReasoningSummaryMapsToThinkingDisplay checks how a reasoning summary maps
+// to thinking.display, and that strict portability rejects one the family
+// cannot express.
+func ReasoningSummaryMapsToThinkingDisplay(t *testing.T, compile Compile) {
 	for _, test := range []struct {
 		name        string
 		reasoning   llm.ReasoningSpec
@@ -68,14 +79,17 @@ func TestCompileReasoningSummaryMapsToThinkingDisplay(t *testing.T) {
 		{name: "concise without mode strict", reasoning: llm.ReasoningSpec{Summary: llm.ReasoningSummaryConcise}, strict: true, wantError: "reasoning summary"},
 		{name: "detailed adaptive strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryDetailed}, strict: true, wantError: "reasoning summary"},
 		{name: "concise adaptive best effort", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryConcise}, wantType: "adaptive", wantDisplay: "summarized"},
-		{name: "detailed enabled best effort", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &budget, Summary: llm.ReasoningSummaryDetailed}, wantType: "enabled", wantDisplay: "summarized"},
+		{name: "detailed enabled best effort", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: intPtr(2048), Summary: llm.ReasoningSummaryDetailed}, wantType: "enabled", wantDisplay: "summarized"},
 		{name: "auto adaptive strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryAuto}, strict: true, wantType: "adaptive", wantDisplay: "summarized"},
 		{name: "none adaptive strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone}, strict: true, wantType: "adaptive", wantDisplay: "omitted"},
 		{name: "default adaptive strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive}, strict: true, wantType: "adaptive"},
 		{name: "concise disabled best effort", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Summary: llm.ReasoningSummaryConcise}, wantType: "disabled"},
+		// Disabled wins over an effort, as on Chat and Responses (#1666).
+		{name: "disabled with effort strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortHigh}, strict: true, wantType: "disabled"},
+		{name: "disabled with maximum effort strict", reasoning: llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortMaximum}, strict: true, wantType: "disabled"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			wire, err := compileReasoning(t, test.reasoning, test.strict)
+			wire, err := compileReasoning(t, compile, test.reasoning, test.strict)
 			if test.wantError != "" {
 				var mapped *provider.Error
 				// Strict representability rejections are unsupported_capability.
@@ -105,35 +119,15 @@ func TestCompileReasoningSummaryMapsToThinkingDisplay(t *testing.T) {
 	}
 }
 
-func compileReasoning(t *testing.T, reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
-	t.Helper()
-	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "v1-reasoning", Model: "claude-contract", Reasoning: &reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}},
-		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
-		Strict:  strict,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return marshalBedrockWire(t, call.SDKParams), nil
-}
-
-func portabilityName(strict bool) string {
-	if strict {
-		return "/strict"
-	}
-	return "/best effort"
-}
-
-func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
+// ExtraHighReturnsUnsupportedCapability checks that xhigh effort on the
+// contract model is refused before dispatch in every reasoning mode.
+func ExtraHighReturnsUnsupportedCapability(t *testing.T, compile Compile) {
 	budget := 2048
 	for _, mode := range []llm.ReasoningMode{"", llm.ReasoningModeProviderDefault, llm.ReasoningModeAdaptive, llm.ReasoningModeEnabled, llm.ReasoningModeDisabled} {
 		for _, strict := range []bool{false, true} {
-			t.Run(string(mode)+portabilityName(strict), func(t *testing.T) {
-				_, err := compileReasoning(t, llm.ReasoningSpec{Mode: mode, Effort: llm.ReasoningEffortExtraHigh, TokenBudget: &budget}, strict)
-				var mapped *provider.Error
-				if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever || !strings.Contains(mapped.SafeMessage, "xhigh") {
+			t.Run(string(mode)+PortabilityName(strict), func(t *testing.T) {
+				_, err := compileReasoning(t, compile, llm.ReasoningSpec{Mode: mode, Effort: llm.ReasoningEffortExtraHigh, TokenBudget: &budget}, strict)
+				if !isNonRetryableUnsupported(err, "xhigh") {
 					t.Fatalf("Compile() = %v, want non-retryable unsupported capability before dispatch", err)
 				}
 			})
@@ -141,12 +135,12 @@ func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
 	}
 }
 
-// Disabled wins over an effort on every family: thinking is disabled and no
-// output_config.effort is sent, as Chat and Responses send effort none
-// (#1666).
-func TestCompileDisabledReasoningIgnoresEffort(t *testing.T) {
+// DisabledReasoningIgnoresEffort checks that disabled wins over an effort:
+// thinking is disabled and no output_config.effort is sent, as Chat and
+// Responses send effort none (#1666).
+func DisabledReasoningIgnoresEffort(t *testing.T, compile Compile) {
 	for _, strict := range []bool{true, false} {
-		wire, err := compileReasoning(t, llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortHigh}, strict)
+		wire, err := compileReasoning(t, compile, llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: llm.ReasoningEffortHigh}, strict)
 		if err != nil {
 			t.Fatal(err)
 		}

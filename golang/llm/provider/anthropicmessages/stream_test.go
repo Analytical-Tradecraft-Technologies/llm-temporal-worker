@@ -2,7 +2,6 @@ package anthropicmessages
 
 import (
 	"bytes"
-	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +17,7 @@ func TestDecodeStreamPreservesTextToolAndReasoningAcrossFragments(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 3, 11)} {
-		got, err := DecodeStream(&anthropicChunkReader{chunks: chunks})
+		got, err := DecodeStream(streamtest.NewChunkReader(chunks))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,29 +38,7 @@ func TestDecodeStreamPreservesTextToolAndReasoningAcrossFragments(t *testing.T) 
 
 func TestDecodeStreamEnumeratesSplitPointsEmptyReadsAndCRLF(t *testing.T) {
 	wire := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\nevent: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\nevent: content_block_stop\ndata: {\"index\":0}\n\nevent: message_delta\ndata: {\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {}\n\n")
-	for _, variant := range []struct {
-		name string
-		wire []byte
-	}{
-		{name: "lf", wire: wire},
-		{name: "crlf", wire: streamtest.CRLF(wire)},
-	} {
-		t.Run(variant.name, func(t *testing.T) {
-			want, err := DecodeStream(bytes.NewReader(variant.wire))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for split, chunks := range streamtest.TwoPartFragments(variant.wire) {
-				got, err := DecodeStream(&anthropicChunkReader{chunks: streamtest.WithEmptyChunks(chunks)})
-				if err != nil {
-					t.Fatalf("split %d: %v", split, err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("split %d differs\n got: %#v\nwant: %#v", split, got, want)
-				}
-			}
-		})
-	}
+	streamtest.SplitInvariant(t, wire, DecodeStream)
 }
 
 func TestDecodeStreamRejectsEventAfterTerminal(t *testing.T) {
@@ -69,26 +46,4 @@ func TestDecodeStreamRejectsEventAfterTerminal(t *testing.T) {
 	if _, err := DecodeStream(strings.NewReader(wire)); err == nil {
 		t.Fatal("post-terminal event unexpectedly succeeded")
 	}
-}
-
-type anthropicChunkReader struct {
-	chunks [][]byte
-	index  int
-}
-
-func (reader *anthropicChunkReader) Read(buffer []byte) (int, error) {
-	if reader.index >= len(reader.chunks) {
-		return 0, io.EOF
-	}
-	chunk := reader.chunks[reader.index]
-	if len(chunk) == 0 {
-		reader.index++
-		return 0, nil
-	}
-	n := copy(buffer, chunk)
-	reader.chunks[reader.index] = chunk[n:]
-	if len(reader.chunks[reader.index]) == 0 {
-		reader.index++
-	}
-	return n, nil
 }

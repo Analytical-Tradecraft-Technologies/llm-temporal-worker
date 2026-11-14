@@ -206,7 +206,7 @@ func TestChatContractFixturesKeepDecoderOutputFragmentationInvariant(t *testing.
 				t.Fatal("stream fixture decoded no events")
 			}
 			for split := 1; split < len(wire); split++ {
-				got, err := DecodeStream(&chunkReader{chunks: [][]byte{wire[:split], {}, wire[split:]}})
+				got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
 				if err != nil {
 					t.Fatalf("split %d: %v", split, err)
 				}
@@ -215,7 +215,7 @@ func TestChatContractFixturesKeepDecoderOutputFragmentationInvariant(t *testing.
 				}
 			}
 			for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 17, 11)} {
-				got, err := DecodeStream(&chunkReader{chunks: chunks})
+				got, err := DecodeStream(streamtest.NewChunkReader(chunks))
 				if err != nil {
 					t.Fatal(err)
 				}
