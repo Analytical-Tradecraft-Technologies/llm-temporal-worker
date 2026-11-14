@@ -210,6 +210,22 @@ func newHarnessWithAdmission(t testing.TB, adapter provider.Adapter, admissionSt
 	return testHarness{engine: engineValue, admission: admissionStore, results: results, clock: clock()}
 }
 
+// priorityWithStandardFallback is baseRequest asking for the priority class
+// with standard as its only fallback.
+func priorityWithStandardFallback(operationKey string) llm.Request {
+	request := baseRequest(operationKey)
+	request.ServiceClass = llm.ServiceClassPriority
+	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	return request
+}
+
+// recordedCalls copies the provider calls the adapter has received.
+func (adapter *fakeAdapter) recordedCalls() []provider.Call {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return append([]provider.Call(nil), adapter.calls...)
+}
+
 func baseRequest(operationKey string) llm.Request {
 	return llm.Request{OperationKey: operationKey, Context: llm.RequestContext{Tenant: "tenant-1"}, Model: "logical-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}
 }
@@ -329,9 +345,7 @@ func TestGenerateUsesOnlyExplicitFallbackWithMatchingRequiredBudgetPolicy(t *tes
 	}}
 	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
 
-	request := baseRequest("budgeted-explicit-fallback")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("budgeted-explicit-fallback")
 	response, err := harness.engine.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -339,9 +353,7 @@ func TestGenerateUsesOnlyExplicitFallbackWithMatchingRequiredBudgetPolicy(t *tes
 	if response.Service.Requested != llm.ServiceClassPriority || response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
 		t.Fatalf("service facts = %#v, want explicit standard fallback", response.Service)
 	}
-	adapter.mu.Lock()
-	calls := append([]provider.Call(nil), adapter.calls...)
-	adapter.mu.Unlock()
+	calls := adapter.recordedCalls()
 	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("provider calls = %#v, want only standard fallback", calls)
 	}
@@ -400,9 +412,7 @@ func TestGenerateCarriesExactReservationAlongsideRedisCompatibilityAmount(t *tes
 func TestGenerateFallbackDoesNotReplayRejectedDispatch(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", rejectFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	request := baseRequest("fallback")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("fallback")
 	response, err := harness.engine.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -441,9 +451,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkFallsBackWithoutAmbiguity(t
 		t.Run(test.name, func(t *testing.T) {
 			adapter := &fakeAdapter{name: "fake", egressFirst: test.egress, preDispatchFirst: test.preDispatch, response: successfulResponse()}
 			harness := newHarness(t, adapter)
-			request := baseRequest("egress-fallback-" + test.name)
-			request.ServiceClass = llm.ServiceClassPriority
-			request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+			request := priorityWithStandardFallback("egress-fallback-" + test.name)
 			response, err := harness.engine.Generate(context.Background(), request)
 			if err != nil {
 				t.Fatal(err)
@@ -521,9 +529,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkRecordsNoCost(t *testing.T)
 func TestGenerateCertifiedPreDispatchCallerDeadlineAfterMarkDoesNotFallback(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", preDispatchDeadline: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	request := baseRequest("pre-dispatch-caller-deadline")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("pre-dispatch-caller-deadline")
 
 	_, err := harness.engine.Generate(context.Background(), request)
 	if err == nil {
@@ -557,9 +563,7 @@ func TestGenerateCertifiedPreDispatchCallerDeadlineAfterMarkDoesNotFallback(t *t
 func TestGenerateRawDeadlineAfterMarkRemainsAmbiguous(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", rawDeadlineFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	request := baseRequest("raw-post-mark-deadline")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("raw-post-mark-deadline")
 
 	_, err := harness.engine.Generate(context.Background(), request)
 	if err == nil {
@@ -583,9 +587,7 @@ func TestGenerateRawDeadlineAfterMarkRemainsAmbiguous(t *testing.T) {
 func TestGenerateRedirectResponseAfterMarkDoesNotFallback(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", redirectFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	request := baseRequest("redirect-no-fallback")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("redirect-no-fallback")
 	_, err := harness.engine.Generate(context.Background(), request)
 	if err == nil {
 		t.Fatal("redirect response unexpectedly succeeded")

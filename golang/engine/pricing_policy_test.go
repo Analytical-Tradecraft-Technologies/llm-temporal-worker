@@ -26,9 +26,7 @@ func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.
 	}}
 	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
 
-	request := baseRequest("skip-budgeted-unpriced")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("skip-budgeted-unpriced")
 	response, err := harness.engine.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -36,9 +34,7 @@ func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.
 	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
 		t.Fatalf("response = %#v, want priced standard fallback", response)
 	}
-	adapter.mu.Lock()
-	calls := append([]provider.Call(nil), adapter.calls...)
-	adapter.mu.Unlock()
+	calls := adapter.recordedCalls()
 	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("provider calls = %#v, want only priced standard fallback", calls)
 	}
@@ -79,9 +75,7 @@ func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
 	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, priceEntryForTier("standard-tier")))
 	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
 
-	request := baseRequest("skip-active-partial-price")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("skip-active-partial-price")
 	response, err := harness.engine.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -89,9 +83,7 @@ func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
 	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
 		t.Fatalf("response = %#v, want complete standard fallback", response)
 	}
-	adapter.mu.Lock()
-	calls := append([]provider.Call(nil), adapter.calls...)
-	adapter.mu.Unlock()
+	calls := adapter.recordedCalls()
 	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("provider calls = %#v, want only standard fallback", calls)
 	}
@@ -111,9 +103,7 @@ func TestGenerateReturnsNoRouteWhenAllCandidatePricesAreUnusable(t *testing.T) {
 	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, overflow))
 	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
 
-	request := baseRequest("all-unusable-prices")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("all-unusable-prices")
 	_, err := harness.engine.Generate(context.Background(), request)
 	if err == nil {
 		t.Fatal("all unusable candidates unexpectedly dispatched")
@@ -141,9 +131,7 @@ func TestGenerateKeepsTokenizerErrorsFatal(t *testing.T) {
 		return 0, errors.New("tokenizer unavailable")
 	}}
 
-	request := baseRequest("tokenizer-error-is-fatal")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("tokenizer-error-is-fatal")
 	_, err := harness.engine.Generate(context.Background(), request)
 	if err == nil {
 		t.Fatal("tokenizer error unexpectedly fell back")

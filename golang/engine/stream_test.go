@@ -328,9 +328,7 @@ func TestStreamRetriesPreWriteRejectionOnFallback(t *testing.T) {
 		},
 	}
 	harness := newHarness(t, adapter)
-	request := baseRequest("stream-retry")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("stream-retry")
 
 	stream, err := harness.engine.Stream(context.Background(), request)
 	if err != nil {
