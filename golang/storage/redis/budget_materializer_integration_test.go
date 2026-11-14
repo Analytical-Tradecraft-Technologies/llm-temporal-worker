@@ -14,32 +14,46 @@ import (
 	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
+// openLiveMaterializer clears prefix on the live Redis and returns a
+// Function-mode materializer for generation and incarnation whose clock is
+// fixed at the returned time, with a context that ends with the test or
+// after ten seconds.
+func openLiveMaterializer(t *testing.T, prefix string, generation durable.GenerationID, incarnation durable.IncarnationID) (context.Context, *RedisBudgetMaterializer, time.Time) {
+	t.Helper()
+	client := openLiveRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	keys := liveKeyOptions(prefix)
+	cleanupLivePrefix(t, client, keys.Prefix)
+	now := time.Now().UTC().Truncate(time.Second)
+	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
+		Client: client, Mode: AdmissionModeFunction, Keys: keys,
+		GenerationID: generation, IncarnationID: incarnation,
+		Clock: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctx, materializer, now
+}
+
+// liveHourReservation reserves amount against limit in the current hour of
+// a one-day rolling window.
+func liveHourReservation(policy string, now time.Time, amount, limit string) admission.WindowReservation {
+	return admission.WindowReservation{
+		PolicyID: policy, WindowID: "hour", Bucket: now.Unix() / 3600,
+		AmountUSD: pricing.MustUSD(amount), LimitUSD: pricing.MustUSD(limit),
+		BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
+	}
+}
+
 // TestLiveRedisBudgetMaterializerContract exercises the active durable budget
 // port against the same provisioned Redis Function used by production. It
 // covers acceptance, idempotent denial, and duplicate completion reconciliation
 // without depending on process-local state.
 func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	keys := liveKeyOptions("durable-materializer")
-	cleanupLivePrefix(t, client, keys.Prefix)
-
-	now := time.Now().UTC().Truncate(time.Second)
-	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
-		Client: client, Mode: AdmissionModeFunction, Keys: keys,
-		GenerationID:  durable.GenerationID("generation-live"),
-		IncarnationID: durable.IncarnationID("incarnation-live"),
-		Clock:         func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservation := admission.WindowReservation{
-		PolicyID: "durable-policy", WindowID: "hour", Bucket: now.Unix() / 3600,
-		AmountUSD: pricing.MustUSD("0.01"), LimitUSD: pricing.MustUSD("0.02"),
-		BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
-	}
+	ctx, materializer, now := openLiveMaterializer(t, "durable-materializer", "generation-live", "incarnation-live")
+	reservation := liveHourReservation("durable-policy", now, "0.01", "0.02")
 	request := durable.ReserveRequest{
 		OperationID: "durable-operation-accepted", GenerationID: "generation-live",
 		ExpiresAt: now.Add(time.Hour), Reservations: []admission.WindowReservation{reservation},
@@ -100,25 +114,8 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 }
 
 func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	keys := liveKeyOptions("durable-materializer-batch")
-	cleanupLivePrefix(t, client, keys.Prefix)
-	now := time.Now().UTC().Truncate(time.Second)
-	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
-		Client: client, Mode: AdmissionModeFunction, Keys: keys,
-		GenerationID: durable.GenerationID("generation-batch"), IncarnationID: durable.IncarnationID("incarnation-batch"),
-		Clock: func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservation := admission.WindowReservation{
-		PolicyID: "batch-policy", WindowID: "hour", Bucket: now.Unix() / 3600,
-		AmountUSD: pricing.MustUSD("0.01"), LimitUSD: pricing.MustUSD("0.02"),
-		BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
-	}
+	ctx, materializer, now := openLiveMaterializer(t, "durable-materializer-batch", "generation-batch", "incarnation-batch")
+	reservation := liveHourReservation("batch-policy", now, "0.01", "0.02")
 	request := durable.ReserveRequest{OperationID: "batch-operation", GenerationID: "generation-batch", ExpiresAt: now.Add(time.Hour), Reservations: []admission.WindowReservation{reservation}}
 	accepted, err := materializer.Accept(ctx, request)
 	if err != nil {
@@ -174,25 +171,8 @@ func TestLiveRedisRollingBudget(t *testing.T) {
 // tostring() renders such a total in scientific notation, which the Go decoder
 // rejects, so the denial must be formatted as a plain decimal integer.
 func TestLiveRedisBudgetMaterializerDenialDecodesAtLargeActiveTotal(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	keys := liveKeyOptions("durable-large-total")
-	cleanupLivePrefix(t, client, keys.Prefix)
-	now := time.Now().UTC().Truncate(time.Second)
-	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
-		Client: client, Mode: AdmissionModeFunction, Keys: keys,
-		GenerationID: durable.GenerationID("generation-large"), IncarnationID: durable.IncarnationID("incarnation-large"),
-		Clock: func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservation := admission.WindowReservation{
-		PolicyID: "large-policy", WindowID: "hour", Bucket: now.Unix() / 3600,
-		AmountUSD: pricing.MustUSD("40000.01"), LimitUSD: pricing.MustUSD("150000"),
-		BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
-	}
+	ctx, materializer, now := openLiveMaterializer(t, "durable-large-total", "generation-large", "incarnation-large")
+	reservation := liveHourReservation("large-policy", now, "40000.01", "150000")
 	request := func(id string) durable.ReserveRequest {
 		return durable.ReserveRequest{OperationID: durable.OperationID(id), GenerationID: "generation-large", ExpiresAt: now.Add(time.Hour), Reservations: []admission.WindowReservation{reservation}}
 	}
@@ -219,25 +199,8 @@ func TestLiveRedisBudgetMaterializerDenialDecodesAtLargeActiveTotal(t *testing.T
 // exact finalization, covering the HINCRBY arguments and expiry-index members
 // that are formatted from Lua numbers.
 func TestLiveRedisBudgetMaterializerHandlesSingleReservationAboveHundredThousandUSD(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	keys := liveKeyOptions("durable-large-operation")
-	cleanupLivePrefix(t, client, keys.Prefix)
-	now := time.Now().UTC().Truncate(time.Second)
-	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
-		Client: client, Mode: AdmissionModeFunction, Keys: keys,
-		GenerationID: durable.GenerationID("generation-large"), IncarnationID: durable.IncarnationID("incarnation-large"),
-		Clock: func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	reservation := admission.WindowReservation{
-		PolicyID: "large-operation-policy", WindowID: "hour", Bucket: now.Unix() / 3600,
-		AmountUSD: pricing.MustUSD("120000.01"), LimitUSD: pricing.MustUSD("200000"),
-		BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
-	}
+	ctx, materializer, now := openLiveMaterializer(t, "durable-large-operation", "generation-large", "incarnation-large")
+	reservation := liveHourReservation("large-operation-policy", now, "120000.01", "200000")
 	request := durable.ReserveRequest{OperationID: "large-single-operation", GenerationID: "generation-large", ExpiresAt: now.Add(time.Hour), Reservations: []admission.WindowReservation{reservation}}
 	accepted, err := materializer.Accept(ctx, request)
 	if err != nil || !accepted.Accepted || len(accepted.Events) != 1 {
@@ -274,20 +237,7 @@ func TestLiveRedisBudgetMaterializerHandlesSingleReservationAboveHundredThousand
 // finalized exactly under a ten-minute window, and a second reservation
 // seconds later must be denied because the spend counts from acceptance.
 func TestLiveRedisBudgetMaterializerWaitedSpendCountsFromAcceptance(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	keys := liveKeyOptions("durable-waited")
-	cleanupLivePrefix(t, client, keys.Prefix)
-	now := time.Now().UTC().Truncate(time.Second)
-	materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
-		Client: client, Mode: AdmissionModeFunction, Keys: keys,
-		GenerationID: durable.GenerationID("generation-waited"), IncarnationID: durable.IncarnationID("incarnation-waited"),
-		Clock: func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx, materializer, now := openLiveMaterializer(t, "durable-waited", "generation-waited", "incarnation-waited")
 	quoted := now.Add(-12 * time.Minute)
 	reservation := admission.WindowReservation{
 		PolicyID: "waited-policy", WindowID: "ten-minutes", Bucket: quoted.UnixNano() / int64(time.Minute),

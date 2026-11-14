@@ -168,19 +168,7 @@ func TestAdmissionContinueReconcilesAndRotatesDispatchToken(t *testing.T) {
 	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
 
 	next := memoryReservation(7, 10)
-	continued, err := store.Continue(context.Background(), admission.ContinueRequest{
-		OperationID:   operation.ID,
-		DispatchToken: operation.DispatchToken,
-		Outcome: admission.AttemptOutcome{
-			Certainty: admission.Rejected,
-			Incurred:  3,
-			Attempt:   admission.AttemptFacts{RouteID: "fallback", AttemptNumber: 1},
-		},
-		Remaining:    7,
-		Reservations: []admission.WindowReservation{next},
-		LeaseUntil:   now.Add(time.Minute),
-		ExpiresAt:    now.Add(time.Hour),
-	})
+	continued, err := continueAfterRejection(store, now, operation, "fallback", 7, next)
 	if err != nil || continued.Denied != nil {
 		t.Fatalf("continue = %#v, %v", continued, err)
 	}
@@ -209,19 +197,7 @@ func TestAdmissionContinueDenialFinalizesWithoutGhostReservation(t *testing.T) {
 	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
 
 	deniedReservation := memoryReservation(8, 10)
-	continued, err := store.Continue(context.Background(), admission.ContinueRequest{
-		OperationID:   operation.ID,
-		DispatchToken: operation.DispatchToken,
-		Outcome: admission.AttemptOutcome{
-			Certainty: admission.Rejected,
-			Incurred:  3,
-			Attempt:   admission.AttemptFacts{RouteID: "initial", AttemptNumber: 1},
-		},
-		Remaining:    8,
-		Reservations: []admission.WindowReservation{deniedReservation},
-		LeaseUntil:   now.Add(time.Minute),
-		ExpiresAt:    now.Add(time.Hour),
-	})
+	continued, err := continueAfterRejection(store, now, operation, "initial", 8, deniedReservation)
 	if err != nil || continued.Denied == nil || continued.Denied.Active != 3 {
 		t.Fatalf("denied continue = %#v, %v", continued, err)
 	}
@@ -237,4 +213,23 @@ func TestAdmissionContinueDenialFinalizesWithoutGhostReservation(t *testing.T) {
 	if err != nil || accepted.Denied != nil {
 		t.Fatalf("ghost reservation after denied continue = %#v, %v", accepted, err)
 	}
+}
+
+// continueAfterRejection continues operation after its first attempt on
+// route was rejected having incurred 3, reserving reservation for the
+// remaining budget.
+func continueAfterRejection(store *AdmissionStore, now time.Time, operation admission.Operation, route string, remaining pricing.MicroUSD, reservation admission.WindowReservation) (admission.ContinueResult, error) {
+	return store.Continue(context.Background(), admission.ContinueRequest{
+		OperationID:   operation.ID,
+		DispatchToken: operation.DispatchToken,
+		Outcome: admission.AttemptOutcome{
+			Certainty: admission.Rejected,
+			Incurred:  3,
+			Attempt:   admission.AttemptFacts{RouteID: route, AttemptNumber: 1},
+		},
+		Remaining:    remaining,
+		Reservations: []admission.WindowReservation{reservation},
+		LeaseUntil:   now.Add(time.Minute),
+		ExpiresAt:    now.Add(time.Hour),
+	})
 }

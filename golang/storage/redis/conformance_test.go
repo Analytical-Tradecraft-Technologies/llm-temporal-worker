@@ -72,16 +72,7 @@ func TestRedisKeyNamespacesDoNotAliasDerivedState(t *testing.T) {
 func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	fixture := newContinuationRuntimeFixture(func() time.Time { return now })
-	store, err := NewContinuationStore(ContinuationOptions{
-		Invoker: fixture,
-		Reader:  fixture,
-		Keys:    testKeyOptions(),
-		Keyring: testKeyring(t),
-		Clock:   func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, fixture, fixture, now)
 	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)
@@ -129,16 +120,7 @@ func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 func TestContinuationStoreFailsClosedForUnavailableRedisState(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	fixture := newContinuationRuntimeFixture(func() time.Time { return now })
-	store, err := NewContinuationStore(ContinuationOptions{
-		Invoker: fixture,
-		Reader:  fixture,
-		Keys:    testKeyOptions(),
-		Keyring: testKeyring(t),
-		Clock:   func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, fixture, fixture, now)
 	backendErr := errors.New("dial tcp redis.example.internal: connection reset")
 	fixture.putErr = backendErr
 	if _, err := store.CreateRoot(context.Background(), testContinuation(t, now)); !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "redis.example.internal") {
@@ -176,16 +158,7 @@ func TestContinuationStoreFailsClosedForUnavailableRedisState(t *testing.T) {
 func TestContinuationStoreTreatsExpiryRaceAsNotFound(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	fixture := newContinuationRuntimeFixture(func() time.Time { return now })
-	store, err := NewContinuationStore(ContinuationOptions{
-		Invoker: fixture,
-		Reader:  fixture,
-		Keys:    testKeyOptions(),
-		Keyring: testKeyring(t),
-		Clock:   func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, fixture, fixture, now)
 	handle, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)
