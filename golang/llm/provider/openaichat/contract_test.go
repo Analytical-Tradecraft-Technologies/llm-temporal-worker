@@ -161,18 +161,7 @@ func TestInvokeSubmitsExactlyOnceAndLiftsResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-invoke", Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, call := compileChatProdCall(t, client, "op-invoke")
 	observer := &chatObserver{}
 	result, err := adapter.Invoke(context.Background(), call, observer)
 	if err != nil {
@@ -210,18 +199,7 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "chat-redirect", Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, call := compileChatProdCall(t, client, "chat-redirect")
 	observer := &chatObserver{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
 	var mapped *provider.Error
@@ -254,18 +232,7 @@ func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "chat-pre-dial-deadline", Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, call := compileChatProdCall(t, client, "chat-pre-dial-deadline")
 	observer := &chatObserver{}
 	result := make(chan error, 1)
 	go func() {
@@ -432,4 +399,24 @@ func marshalWire(t *testing.T, value any) map[string]any {
 		t.Fatal(err)
 	}
 	return decoded
+}
+
+// compileChatProdCall builds the "chat-prod" adapter over client with the
+// test profile and strictly compiles an empty chat-model request under
+// operationKey.
+func compileChatProdCall(t *testing.T, client *Client, operationKey string) (*Adapter, provider.Call) {
+	t.Helper()
+	adapter, err := New(client, "chat-prod", testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: operationKey, Model: "chat-model"},
+		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
+		Strict:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter, call
 }

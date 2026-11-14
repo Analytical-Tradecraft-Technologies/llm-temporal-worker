@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A schema outside the subset the lift validates against is rejected at
@@ -47,7 +48,7 @@ func TestCompileRejectsAnExponentialOutputSchemaBeforeDispatch(t *testing.T) {
 // A strict schema is closed and fully required on the wire, and requests
 // OpenAI documents as errors fail at compile time as unsupported (#1353).
 func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
-	request := llm.Request{Model: "gpt-contract", Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{
+	request := llm.Request{Model: "gpt-contract", Input: contract.WireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{
 		Kind: llm.OutputKindJSONSchema, Name: "invoice", Strict: true,
 		Schema: json.RawMessage(`{"type":"object","properties":{"total":{"type":"number"},"note":{"type":"string","minLength":1}},"required":["total"]}`),
 	}}}
@@ -69,7 +70,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"code":{"type":"string","minLength":3}},"required":["code"],"additionalProperties":false}`)
 	call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: wireAuditUserText("hi"),
+		Request: llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
 		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 	})
@@ -89,7 +90,7 @@ func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 func TestOutputWithAnUnboundedNumberFailsValidationWithoutPanicking(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"amount":{"type":"number","minimum":0}},"required":["amount"],"additionalProperties":false}`)
 	call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-number", Model: "gpt-contract", Input: wireAuditUserText("hi"),
+		Request: llm.Request{OperationKey: "op-number", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
 		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 	})
@@ -106,9 +107,9 @@ func TestOutputWithAnUnboundedNumberFailsValidationWithoutPanicking(t *testing.T
 
 func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 	for name, request := range map[string]llm.Request{
-		"strict allOf": {Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true,
+		"strict allOf": {Input: contract.WireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true,
 			Schema: json.RawMessage(`{"type":"object","properties":{"a":{"allOf":[{"type":"string"}]}}}`)}}},
-		"json mode without json": {Input: wireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}},
+		"json mode without json": {Input: contract.WireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			request.OperationKey = "op-structured"
@@ -129,7 +130,7 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 		})
 	}
 	// Any case of the word satisfies the provider's rule.
-	request := llm.Request{Model: "gpt-contract", Input: wireAuditUserText("answer as a Json object"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}
+	request := llm.Request{Model: "gpt-contract", Input: contract.WireAuditUserText("answer as a Json object"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}
 	if _, _, err := lowerRequestMap(request, llm.ServiceClassStandard, false, supportedExtensionFields); err != nil {
 		t.Fatalf("json mode mentioning json: %v", err)
 	}

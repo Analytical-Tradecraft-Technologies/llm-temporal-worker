@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A schema outside the subset the lift validates against is rejected at
@@ -47,7 +48,7 @@ func TestCompileRejectsAnExponentialOutputSchemaBeforeDispatch(t *testing.T) {
 // A strict schema is closed and fully required on the wire, and requests
 // OpenAI documents as errors fail at compile time as unsupported (#1353).
 func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
-	request := llm.Request{Model: "chat-model", Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{
+	request := llm.Request{Model: "chat-model", Input: contract.WireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{
 		Kind: llm.OutputKindJSONSchema, Name: "invoice", Strict: true,
 		Schema: json.RawMessage(`{"type":"object","properties":{"total":{"type":"number"},"lines":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["total"]}`),
 	}}}
@@ -69,7 +70,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"code":{"type":"string","minLength":3}},"required":["code"],"additionalProperties":false}`)
 	call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-strict", Model: "chat-model", Input: wireAuditUserText("hi"),
+		Request: llm.Request{OperationKey: "op-strict", Model: "chat-model", Input: contract.WireAuditUserText("hi"),
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
 		Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 	})
@@ -89,7 +90,7 @@ func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 func TestOutputWithAnUnboundedNumberFailsValidationWithoutPanicking(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"amount":{"type":"number","minimum":0}},"required":["amount"],"additionalProperties":false}`)
 	call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-number", Model: "chat-model", Input: wireAuditUserText("hi"),
+		Request: llm.Request{OperationKey: "op-number", Model: "chat-model", Input: contract.WireAuditUserText("hi"),
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
 		Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 	})
@@ -106,9 +107,9 @@ func TestOutputWithAnUnboundedNumberFailsValidationWithoutPanicking(t *testing.T
 
 func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 	for name, request := range map[string]llm.Request{
-		"strict open object": {Input: wireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true,
+		"strict open object": {Input: contract.WireAuditUserText("hi"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true,
 			Schema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":true}`)}}},
-		"json mode without json": {Input: wireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}},
+		"json mode without json": {Input: contract.WireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			request.OperationKey = "op-structured"
@@ -130,7 +131,7 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 	}
 	// An instruction mentioning the word satisfies the provider's rule.
 	request := llm.Request{Model: "chat-model", Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "Reply with JSON."}},
-		Input: wireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}
+		Input: contract.WireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}
 	if _, err := lowerRequestMap(request, testProfile(), "default"); err != nil {
 		t.Fatalf("json mode mentioning json: %v", err)
 	}
