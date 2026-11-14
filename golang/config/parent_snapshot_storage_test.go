@@ -3,12 +3,10 @@ package config_test
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 // withParentSnapshotStorage sets state.requests.parent_snapshot_storage in the
@@ -50,14 +48,7 @@ func TestParentSnapshotStorageDefaultsInlineWithoutChangingDigest(t *testing.T) 
 }
 
 func TestConfigSchemaParentSnapshotStorage(t *testing.T) {
-	source, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {
 		t.Fatal(err)

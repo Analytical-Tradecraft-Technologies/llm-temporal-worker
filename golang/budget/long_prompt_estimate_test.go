@@ -43,21 +43,7 @@ func TestEstimateReservesLongPromptPriceWhenMediaCanReachThreshold(t *testing.T)
 		"short text":       {request(llm.TextPart{Text: "hi"}), false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			estimate, err := Estimator{}.EstimateCandidate(test.request, candidate, entry)
-			if err != nil {
-				t.Fatal(err)
-			}
-			prices := entry.Prices
-			if test.long {
-				prices = entry.LongPrompt.Prices
-			}
-			want, err := pricing.CostFromUsage(pricing.Entry{Prices: prices}, pricing.Usage{InputTokens: estimate.InputTokens, OutputTokens: estimate.OutputTokens, CacheWriteTokens: estimate.CacheWriteTokens})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if estimate.CostUSD.Cmp(want.USD) != 0 {
-				t.Fatalf("reservation = %s for %d input tokens, want %s (long-prompt price %v)", estimate.CostUSD.String(), estimate.InputTokens, want.USD.String(), test.long)
-			}
+			estimate := assertReservedAtPromptPrice(t, test.request, candidate, entry, test.long)
 			// A prompt over the threshold settles at the long-prompt price;
 			// the reservation must cover the smallest such prompt.
 			if test.long {
@@ -101,21 +87,30 @@ func TestEstimateReservesHaiku55LongPromptPrice(t *testing.T) {
 		"short text":       {request(llm.TextPart{Text: "hi"}), false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			estimate, err := Estimator{}.EstimateCandidate(test.request, candidate, entry)
-			if err != nil {
-				t.Fatal(err)
-			}
-			prices := entry.Prices
-			if test.long {
-				prices = entry.LongPrompt.Prices
-			}
-			want, err := pricing.CostFromUsage(pricing.Entry{Prices: prices}, pricing.Usage{InputTokens: estimate.InputTokens, OutputTokens: estimate.OutputTokens, CacheWriteTokens: estimate.CacheWriteTokens})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if estimate.CostUSD.Cmp(want.USD) != 0 {
-				t.Fatalf("reservation = %s for %d input tokens, want %s (long-prompt price %v)", estimate.CostUSD.String(), estimate.InputTokens, want.USD.String(), test.long)
-			}
+			assertReservedAtPromptPrice(t, test.request, candidate, entry, test.long)
 		})
 	}
+}
+
+// assertReservedAtPromptPrice estimates request on candidate and checks the
+// reservation equals the estimated usage priced at the long-prompt tier when
+// long is set, and at the standard prices otherwise.
+func assertReservedAtPromptPrice(t *testing.T, request llm.Request, candidate routing.Candidate, entry pricing.Entry, long bool) Estimate {
+	t.Helper()
+	estimate, err := Estimator{}.EstimateCandidate(request, candidate, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices := entry.Prices
+	if long {
+		prices = entry.LongPrompt.Prices
+	}
+	want, err := pricing.CostFromUsage(pricing.Entry{Prices: prices}, pricing.Usage{InputTokens: estimate.InputTokens, OutputTokens: estimate.OutputTokens, CacheWriteTokens: estimate.CacheWriteTokens})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.CostUSD.Cmp(want.USD) != 0 {
+		t.Fatalf("reservation = %s for %d input tokens, want %s (long-prompt price %v)", estimate.CostUSD.String(), estimate.InputTokens, want.USD.String(), long)
+	}
+	return estimate
 }

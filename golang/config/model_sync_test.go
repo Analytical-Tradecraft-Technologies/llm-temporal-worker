@@ -2,14 +2,12 @@ package config_test
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 // modelSyncConfig is the example configuration with a sync-only OpenRouter
@@ -63,14 +61,7 @@ func TestModelSyncConfigValidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatalf("sync-only configuration does not match the schema: %v", err)
 	}

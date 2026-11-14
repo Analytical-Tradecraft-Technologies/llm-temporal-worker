@@ -2,12 +2,10 @@ package config_test
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
 func TestRegionalConfigValidation(t *testing.T) {
@@ -31,14 +29,7 @@ func TestRegionalConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(data); err != nil {
 		t.Fatal(err)
 	}

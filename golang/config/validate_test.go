@@ -2,13 +2,11 @@ package config_test
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -38,14 +36,7 @@ func TestConfigExampleMatchesJSONSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatal(err)
 	}
@@ -65,14 +56,7 @@ func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	aws := document["state"].(map[string]any)["requests"].(map[string]any)["provider"].(map[string]any)["aws"].(map[string]any)
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for _, tc := range []struct {
 		name  string
 		value any
@@ -106,14 +90,7 @@ func TestConfigSchemaAcceptsDevelopmentFileBlobStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatalf("development file blob store schema error: %v", err)
 	}
@@ -135,14 +112,7 @@ func TestConfigSchemaAcceptsDevelopmentMemoryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatalf("development memory state schema error: %v", err)
 	}
@@ -158,14 +128,7 @@ func TestConfigSchemaRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err == nil {
 		t.Fatal("schema accepted a production file blob store")
 	}
@@ -181,14 +144,7 @@ func TestConfigSchemaRejectsProductionRedisWithoutTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err == nil {
 		t.Fatal("schema accepted a production Redis configuration without TLS")
 	}
@@ -203,28 +159,14 @@ func TestConfigSchemaAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatalf("development Redis without TLS schema error: %v", err)
 	}
 }
 
 func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for _, test := range []struct {
 		name  string
 		input func(*config.Config)
@@ -325,14 +267,7 @@ func TestConfigValidationBoundsAdmissionRouteFields(t *testing.T) {
 }
 
 func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for _, root := range []string{"/", "relative/blobs", "/var/lib/../"} {
 		t.Run(root, func(t *testing.T) {
 			loaded, err := config.Load(developmentFileBlobYAML(t))
@@ -367,14 +302,7 @@ func TestConfigValidationRejectsUnsafeFileBlobRoots(t *testing.T) {
 }
 
 func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {
 		t.Fatal(err)
@@ -390,14 +318,7 @@ func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 }
 
 func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	loaded, err := config.Load(exampleYAML(t))
 	if err != nil {
 		t.Fatal(err)
@@ -441,14 +362,7 @@ func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatal(err)
 	}
@@ -467,14 +381,7 @@ func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	if err := compiled.Validate(encoded); err != nil {
 		t.Fatal(err)
 	}
@@ -489,14 +396,7 @@ func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for _, variant := range []string{"missing-cloud", "obsolete-sql"} {
 		t.Run(variant, func(t *testing.T) {
 			var document map[string]any
@@ -523,14 +423,7 @@ func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 // environment is a free-form identifier. Production hardening applies to every
 // value except the exact development name, so a near-miss cannot skip it.
 func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for _, environment := range []string{"Production", "prod", "staging", "live", "Development"} {
 		rename := func(data string) string {
 			return strings.ReplaceAll(data, "environment: production", "environment: "+environment)
@@ -599,14 +492,7 @@ func TestRedisServiceMeshSecurityContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-			if err != nil {
-				t.Fatal(err)
-			}
-			compiled, err := schema.Parse(schemaData)
-			if err != nil {
-				t.Fatal(err)
-			}
+			compiled := configSchema(t)
 			if err := compiled.Validate(data); (err == nil) != test.valid {
 				t.Fatalf("schema validation = %v, valid = %v", err, test.valid)
 			}
@@ -627,14 +513,7 @@ func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for _, id := range []string{
 		"key-2026-07",
 		"key_2026",
@@ -667,14 +546,7 @@ func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
 // chain, so validation refuses every other auth kind the generic auth check
 // accepts rather than letting the worker fail each start (#1669).
 func TestConfigValidationRejectsS3BlobAuthTheWorkerCannotBuild(t *testing.T) {
-	schemaData, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := configSchema(t)
 	for kind, auth := range map[string]config.AuthConfig{
 		"bearer_env":               {Kind: "bearer_env", Name: "S3_TOKEN"},
 		"header_env":               {Kind: "header_env", Name: "S3_TOKEN"},
