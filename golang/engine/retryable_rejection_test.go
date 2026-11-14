@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -46,9 +45,7 @@ func TestGenerateAttemptCapKeepsTheLastProviderFailure(t *testing.T) {
 	adapter := &fakeAdapter{name: "cap", rejectFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
 	harness.engine.dependencies.MaxAttempts = 1
-	request := baseRequest("attempt-cap")
-	request.ServiceClass = llm.ServiceClassPriority
-	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassStandard}
+	request := priorityWithStandardFallback("attempt-cap")
 	_, err := harness.engine.Generate(context.Background(), request)
 	var failure *provider.Error
 	if !errors.As(err, &failure) || failure.Code != provider.CodeProviderUnavailable || failure.Dispatch != provider.DispatchRejected {
