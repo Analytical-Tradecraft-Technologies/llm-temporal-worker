@@ -791,11 +791,8 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	result := Request{APIVersion: apiVersion, OperationKey: operationKey, Model: model, Portability: PortabilityStrict}
-	if raw, ok := fields["context"]; ok {
-		result.Context, err = decodeRequestContext(raw)
-		if err != nil {
-			return fmt.Errorf("context: %w", err)
-		}
+	if err := decodeOptionalField(fields, "context", &result.Context, decodeRequestContext); err != nil {
+		return err
 	}
 	serviceClass := ServiceClass("")
 	if raw, ok := fields["service_class"]; ok {
@@ -830,60 +827,30 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("portability %q is invalid", result.Portability)
 		}
 	}
-	if raw, ok := fields["instructions"]; ok {
-		result.Instructions, err = decodeInstructions(raw)
-		if err != nil {
-			return fmt.Errorf("instructions: %w", err)
-		}
+	if err := decodeOptionalField(fields, "instructions", &result.Instructions, decodeInstructions); err != nil {
+		return err
 	}
-	if raw, ok := fields["input"]; ok {
-		result.Input, err = decodeItems(raw)
-		if err != nil {
-			return fmt.Errorf("input: %w", err)
-		}
+	if err := decodeOptionalField(fields, "input", &result.Input, decodeItems); err != nil {
+		return err
 	}
-	if raw, ok := fields["tools"]; ok {
-		result.Tools, err = decodeTools(raw)
-		if err != nil {
-			return fmt.Errorf("tools: %w", err)
-		}
+	if err := decodeOptionalField(fields, "tools", &result.Tools, decodeTools); err != nil {
+		return err
 	}
 	result.ToolPolicy = ToolPolicy{Mode: ToolChoiceAuto}
-	if raw, ok := fields["tool_policy"]; ok {
-		result.ToolPolicy, err = decodeToolPolicy(raw)
-		if err != nil {
-			return fmt.Errorf("tool_policy: %w", err)
-		}
+	if err := decodeOptionalField(fields, "tool_policy", &result.ToolPolicy, decodeToolPolicy); err != nil {
+		return err
 	}
-	if raw, ok := fields["output"]; ok {
-		if string(raw) != "null" {
-			result.Output, err = decodeOutput(raw)
-			if err != nil {
-				return fmt.Errorf("output: %w", err)
-			}
-		}
+	if err := decodeNullableField(fields, "output", &result.Output, decodeOutput); err != nil {
+		return err
 	}
-	if raw, ok := fields["sampling"]; ok {
-		if string(raw) != "null" {
-			result.Sampling, err = decodeSampling(raw)
-			if err != nil {
-				return fmt.Errorf("sampling: %w", err)
-			}
-		}
+	if err := decodeNullableField(fields, "sampling", &result.Sampling, decodeSampling); err != nil {
+		return err
 	}
-	if raw, ok := fields["reasoning"]; ok {
-		if string(raw) != "null" {
-			result.Reasoning, err = decodeReasoning(raw)
-			if err != nil {
-				return fmt.Errorf("reasoning: %w", err)
-			}
-		}
+	if err := decodeNullableField(fields, "reasoning", &result.Reasoning, decodeReasoning); err != nil {
+		return err
 	}
-	if raw, ok := fields["continuation"]; ok && string(raw) != "null" {
-		result.Continuation, err = decodeContinuation(raw)
-		if err != nil {
-			return fmt.Errorf("continuation: %w", err)
-		}
+	if err := decodeNullableField(fields, "continuation", &result.Continuation, decodeContinuation); err != nil {
+		return err
 	}
 	if raw, ok := fields["web_fetch"]; ok {
 		if string(raw) == "null" {
@@ -936,15 +903,7 @@ func decodeInstructions(data []byte) ([]Instruction, error) {
 	if err := decodeJSON(data, &values); err != nil {
 		return nil, err
 	}
-	result := make([]Instruction, 0, len(values))
-	for index, value := range values {
-		instruction, err := decodeInstruction(value)
-		if err != nil {
-			return nil, fmt.Errorf("instruction %d: %w", index, err)
-		}
-		result = append(result, instruction)
-	}
-	return result, nil
+	return decodeEach(values, "instruction", decodeInstruction)
 }
 
 func decodeTools(data []byte) ([]Tool, error) {
@@ -952,15 +911,7 @@ func decodeTools(data []byte) ([]Tool, error) {
 	if err := decodeJSON(data, &values); err != nil {
 		return nil, err
 	}
-	result := make([]Tool, 0, len(values))
-	for index, value := range values {
-		tool, err := decodeTool(value)
-		if err != nil {
-			return nil, fmt.Errorf("tool %d: %w", index, err)
-		}
-		result = append(result, tool)
-	}
-	return result, nil
+	return decodeEach(values, "tool", decodeTool)
 }
 
 func copyRawMap(source map[string]json.RawMessage) map[string]json.RawMessage {

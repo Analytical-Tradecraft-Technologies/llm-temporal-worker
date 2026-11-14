@@ -721,3 +721,41 @@ func splitJSONArray(data []byte) ([]json.RawMessage, bool) {
 func marshalObject(fields map[string]any) ([]byte, error) {
 	return json.Marshal(fields)
 }
+
+// decodeOptionalField decodes fields[name] into target when the field is
+// present. A decode failure is prefixed with the field name.
+func decodeOptionalField[T any](fields map[string]json.RawMessage, name string, target *T, decode func([]byte) (T, error)) error {
+	raw, ok := fields[name]
+	if !ok {
+		return nil
+	}
+	value, err := decode(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	*target = value
+	return nil
+}
+
+// decodeNullableField is decodeOptionalField for a field that may also be
+// sent as null, which leaves target unchanged.
+func decodeNullableField[T any](fields map[string]json.RawMessage, name string, target *T, decode func([]byte) (T, error)) error {
+	if raw, ok := fields[name]; ok && string(raw) == "null" {
+		return nil
+	}
+	return decodeOptionalField(fields, name, target, decode)
+}
+
+// decodeEach decodes every element of an already split JSON array. A
+// failure names the element as noun and index, as in "item 2".
+func decodeEach[T any](values []json.RawMessage, noun string, decode func([]byte) (T, error)) ([]T, error) {
+	result := make([]T, 0, len(values))
+	for index, value := range values {
+		decoded, err := decode(value)
+		if err != nil {
+			return nil, fmt.Errorf("%s %d: %w", noun, index, err)
+		}
+		result = append(result, decoded)
+	}
+	return result, nil
+}
