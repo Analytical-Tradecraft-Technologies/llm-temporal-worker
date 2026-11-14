@@ -9,7 +9,6 @@ import (
 
 	"github.com/openai/openai-go/v3/option"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -22,18 +21,7 @@ func invokeWithClientMiddleware(t *testing.T, middleware option.Middleware, tran
 	if middleware != nil {
 		client.requestOptions = append(client.requestOptions, option.WithMiddleware(middleware))
 	}
-	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-unsent", Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, call := compileChatProdCall(t, client, "op-unsent")
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	return err
 }

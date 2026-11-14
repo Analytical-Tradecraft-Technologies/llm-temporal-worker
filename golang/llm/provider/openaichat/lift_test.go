@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLiftCompletedToolResponsePreservesUsageAndIDs(t *testing.T) {
@@ -149,7 +150,7 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 			format.Schema = json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
 		}
 
-		params, err := lowerRequest(llm.Request{Model: "chat-model", Input: wireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: format}}, testProfile(), "default")
+		params, err := lowerRequest(llm.Request{Model: "chat-model", Input: contract.WireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: format}}, testProfile(), "default")
 		if err != nil {
 			t.Fatal(err)
 		}

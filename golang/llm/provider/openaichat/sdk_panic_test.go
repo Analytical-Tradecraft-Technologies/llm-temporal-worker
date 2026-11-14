@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -28,18 +27,7 @@ func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-panic", Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, call := compileChatProdCall(t, client, "op-panic")
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever || mapped.Code != provider.CodeProviderInvalidResponse || mapped.OperationID != "op-panic" {
@@ -58,18 +46,7 @@ func TestInvokeRecoversAnSDKPanicWhileReadingAnErrorResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-panic", Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, call := compileChatProdCall(t, client, "op-panic")
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation || mapped.Code != provider.CodeProviderUnavailable {
