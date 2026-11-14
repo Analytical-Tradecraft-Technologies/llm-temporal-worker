@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
 var requestOwnedFields = []string{
@@ -46,7 +47,7 @@ func TestCompileRejectsRequestOwnedExtensionFields(t *testing.T) {
 			value = `null`
 		}
 		for _, strict := range []bool{false, true} {
-			t.Run(wire+portabilityName(strict), func(t *testing.T) {
+			t.Run(wire+messagestest.PortabilityName(strict), func(t *testing.T) {
 				profile := testProfile()
 				profile.AllowedExtensions["anthropic.owned"] = ExtensionSpec{Fields: map[string]string{wire: wire}}
 				adapter := &Adapter{endpointID: "anthropic-test", profile: profile}
@@ -76,7 +77,7 @@ func TestCompileRejectsRequestOwnedExtensionFields(t *testing.T) {
 
 func TestCompileAcceptsAllowedNonOwnedExtensionField(t *testing.T) {
 	for _, strict := range []bool{false, true} {
-		t.Run(portabilityName(strict), func(t *testing.T) {
+		t.Run(messagestest.PortabilityName(strict), func(t *testing.T) {
 			adapter := &Adapter{endpointID: "anthropic-test", profile: mustProfile(t, testProfile())}
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{

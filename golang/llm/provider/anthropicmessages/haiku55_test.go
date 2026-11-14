@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
 func compileHaiku55(t *testing.T, request llm.Request, strict bool) (provider.Call, error) {
@@ -46,7 +47,7 @@ func TestHaiku55RejectsUnsupportedParametersBeforeDispatch(t *testing.T) {
 		{name: "combined defaults", request: llm.Request{Sampling: &llm.SamplingSpec{Temperature: &defaultTemperature, TopP: &defaultTopP}}},
 	} {
 		for _, strict := range []bool{false, true} {
-			t.Run(test.name+portabilityName(strict), func(t *testing.T) {
+			t.Run(test.name+messagestest.PortabilityName(strict), func(t *testing.T) {
 				call, err := compileHaiku55(t, test.request, strict)
 				var mapped *provider.Error
 				if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever || !strings.Contains(mapped.SafeMessage, "Haiku 5.5") {
@@ -101,7 +102,7 @@ func TestHaiku55PreservesSupportedParameters(t *testing.T) {
 		}},
 	} {
 		for _, strict := range []bool{false, true} {
-			t.Run(test.name+portabilityName(strict), func(t *testing.T) {
+			t.Run(test.name+messagestest.PortabilityName(strict), func(t *testing.T) {
 				call, err := compileHaiku55(t, test.request, strict)
 				if err != nil {
 					t.Fatal(err)

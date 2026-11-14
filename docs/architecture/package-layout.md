@@ -28,6 +28,7 @@ current-layout reference.
 │   │   │   │   ├── azurecredentials/ Azure credential failures as pre-dispatch auth errors
 │   │   │   │   ├── clientconfig/   Provider endpoint and URL configuration helpers
 │   │   │   │   ├── contract/       Shared adapter contract-test helpers
+│   │   │   │   ├── messagestest/   Compile tests shared by the two Messages adapters
 │   │   │   │   ├── openaierror/    OpenAI SDK errors to the provider error contract
 │   │   │   │   ├── openaischema/   Output schemas for OpenAI strict structured outputs
 │   │   │   │   ├── openaiwire/     Lowering shared by the Chat and Responses adapters

@@ -171,7 +171,7 @@ func TestBedrockContractStreamFixturesRemainFragmentationInvariant(t *testing.T)
 				t.Fatalf("tool argument fragments = %d, want %d", toolFragments, fixture.wantToolFragments)
 			}
 			for split := 1; split < len(wire); split++ {
-				got, err := DecodeStream(&bedrockChunkReader{chunks: [][]byte{wire[:split], {}, wire[split:]}})
+				got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
 				if err != nil {
 					t.Fatalf("split %d: %v", split, err)
 				}
@@ -180,7 +180,7 @@ func TestBedrockContractStreamFixturesRemainFragmentationInvariant(t *testing.T)
 				}
 			}
 			for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 41, 11)} {
-				got, err := DecodeStream(&bedrockChunkReader{chunks: chunks})
+				got, err := DecodeStream(streamtest.NewChunkReader(chunks))
 				if err != nil {
 					t.Fatal(err)
 				}

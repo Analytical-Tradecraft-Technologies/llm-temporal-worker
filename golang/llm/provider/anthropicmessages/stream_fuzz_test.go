@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
 func FuzzDecodeStream(f *testing.F) {
@@ -23,7 +23,7 @@ func FuzzDecodeStream(f *testing.F) {
 		if err != nil {
 			return
 		}
-		assertDecodedEventsAssemble(t, events)
+		streamtest.AssertEventsAssemble(t, "anthropic-fuzz", events)
 	})
 }
 
@@ -32,36 +32,5 @@ func TestDecodedProviderTerminalErrorIsValidFuzzOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertDecodedEventsAssemble(t, events)
-}
-
-func assertDecodedEventsAssemble(t *testing.T, events []provider.Event) {
-	t.Helper()
-	assembler := provider.NewAssembler("anthropic-fuzz")
-	for index, event := range events {
-		if err := assembler.Add(event); err != nil {
-			t.Fatalf("decoded event %d (%T) violates assembler contract: %v", index, event, err)
-		}
-	}
-	response, err := assembler.Result()
-	if hasProviderTerminalError(events) {
-		if err == nil {
-			t.Fatal("decoded provider terminal error unexpectedly assembled a response")
-		}
-		return
-	}
-	if err != nil {
-		t.Fatalf("decoded terminal stream did not assemble: %v", err)
-	}
-	if response.OperationKey != "anthropic-fuzz" || !response.Status.Valid() {
-		t.Fatalf("assembled response is not semantic: %#v", response)
-	}
-}
-
-func hasProviderTerminalError(events []provider.Event) bool {
-	if len(events) == 0 {
-		return false
-	}
-	_, ok := events[len(events)-1].(provider.StreamErrored)
-	return ok
+	streamtest.AssertEventsAssemble(t, "anthropic-fuzz", events)
 }
