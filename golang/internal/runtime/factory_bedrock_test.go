@@ -137,8 +137,41 @@ func TestProductionFactoryRejectsNonDefaultBedrockAuthBeforeDependencies(t *test
 }
 
 func TestProductionFactoryBuildsBedrockMessagesWithGeneratedProfile(t *testing.T) {
-	endpointID := "bedrock-messages"
-	region := "us-west-2"
+	adapter, baseURL, awsConfigCalled := buildGeneratedBedrockAdapter(t, "bedrock_anthropic_messages", "bedrock-messages", "us-west-2")
+	bedrockAdapter, ok := adapter.(*bedrockmessages.Adapter)
+	if !ok {
+		t.Fatalf("adapter = %T, want *bedrockmessages.Adapter", adapter)
+	}
+	profile := bedrockAdapter.Profile()
+	if profile.ExpectedBaseURL != baseURL+"/" || profile.ServiceTiers[llm.ServiceClassEconomy] != "flex" || profile.ServiceTiers[llm.ServiceClassStandard] != "default" || profile.ServiceTiers[llm.ServiceClassPriority] != "priority" {
+		t.Fatalf("generated Bedrock Messages profile = %#v", profile)
+	}
+	if !awsConfigCalled {
+		t.Fatal("AWS config factory was not called")
+	}
+}
+
+func TestProductionFactoryBuildsBedrockConverseWithGeneratedProfile(t *testing.T) {
+	adapter, baseURL, _ := buildGeneratedBedrockAdapter(t, "bedrock_converse", "bedrock-converse", "eu-west-1")
+	bedrockAdapter, ok := adapter.(*bedrockconverse.Adapter)
+	if !ok {
+		t.Fatalf("adapter = %T, want *bedrockconverse.Adapter", adapter)
+	}
+	profile := bedrockAdapter.Profile()
+	if profile.ExpectedBaseURL != baseURL+"/" || profile.ServiceTiers[llm.ServiceClassEconomy] != "flex" || profile.ServiceTiers[llm.ServiceClassStandard] != "default" || profile.ServiceTiers[llm.ServiceClassPriority] != "priority" {
+		t.Fatalf("generated Bedrock Converse profile = %#v", profile)
+	}
+	if got := profile.Capabilities.Features[provider.FeatureStreaming].State; got != provider.CapabilityUnsupported {
+		t.Fatalf("generated Bedrock Converse streaming capability = %q, want unsupported", got)
+	}
+}
+
+// buildGeneratedBedrockAdapter builds the adapter for one Bedrock endpoint
+// of family in region with flex, default and priority tiers and no profile
+// override, so the factory generates the profile. It returns the adapter,
+// the configured base URL and whether the AWS config factory was called.
+func buildGeneratedBedrockAdapter(t *testing.T, family, endpointID, region string) (provider.Adapter, string, bool) {
+	t.Helper()
 	awsConfigCalled := false
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
 		HTTPClient: &http.Client{},
@@ -151,7 +184,7 @@ func TestProductionFactoryBuildsBedrockMessagesWithGeneratedProfile(t *testing.T
 		},
 	}}
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
-		Family: "bedrock_anthropic_messages", BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
+		Family: family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
 		Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
 		ServiceClasses: map[llm.ServiceClass]config.TierConfig{
 			llm.ServiceClassEconomy:  {ProviderValue: "flex"},
@@ -166,58 +199,7 @@ func TestProductionFactoryBuildsBedrockMessagesWithGeneratedProfile(t *testing.T
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}
-	bedrockAdapter, ok := adapter.(*bedrockmessages.Adapter)
-	if !ok {
-		t.Fatalf("adapter = %T, want *bedrockmessages.Adapter", adapter)
-	}
-	profile := bedrockAdapter.Profile()
-	if profile.ExpectedBaseURL != value.Endpoints[endpointID].BaseURL+"/" || profile.ServiceTiers[llm.ServiceClassEconomy] != "flex" || profile.ServiceTiers[llm.ServiceClassStandard] != "default" || profile.ServiceTiers[llm.ServiceClassPriority] != "priority" {
-		t.Fatalf("generated Bedrock Messages profile = %#v", profile)
-	}
-	if !awsConfigCalled {
-		t.Fatal("AWS config factory was not called")
-	}
-}
-
-func TestProductionFactoryBuildsBedrockConverseWithGeneratedProfile(t *testing.T) {
-	endpointID := "bedrock-converse"
-	region := "eu-west-1"
-	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-		HTTPClient: &http.Client{},
-		AWSConfigFactory: func(_ context.Context, gotRegion string) (aws.Config, error) {
-			if gotRegion != region {
-				t.Fatalf("AWS config region = %q, want %q", gotRegion, region)
-			}
-			return aws.Config{Region: gotRegion}, nil
-		},
-	}}
-	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
-		Family: "bedrock_converse", BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
-		Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
-		ServiceClasses: map[llm.ServiceClass]config.TierConfig{
-			llm.ServiceClassEconomy:  {ProviderValue: "flex"},
-			llm.ServiceClassStandard: {ProviderValue: "default"},
-			llm.ServiceClassPriority: {ProviderValue: "priority"},
-		},
-	}}}
-	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
-	}}}
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
-	if err != nil {
-		t.Fatalf("buildAdapter() error = %v", err)
-	}
-	bedrockAdapter, ok := adapter.(*bedrockconverse.Adapter)
-	if !ok {
-		t.Fatalf("adapter = %T, want *bedrockconverse.Adapter", adapter)
-	}
-	profile := bedrockAdapter.Profile()
-	if profile.ExpectedBaseURL != value.Endpoints[endpointID].BaseURL+"/" || profile.ServiceTiers[llm.ServiceClassEconomy] != "flex" || profile.ServiceTiers[llm.ServiceClassStandard] != "default" || profile.ServiceTiers[llm.ServiceClassPriority] != "priority" {
-		t.Fatalf("generated Bedrock Converse profile = %#v", profile)
-	}
-	if got := profile.Capabilities.Features[provider.FeatureStreaming].State; got != provider.CapabilityUnsupported {
-		t.Fatalf("generated Bedrock Converse streaming capability = %q, want unsupported", got)
-	}
+	return adapter, value.Endpoints[endpointID].BaseURL, awsConfigCalled
 }
 
 func TestProductionFactoryFailsClosedWhenBedrockAWSConfigFactoryFails(t *testing.T) {

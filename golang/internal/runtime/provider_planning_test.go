@@ -131,17 +131,7 @@ func unsafePlanningDetails(err *provider.Error) bool {
 func TestProviderPlanningRealCompilerResolvesAliasesAndFallbackForBothPhases(t *testing.T) {
 	capabilities, _, _, request, replay, compact := planningFixture()
 	var httpCalls atomic.Int32
-	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
-		httpCalls.Add(1)
-		return nil, errors.New("unexpected HTTP request")
-	})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := offlineResponsesAdapter(t, &httpCalls)
 	capabilities.Adapters = engine.AdapterMap{"endpoint": adapter}
 	planning, err := capabilities.NewProviderPlanning(context.Background())
 	if err != nil {
@@ -716,4 +706,23 @@ func TestProviderPlanningFlattensSummarizerInstructionsOnlyForSingleSystemFamili
 			}
 		})
 	}
+}
+
+// offlineResponsesAdapter is an OpenAI Responses adapter for endpoint
+// "endpoint" whose HTTP client counts every request in httpCalls and fails
+// it, for tests that must compile but never dispatch.
+func offlineResponsesAdapter(t *testing.T, httpCalls *atomic.Int32) *openairesponses.Adapter {
+	t.Helper()
+	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls.Add(1)
+		return nil, errors.New("unexpected HTTP request")
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
 }

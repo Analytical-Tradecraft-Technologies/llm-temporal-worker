@@ -19,116 +19,39 @@ func TestV1PayloadCodecsRoundTripEveryWireKind(t *testing.T) {
 		codec func([]byte, PayloadLimits) (any, []byte, error)
 	}{
 		{
-			name: "generate root",
-			file: "generate-root.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.GenerateRequestV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalGenerateV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalGenerateV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "generate root",
+			file:  "generate-root.json",
+			codec: payloadRoundTrip(MarshalGenerateV1, UnmarshalGenerateV1),
 		},
 		{
-			name: "generate delta",
-			file: "generate-delta.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.GenerateRequestV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalGenerateV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalGenerateV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "generate delta",
+			file:  "generate-delta.json",
+			codec: payloadRoundTrip(MarshalGenerateV1, UnmarshalGenerateV1),
 		},
 		{
-			name: "generate response",
-			file: "generate-response.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.GenerateResponseV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalGenerateResponseV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalGenerateResponseV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "generate response",
+			file:  "generate-response.json",
+			codec: payloadRoundTrip(MarshalGenerateResponseV1, UnmarshalGenerateResponseV1),
 		},
 		{
-			name: "compact request",
-			file: "compact-request.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.CompactRequestV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalCompactV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalCompactV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "compact request",
+			file:  "compact-request.json",
+			codec: payloadRoundTrip(MarshalCompactV1, UnmarshalCompactV1),
 		},
 		{
-			name: "compact response",
-			file: "compact-response.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.CompactResponseV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalCompactResponseV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalCompactResponseV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "compact response",
+			file:  "compact-response.json",
+			codec: payloadRoundTrip(MarshalCompactResponseV1, UnmarshalCompactResponseV1),
 		},
 		{
-			name: "query request",
-			file: "query-provider-status.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.QueryRequestV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalQueryV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalQueryV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "query request",
+			file:  "query-provider-status.json",
+			codec: payloadRoundTrip(MarshalQueryV1, UnmarshalQueryV1),
 		},
 		{
-			name: "query response",
-			file: "query-provider-response.json",
-			codec: func(data []byte, limits PayloadLimits) (any, []byte, error) {
-				var value llm.QueryResponseV1
-				if err := json.Unmarshal(data, &value); err != nil {
-					return nil, nil, err
-				}
-				encoded, err := MarshalQueryResponseV1(value, limits)
-				if err != nil {
-					return nil, nil, err
-				}
-				decoded, err := UnmarshalQueryResponseV1(encoded, limits)
-				return decoded, encoded, err
-			},
+			name:  "query response",
+			file:  "query-provider-response.json",
+			codec: payloadRoundTrip(MarshalQueryResponseV1, UnmarshalQueryResponseV1),
 		},
 	}
 
@@ -265,4 +188,22 @@ func readV1PayloadFixture(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// payloadRoundTrip decodes a fixture into T, encodes it with marshal and
+// decodes the encoding with unmarshal, returning the decoded value and the
+// encoding.
+func payloadRoundTrip[T any](marshal func(T, PayloadLimits) ([]byte, error), unmarshal func([]byte, PayloadLimits) (T, error)) func([]byte, PayloadLimits) (any, []byte, error) {
+	return func(data []byte, limits PayloadLimits) (any, []byte, error) {
+		var value T
+		if err := json.Unmarshal(data, &value); err != nil {
+			return nil, nil, err
+		}
+		encoded, err := marshal(value, limits)
+		if err != nil {
+			return nil, nil, err
+		}
+		decoded, err := unmarshal(encoded, limits)
+		return decoded, encoded, err
+	}
 }

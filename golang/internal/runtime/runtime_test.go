@@ -784,6 +784,27 @@ func TestStopDependencyMonitorSignalsCancellationBeforeReadinessHandoff(t *testi
 func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 	probe := &mutableRuntimeProbe{}
 	probe.healthy.Store(true)
+	runtime, replacement := assertUnconfiguredV1ReloadNotReady(t, []DependencyProbe{probe})
+
+	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
+		t.Fatal(err)
+	}
+	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() >= 1 })
+	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusOK {
+		t.Fatalf("ready status after configured v1 reload = %d", got)
+	}
+}
+
+func TestRuntimeMonitorTracksReloadedV1ReadinessWithoutDependencyProbes(t *testing.T) {
+	assertUnconfiguredV1ReloadNotReady(t, nil)
+}
+
+// assertUnconfiguredV1ReloadNotReady starts a runtime whose second engine
+// build has no v1 runtime, checks it starts ready, reloads it into that
+// build and checks it becomes not ready but stays live. It returns the
+// runtime and the worker a third build will start.
+func assertUnconfiguredV1ReloadNotReady(t *testing.T, probes []DependencyProbe) (*Runtime, *monitoringWorker) {
+	t.Helper()
 	initial := &monitoringWorker{}
 	replacement := &monitoringWorker{}
 	var workerBuilds atomic.Int32
@@ -803,7 +824,9 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 		}
 		return testEngine{}, &testV1ClientSet{runtime: v1Runtime}, nil
 	})
-	options.DependencyProbes = []DependencyProbe{probe}
+	if probes != nil {
+		options.DependencyProbes = probes
+	}
 	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
 	if err != nil {
 		t.Fatal(err)
@@ -829,60 +852,7 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusServiceUnavailable {
 		t.Fatalf("ready status after unconfigured v1 reload = %d", got)
 	}
-
-	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
-		t.Fatal(err)
-	}
-	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() >= 1 })
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusOK {
-		t.Fatalf("ready status after configured v1 reload = %d", got)
-	}
-}
-
-func TestRuntimeMonitorTracksReloadedV1ReadinessWithoutDependencyProbes(t *testing.T) {
-	initial := &monitoringWorker{}
-	var workerBuilds atomic.Int32
-	var clientBuilds atomic.Int32
-	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
-	options.V1Runtime = nil
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-		if workerBuilds.Add(1) == 1 {
-			return initial, &testRegistry{}, nil
-		}
-		return &monitoringWorker{}, &testRegistry{}, nil
-	}
-	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
-		var v1Runtime appactivity.V1Runtime
-		if clientBuilds.Add(1) != 2 {
-			v1Runtime = testV1Runtime{}
-		}
-		return testEngine{}, &testV1ClientSet{runtime: v1Runtime}, nil
-	})
-	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
-	if !runtime.Health.Ready() || initial.starts.Load() != 1 {
-		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
-	}
-
-	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
-		t.Fatal(err)
-	}
-	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && initial.stops.Load() >= 1 })
-	if runtime.Health.Live() != true {
-		t.Fatal("unconfigured v1 reload changed liveness")
-	}
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusServiceUnavailable {
-		t.Fatalf("ready status after unconfigured v1 reload without probes = %d", got)
-	}
+	return runtime, replacement
 }
 
 func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
