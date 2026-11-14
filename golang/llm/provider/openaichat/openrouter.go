@@ -224,28 +224,7 @@ func NewOpenRouterProfile(config OpenRouterProfileConfig) (Profile, error) {
 			"require_parameters": "provider",
 		}}
 	}
-	profile, err := NewProfile(Profile{
-		// The developer role is not accepted by every API version or
-		// compatible server; system is.
-		ApplicationInstructionRole: "system",
-		ID:                         config.ID,
-		CapabilityVersion:          config.CapabilityVersion,
-		Capabilities:               config.Capabilities,
-		ServiceTiers:               config.ServiceTiers,
-		ActualServiceClasses:       config.ActualServiceClasses,
-		MissingActualServiceClass:  config.MissingActualServiceClass,
-		AllowedExtensions:          allowed,
-		ExpectedBaseURL:            baseURL,
-		ExpectedModel:              config.Model,
-		ReservedWireFields:         map[string]struct{}{"provider": {}},
-		ResponseAugment:            augmentOpenRouter,
-		ResponseError:              openRouterResponseError,
-	})
-	if err != nil {
-		return Profile{}, err
-	}
-	profile.providerField = routing.providerField
-	return profile, nil
+	return openRouterProfile(config, baseURL, routing, allowed)
 }
 
 // newOpenRouterUpstreamProfile builds the profile for an endpoint on which
@@ -259,6 +238,13 @@ func newOpenRouterUpstreamProfile(config OpenRouterProfileConfig, baseURL string
 	}
 	allowed := cloneExtensions(config.AllowedExtensions)
 	delete(allowed, "openrouter")
+	return openRouterProfile(config, baseURL, routing, allowed)
+}
+
+// openRouterProfile validates the Chat profile shared by both OpenRouter
+// routing modes. The developer role is not accepted by every API version or
+// compatible server; system is.
+func openRouterProfile(config OpenRouterProfileConfig, baseURL string, routing openRouterRouting, allowed map[string]ExtensionSpec) (Profile, error) {
 	profile, err := NewProfile(Profile{
 		ApplicationInstructionRole: "system",
 		ID:                         config.ID,

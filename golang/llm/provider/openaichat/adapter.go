@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaiwire"
 )
 
 // Adapter owns one official OpenAI SDK client and one immutable compatible
@@ -112,7 +113,7 @@ func (adapter *Adapter) ValidateRequest(ctx context.Context, request llm.Request
 	if request.Output != nil {
 		if normalized, err := llm.NormalizeRequest(request); err == nil {
 			if _, err := lowerRequestMap(normalized, adapter.profile, ""); errors.As(err, new(*openaischema.UnsupportedError)) {
-				return lowerError(err)
+				return openaiwire.LowerError(err)
 			}
 		}
 	}
@@ -166,7 +167,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := lowerRequest(normalized, profile, providerTier)
 	if err != nil {
-		return provider.Call{}, lowerError(err)
+		return provider.Call{}, openaiwire.LowerError(err)
 	}
 	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, providerTier)
 	if err != nil {
@@ -262,14 +263,14 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 	features := []provider.Feature{provider.FeatureText, provider.FeatureUsage}
 	for _, instruction := range request.Instructions {
 		for _, part := range instruction.Content {
-			features = append(features, partFeature(part))
+			features = append(features, openaiwire.PartFeature(part))
 		}
 	}
 	for _, item := range request.Input {
 		switch value := item.(type) {
 		case llm.Message:
 			for _, part := range value.Content {
-				features = append(features, partFeature(part))
+				features = append(features, openaiwire.PartFeature(part))
 			}
 		case llm.ToolCall, llm.ToolResult:
 			features = append(features, provider.FeatureToolCall)
@@ -288,27 +289,6 @@ func requiredFeatures(request llm.Request) []provider.Feature {
 		features = append(features, provider.FeatureContinuation)
 	}
 	return provider.UniqueFeatures(features)
-}
-
-func partFeature(part llm.Part) provider.Feature {
-	switch part.PartKind() {
-	case llm.PartKindImage:
-		return provider.FeatureImage
-	case llm.PartKindDocument:
-		return provider.FeatureDocument
-	default:
-		return provider.FeatureText
-	}
-}
-
-// lowerError maps a lowering failure to the error contract. A request that
-// structured output cannot represent is unsupported, not malformed.
-func lowerError(err error) *provider.Error {
-	var unsupported *openaischema.UnsupportedError
-	if errors.As(err, &unsupported) {
-		return provider.NewUnsupportedFeatureError(provider.FeatureStructuredOutput, err.Error())
-	}
-	return provider.NewCompileError(err.Error())
 }
 
 func mixedInstructionLevels(instructions []llm.Instruction) bool {

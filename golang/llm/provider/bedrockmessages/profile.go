@@ -66,8 +66,8 @@ func NewProfile(profile Profile) (Profile, error) {
 	copy := profile
 	copy.Capabilities = profile.Capabilities.Clone()
 	copy.Capabilities.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(copy.Capabilities.Features[provider.FeatureStreaming])
-	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
-	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
+	copy.ServiceTiers = provider.CloneServiceTiers(profile.ServiceTiers)
+	copy.ActualServiceClasses = provider.CloneActualServiceClasses(profile.ActualServiceClasses)
 	if copy.ExpectedBaseURL != "" {
 		copy.ExpectedBaseURL, _ = clientconfig.BaseURL(copy.ExpectedBaseURL)
 	}
@@ -118,21 +118,8 @@ func (profile Profile) validate() error {
 	if supported == 0 {
 		return fmt.Errorf("bedrock messages profile %q must support at least one service class", profile.ID)
 	}
-	for feature, capability := range profile.Capabilities.Features {
-		if feature == "" {
-			return fmt.Errorf("bedrock messages profile %q contains an empty capability feature", profile.ID)
-		}
-		if !capability.State.Valid() {
-			return fmt.Errorf("bedrock messages profile %q capability %q has invalid state %q", profile.ID, feature, capability.State)
-		}
-	}
-	for _, feature := range provider.AllFeatures() {
-		if _, ok := profile.Capabilities.Features[feature]; !ok {
-			return fmt.Errorf("bedrock messages profile %q must explicitly declare capability %q", profile.ID, feature)
-		}
-	}
-	if streaming := profile.Capabilities.Features[provider.FeatureStreaming]; streaming.State == provider.CapabilityNative || streaming.State == provider.CapabilityEmulated {
-		return fmt.Errorf("bedrock messages profile %q cannot advertise streaming as %q: adapter does not implement OpenStream", profile.ID, streaming.State)
+	if err := provider.ValidateProfileFeatures("bedrock messages", profile.ID, profile.Capabilities.Features); err != nil {
+		return err
 	}
 	if profile.MissingActualServiceClass != "" && !profile.MissingActualServiceClass.Valid() {
 		return fmt.Errorf("bedrock messages profile %q missing actual service class %q is invalid", profile.ID, profile.MissingActualServiceClass)
@@ -204,20 +191,4 @@ func validProviderTier(value string) bool {
 	default:
 		return false
 	}
-}
-
-func cloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {
-	copy := make(map[llm.ServiceClass]string, len(values))
-	for class, value := range values {
-		copy[class] = value
-	}
-	return copy
-}
-
-func cloneActualClasses(values map[string]llm.ServiceClass) map[string]llm.ServiceClass {
-	copy := make(map[string]llm.ServiceClass, len(values))
-	for tier, class := range values {
-		copy[tier] = class
-	}
-	return copy
 }

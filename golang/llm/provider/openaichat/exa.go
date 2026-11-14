@@ -8,14 +8,14 @@ import (
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaiwire"
 )
 
-const exaBaseURL = "https://api.exa.ai/"
+const exaBaseURL = openaiwire.ExaBaseURL
 
 type ExaClientConfig struct {
 	BaseURL    string
@@ -24,29 +24,11 @@ type ExaClientConfig struct {
 }
 
 func NewExaClient(config ExaClientConfig) (*Client, error) {
-	baseURL, err := clientconfig.BaseURL(config.BaseURL)
+	baseURL, options, err := openaiwire.ExaClientOptions("exa chat", config.BaseURL, config.APIKey, config.HTTPClient)
 	if err != nil {
-		return nil, fmt.Errorf("exa chat: %w", err)
+		return nil, err
 	}
-	if baseURL != exaBaseURL {
-		return nil, fmt.Errorf("exa chat: base URL must be exactly %q", exaBaseURL)
-	}
-	if err := clientconfig.Secret("Exa API key", config.APIKey); err != nil {
-		return nil, fmt.Errorf("exa chat: %w", err)
-	}
-	if config.HTTPClient == nil {
-		return nil, fmt.Errorf("exa chat: HTTP client is required")
-	}
-	return &Client{
-		sdk: openai.NewClient(
-			option.WithBaseURL(baseURL),
-			option.WithHTTPClient(config.HTTPClient),
-			option.WithHeaderDel("Authorization"),
-			option.WithHeader("x-api-key", config.APIKey),
-			option.WithMaxRetries(0),
-		),
-		baseURL: baseURL,
-	}, nil
+	return &Client{sdk: openai.NewClient(options...), baseURL: baseURL}, nil
 }
 
 type ExaProfileConfig struct {

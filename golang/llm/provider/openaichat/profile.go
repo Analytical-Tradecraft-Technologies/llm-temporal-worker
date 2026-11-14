@@ -109,8 +109,8 @@ func NewProfile(profile Profile) (Profile, error) {
 	copy.Capabilities = profile.Capabilities.Clone()
 	copy.Capabilities.Features[provider.FeatureContinuation] = unsupportedContinuationCapability(copy.Capabilities.Features[provider.FeatureContinuation])
 	copy.Capabilities.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(copy.Capabilities.Features[provider.FeatureStreaming])
-	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
-	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
+	copy.ServiceTiers = provider.CloneServiceTiers(profile.ServiceTiers)
+	copy.ActualServiceClasses = provider.CloneActualServiceClasses(profile.ActualServiceClasses)
 	copy.AllowedExtensions = cloneExtensions(profile.AllowedExtensions)
 	copy.WireDefaults = cloneRawMessages(profile.WireDefaults)
 	copy.ReservedWireFields = cloneStringSet(profile.ReservedWireFields)
@@ -183,21 +183,8 @@ func (profile Profile) validate() error {
 			return fmt.Errorf("openai chat profile %q service class %q has invalid provider tier %q", profile.ID, class, value)
 		}
 	}
-	for feature, capability := range profile.Capabilities.Features {
-		if feature == "" {
-			return fmt.Errorf("openai chat profile %q contains an empty capability feature", profile.ID)
-		}
-		if !capability.State.Valid() {
-			return fmt.Errorf("openai chat profile %q capability %q has invalid state %q", profile.ID, feature, capability.State)
-		}
-	}
-	for _, feature := range provider.AllFeatures() {
-		if _, ok := profile.Capabilities.Features[feature]; !ok {
-			return fmt.Errorf("openai chat profile %q must explicitly declare capability %q", profile.ID, feature)
-		}
-	}
-	if streaming := profile.Capabilities.Features[provider.FeatureStreaming]; streaming.State == provider.CapabilityNative || streaming.State == provider.CapabilityEmulated {
-		return fmt.Errorf("openai chat profile %q cannot advertise streaming as %q: adapter does not implement OpenStream", profile.ID, streaming.State)
+	if err := provider.ValidateProfileFeatures("openai chat", profile.ID, profile.Capabilities.Features); err != nil {
+		return err
 	}
 	if continuation := profile.Capabilities.Features[provider.FeatureContinuation]; continuation.State == provider.CapabilityNative || continuation.State == provider.CapabilityEmulated {
 		return fmt.Errorf("openai chat profile %q cannot advertise continuation as %q: adapter does not implement continuation", profile.ID, continuation.State)
@@ -363,22 +350,6 @@ func unsupportedContinuationCapability(capability provider.Capability) provider.
 
 func validProviderTier(value string) bool {
 	return value != "" && len(value) <= 128
-}
-
-func cloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {
-	copy := make(map[llm.ServiceClass]string, len(values))
-	for class, value := range values {
-		copy[class] = value
-	}
-	return copy
-}
-
-func cloneActualClasses(values map[string]llm.ServiceClass) map[string]llm.ServiceClass {
-	copy := make(map[string]llm.ServiceClass, len(values))
-	for tier, class := range values {
-		copy[tier] = class
-	}
-	return copy
 }
 
 func cloneExtensions(values map[string]ExtensionSpec) map[string]ExtensionSpec {

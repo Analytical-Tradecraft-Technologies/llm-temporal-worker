@@ -6,15 +6,14 @@ import (
 	"net/http"
 
 	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaiwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 const (
-	exaBaseURL = "https://api.exa.ai/"
+	exaBaseURL = openaiwire.ExaBaseURL
 	// ExaAgentModel is the model Exa serves on its Responses endpoint: the
 	// Agent API.
 	ExaAgentModel = "exa-agent"
@@ -34,26 +33,11 @@ type ExaClientConfig struct {
 // NewExaClient constructs the Responses client for Exa's Agent API. Exa
 // authenticates with x-api-key rather than a bearer token.
 func NewExaClient(config ExaClientConfig) (*Client, error) {
-	baseURL, err := clientconfig.BaseURL(config.BaseURL)
+	_, options, err := openaiwire.ExaClientOptions("exa responses", config.BaseURL, config.APIKey, config.HTTPClient)
 	if err != nil {
-		return nil, fmt.Errorf("exa responses: %w", err)
+		return nil, err
 	}
-	if baseURL != exaBaseURL {
-		return nil, fmt.Errorf("exa responses: base URL must be exactly %q", exaBaseURL)
-	}
-	if err := clientconfig.Secret("Exa API key", config.APIKey); err != nil {
-		return nil, fmt.Errorf("exa responses: %w", err)
-	}
-	if config.HTTPClient == nil {
-		return nil, fmt.Errorf("exa responses: HTTP client is required")
-	}
-	return &Client{sdk: openai.NewClient(
-		option.WithBaseURL(baseURL),
-		option.WithHTTPClient(config.HTTPClient),
-		option.WithHeaderDel("Authorization"),
-		option.WithHeader("x-api-key", config.APIKey),
-		option.WithMaxRetries(0),
-	)}, nil
+	return &Client{sdk: openai.NewClient(options...)}, nil
 }
 
 // WithExaAgent adapts the request and response to Exa's Agent API: only the
