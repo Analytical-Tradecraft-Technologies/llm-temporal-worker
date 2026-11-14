@@ -531,53 +531,29 @@ func (response *Response) UnmarshalJSON(data []byte) error {
 	if result.OperationID, _, err = optionalString(fields, "operation_id"); err != nil {
 		return err
 	}
-	if raw, ok := fields["output"]; ok {
-		result.Output, err = decodeItems(raw)
-		if err != nil {
-			return fmt.Errorf("output: %w", err)
-		}
+	if err := decodeOptionalField(fields, "output", &result.Output, decodeItems); err != nil {
+		return err
 	}
-	if raw, ok := fields["route"]; ok {
-		result.Route, err = decodeRouteFacts(raw)
-		if err != nil {
-			return fmt.Errorf("route: %w", err)
-		}
+	if err := decodeOptionalField(fields, "route", &result.Route, decodeRouteFacts); err != nil {
+		return err
 	}
-	if raw, ok := fields["service"]; ok {
-		result.Service, err = decodeServiceFacts(raw)
-		if err != nil {
-			return fmt.Errorf("service: %w", err)
-		}
+	if err := decodeOptionalField(fields, "service", &result.Service, decodeServiceFacts); err != nil {
+		return err
 	}
-	if raw, ok := fields["usage"]; ok {
-		result.Usage, err = decodeUsage(raw)
-		if err != nil {
-			return fmt.Errorf("usage: %w", err)
-		}
+	if err := decodeOptionalField(fields, "usage", &result.Usage, decodeUsage); err != nil {
+		return err
 	}
-	if raw, ok := fields["cost"]; ok {
-		result.Cost, err = decodeCost(raw)
-		if err != nil {
-			return fmt.Errorf("cost: %w", err)
-		}
+	if err := decodeOptionalField(fields, "cost", &result.Cost, decodeCost); err != nil {
+		return err
 	}
-	if raw, ok := fields["provider"]; ok {
-		result.Provider, err = decodeProviderFacts(raw)
-		if err != nil {
-			return fmt.Errorf("provider: %w", err)
-		}
+	if err := decodeOptionalField(fields, "provider", &result.Provider, decodeProviderFacts); err != nil {
+		return err
 	}
-	if raw, ok := fields["continuation"]; ok && string(raw) != "null" {
-		result.Continuation, err = decodeContinuation(raw)
-		if err != nil {
-			return fmt.Errorf("continuation: %w", err)
-		}
+	if err := decodeNullableField(fields, "continuation", &result.Continuation, decodeContinuation); err != nil {
+		return err
 	}
-	if raw, ok := fields["diagnostics"]; ok {
-		result.Diagnostics, err = decodeDiagnostics(raw)
-		if err != nil {
-			return fmt.Errorf("diagnostics: %w", err)
-		}
+	if err := decodeOptionalField(fields, "diagnostics", &result.Diagnostics, decodeDiagnostics); err != nil {
+		return err
 	}
 	if result.Output == nil {
 		result.Output = []Item{}

@@ -251,11 +251,17 @@ func (ProviderState) item()              {}
 func (ProviderState) ItemKind() ItemKind { return ItemKindProviderState }
 
 func (state ProviderState) MarshalJSON() ([]byte, error) {
+	return marshalProviderState(ItemKindProviderState, "provider state", state)
+}
+
+// marshalProviderState writes the provider-state payload that the item and
+// the part share under kind. label names the value in the error.
+func marshalProviderState(kind any, label string, state ProviderState) ([]byte, error) {
 	if state.Provider == "" || state.EndpointFamily == "" || state.MediaType == "" {
-		return nil, fmt.Errorf("provider state requires provider, endpoint_family, and media_type")
+		return nil, fmt.Errorf("%s requires provider, endpoint_family, and media_type", label)
 	}
 	return marshalObject(map[string]any{
-		"kind":            ItemKindProviderState,
+		"kind":            kind,
 		"provider":        state.Provider,
 		"endpoint_family": state.EndpointFamily,
 		"media_type":      state.MediaType,
@@ -275,6 +281,12 @@ func decodeProviderState(data []byte) (ProviderState, error) {
 	if err != nil {
 		return ProviderState{}, err
 	}
+	return decodeProviderStateFields(fields, "provider state")
+}
+
+// decodeProviderStateFields reads the provider-state payload that the item
+// and the part share. label names the value in the opaque decode error.
+func decodeProviderStateFields(fields map[string]json.RawMessage, label string) (ProviderState, error) {
 	provider, err := requiredString(fields, "provider")
 	if err != nil {
 		return ProviderState{}, err
@@ -293,7 +305,7 @@ func decodeProviderState(data []byte) (ProviderState, error) {
 	}
 	opaque, err := decodeBytesJSON(opaqueRaw)
 	if err != nil {
-		return ProviderState{}, fmt.Errorf("provider state opaque: %w", err)
+		return ProviderState{}, fmt.Errorf("%s opaque: %w", label, err)
 	}
 	return ProviderState{
 		Provider:       provider,
@@ -423,15 +435,7 @@ func decodeItems(data []byte) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	items := make([]Item, 0, len(values))
-	for index, value := range values {
-		item, err := decodeItem(value)
-		if err != nil {
-			return nil, fmt.Errorf("item %d: %w", index, err)
-		}
-		items = append(items, item)
-	}
-	return items, nil
+	return decodeEach(values, "item", decodeItem)
 }
 
 // DecodeItems decodes a JSON item array through the canonical kind-dispatch
@@ -762,16 +766,7 @@ func (ProviderStatePart) part()              {}
 func (ProviderStatePart) PartKind() PartKind { return PartKindProviderState }
 
 func (part ProviderStatePart) MarshalJSON() ([]byte, error) {
-	if part.Provider == "" || part.EndpointFamily == "" || part.MediaType == "" {
-		return nil, fmt.Errorf("provider state part requires provider, endpoint_family, and media_type")
-	}
-	return marshalObject(map[string]any{
-		"kind":            PartKindProviderState,
-		"provider":        part.Provider,
-		"endpoint_family": part.EndpointFamily,
-		"media_type":      part.MediaType,
-		"opaque":          opaqueBytes(part.Opaque),
-	})
+	return marshalProviderState(PartKindProviderState, "provider state part", ProviderState(part))
 }
 
 func decodeProviderStatePart(data []byte) (ProviderStatePart, error) {
@@ -779,27 +774,11 @@ func decodeProviderStatePart(data []byte) (ProviderStatePart, error) {
 	if err != nil {
 		return ProviderStatePart{}, err
 	}
-	provider, err := requiredString(fields, "provider")
+	state, err := decodeProviderStateFields(fields, "provider state part")
 	if err != nil {
 		return ProviderStatePart{}, err
 	}
-	family, err := requiredString(fields, "endpoint_family")
-	if err != nil {
-		return ProviderStatePart{}, err
-	}
-	mediaType, err := requiredString(fields, "media_type")
-	if err != nil {
-		return ProviderStatePart{}, err
-	}
-	opaqueRaw, err := requireField(fields, "opaque")
-	if err != nil {
-		return ProviderStatePart{}, err
-	}
-	opaque, err := decodeBytesJSON(opaqueRaw)
-	if err != nil {
-		return ProviderStatePart{}, fmt.Errorf("provider state part opaque: %w", err)
-	}
-	return ProviderStatePart{Provider: provider, EndpointFamily: family, MediaType: mediaType, Opaque: copyBytes(opaque)}, nil
+	return ProviderStatePart(state), nil
 }
 
 func decodePart(data []byte) (Part, error) {
@@ -837,15 +816,7 @@ func decodeParts(data []byte) ([]Part, error) {
 	if err != nil {
 		return nil, err
 	}
-	parts := make([]Part, 0, len(values))
-	for index, value := range values {
-		part, err := decodePart(value)
-		if err != nil {
-			return nil, fmt.Errorf("part %d: %w", index, err)
-		}
-		parts = append(parts, part)
-	}
-	return parts, nil
+	return decodeEach(values, "part", decodePart)
 }
 
 func validateToolName(name string) error {
