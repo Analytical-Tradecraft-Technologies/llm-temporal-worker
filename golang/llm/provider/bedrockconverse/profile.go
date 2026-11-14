@@ -69,8 +69,8 @@ func NewProfile(profile Profile) (Profile, error) {
 	}
 	copy := profile
 	copy.Capabilities = profile.Capabilities.Clone()
-	copy.ServiceTiers = cloneServiceTiers(profile.ServiceTiers)
-	copy.ActualServiceClasses = cloneActualClasses(profile.ActualServiceClasses)
+	copy.ServiceTiers = provider.CloneServiceTiers(profile.ServiceTiers)
+	copy.ActualServiceClasses = provider.CloneActualServiceClasses(profile.ActualServiceClasses)
 	if copy.ExpectedBaseURL != "" {
 		copy.ExpectedBaseURL, _ = clientconfig.BaseURL(copy.ExpectedBaseURL)
 	}
@@ -189,20 +189,4 @@ func validServiceTier(value string) bool {
 	default:
 		return false
 	}
-}
-
-func cloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {
-	copy := make(map[llm.ServiceClass]string, len(values))
-	for class, value := range values {
-		copy[class] = value
-	}
-	return copy
-}
-
-func cloneActualClasses(values map[string]llm.ServiceClass) map[string]llm.ServiceClass {
-	copy := make(map[string]llm.ServiceClass, len(values))
-	for tier, class := range values {
-		copy[tier] = class
-	}
-	return copy
 }
