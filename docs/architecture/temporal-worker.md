@@ -307,6 +307,18 @@ applies. The monitor does not start a replacement poller until that drain
 completes, so a transient dependency recovery cannot create overlapping
 pollers.
 
+## Workflow code changes
+
+Open runs replay on whichever build polls the task queue next, so a workflow
+change that alters the commands for an existing history is guarded with a
+`GetVersion` change ID, and its old branch is deleted only after a retention
+horizon. Pinned Worker Versioning is optional and complements the guard; it
+does not replace it. The
+[workflow versioning reference](../reference/workflow-versioning.md) lists
+every current change ID with its replay coverage, explains when to use
+`GetVersion` and when pinned versioning, gives the Temporal CLI promotion,
+ramp and rollback steps, and sets out the marker retirement procedure.
+
 ## Local Compose recovery proof
 
 `LLMTW_COMPOSE_LIVE=1 make compose-live-integration` is the opt-in local
