@@ -23,11 +23,17 @@ func ComputeTestFingerprint(seed string) Fingerprint {
 	return fingerprint
 }
 
-func TestFillCoordinatorCollapsesConcurrentFills(t *testing.T) {
-	coordinator, err := NewFillCoordinator(64)
+func newFillCoordinator(t *testing.T, maxResponseBytes int) *FillCoordinator {
+	t.Helper()
+	coordinator, err := NewFillCoordinator(maxResponseBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return coordinator
+}
+
+func TestFillCoordinatorCollapsesConcurrentFills(t *testing.T) {
+	coordinator := newFillCoordinator(t, 64)
 	key := testFingerprint()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -87,10 +93,7 @@ func TestFillCoordinatorCollapsesConcurrentFills(t *testing.T) {
 }
 
 func TestFillCoordinatorWaiterCanCancel(t *testing.T) {
-	coordinator, err := NewFillCoordinator(64)
-	if err != nil {
-		t.Fatal(err)
-	}
+	coordinator := newFillCoordinator(t, 64)
 	key := testFingerprint()
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -116,10 +119,7 @@ func TestFillCoordinatorWaiterCanCancel(t *testing.T) {
 }
 
 func TestFillCoordinatorDoesNotRetainFailuresAndCopiesResponse(t *testing.T) {
-	coordinator, err := NewFillCoordinator(4)
-	if err != nil {
-		t.Fatal(err)
-	}
+	coordinator := newFillCoordinator(t, 4)
 	key := testFingerprint()
 	if _, err := coordinator.Fill(context.Background(), key, func(context.Context) ([]byte, error) {
 		return nil, errors.New("transient")
@@ -141,10 +141,7 @@ func TestFillCoordinatorDoesNotRetainFailuresAndCopiesResponse(t *testing.T) {
 }
 
 func TestFillCoordinatorRecoversPanicsAndAllowsRetry(t *testing.T) {
-	coordinator, err := NewFillCoordinator(0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	coordinator := newFillCoordinator(t, 0)
 	key := testFingerprint()
 	if _, err := coordinator.Fill(context.Background(), key, func(context.Context) ([]byte, error) {
 		panic("fixture panic")
@@ -157,10 +154,7 @@ func TestFillCoordinatorRecoversPanicsAndAllowsRetry(t *testing.T) {
 }
 
 func TestFillCoordinatorRejectsInvalidInputs(t *testing.T) {
-	coordinator, err := NewFillCoordinator(0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	coordinator := newFillCoordinator(t, 0)
 	for _, test := range []struct {
 		name string
 		ctx  context.Context

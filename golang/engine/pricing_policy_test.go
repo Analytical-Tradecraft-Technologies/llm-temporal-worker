@@ -15,18 +15,14 @@ import (
 )
 
 func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	adapter, harness := newFakeHarness(t)
 	harness.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
 		snapshot.BudgetPolicies = []budget.Policy{tenantClassBudgetPolicy("priority-only", llm.ServiceClassPriority)}
 	})
 
 	request := priorityWithStandardFallback("skip-budgeted-unpriced")
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := harness.mustGenerate(t, request)
 	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
 		t.Fatalf("response = %#v, want priced standard fallback", response)
 	}
@@ -34,19 +30,14 @@ func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.
 }
 
 func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	_, harness := newFakeHarness(t)
 	harness.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
 		snapshot.RequirePriceWhenBudgeted = true
 	})
 
-	request := baseRequest("allow-unbudgeted-unpriced")
-	request.ServiceClass = llm.ServiceClassPriority
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := priorityRequest("allow-unbudgeted-unpriced")
+	response := harness.mustGenerate(t, request)
 	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ReservedCostUSD != nil || response.Cost.ActualCostUSD != nil || response.Cost.Method != "" || response.Cost.CatalogVersion != "" {
 		t.Fatalf("unpriced response cost = %#v, want unknown zero-value monetary facts", response.Cost)
 	}
@@ -57,8 +48,7 @@ func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) 
 }
 
 func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	adapter, harness := newFakeHarness(t)
 	partial := priceEntryForTier("priority-tier")
 	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentInput}
 	harness.updateSnapshot(func(snapshot *Snapshot) {
@@ -66,10 +56,7 @@ func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
 	})
 
 	request := priorityWithStandardFallback("skip-active-partial-price")
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := harness.mustGenerate(t, request)
 	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
 		t.Fatalf("response = %#v, want complete standard fallback", response)
 	}
@@ -77,8 +64,7 @@ func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
 }
 
 func TestGenerateReturnsNoRouteWhenAllCandidatePricesAreUnusable(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	adapter, harness := newFakeHarness(t)
 	partial := priceEntryForTier("priority-tier")
 	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentInput}
 	overflow := priceEntryForTier("standard-tier")
@@ -93,13 +79,11 @@ func TestGenerateReturnsNoRouteWhenAllCandidatePricesAreUnusable(t *testing.T) {
 	request := priorityWithStandardFallback("all-unusable-prices")
 	_, err := harness.engine.Generate(context.Background(), request)
 	requireNoEligiblePrice(t, err, "all unusable candidates unexpectedly dispatched")
-	requireNoOperation(t, harness, request)
-	adapter.requireInvokes(t, 0, "provider invoke count = %d, want zero")
+	requireNothingDispatched(t, harness, adapter, request)
 }
 
 func TestGenerateKeepsTokenizerErrorsFatal(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	_, harness := newFakeHarness(t)
 	harness.engine.dependencies.Estimator = budget.Estimator{Tokenizer: func(llm.Request, routing.Candidate) (int64, error) {
 		return 0, errors.New("tokenizer unavailable")
 	}}
@@ -128,34 +112,29 @@ func TestGenerateRejectsUnavailablePriceWhenPolicyRequiresIt(t *testing.T) {
 		}()}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-			harness := newHarness(t, adapter)
+			adapter, harness := newFakeHarness(t)
 			harness.updateSnapshot(func(snapshot *Snapshot) {
 				snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, test.entries...))
 				snapshot.RequirePriceWhenBudgeted = true
 				snapshot.BudgetPolicies = []budget.Policy{tenantClassBudgetPolicy("priority-only", llm.ServiceClassPriority)}
 			})
 
-			request := baseRequest("reject-budgeted-unpriced-" + test.name)
-			request.ServiceClass = llm.ServiceClassPriority
+			request := priorityRequest("reject-budgeted-unpriced-" + test.name)
 			_, err := harness.engine.Generate(context.Background(), request)
 			requireNoEligiblePrice(t, err, "budgeted unpriced request unexpectedly dispatched")
-			requireNoOperation(t, harness, request)
-			adapter.requireInvokes(t, 0, "provider invoke count = %d, want zero")
+			requireNothingDispatched(t, harness, adapter, request)
 		})
 	}
 }
 
 func TestGenerateRejectsUnbudgetedUnpricedCandidateWhenPolicyIsStrict(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	_, harness := newFakeHarness(t)
 	harness.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
 		snapshot.RequirePriceWhenBudgeted = false
 	})
 
-	request := baseRequest("reject-strict-unpriced")
-	request.ServiceClass = llm.ServiceClassPriority
+	request := priorityRequest("reject-strict-unpriced")
 	_, err := harness.engine.Generate(context.Background(), request)
 	if err == nil {
 		t.Fatal("strict unpriced request unexpectedly dispatched")
@@ -196,8 +175,7 @@ func requireNoOperation(t *testing.T, harness testHarness, request llm.Request) 
 
 func TestGenerateRejectsContextOverflowBeforePricedOrUnpricedDispatch(t *testing.T) {
 	for _, unpriced := range []bool{false, true} {
-		adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-		harness := newHarness(t, adapter)
+		adapter, harness := newFakeHarness(t)
 		snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
 		for name, model := range snapshot.Routes.Models {
 			for i := range model.Routes {
@@ -228,10 +206,7 @@ func TestGenerateKeepsUnknownProviderChargeReserved(t *testing.T) {
 	paid.Cost.Status = llm.CostStatusUnknown
 	adapter := &fakeAdapter{name: "fake", response: paid}
 	harness := newHarness(t, adapter)
-	response, err := harness.engine.Generate(context.Background(), baseRequest("unknown-hosted-charge"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := harness.mustGenerate(t, baseRequest("unknown-hosted-charge"))
 	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ActualCostUSD != nil || response.Cost.ReservedCostUSD == nil {
 		t.Fatalf("unknown charge lost its reservation: %#v", response.Cost)
 	}

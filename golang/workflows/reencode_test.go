@@ -13,7 +13,6 @@ import (
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/testsuite"
 )
 
 // unescapedRequest encodes a v1 fixture whose first appended text is text the
@@ -49,8 +48,7 @@ type reencodeRun struct {
 // parent, the largest envelope the internal child can receive.
 func runReencoded(t *testing.T, limits activity.PayloadLimits, input converter.RawValue) reencodeRun {
 	t.Helper()
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
+	env := newWorkflowEnv()
 	env.SetDataConverter(activity.BoundedDataConverter(limits))
 	Register(env, limits)
 	var run reencodeRun

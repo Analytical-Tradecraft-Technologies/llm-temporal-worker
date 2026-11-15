@@ -2,11 +2,9 @@ package architecturetest
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,30 +28,21 @@ func TestSLOEvidenceMakeTargetIsOfflineAndFocused(t *testing.T) {
 	expectContainsEach(t, target, "slo-evidence-verify is missing %q",
 		"$(GO) test ./internal/architecturetest -run '^TestSLOEvidence' -count=1",
 	)
-	for _, forbidden := range []string{
+	expectOmitsEach(t, target, "slo-evidence-verify must not require protected or external state via %q",
 		"LLMTW_LIVE_",
 		"LLMTW_REDIS_ADDR",
 		"docker",
 		"release-verify",
-	} {
-		if strings.Contains(target, forbidden) {
-			t.Errorf("slo-evidence-verify must not require protected or external state via %q", forbidden)
-		}
-	}
+	)
 }
 
 func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testing.T) {
 	root := repositoryRoot(t)
 	inputPath, evidencePath, digest := recordValidSLOEvidence(t, root, t.TempDir(), "slo-measurement.json")
 
-	raw, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(readText(t, evidencePath))
 	var record map[string]any
-	if err := json.Unmarshal(raw, &record); err != nil {
-		t.Fatalf("decode SLO evidence: %v", err)
-	}
+	decodeJSON(t, raw, "SLO evidence", &record)
 	assertExactKeys(t, "record", record,
 		"schema_version", "kind", "status", "measured_at",
 		"source_revision", "deployment_id_sha256", "region",
@@ -67,9 +56,7 @@ func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testin
 	if got := record["content_sha256"]; got != digest {
 		t.Fatalf("record content_sha256 = %#v, want %q", got, digest)
 	}
-	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
-		t.Fatalf("record is not canonical JSON: %q", raw)
-	}
+	assertCanonicalJSON(t, raw, "record")
 
 	if _, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest); err != nil {
 		t.Fatalf("verify recorded SLO evidence: %v", err)
@@ -77,13 +64,7 @@ func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testin
 	if _, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath); err == nil {
 		t.Fatal("record unexpectedly overwrote immutable evidence path")
 	}
-	metadata, err := os.Stat(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := metadata.Mode().Perm(); got != 0o600 {
-		t.Fatalf("evidence mode = %o, want 600", got)
-	}
+	assertPrivateFileMode(t, evidencePath, "evidence")
 }
 
 func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T) {
@@ -102,14 +83,9 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 		t.Fatalf("bind output = %q, want binding digest", output)
 	}
 
-	raw, err := os.ReadFile(bindingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(readText(t, bindingPath))
 	var binding map[string]any
-	if err := json.Unmarshal(raw, &binding); err != nil {
-		t.Fatalf("decode SLO binding: %v", err)
-	}
+	decodeJSON(t, raw, "SLO binding", &binding)
 	assertExactKeys(t, "binding", binding, "schema_version", "kind", "status", "evidence", "release", "redacted", "content_sha256")
 	if got, want := binding["kind"], "slo_release_binding"; got != want {
 		t.Fatalf("binding kind = %#v, want %q", got, want)
@@ -121,10 +97,7 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 	if !ok || evidence["source_revision"] != sloEvidenceSourceRevision || evidence["content_sha256"] != digest {
 		t.Fatalf("binding evidence = %#v, want source and digest", binding["evidence"])
 	}
-	release, ok := binding["release"].(map[string]any)
-	if !ok {
-		t.Fatalf("binding release = %#v, want object", binding["release"])
-	}
+	release := mappingField(t, "binding release", binding, "release")
 	for key, want := range map[string]any{
 		"source_revision": sloBindingReleaseRevision, "image_reference": sloBindingImageReference,
 		"image_digest": sloBindingImageDigest, "workflow_run_id": float64(30535408998),
@@ -139,17 +112,13 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 	}
 	bindingSchema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-binding.schema.json", "urn:llmtw:slo-evidence-binding:v1")
 	assertSLOSchemaRejectsUnknownField(t, bindingSchema, binding, "binding schema", "binding")
-	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
-		t.Fatalf("binding is not canonical JSON: %q", raw)
-	}
+	assertCanonicalJSON(t, raw, "binding")
 
 	if _, err := runSLOEvidence(root, append([]string{"verify-binding"}, args...)...); err != nil {
 		t.Fatalf("verify SLO binding: %v", err)
 	}
 	before := append([]byte(nil), raw...)
-	if output, err := runSLOEvidence(root, append([]string{"bind"}, args...)...); err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-		t.Fatalf("bind unexpectedly overwrote immutable binding: %v, %q", err, output)
-	}
+	assertSLOEvidenceRejected(t, root, "bind unexpectedly overwrote immutable binding", append([]string{"bind"}, args...)...)
 	after, err := os.ReadFile(bindingPath)
 	if err != nil {
 		t.Fatal(err)
@@ -157,13 +126,7 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 	if !bytes.Equal(after, before) {
 		t.Fatal("failed bind changed immutable binding")
 	}
-	metadata, err := os.Stat(bindingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := metadata.Mode().Perm(); got != 0o600 {
-		t.Fatalf("binding mode = %o, want 600", got)
-	}
+	assertPrivateFileMode(t, bindingPath, "binding")
 }
 
 func TestSLOEvidenceBindingRejectsCrossRevisionAndUnsafeReleaseMetadata(t *testing.T) {
@@ -190,13 +153,8 @@ func TestSLOEvidenceBindingRejectsCrossRevisionAndUnsafeReleaseMetadata(t *testi
 			bindingPath := filepath.Join(directory, testCase.name+".json")
 			args := sloBindingArguments(evidencePath, bindingPath, digest)
 			testCase.mutate(args)
-			output, err := runSLOEvidence(root, append([]string{"bind"}, args...)...)
-			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-				t.Fatalf("bind result = %v, %q; want safe rejection", err, output)
-			}
-			if _, statErr := os.Stat(bindingPath); !os.IsNotExist(statErr) {
-				t.Fatalf("rejected bind left output path: %v", statErr)
-			}
+			assertSLOEvidenceRejected(t, root, "bind result", append([]string{"bind"}, args...)...)
+			assertPathAbsent(t, bindingPath, "rejected bind left output path")
 		})
 	}
 }
@@ -261,10 +219,7 @@ func TestSLOEvidenceRejectsUnsafeOrFailingCandidates(t *testing.T) {
 			testCase.mutate(candidate)
 			inputPath := filepath.Join(directory, "candidate.json")
 			writeSLOEvidenceCandidate(t, inputPath, candidate)
-			output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
-			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-				t.Fatalf("record result = %v, %q; want safe rejection", err, output)
-			}
+			assertSLOEvidenceRejected(t, root, "record result", "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
 		})
 	}
 }
@@ -292,19 +247,13 @@ func TestSLOEvidenceRejectsDuplicateJSONKeys(t *testing.T) {
 			directory := t.TempDir()
 			inputPath := filepath.Join(directory, "candidate.json")
 			writeReleaseArtifact(t, inputPath, []byte(testCase.raw))
-			output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
-			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-				t.Fatalf("record duplicate-key candidate = %v, %q; want safe rejection", err, output)
-			}
+			assertSLOEvidenceRejected(t, root, "record duplicate-key candidate", "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
 		})
 	}
 
 	evidencePath := filepath.Join(t.TempDir(), "evidence.json")
 	writeReleaseArtifact(t, evidencePath, []byte(`{"schema_version":1,"schema_version":1}`))
-	output, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", strings.Repeat("a", 64))
-	if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-		t.Fatalf("verify duplicate-key evidence = %v, %q; want safe rejection", err, output)
-	}
+	assertSLOEvidenceRejected(t, root, "verify duplicate-key evidence", "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", strings.Repeat("a", 64))
 }
 
 func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *testing.T) {
@@ -313,14 +262,9 @@ func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *test
 
 	record := readJSONObject(t, evidencePath)
 	record["endpoint"] = "https://redis.internal.example"
-	tampered, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tampered := marshalJSON(t, record)
 	writeReleaseArtifact(t, evidencePath, tampered)
-	if output, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest); err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-		t.Fatalf("verify tampered evidence = %v, %q; want safe rejection", err, output)
-	}
+	assertSLOEvidenceRejected(t, root, "verify tampered evidence", "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest)
 
 	schema := compileSLOEvidenceJSONSchema(t, root)
 	delete(record, "endpoint")
@@ -342,9 +286,7 @@ func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
 
 func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
 	root := repositoryRoot(t)
-	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "metrics.prom")
-	outputPath := filepath.Join(directory, "worker-error-summary.json")
+	inputPath, outputPath := tempFilePaths(t, "metrics.prom", "worker-error-summary.json")
 	metrics := strings.Join([]string{
 		"# TYPE llmtw_activity_total counter",
 		`llmtw_activity_total{status="completed",error_class="none"} 5000`,
@@ -361,14 +303,9 @@ func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
 	if !strings.HasPrefix(strings.TrimSpace(string(output)), "worker error summary recorded sha256=") {
 		t.Fatalf("summary output = %q", output)
 	}
-	raw, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := []byte(readText(t, outputPath))
 	var summary map[string]any
-	if err := json.Unmarshal(raw, &summary); err != nil {
-		t.Fatalf("decode summary: %v", err)
-	}
+	decodeJSON(t, raw, "summary", &summary)
 	want := map[string]any{
 		"schema_version":         float64(1),
 		"kind":                   "worker_error_summary",
@@ -393,16 +330,8 @@ func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
 	if bytes.Contains(raw, []byte("llmtw_activity")) || bytes.Contains(raw, []byte("process_cpu")) {
 		t.Fatalf("summary retained raw metric names: %q", raw)
 	}
-	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
-		t.Fatalf("summary is not canonical JSON: %q", raw)
-	}
-	metadata, err := os.Stat(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := metadata.Mode().Perm(); got != 0o600 {
-		t.Fatalf("summary mode = %o, want 600", got)
-	}
+	assertCanonicalJSON(t, raw, "summary")
+	assertPrivateFileMode(t, outputPath, "summary")
 	if _, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath); err == nil {
 		t.Fatal("summary unexpectedly overwrote immutable output")
 	}
@@ -459,17 +388,10 @@ func TestSLOEvidenceWorkerErrorSummaryRejectsUnsafeSnapshots(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			directory := t.TempDir()
-			inputPath := filepath.Join(directory, "metrics.prom")
-			outputPath := filepath.Join(directory, "summary.json")
+			inputPath, outputPath := tempFilePaths(t, "metrics.prom", "summary.json")
 			writeReleaseArtifact(t, inputPath, []byte(testCase.metrics+"\n"))
-			output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
-			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
-				t.Fatalf("summary result = %v, %q; want safe rejection", err, output)
-			}
-			if _, statErr := os.Stat(outputPath); !os.IsNotExist(statErr) {
-				t.Fatalf("rejected summary left output path: %v", statErr)
-			}
+			assertSLOEvidenceRejected(t, root, "summary result", "worker-error-summary", "--input", inputPath, "--output", outputPath)
+			assertPathAbsent(t, outputPath, "rejected summary left output path")
 		})
 	}
 }
@@ -515,17 +437,43 @@ func recordValidSLOEvidence(t *testing.T, root, directory, evidenceName string) 
 
 func writeSLOEvidenceCandidate(t *testing.T, path string, candidate map[string]any) {
 	t.Helper()
-	data, err := json.Marshal(candidate)
+	writeJSONArtifact(t, path, candidate)
+}
+
+// assertCanonicalJSON requires raw to be compact JSON ending in a newline;
+// label names the document in failures.
+func assertCanonicalJSON(t *testing.T, raw []byte, label string) {
+	t.Helper()
+	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
+		t.Fatalf("%s is not canonical JSON: %q", label, raw)
+	}
+}
+
+// assertPrivateFileMode requires the file at path to have mode 0600; label
+// names it in failures.
+func assertPrivateFileMode(t *testing.T, path, label string) {
+	t.Helper()
+	metadata, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeReleaseArtifact(t, path, data)
+	if got := metadata.Mode().Perm(); got != 0o600 {
+		t.Fatalf("%s mode = %o, want 600", label, got)
+	}
+}
+
+// assertSLOEvidenceRejected runs slo-evidence.py with arguments and fails with
+// failure unless it exits non-zero with only the safe rejection message.
+func assertSLOEvidenceRejected(t *testing.T, root, failure string, arguments ...string) {
+	t.Helper()
+	output, err := runSLOEvidence(root, arguments...)
+	if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
+		t.Fatalf("%s = %v, %q; want safe rejection", failure, err, output)
+	}
 }
 
 func runSLOEvidence(root string, arguments ...string) ([]byte, error) {
-	command := exec.Command("python3", append([]string{filepath.Join(root, "scripts", "release", "slo-evidence.py")}, arguments...)...)
-	command.Dir = root
-	return command.CombinedOutput()
+	return runReleaseScript(root, "slo-evidence.py", arguments...)
 }
 
 // assertSLOSchemaRejectsUnknownField requires schema to accept the recorded
@@ -565,9 +513,7 @@ func TestSLOEvidenceAcceptsAHealthyWorkerExport(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	metrics.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "metrics.prom")
-	outputPath := filepath.Join(directory, "worker-error-summary.json")
+	inputPath, outputPath := tempFilePaths(t, "metrics.prom", "worker-error-summary.json")
 	writeReleaseArtifact(t, inputPath, recorder.Body.Bytes())
 	output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
 	if err != nil {

@@ -20,7 +20,7 @@ var fuzzTargetName = regexp.MustCompile(`^Fuzz[[:alnum:]_]+$`)
 
 func TestFuzzGateCoversEveryRepositoryFuzzTarget(t *testing.T) {
 	root := moduleRoot(t)
-	script := readFile(t, filepath.Join(moduleRoot(t), "scripts", "run-fuzz.sh"))
+	script := readText(t, moduleRoot(t), "scripts", "run-fuzz.sh")
 
 	for _, target := range repositoryFuzzTargets(t, root) {
 		entry := target.packagePath + " " + target.name
@@ -28,17 +28,13 @@ func TestFuzzGateCoversEveryRepositoryFuzzTarget(t *testing.T) {
 			t.Fatalf("fuzz gate does not include %s", entry)
 		}
 	}
-	if !strings.Contains(script, "reproduce a saved corpus input") {
-		t.Fatal("fuzz gate does not document a saved-corpus reproduction command")
-	}
+	assertContains(t, script, "reproduce a saved corpus input", "fuzz gate does not document a saved-corpus reproduction command")
 }
 
 func TestFuzzGateCoversNanoUSDMaterialization(t *testing.T) {
 	root := moduleRoot(t)
-	script := readFile(t, filepath.Join(root, "scripts", "run-fuzz.sh"))
-	if !strings.Contains(script, "./pricing FuzzNanoUSDMaterialization") {
-		t.Fatal("fuzz gate does not include the conservative nanoUSD rounding target")
-	}
+	script := readText(t, root, "scripts", "run-fuzz.sh")
+	assertContains(t, script, "./pricing FuzzNanoUSDMaterialization", "fuzz gate does not include the conservative nanoUSD rounding target")
 }
 
 func TestRepositoryFuzzTargetsIncludesOrdinaryTestFiles(t *testing.T) {
@@ -58,14 +54,12 @@ func TestRepositoryFuzzTargetsIncludesOutsideLegacyAllowlist(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "admission", "engine_fuzz_test.go"), []byte(`package admission
+	writeFile(t, filepath.Join(root, "admission", "engine_fuzz_test.go"), []byte(`package admission
 
 import "testing"
 
 func FuzzAdmissionEngine(f *testing.F) {}
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+`), 0o600)
 
 	for _, target := range repositoryFuzzTargets(t, root) {
 		if target.packagePath == "./admission" && target.name == "FuzzAdmissionEngine" {
@@ -77,7 +71,7 @@ func FuzzAdmissionEngine(f *testing.F) {}
 
 func TestRepositoryFuzzTargetsIgnoresFuzzLookalikesOutsideDeclarations(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "lookalike_fuzz_test.go"), []byte(`package fixture
+	writeFile(t, filepath.Join(root, "lookalike_fuzz_test.go"), []byte(`package fixture
 
 import "testing"
 
@@ -87,9 +81,7 @@ func FuzzString(f *testing.F) {}
 `+"`"+`
 
 func FuzzReal(f *testing.F) {}
-`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+`), 0o600)
 
 	targets := repositoryFuzzTargets(t, root)
 	if len(targets) != 1 || targets[0].packagePath != "." || targets[0].name != "FuzzReal" {
@@ -120,9 +112,7 @@ func FuzzForeign(f *testing.F) {}
 `,
 	}
 	for name, data := range files {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeFile(t, filepath.Join(root, name), []byte(data), 0o600)
 	}
 
 	targets := repositoryFuzzTargets(t, root)
@@ -133,40 +123,34 @@ func FuzzForeign(f *testing.F) {}
 
 func TestQualityGatesAreWiredIntoMakeCIAndTestingStrategy(t *testing.T) {
 	root := repositoryRoot(t)
-	makefile := readFile(t, filepath.Join(moduleRoot(t), "Makefile"))
+	makefile := readText(t, moduleRoot(t), "Makefile")
 	assertContainsEach(t, makefile, "Makefile does not include %q", "fuzz-smoke:", "mutation-verify:", "scripts/run-fuzz.sh smoke", "scripts/run-mutation.sh")
 
-	pullRequest := readFile(t, filepath.Join(root, ".github", "workflows", "pull-request.yml"))
+	pullRequest := readText(t, root, ".github", "workflows", "pull-request.yml")
 	assertContainsEach(t, pullRequest, "pull-request workflow does not run %q", "make fuzz-smoke", "make mutation-verify")
 
-	master := readFile(t, filepath.Join(root, ".github", "workflows", "master.yml"))
+	master := readText(t, root, ".github", "workflows", "master.yml")
 	assertContainsEach(t, master, "master workflow does not configure %q", "fuzz-shard", "matrix:", "shard: [0, 1, 2]", "scripts/run-fuzz.sh shard")
 
-	strategy := readFile(t, filepath.Join(root, "docs", "testing", "strategy.md"))
+	strategy := readText(t, root, "docs", "testing", "strategy.md")
 	assertContainsEach(t, strategy, "testing strategy does not document %q", "make fuzz-smoke", "make mutation-verify")
 }
 
 func TestMasterFuzzShardsUseFixedExecutionBudget(t *testing.T) {
 	root := repositoryRoot(t)
-	master := readFile(t, filepath.Join(root, ".github", "workflows", "master.yml"))
-	if !strings.Contains(master, `FUZZ_TIME=250000x bash ../scripts/release/run-gate.sh fuzz_summary "$RUNNER_TEMP/fuzz-evidence/fuzz-${{ matrix.shard }}.json" bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"`) {
-		t.Fatal("master fuzz shards must use the fixed 250000x execution budget")
-	}
-	if strings.Contains(master, "FUZZ_TIME=45s") {
-		t.Fatal("master fuzz shards must not use a deadline-based fuzz budget")
-	}
+	master := readText(t, root, ".github", "workflows", "master.yml")
+	assertContains(t, master, `FUZZ_TIME=250000x bash ../scripts/release/run-gate.sh fuzz_summary "$RUNNER_TEMP/fuzz-evidence/fuzz-${{ matrix.shard }}.json" bash scripts/run-fuzz.sh shard "${{ matrix.shard }}"`, "master fuzz shards must use the fixed 250000x execution budget")
+	assertOmits(t, master, "FUZZ_TIME=45s", "master fuzz shards must not use a deadline-based fuzz budget")
 
-	script := readFile(t, filepath.Join(moduleRoot(t), "scripts", "run-fuzz.sh"))
-	if !strings.Contains(script, "-parallel=1") {
-		t.Fatal("fuzz runner must retain one worker per target")
-	}
+	script := readText(t, moduleRoot(t), "scripts", "run-fuzz.sh")
+	assertContains(t, script, "-parallel=1", "fuzz runner must retain one worker per target")
 
-	strategy := readFile(t, filepath.Join(root, "docs", "testing", "strategy.md"))
+	strategy := readText(t, root, "docs", "testing", "strategy.md")
 	assertContainsEach(t, strategy, "testing strategy does not document %q", "FUZZ_TIME=250000x", "248,282")
 }
 
 func TestMutationManifestCoversCriticalSemanticInvariants(t *testing.T) {
-	manifest := readFile(t, filepath.Join(moduleRoot(t), "tools", "mutationverify", "main.go"))
+	manifest := readText(t, moduleRoot(t), "tools", "mutationverify", "main.go")
 	assertContainsEach(t, manifest, "mutation manifest does not include %q",
 		"money-round-up",
 		"window-comparison-boundary",
@@ -316,24 +300,11 @@ func excludedFromFuzzTargetScan(name string) bool {
 var (
 	repositoryRoot = repotest.RepositoryRoot
 	moduleRoot     = repotest.ModuleRoot
+	readText       = repotest.ReadText
+	writeFile      = repotest.WriteFile
+
+	assertContains     = repotest.AssertContains
+	assertOmits        = repotest.AssertOmits
+	assertContainsEach = repotest.AssertContainsEach
+	assertOmitsEach    = repotest.AssertOmitsEach
 )
-
-// assertContainsEach fails with failure, formatted with the missing value,
-// unless text contains every value.
-func assertContainsEach(t *testing.T, text, failure string, values ...string) {
-	t.Helper()
-	for _, value := range values {
-		if !strings.Contains(text, value) {
-			t.Fatalf(failure, value)
-		}
-	}
-}
-
-func readFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
-}

@@ -1,8 +1,6 @@
 package architecturetest
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,13 +21,10 @@ func TestMasterPushRunsAreNeverCancelled(t *testing.T) {
 func TestReleaseEvidenceRendersEveryPolicyCheckedOverlay(t *testing.T) {
 	root := repositoryRoot(t)
 	collect := readRepositoryFile(t, root, "scripts", "release", "collect.sh")
-	verify, err := os.ReadFile(filepath.Join(root, "golang", "deploy", "verify.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	verify := readText(t, root, "golang", "deploy", "verify.sh")
 	for _, overlay := range []string{"base", "examples/aws-workload-identity", "examples/azure-workload-identity", "examples/private-state-egress", "examples/redis-tls"} {
 		path := "deploy/kubernetes/" + overlay
-		if !strings.Contains(string(verify), path) {
+		if !strings.Contains(verify, path) {
 			t.Fatalf("deploy/verify.sh no longer checks %s; update this test", path)
 		}
 		if !strings.Contains(collect, path) {

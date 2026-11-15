@@ -5,7 +5,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,9 +14,7 @@ import (
 // Check every package and its tests, including code outside the worker binary.
 // A transitive SQL dependency must not silently restore the removed backend.
 func TestWorkerHasNoSQLDependencies(t *testing.T) {
-	command := exec.Command("go", "list", "-deps", "-test", "./...")
-	command.Dir = moduleRoot(t)
-	output, err := command.CombinedOutput()
+	output, err := combinedOutputIn(moduleRoot(t), "go", "list", "-deps", "-test", "./...")
 	if err != nil {
 		t.Fatalf("list worker dependencies: %v\n%s", err, output)
 	}
@@ -71,9 +68,7 @@ func TestWorkerSourceHasNoSQLImports(t *testing.T) {
 // Also reject unused explicit requirements and replacements; checking only
 // compiled imports would let a dormant driver remain in the module manifest.
 func TestWorkerModuleHasNoSQLRequirements(t *testing.T) {
-	command := exec.Command("go", "mod", "edit", "-json")
-	command.Dir = moduleRoot(t)
-	output, err := command.CombinedOutput()
+	output, err := combinedOutputIn(moduleRoot(t), "go", "mod", "edit", "-json")
 	if err != nil {
 		t.Fatalf("read module requirements: %v\n%s", err, output)
 	}

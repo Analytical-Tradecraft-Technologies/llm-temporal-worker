@@ -249,15 +249,12 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 		return nil, fmt.Errorf("live profile is not pinned")
 	}
 	switch profile.ID {
-	case "openai-responses":
+	case "openai-responses", "openai-chat", "openrouter-chat", "exa-chat", "anthropic-direct":
 		key, err := credentialFor(profile, lookup)
 		if err != nil {
 			return nil, err
 		}
-		client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: liveOpenAIBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		return liveAdapter(client, err, func(client *openairesponses.Client) (provider.Adapter, error) {
-			return openairesponses.NewOpenAIAdapter(client, profile.ID, "live-openai-responses/v1")
-		})
+		return credentialedLiveAdapter(profile, key)
 	case "azure-responses":
 		endpoint, err := requiredEnvironment(lookup, liveAzureEndpointEnv)
 		if err != nil {
@@ -282,46 +279,6 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 		return liveAdapter(client, err, func(client *openairesponses.Client) (provider.Adapter, error) {
 			return openairesponses.NewAzureAdapter(client, profile.ID, "live-azure-responses/v1")
 		})
-	case "openai-chat":
-		key, err := credentialFor(profile, lookup)
-		if err != nil {
-			return nil, err
-		}
-		chatProfile, err := chatProfileFor(profile)
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		client, err := openaichat.NewClient(openaichat.ClientConfig{BaseURL: liveOpenAIBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
-			return openaichat.NewOpenAIAdapter(client, profile.ID, chatProfile)
-		})
-	case "openrouter-chat":
-		key, err := credentialFor(profile, lookup)
-		if err != nil {
-			return nil, err
-		}
-		client, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: liveOpenRouterBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
-			return openaichat.NewOpenRouterAdapter(client, profile.ID, openRouterProfileConfig(profile))
-		})
-	case "exa-chat":
-		key, err := credentialFor(profile, lookup)
-		if err != nil {
-			return nil, err
-		}
-		client, err := openaichat.NewExaClient(openaichat.ExaClientConfig{BaseURL: liveExaBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
-			return openaichat.NewExaAdapter(client, profile.ID, exaProfileConfig(profile))
-		})
-	case "anthropic-direct":
-		key, err := credentialFor(profile, lookup)
-		if err != nil {
-			return nil, err
-		}
-		client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: liveAnthropicBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		return liveAdapter(client, err, func(client *anthropicmessages.Client) (provider.Adapter, error) {
-			return anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicBaseURL))
-		})
 	case "anthropic-aws":
 		workspace, err := requiredEnvironment(lookup, liveAnthropicAWSWorkspaceEnvironment)
 		if err != nil {
@@ -335,27 +292,62 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 		return liveAdapter(client, err, func(client *anthropicmessages.Client) (provider.Adapter, error) {
 			return anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicAWSBaseURL))
 		})
-	case "bedrock-anthropic":
+	case "bedrock-anthropic", "bedrock-converse":
 		config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(liveAWSRegion))
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
-		client, err := bedrockmessages.NewClient(ctx, bedrockmessages.ClientConfig{HTTPClient: newLiveHTTPClient(), AWSConfig: config})
-		return liveAdapter(client, err, func(client *bedrockmessages.Client) (provider.Adapter, error) {
-			profileConfig := bedrockmessages.DefaultProfile(profile.ID)
-			profileConfig.ExpectedModel = profile.Model
-			return bedrockmessages.NewAdapter(client, profile.ID, profileConfig)
-		})
-	case "bedrock-converse":
-		config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(liveAWSRegion))
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
+		if profile.ID == "bedrock-anthropic" {
+			client, err := bedrockmessages.NewClient(ctx, bedrockmessages.ClientConfig{HTTPClient: newLiveHTTPClient(), AWSConfig: config})
+			return liveAdapter(client, err, func(client *bedrockmessages.Client) (provider.Adapter, error) {
+				profileConfig := bedrockmessages.DefaultProfile(profile.ID)
+				profileConfig.ExpectedModel = profile.Model
+				return bedrockmessages.NewAdapter(client, profile.ID, profileConfig)
+			})
 		}
 		client, err := bedrockconverse.NewClient(ctx, bedrockconverse.ClientConfig{HTTPClient: newLiveHTTPClient(), AWSConfig: config})
 		return liveAdapter(client, err, func(client *bedrockconverse.Client) (provider.Adapter, error) {
 			profileConfig := bedrockconverse.DefaultProfile(profile.ID)
 			profileConfig.ExpectedModel = profile.Model
 			return bedrockconverse.NewAdapter(client, profile.ID, profileConfig)
+		})
+	default:
+		return nil, fmt.Errorf("live profile is not supported")
+	}
+}
+
+// credentialedLiveAdapter builds the profiles whose only external input is the
+// environment credential that adapterForWithAzureDependencies already read.
+func credentialedLiveAdapter(profile Profile, key string) (provider.Adapter, error) {
+	switch profile.ID {
+	case "openai-responses":
+		client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: liveOpenAIBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
+		return liveAdapter(client, err, func(client *openairesponses.Client) (provider.Adapter, error) {
+			return openairesponses.NewOpenAIAdapter(client, profile.ID, "live-openai-responses/v1")
+		})
+	case "openai-chat":
+		chatProfile, err := chatProfileFor(profile)
+		if err != nil {
+			return nil, fmt.Errorf("live adapter construction failed")
+		}
+		client, err := openaichat.NewClient(openaichat.ClientConfig{BaseURL: liveOpenAIBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
+		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
+			return openaichat.NewOpenAIAdapter(client, profile.ID, chatProfile)
+		})
+	case "openrouter-chat":
+		client, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: liveOpenRouterBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
+		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
+			return openaichat.NewOpenRouterAdapter(client, profile.ID, openRouterProfileConfig(profile))
+		})
+	case "exa-chat":
+		client, err := openaichat.NewExaClient(openaichat.ExaClientConfig{BaseURL: liveExaBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
+		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
+			return openaichat.NewExaAdapter(client, profile.ID, exaProfileConfig(profile))
+		})
+	case "anthropic-direct":
+		client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: liveAnthropicBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
+		return liveAdapter(client, err, func(client *anthropicmessages.Client) (provider.Adapter, error) {
+			return anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicBaseURL))
 		})
 	default:
 		return nil, fmt.Errorf("live profile is not supported")

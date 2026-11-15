@@ -17,19 +17,9 @@ import (
 
 func TestPublicGenerateOptionalCompaction(t *testing.T) {
 	for _, compact := range []bool{false, true} {
-		var suite testsuite.WorkflowTestSuite
-		env := suite.NewTestWorkflowEnvironment()
-		var request llm.GenerateRequestV1
-		workflowJSON(t, "generate-root", &request)
-		parent := llm.CheckpointHandle("ckp_v1.original")
-		request.Parent = &parent
-		var generated llm.GenerateResponseV1
-		workflowJSON(t, "generate-response", &generated)
-		generated.OperationKey = request.OperationKey
-		generated.OperationID = testRequestID
-		var summary llm.CompactResponseV1
-		workflowJSON(t, "compact-response", &summary)
-		summary.OperationKey = compactionKey(request)
+		env := newWorkflowEnv()
+		request, generated, summary := parentedGenerateFixtures(t)
+		parent := *request.Parent
 		summary.OperationID = testRequestID
 		planned, compactions, generations := 0, 0, 0
 		env.RegisterWorkflowWithOptions(Generate, workflow.RegisterOptions{Name: GenerateWorkflowName})
@@ -66,13 +56,8 @@ func TestPublicGenerateOptionalCompaction(t *testing.T) {
 			return &llm.ExecutionResultV1{RequestID: testRequestID, Kind: "generate", State: llm.ExecutionCompleted, Generate: &generated}, nil
 		}, workflow.RegisterOptions{Name: RequestWorkflowName})
 		env.ExecuteWorkflow(GenerateWorkflowName, request)
-		if err := env.GetWorkflowError(); err != nil {
-			t.Fatal(err)
-		}
 		var got llm.GenerateResponseV1
-		if err := env.GetWorkflowResult(&got); err != nil {
-			t.Fatal(err)
-		}
+		requireWorkflowResult(t, env, &got)
 		expectedCompactions := 0
 		if compact {
 			expectedCompactions = 1
@@ -85,19 +70,8 @@ func TestPublicGenerateOptionalCompaction(t *testing.T) {
 
 func TestPublicGenerateBindingVersionMigration(t *testing.T) {
 	for _, version := range []workflow.Version{workflow.DefaultVersion, 1} {
-		var suite testsuite.WorkflowTestSuite
-		env := suite.NewTestWorkflowEnvironment()
-		var request llm.GenerateRequestV1
-		workflowJSON(t, "generate-root", &request)
-		parent := llm.CheckpointHandle("ckp_v1.original")
-		request.Parent = &parent
-		var summary llm.CompactResponseV1
-		workflowJSON(t, "compact-response", &summary)
-		summary.OperationKey = compactionKey(request)
-		var generated llm.GenerateResponseV1
-		workflowJSON(t, "generate-response", &generated)
-		generated.OperationKey = request.OperationKey
-		generated.OperationID = testRequestID
+		env := newWorkflowEnv()
+		request, generated, summary := parentedGenerateFixtures(t)
 		compactions := 0
 		env.RegisterWorkflowWithOptions(Generate, workflow.RegisterOptions{Name: GenerateWorkflowName})
 		registerPlanner(env, func(context.Context, llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
@@ -121,9 +95,7 @@ func TestPublicGenerateBindingVersionMigration(t *testing.T) {
 		}, workflow.RegisterOptions{Name: RequestWorkflowName})
 		env.OnGetVersion("public-generation-binding-v1", workflow.DefaultVersion, workflow.Version(1)).Return(version)
 		env.ExecuteWorkflow(GenerateWorkflowName, request)
-		if err := env.GetWorkflowError(); err != nil {
-			t.Fatal(err)
-		}
+		requireNoWorkflowError(t, env)
 		want := 0
 		if version == workflow.DefaultVersion {
 			want = 1
@@ -157,9 +129,7 @@ func TestPublicWorkflowsUseActualInternalStateMachine(t *testing.T) {
 			name, input = CompactWorkflowName, wireFixture(t, "compact-request")
 		}
 		f.env.ExecuteWorkflow(name, input)
-		if err := f.env.GetWorkflowError(); err != nil {
-			t.Fatal(err)
-		}
+		requireNoWorkflowError(t, f.env)
 		if len(f.steps) != 0 {
 			t.Fatal("public caller abandoned unfinished work")
 		}
@@ -167,12 +137,8 @@ func TestPublicWorkflowsUseActualInternalStateMachine(t *testing.T) {
 }
 
 func TestPublicGenerateDoesNotGenerateAfterCompactionFailure(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
-	var request llm.GenerateRequestV1
-	workflowJSON(t, "generate-root", &request)
-	parent := llm.CheckpointHandle("ckp_v1.original")
-	request.Parent = &parent
+	env := newWorkflowEnv()
+	request, _, _ := parentedGenerateFixtures(t)
 	env.RegisterWorkflowWithOptions(Generate, workflow.RegisterOptions{Name: GenerateWorkflowName})
 	registerPlanner(env, func(context.Context, llm.GenerateRequestV1) (llm.GenerationPlanV1, error) {
 		return llm.GenerationPlanV1{CompactBeforeGenerate: true}, nil
@@ -184,6 +150,24 @@ func TestPublicGenerateDoesNotGenerateAfterCompactionFailure(t *testing.T) {
 	if env.GetWorkflowError() == nil {
 		t.Fatal("compaction failure accepted")
 	}
+}
+
+// parentedGenerateFixtures returns the generate-root request with parent
+// ckp_v1.original, its generate response bound to the request, and the
+// compact response bound to the request's compaction.
+func parentedGenerateFixtures(t *testing.T) (llm.GenerateRequestV1, llm.GenerateResponseV1, llm.CompactResponseV1) {
+	t.Helper()
+	var request llm.GenerateRequestV1
+	workflowJSON(t, "generate-root", &request)
+	parent := llm.CheckpointHandle("ckp_v1.original")
+	request.Parent = &parent
+	var generated llm.GenerateResponseV1
+	workflowJSON(t, "generate-response", &generated)
+	generated.OperationKey, generated.OperationID = request.OperationKey, testRequestID
+	var summary llm.CompactResponseV1
+	workflowJSON(t, "compact-response", &summary)
+	summary.OperationKey = compactionKey(request)
+	return request, generated, summary
 }
 
 // registerPlanner registers plan as both generation planning Activities: the
@@ -202,8 +186,7 @@ func registerPlanner(env *testsuite.TestWorkflowEnvironment, plan func(context.C
 // the request workflow or the old plan Activity runs.
 func resolvedGenerate(t *testing.T, alter func(*llm.ExecutionResultV1), version workflow.Version) (*testsuite.TestWorkflowEnvironment, llm.GenerateRequestV1, llm.GenerateResponseV1, *[]llm.ExecutionReferenceV1) {
 	t.Helper()
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
+	env := newWorkflowEnv()
 	var request llm.GenerateRequestV1
 	workflowJSON(t, "generate-root", &request)
 	request.Cache = &llm.CachePolicyV1{}
@@ -252,13 +235,8 @@ func resolvedGenerate(t *testing.T, alter func(*llm.ExecutionResultV1), version 
 // the request workflow would have.
 func TestPublicGenerateResolvedSkipsRequestWorkflow(t *testing.T) {
 	env, request, generated, exports := resolvedGenerate(t, nil, 1)
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
 	var got llm.GenerateResponseV1
-	if err := env.GetWorkflowResult(&got); err != nil {
-		t.Fatal(err)
-	}
+	requireWorkflowResult(t, env, &got)
 	want := []llm.ExecutionReferenceV1{{RequestID: testRequestID, Context: request.Context, Capability: testCapability}}
 	if !reflect.DeepEqual(got, generated) || !reflect.DeepEqual(*exports, want) {
 		t.Fatalf("result or export changed: exports %+v", *exports)
@@ -286,9 +264,7 @@ func TestPublicGenerateRejectsMismatchedResolution(t *testing.T) {
 // Activity and the request workflow.
 func TestPublicGenerateBeforeResolutionKeepsRequestWorkflow(t *testing.T) {
 	env, _, generated, _ := resolvedGenerate(t, nil, workflow.DefaultVersion)
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
+	requireNoWorkflowError(t, env)
 	var got llm.GenerateResponseV1
 	if err := env.GetWorkflowResult(&got); err != nil || !reflect.DeepEqual(got, generated) {
 		t.Fatalf("result changed: %v", err)

@@ -18,6 +18,20 @@ func mapBody(t *testing.T, body string) (mappedRequest, *apiError) {
 	return mapCreateRequest(request, testIdentity, "resp_test")
 }
 
+// mapNext decodes and maps body as response resp_next, failing on either error.
+func mapNext(t *testing.T, body string) mappedRequest {
+	t.Helper()
+	request, apiErr := decodeCreateRequest([]byte(body))
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	mapped, apiErr := mapCreateRequest(request, testIdentity, "resp_next")
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	return mapped
+}
+
 func TestParseAPIKey(t *testing.T) {
 	for key, want := range map[string]*llm.RequestContext{
 		"acme/search/batch-job":  {Tenant: "acme", Project: "search", Actor: "batch-job"},
@@ -204,14 +218,7 @@ func TestWorkflowIDSeparatesProjects(t *testing.T) {
 }
 
 func TestContinuationSetsCompositeSettingsInFull(t *testing.T) {
-	request, apiErr := decodeCreateRequest([]byte(`{"input":"more","previous_response_id":"resp_first","max_output_tokens":50,"parallel_tool_calls":false}`))
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
-	mapped, apiErr := mapCreateRequest(request, testIdentity, "resp_next")
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
+	mapped := mapNext(t, `{"input":"more","previous_response_id":"resp_first","max_output_tokens":50,"parallel_tool_calls":false}`)
 	parent := llm.CheckpointHandle("checkpoint")
 	mapped.Generate.Parent = &parent
 	if _, err := mapped.Generate.MarshalJSON(); err != nil {
@@ -228,11 +235,7 @@ func TestContinuationSetsCompositeSettingsInFull(t *testing.T) {
 		t.Fatalf("unexpected tool policy: %+v", policy)
 	}
 
-	request, _ = decodeCreateRequest([]byte(`{"input":"more","previous_response_id":"resp_first"}`))
-	mapped, apiErr = mapCreateRequest(request, testIdentity, "resp_next")
-	if apiErr != nil {
-		t.Fatal(apiErr)
-	}
+	mapped = mapNext(t, `{"input":"more","previous_response_id":"resp_first"}`)
 	if mapped.Generate.SettingsPatch.Output.Set == nil || mapped.Generate.SettingsPatch.Output.Set.MaxTokens != nil ||
 		mapped.Generate.SettingsPatch.ToolPolicy.Set == nil || !mapped.Generate.SettingsPatch.ToolPolicy.Set.Parallel {
 		t.Fatalf("a bare continuation does not reset the per-request settings: %+v", mapped.Generate.SettingsPatch)
@@ -241,7 +244,7 @@ func TestContinuationSetsCompositeSettingsInFull(t *testing.T) {
 		t.Fatal("a bare continuation overrides inherited settings")
 	}
 
-	request, _ = decodeCreateRequest([]byte(`{"model":"m","input":"new"}`))
+	request, _ := decodeCreateRequest([]byte(`{"model":"m","input":"new"}`))
 	mapped, _ = mapCreateRequest(request, testIdentity, "resp_new")
 	if mapped.Generate.SettingsPatch.Output.Set != nil || mapped.Generate.SettingsPatch.ToolPolicy.Set != nil {
 		t.Fatal("a new conversation sets settings it was not given")
@@ -253,14 +256,7 @@ func TestContinuationSetsCompositeSettingsInFull(t *testing.T) {
 func TestReasoningEffortReplacesAnInheritedMode(t *testing.T) {
 	turn := func(body string, base state.ModelState) state.ModelState {
 		t.Helper()
-		request, apiErr := decodeCreateRequest([]byte(body))
-		if apiErr != nil {
-			t.Fatal(apiErr)
-		}
-		mapped, apiErr := mapCreateRequest(request, testIdentity, "resp_next")
-		if apiErr != nil {
-			t.Fatal(apiErr)
-		}
+		mapped := mapNext(t, body)
 		next, err := state.ApplySettingsPatchV1(base, mapped.Generate.SettingsPatch)
 		if err != nil {
 			t.Fatal(err)

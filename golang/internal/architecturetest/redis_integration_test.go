@@ -9,9 +9,7 @@ import (
 
 func TestRedisIntegrationForwardsConfiguredContainerPrefixToRestartGate(t *testing.T) {
 	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
-	if !strings.Contains(makefile, `LLMTW_REDIS_CONTAINER_PREFIX="$(REDIS_INTEGRATION_CONTAINER_PREFIX)"`) {
-		t.Fatal("redis-integration does not pass its configured container prefix to the persistence gate")
-	}
+	assertContains(t, makefile, `LLMTW_REDIS_CONTAINER_PREFIX="$(REDIS_INTEGRATION_CONTAINER_PREFIX)"`, "redis-integration does not pass its configured container prefix to the persistence gate")
 
 	testSource := readRepositoryFile(t, moduleRoot(t), "storage", "redis", "shared_state_conformance_integration_test.go")
 	expectContainsEach(t, testSource, "Redis persistence gate does not honor configured container prefixes: missing %q",
@@ -23,17 +21,13 @@ func TestRedisIntegrationForwardsConfiguredContainerPrefixToRestartGate(t *testi
 func TestRedisIntegrationFailureRedactorRunsThroughBash(t *testing.T) {
 	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
 	target := redisIntegrationTarget(t, makefile)
-	if !strings.Contains(target, "bash ./scripts/redact-compose-logs.sh") {
-		t.Fatal("redis-integration must invoke its failure redactor through bash")
-	}
+	assertContains(t, target, "bash ./scripts/redact-compose-logs.sh", "redis-integration must invoke its failure redactor through bash")
 }
 
 func TestReadinessIntegrationProvisionsRedisFunctionsForStorageGate(t *testing.T) {
 	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
 	target := makeTarget(t, makefile, "readiness-integration:\n", "\n\n# Runs the black-box StoreFactory contract")
-	if strings.Contains(makefile, "READINESS_REDIS_PORT") {
-		t.Fatal("Makefile must not retain a fixed readiness Redis port setting")
-	}
+	assertOmits(t, makefile, "READINESS_REDIS_PORT", "Makefile must not retain a fixed readiness Redis port setting")
 	if regexp.MustCompile(`--publish 127\.0\.0\.1:[^:]`).MatchString(target) {
 		t.Fatal("readiness-integration must not publish Redis on a fixed host port")
 	}
@@ -62,21 +56,18 @@ func TestRedisBenchmarkIsOperatorGatedAndExcludedFromCI(t *testing.T) {
 		"-tags=redisbenchmark",
 		"BenchmarkV1ActivitiesAdmissionRedis",
 	)
-	for _, forbidden := range []string{"docker", "FunctionLoad", "LLMTW_REDIS_TEST_PROVISION"} {
-		if strings.Contains(target, forbidden) {
-			t.Errorf("redis-benchmark must not contain %q", forbidden)
-		}
-	}
+	expectOmitsEach(t, target, "redis-benchmark must not contain %q", "docker", "FunctionLoad", "LLMTW_REDIS_TEST_PROVISION")
 	compileTarget := redisBenchmarkCompileTarget(t, makefile)
 	expectContainsEach(t, compileTarget, "redis-benchmark-compile is missing %q",
 		// The safety tests run; the benchmark itself never does (#1534).
 		"$(GO) test -tags=redisbenchmark ./internal/runtime -run '^TestRedisBenchmark' -bench '^$$'",
 	)
-	for _, forbidden := range []string{"LLMTW_REDIS_BENCHMARK", "docker", "Function", "redis-benchmark:"} {
-		if strings.Contains(compileTarget, forbidden) {
-			t.Errorf("redis-benchmark-compile must not contain %q", forbidden)
-		}
-	}
+	expectOmitsEach(t, compileTarget, "redis-benchmark-compile must not contain %q",
+		"LLMTW_REDIS_BENCHMARK",
+		"docker",
+		"Function",
+		"redis-benchmark:",
+	)
 	for _, workflow := range []string{"master.yml", "pull-request.yml"} {
 		data := readRepositoryFile(t, repositoryRoot(t), ".github", "workflows", workflow)
 		if !strings.Contains(data, "make redis-benchmark-compile") {
@@ -102,12 +93,8 @@ func TestRedisPersistenceCleanupUsesRestartedClient(t *testing.T) {
 	const start = "func TestLiveRedisConfiguredPersistenceSurvivesRestart(t *testing.T) {"
 	const end = "\nfunc TestLiveRedisConfiguredPersistenceGateAllowsOverriddenPrefix"
 	persistenceTest := textSection(t, testSource, start, end, "Redis restart persistence test")
-	if strings.Contains(persistenceTest, "cleanupLivePrefix(t, client, keys.Prefix)") {
-		t.Fatal("Redis restart persistence cleanup must not retain the pre-restart client")
-	}
-	if !strings.Contains(persistenceTest, "cleanupLivePrefix(t, restartedClient, keys.Prefix)") {
-		t.Fatal("Redis restart persistence cleanup must use the restarted client")
-	}
+	assertOmits(t, persistenceTest, "cleanupLivePrefix(t, client, keys.Prefix)", "Redis restart persistence cleanup must not retain the pre-restart client")
+	assertContains(t, persistenceTest, "cleanupLivePrefix(t, restartedClient, keys.Prefix)", "Redis restart persistence cleanup must use the restarted client")
 }
 
 func TestRedisLiveHarnessRefreshesEphemeralPortBeforeEachTest(t *testing.T) {
@@ -122,12 +109,8 @@ func TestRedisLiveHarnessRefreshesEphemeralPortBeforeEachTest(t *testing.T) {
 
 func TestRedisContinuationLiveTestUsesRefreshedHarness(t *testing.T) {
 	source := readRepositoryFile(t, moduleRoot(t), "storage", "redis", "continuation_integration_test.go")
-	if !strings.Contains(source, "client := openLiveRedis(t)") {
-		t.Fatal("continuation live test must use the shared Redis harness")
-	}
-	if strings.Contains(source, `os.Getenv("LLMTW_REDIS_ADDR")`) {
-		t.Fatal("continuation live test must not retain a stale Redis address")
-	}
+	assertContains(t, source, "client := openLiveRedis(t)", "continuation live test must use the shared Redis harness")
+	assertOmits(t, source, `os.Getenv("LLMTW_REDIS_ADDR")`, "continuation live test must not retain a stale Redis address")
 }
 
 func redisIntegrationTarget(t *testing.T, makefile string) string {

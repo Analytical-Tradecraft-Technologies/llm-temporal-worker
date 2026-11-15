@@ -15,10 +15,7 @@ import (
 func TestGenerateReplaysACompletedOperationAfterItsRouteIsRemoved(t *testing.T) {
 	adapter := &fakeAdapter{name: "replay", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	first, err := harness.engine.Generate(context.Background(), baseRequest("replay-after-route-removal"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := harness.mustGenerate(t, baseRequest("replay-after-route-removal"))
 	static := harness.engine.dependencies.Snapshots.(StaticSnapshot)
 	static.Value.Routes = routing.Catalog{Version: "routes-2", Models: map[string]routing.Model{}}
 	harness.engine.dependencies.Snapshots = static
@@ -46,10 +43,7 @@ func (unavailableSnapshot) Current(context.Context) (Snapshot, error) {
 func TestGenerateReplaysACompletedOperationWhileConfigurationIsUnavailable(t *testing.T) {
 	adapter := &fakeAdapter{name: "replay", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	first, err := harness.engine.Generate(context.Background(), baseRequest("replay-without-snapshot"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := harness.mustGenerate(t, baseRequest("replay-without-snapshot"))
 	harness.engine.dependencies.Snapshots = unavailableSnapshot{}
 	replay, err := harness.engine.Generate(context.Background(), baseRequest("replay-without-snapshot"))
 	if err != nil || replay.OperationID != first.OperationID || adapter.invokes != 1 {
