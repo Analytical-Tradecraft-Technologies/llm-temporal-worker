@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -46,7 +48,7 @@ type PlannedProviderCall struct {
 // Route binds the already compiled selection to durable, caller-supplied IDs.
 // Generate and Compact use the same identity for cache lookup and admission.
 func (planned PlannedProviderCall) Route(operation durable.OperationID, generation durable.GenerationID) (durable.RoutePlan, error) {
-	if isNilCapability(planned.Adapter) || !validPlannedCall(planned.Call, planned.Candidate, planned.Call.OperationKey, planned.Call.Metadata.SchemaDigest) ||
+	if typednil.Is(planned.Adapter) || !validPlannedCall(planned.Call, planned.Candidate, planned.Call.OperationKey, planned.Call.Metadata.SchemaDigest) ||
 		planned.CacheIdentity != providerCacheIdentity(planned.Candidate) || planned.CapabilityVersion != planned.Candidate.CapabilityVersion {
 		return durable.RoutePlan{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
@@ -78,14 +80,14 @@ type ProviderPlanning struct {
 }
 
 func (capabilities V1RuntimeCapabilities) NewProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
-	if isNilCapability(capabilities.Planner) {
+	if typednil.Is(capabilities.Planner) {
 		return nil, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	return capabilities.captureProviderPlanning(ctx)
 }
 
 func (capabilities V1RuntimeCapabilities) captureProviderPlanning(ctx context.Context) (*ProviderPlanning, error) {
-	if ctx == nil || isNilCapability(capabilities.Snapshot) || isNilCapability(capabilities.Adapters) {
+	if ctx == nil || typednil.Is(capabilities.Snapshot) || typednil.Is(capabilities.Adapters) {
 		return nil, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	if err := ctx.Err(); err != nil {
@@ -134,7 +136,7 @@ func (planning *ProviderPlanning) plan(ctx context.Context, request llm.Request,
 // selectCall permits the budget planner to reject a compiled candidate before
 // it wins selection. Neither callback nor compilation may perform paid work.
 func (planning *ProviderPlanning) selectCall(ctx context.Context, request llm.Request, pins providerStatePins, accept func(PlannedProviderCall) (bool, error), priorCandidates ...string) (PlannedProviderCall, error) {
-	if ctx == nil || planning == nil || isNilCapability(planning.planner) || isNilCapability(planning.adapters) {
+	if ctx == nil || planning == nil || typednil.Is(planning.planner) || typednil.Is(planning.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	if err := ctx.Err(); err != nil {
@@ -248,7 +250,7 @@ func (planning *ProviderPlanning) compileCandidate(ctx context.Context, semantic
 	if err != nil {
 		return rejectedCandidate(candidate, err, false)
 	}
-	if isNilCapability(adapter) {
+	if typednil.Is(adapter) {
 		return PlannedProviderCall{}, nil, providerPlanningError(provider.CodeConfiguration, provider.PhaseCompile, provider.RetryNever)
 	}
 	query := provider.CapabilityQuery{EndpointID: candidate.EndpointID, Family: provider.Family(candidate.Family), Model: candidate.Model, ServiceClass: candidate.AttemptedClass}
@@ -337,7 +339,7 @@ func (planning *ProviderPlanning) containsCandidate(request llm.Request, candida
 
 func validPlannedCall(call provider.Call, candidate routing.Candidate, operationKey string, digest [32]byte) bool {
 	return call.EndpointID == candidate.EndpointID && call.Family == provider.Family(candidate.Family) && call.Model == candidate.Model &&
-		operationKey != "" && call.OperationKey == operationKey && call.ServiceClass == candidate.AttemptedClass && !isNilCapability(call.SDKParams) &&
+		operationKey != "" && call.OperationKey == operationKey && call.ServiceClass == candidate.AttemptedClass && !typednil.Is(call.SDKParams) &&
 		digest != ([32]byte{}) && call.Metadata.SchemaDigest == digest && call.Metadata.CapabilityVersion == candidate.CapabilityVersion &&
 		call.Metadata.ProviderTier == candidate.ProviderTier && !call.Metadata.OpaqueStateRequired
 }
@@ -541,17 +543,13 @@ func copyProviderCatalog(source routing.Catalog) (routing.Catalog, error) {
 
 func cloneRoutingFeaturesForPlanning(source map[routing.Feature]routing.Capability) map[routing.Feature]routing.Capability {
 	result := make(map[routing.Feature]routing.Capability, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
+	maps.Copy(result, source)
 	return result
 }
 
 func copyProviderHealth(source routing.HealthView) routing.HealthView {
 	result := routing.HealthView{Routes: make(map[string]routing.RouteHealth, len(source.Routes))}
-	for key, value := range source.Routes {
-		result.Routes[key] = value
-	}
+	maps.Copy(result.Routes, source.Routes)
 	return result
 }
 

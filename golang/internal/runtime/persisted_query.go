@@ -20,6 +20,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
@@ -190,16 +191,16 @@ func NewPersistedQueryService(snapshot *config.Snapshot, repositories QueryRepos
 	// creates non-nil typed interfaces and turns an unsupported query family
 	// into a nil-receiver panic. Missing and typed-nil optional capabilities
 	// must retain the same fail-closed behavior.
-	if !isNilCapability(repositories.ProviderStatus) {
+	if !typednil.Is(repositories.ProviderStatus) {
 		handler.provider = repositories.ProviderStatus
 	}
-	if !isNilCapability(repositories.Inventory) {
+	if !typednil.Is(repositories.Inventory) {
 		handler.inventory = repositories.Inventory
 	}
-	if !isNilCapability(repositories.SpendSummary) {
+	if !typednil.Is(repositories.SpendSummary) {
 		handler.spend = repositories.SpendSummary
 	}
-	if !isNilCapability(options.BudgetStatus) {
+	if !typednil.Is(options.BudgetStatus) {
 		handler.budget = options.BudgetStatus
 	}
 	if options.Refresh != nil {

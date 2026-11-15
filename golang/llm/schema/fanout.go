@@ -2,7 +2,9 @@ package schema
 
 import (
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -169,11 +171,7 @@ func (builder *levelBuilder) add(key string, fill func(func(*fanoutNode, int))) 
 	}
 	builder.buckets[signature] = bucket
 	if len(builder.buckets) > maxFanoutBuckets {
-		all := make([]fanoutBucket, 0, len(builder.buckets))
-		for _, bucket := range builder.buckets {
-			all = append(all, bucket)
-		}
-		merged := mergeBuckets(all)
+		merged := mergeBuckets(slices.Collect(maps.Values(builder.buckets)))
 		builder.merged, builder.buckets = &merged, nil
 	}
 }
@@ -182,11 +180,7 @@ func (builder *levelBuilder) level() []fanoutBucket {
 	if builder.merged != nil {
 		return []fanoutBucket{*builder.merged}
 	}
-	level := make([]fanoutBucket, 0, len(builder.buckets))
-	for _, bucket := range builder.buckets {
-		level = append(level, bucket)
-	}
-	return level
+	return slices.Collect(maps.Values(builder.buckets))
 }
 
 // fanoutBucket is the multiset of subschemas applied directly (before their

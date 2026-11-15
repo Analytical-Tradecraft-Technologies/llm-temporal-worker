@@ -42,14 +42,8 @@ type EventHeader struct {
 // Header returns a defensive copy of the header, including optional indexes.
 func (header EventHeader) Header() EventHeader {
 	result := header
-	if header.OutputIndex != nil {
-		index := *header.OutputIndex
-		result.OutputIndex = &index
-	}
-	if header.ContentIndex != nil {
-		index := *header.ContentIndex
-		result.ContentIndex = &index
-	}
+	result.OutputIndex = copyPointer(header.OutputIndex)
+	result.ContentIndex = copyPointer(header.ContentIndex)
 	return result
 }
 

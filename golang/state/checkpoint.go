@@ -575,10 +575,7 @@ func (snapshot CheckpointSnapshot) writeDigestJSON(write func([]byte)) error {
 
 func (checkpoint Checkpoint) clone() Checkpoint {
 	result := checkpoint
-	if checkpoint.Parent != nil {
-		parent := *checkpoint.Parent
-		result.Parent = &parent
-	}
+	result.Parent = clonePointer(checkpoint.Parent)
 	result.Delta = cloneItems(checkpoint.Delta)
 	result.Output = cloneItems(checkpoint.Output)
 	result.SettingsPatch = cloneSettingsPatch(checkpoint.SettingsPatch)

@@ -15,7 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // Decode retains exact JSON numeric literals and rejects trailing values.
@@ -57,7 +58,7 @@ func Ordered(schema any) (json.RawMessage, error) {
 func encode(out *bytes.Buffer, value any) error {
 	switch typed := value.(type) {
 	case map[string]any:
-		return encodeObject(out, typed, sortedKeys(typed))
+		return encodeObject(out, typed, slices.Sorted(maps.Keys(typed)))
 	case []any:
 		out.WriteByte('[')
 		for index, item := range typed {
@@ -127,7 +128,7 @@ func encodeProperties(out *bytes.Buffer, properties map[string]any, required any
 			keys = append(keys, name)
 		}
 	}
-	for _, name := range sortedKeys(properties) {
+	for _, name := range slices.Sorted(maps.Keys(properties)) {
 		if _, done := seen[name]; !done {
 			keys = append(keys, name)
 		}
@@ -136,15 +137,6 @@ func encodeProperties(out *bytes.Buffer, properties map[string]any, required any
 		return fmt.Errorf("schema property order lost a property")
 	}
 	return encodeObject(out, properties, keys)
-}
-
-func sortedKeys(object map[string]any) []string {
-	keys := make([]string, 0, len(object))
-	for key := range object {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // Override is one ordered schema to write into a request body at Path.

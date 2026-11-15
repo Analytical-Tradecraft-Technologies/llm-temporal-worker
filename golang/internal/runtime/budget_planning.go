@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -71,7 +72,7 @@ func (capabilities V1RuntimeCapabilities) NewBudgetPlanning(ctx context.Context)
 }
 
 func (planning *ProviderPlanning) NewBudgetPlanning(estimator budget.Estimator, maxBuckets int) (*BudgetPlanning, error) {
-	if planning == nil || isNilCapability(planning.budgetSnapshot.Prices) || maxBuckets <= 0 ||
+	if planning == nil || typednil.Is(planning.budgetSnapshot.Prices) || maxBuckets <= 0 ||
 		estimator.MaxOutput <= 0 || estimator.MaxReasoning < 0 || (estimator.SafetyRatio != nil && estimator.SafetyRatio.Sign() <= 0) {
 		return nil, budgetPlanningError(provider.CodeConfiguration)
 	}

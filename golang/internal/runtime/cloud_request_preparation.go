@@ -10,6 +10,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -132,7 +133,7 @@ func (p PreparedCloudRequest) compactInput(ctx context.Context) (PreparedCompact
 
 func (capabilities V1RuntimeCapabilities) NewCloudRequestPreparation(resolve CheckpointScopeResolver, limits state.MaterializeLimits) (*CloudRequestPreparation, error) {
 	store, ok := capabilities.Requests.(CloudRequestPreparationStore)
-	if !ok || isNilCapability(store) || capabilities.ConfigDigest == ([32]byte{}) || capabilities.Clock == nil {
+	if !ok || typednil.Is(store) || capabilities.ConfigDigest == ([32]byte{}) || capabilities.Clock == nil {
 		return nil, checkpointReplayError(provider.CodeConfiguration)
 	}
 	replay, err := capabilities.NewCheckpointReplay(resolve, limits)
@@ -500,7 +501,7 @@ func (p *CloudRequestPreparation) withCapability(result llm.ExecutionResultV1, e
 }
 
 func (p *CloudRequestPreparation) authorize(ctx context.Context, caller llm.RequestContext) (string, error) {
-	if p == nil || p.replay == nil || isNilCapability(p.store) || p.clock == nil {
+	if p == nil || p.replay == nil || typednil.Is(p.store) || p.clock == nil {
 		return "", checkpointReplayError(provider.CodeConfiguration)
 	}
 	return p.replay.authorize(ctx, caller)

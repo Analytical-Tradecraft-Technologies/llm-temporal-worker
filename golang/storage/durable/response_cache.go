@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -39,23 +39,10 @@ type ResponseCache struct {
 }
 
 func NewResponseCache(responses cache.ResponseRepository, fills cache.FillRepository, now func() time.Time) (*ResponseCache, error) {
-	if nilCacheRepository(responses) || nilCacheRepository(fills) || now == nil {
+	if typednil.Is(responses) || typednil.Is(fills) || now == nil {
 		return nil, fmt.Errorf("%w: repositories and a clock are required", ErrResponseCacheInvalid)
 	}
 	return &ResponseCache{responses: responses, fills: fills, now: now}, nil
-}
-
-func nilCacheRepository(repository any) bool {
-	if repository == nil {
-		return true
-	}
-	value := reflect.ValueOf(repository)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 // PrepareGenerate is a CacheLookup port implementation after the caller has
@@ -149,7 +136,7 @@ func cachedCompactResponse(entry cache.ResponseEntry, key cache.ResponseKey) (ll
 // PrepareCompact do. A nil entry is a miss; errors are never misses. A caller
 // that then prepares the same key may use the AfterMiss variants.
 func (c *ResponseCache) Lookup(ctx context.Context, key cache.ResponseKey, maxAge *time.Duration) (*cache.ResponseEntry, error) {
-	if ctx == nil || c == nil || c.now == nil || nilCacheRepository(c.responses) ||
+	if ctx == nil || c == nil || c.now == nil || typednil.Is(c.responses) ||
 		(key.Operation != cache.OperationGenerate && key.Operation != cache.OperationCompact) || key.ScopeID == "" || key.RequestIndex < 0 ||
 		key.Fingerprint == (cache.Fingerprint{}) || (maxAge != nil && *maxAge <= 0) || !completeCacheRoute(key.Route) {
 		return nil, ErrResponseCacheInvalid
@@ -186,7 +173,7 @@ func validCachedEntry(entry cache.ResponseEntry, key cache.ResponseKey, now time
 }
 
 func (c *ResponseCache) prepare(ctx context.Context, lease cache.FillLease, maxAge *time.Duration, kind cache.OperationKind, missed bool) (*responseCachePreparation, error) {
-	if ctx == nil || c == nil || c.now == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) ||
+	if ctx == nil || c == nil || c.now == nil || typednil.Is(c.responses) || typednil.Is(c.fills) ||
 		lease.Key.Operation != kind || lease.Key.ScopeID == "" || lease.Key.RequestIndex < 0 ||
 		lease.Key.Fingerprint == (cache.Fingerprint{}) ||
 		lease.OperationID == "" || lease.Attempt == "" || lease.AcquiredAt.IsZero() || !lease.ExpiresAt.After(lease.AcquiredAt) || lease.ExpiresAt.Sub(lease.AcquiredAt) > cache.MaxFillLease ||

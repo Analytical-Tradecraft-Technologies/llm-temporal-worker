@@ -8,10 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -573,7 +575,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return fail(initErr)
 		}
 		store, ok := repository.(budget.InitializationStore)
-		if !ok || isNilCapability(store) {
+		if !ok || typednil.Is(store) {
 			return fail(ErrBudgetInitializationRequired)
 		}
 		readContext, cancel := context.WithTimeout(ctx, time.Duration(value.Server.ReadinessProbeTimeout))
@@ -779,7 +781,7 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	// An interface can hold a typed nil pointer. Treat that value as an
 	// incomplete composition and drain the snapshot-owned clients before the
 	// worker can register Activities and panic on the first invocation.
-	if isNilCapability(v1Runtime) {
+	if typednil.Is(v1Runtime) {
 		return abort(fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid))
 	}
 	_, executes := v1Runtime.(activity.ExecutionRuntime)
@@ -1119,11 +1121,7 @@ func (factory *ProductionEngineFactory) providerEgressClient(value config.Config
 }
 
 func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value config.Config, snapshot engine.Snapshot, syncRuntime *modelSyncRuntime) (map[string]provider.Adapter, error) {
-	ids := make([]string, 0, len(value.Endpoints))
-	for id := range value.Endpoints {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := slices.Sorted(maps.Keys(value.Endpoints))
 	adapters := make(map[string]provider.Adapter, len(ids))
 	for _, endpointID := range ids {
 		endpoint := value.Endpoints[endpointID]
@@ -1397,12 +1395,7 @@ func capabilityFeatureConflict(left, right provider.CapabilitySet) (provider.Fea
 	for feature := range right.Features {
 		features[feature] = struct{}{}
 	}
-	ordered := make([]provider.Feature, 0, len(features))
-	for feature := range features {
-		ordered = append(ordered, feature)
-	}
-	sort.Slice(ordered, func(index, next int) bool { return ordered[index] < ordered[next] })
-	for _, feature := range ordered {
+	for _, feature := range slices.Sorted(maps.Keys(features)) {
 		leftCapability, leftOK := left.Features[feature]
 		rightCapability, rightOK := right.Features[feature]
 		if leftOK != rightOK || (leftOK && leftCapability != rightCapability) {
@@ -1445,9 +1438,7 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 	// provider usage from the response. A catalog may still declare it
 	// explicitly to override this default.
 	copy.Features[provider.FeatureUsage] = provider.Capability{State: provider.CapabilityNative, Reason: "adapter lifts provider usage"}
-	for feature, capability := range value.Features {
-		copy.Features[feature] = capability
-	}
+	maps.Copy(copy.Features, value.Features)
 	return copy
 }
 

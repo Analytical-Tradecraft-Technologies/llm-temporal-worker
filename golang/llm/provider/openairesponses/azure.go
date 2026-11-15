@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -12,6 +11,7 @@ import (
 	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/azurecredentials"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
@@ -73,7 +73,7 @@ func NewAzureTokenClient(config AzureTokenClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !validTokenCredential(config.TokenCredential) {
+	if typednil.Is(config.TokenCredential) {
 		return nil, fmt.Errorf("azure responses: token credential is required")
 	}
 	options := []option.RequestOption{
@@ -91,19 +91,6 @@ func NewAzureTokenClient(config AzureTokenClientConfig) (*Client, error) {
 		options = append(options, azure.WithUnsafeAllowHTTP())
 	}
 	return &Client{sdk: openai.NewClient(options...)}, nil
-}
-
-func validTokenCredential(credential azcore.TokenCredential) bool {
-	if credential == nil {
-		return false
-	}
-	value := reflect.ValueOf(credential)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return !value.IsNil()
-	default:
-		return true
-	}
 }
 
 func validateAzureConfig(rawEndpoint, apiVersion string, httpClient *http.Client) (string, error) {

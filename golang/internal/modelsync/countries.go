@@ -2,7 +2,8 @@ package modelsync
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -53,12 +54,7 @@ const UnreadableCountry = "ZZ"
 
 // CountryListNames returns the supported list names in sorted order.
 func CountryListNames() []string {
-	names := make([]string, 0, len(countryLists))
-	for name := range countryLists {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(countryLists))
 }
 
 // CountryList returns the ISO 3166-1 alpha-2 codes of a named list.

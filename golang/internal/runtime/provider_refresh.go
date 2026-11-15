@@ -12,11 +12,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
@@ -84,7 +86,7 @@ func NewProviderRefresher(options ProviderRefresherOptions) (*ProviderRefresher,
 	if options.ConfigDigest == ([32]byte{}) {
 		return nil, errors.New("provider refresher config digest is required")
 	}
-	if isNilCapability(options.Store) {
+	if typednil.Is(options.Store) {
 		return nil, errors.New("provider refresher inventory store is required")
 	}
 	refresher := &ProviderRefresher{
@@ -110,7 +112,7 @@ func NewProviderRefresher(options ProviderRefresherOptions) (*ProviderRefresher,
 		if target.EndpointID == "" {
 			return nil, errors.New("provider refresh target endpoint is required")
 		}
-		if isNilCapability(target.Lister) {
+		if typednil.Is(target.Lister) {
 			target.Lister = nil
 		}
 		refresher.targets = append(refresher.targets, target)
@@ -299,11 +301,7 @@ func copyStringMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil
 	}
-	copied := make(map[string]string, len(values))
-	for key, value := range values {
-		copied[key] = value
-	}
-	return copied
+	return maps.Clone(values)
 }
 
 func refreshTargetKey(target ProviderRefreshTarget) string {

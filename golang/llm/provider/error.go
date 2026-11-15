@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strconv"
 	"time"
@@ -277,9 +278,7 @@ func WithEndpointID(err *Error, endpointID string) *Error {
 	}
 	cloned := *err
 	cloned.SafeDetails = make(map[string]string, len(err.SafeDetails)+1)
-	for key, value := range err.SafeDetails {
-		cloned.SafeDetails[key] = value
-	}
+	maps.Copy(cloned.SafeDetails, err.SafeDetails)
 	cloned.SafeDetails["endpoint"] = endpointID
 	return &cloned
 }

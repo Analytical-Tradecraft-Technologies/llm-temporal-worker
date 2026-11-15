@@ -95,7 +95,8 @@ current-layout reference.
 │   │   ├── responsesapi/           Optional OpenAI Responses API over Generate
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
 │   │   ├── secrets/                Environment/file secret resolution
-│   │   └── testassert/             Assertions shared by tests across the module
+│   │   ├── testassert/             Assertions shared by tests across the module
+│   │   └── typednil/               Typed-nil dependency check shared by constructors
 │   ├── tools/                      Repository verification and generation commands
 │   │   ├── deploymentpolicy/       Offline Kubernetes workload policy checks
 │   │   ├── modelsyncdefaults/      Regenerates the built-in model-sync rules

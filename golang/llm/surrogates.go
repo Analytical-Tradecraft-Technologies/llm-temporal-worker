@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"maps"
 	"strconv"
 )
 
@@ -86,9 +87,7 @@ func SanitizeRawMapSurrogates(values map[string]json.RawMessage) map[string]json
 		}
 		if result == nil {
 			result = make(map[string]json.RawMessage, len(values))
-			for key, value := range values {
-				result[key] = value
-			}
+			maps.Copy(result, values)
 		}
 		result[key] = sanitized
 	}

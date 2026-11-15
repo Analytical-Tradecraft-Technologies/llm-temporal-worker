@@ -7,6 +7,7 @@ package live
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -113,9 +114,7 @@ func Profiles() []Profile {
 	for _, profile := range profiles {
 		copy := profile
 		copy.AllowedModels = make(map[string]bool, len(profile.AllowedModels))
-		for model, allowed := range profile.AllowedModels {
-			copy.AllowedModels[model] = allowed
-		}
+		maps.Copy(copy.AllowedModels, profile.AllowedModels)
 		result = append(result, copy)
 	}
 	return result

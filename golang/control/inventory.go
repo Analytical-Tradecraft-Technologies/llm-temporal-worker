@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -220,11 +222,7 @@ func InventoryDigest(models []Model) [32]byte {
 	var parts []string
 	for _, model := range copyModels {
 		parts = append(parts, model.ProviderModelID, model.DisplayName, model.OwnedBy, model.CreatedAt.UTC().Format(time.RFC3339Nano), string(model.Lifecycle), hex.EncodeToString(model.CapabilityDigest[:]))
-		keys := make([]string, 0, len(model.SafeMetadata))
-		for key := range model.SafeMetadata {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(model.SafeMetadata))
 		for _, key := range keys {
 			parts = append(parts, key, model.SafeMetadata[key])
 		}

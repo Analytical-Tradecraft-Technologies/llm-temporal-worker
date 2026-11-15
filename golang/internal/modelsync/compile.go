@@ -2,8 +2,9 @@ package modelsync
 
 import (
 	"fmt"
+	"maps"
 	"math/big"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -107,11 +108,7 @@ func Compile(input Input) (Compiled, error) {
 			names[id] = struct{}{}
 		}
 	}
-	ordered := make([]string, 0, len(names))
-	for id := range names {
-		ordered = append(ordered, id)
-	}
-	sort.Strings(ordered)
+	ordered := slices.Sorted(maps.Keys(names))
 	rulesVersion := "model-sync-rules/" + input.Rules.Digest[:min(16, len(input.Rules.Digest))]
 	for _, id := range ordered {
 		if _, reserved := input.Reserved[id]; reserved || input.Rules.Excluded(id) {
@@ -154,11 +151,7 @@ func Compile(input Input) (Compiled, error) {
 			compiled.Models[id] = routing.Model{Name: id, Routes: routes}
 		}
 	}
-	keys := make([]string, 0, len(prices))
-	for key := range prices {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(prices))
 	compiled.Prices = make([]pricing.Entry, 0, len(keys))
 	for _, key := range keys {
 		compiled.Prices = append(compiled.Prices, prices[key])
@@ -256,9 +249,7 @@ func (source Source) route(model string, classes []llm.ServiceClass, contextToke
 		providerTiers[class] = source.Tiers[class]
 	}
 	capabilities := routing.CapabilitySet{Version: source.Capabilities.Version, Features: make(map[routing.Feature]routing.Capability, len(source.Capabilities.Features))}
-	for feature, capability := range source.Capabilities.Features {
-		capabilities.Features[feature] = capability
-	}
+	maps.Copy(capabilities.Features, source.Capabilities.Features)
 	return routing.Route{
 		EndpointID:            source.EndpointID,
 		Provider:              source.provider(),

@@ -8,7 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -178,12 +181,7 @@ func (store *InMemoryRetention) Snapshot() []RetentionRecord {
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	result := make([]RetentionRecord, 0, len(store.records))
-	for _, record := range store.records {
-		result = append(result, record)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
+	return slices.SortedFunc(maps.Values(store.records), func(left, right RetentionRecord) int { return strings.Compare(left.ID, right.ID) })
 }
 
 func (store *InMemoryRetention) Prune(ctx context.Context, policy RetentionPolicy) (RetentionResult, error) {

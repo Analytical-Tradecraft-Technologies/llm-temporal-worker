@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -583,7 +584,7 @@ func openPendingStore(ctx context.Context, snapshot *config.Snapshot) (pendingRe
 		return nil, errors.New("pending recovery storage could not be opened")
 	}
 	store, ok := repository.(pendingRecoveryStore)
-	if !ok || isNilCapability(store) {
+	if !ok || typednil.Is(store) {
 		return nil, errors.New("pending recovery storage is unsupported")
 	}
 	return store, nil
@@ -659,7 +660,7 @@ func RunPendingRecover(ctx context.Context, data []byte, ids []string, stale boo
 	}
 	cloud, ok := source.V1Runtime().(*cloudV1Runtime)
 	store, stored := capabilities.V1RuntimeCapabilities().Requests.(pendingRecoveryStore)
-	if !ok || cloud == nil || cloud.CloudExecutionRuntime == nil || !stored || isNilCapability(store) {
+	if !ok || cloud == nil || cloud.CloudExecutionRuntime == nil || !stored || typednil.Is(store) {
 		return errors.New("pending recovery runtime is unsupported")
 	}
 	recovery.store, recovery.runtime = store, cloud.CloudExecutionRuntime

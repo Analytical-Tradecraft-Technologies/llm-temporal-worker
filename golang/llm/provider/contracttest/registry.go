@@ -2,6 +2,8 @@ package contracttest
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -156,12 +158,7 @@ func registryCapabilities() []string {
 			capabilities[requirement.Capability] = struct{}{}
 		}
 	}
-	result := make([]string, 0, len(capabilities))
-	for capability := range capabilities {
-		result = append(result, capability)
-	}
-	sort.Strings(result)
-	return result
+	return slices.Sorted(maps.Keys(capabilities))
 }
 
 func (artifacts Artifacts) has(kind ArtifactKind) bool {

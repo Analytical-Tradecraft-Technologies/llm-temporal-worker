@@ -2,8 +2,9 @@ package contract
 
 import (
 	"encoding/json"
+	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -25,11 +26,7 @@ func WireDifferences(path string, intended, captured any) []string {
 		for key := range got {
 			keys[key] = struct{}{}
 		}
-		sorted := make([]string, 0, len(keys))
-		for key := range keys {
-			sorted = append(sorted, key)
-		}
-		sort.Strings(sorted)
+		sorted := slices.Sorted(maps.Keys(keys))
 		var differences []string
 		for _, key := range sorted {
 			wantValue, wanted := want[key]

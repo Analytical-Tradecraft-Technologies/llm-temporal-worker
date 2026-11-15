@@ -9,6 +9,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -40,14 +41,14 @@ func NewCloudV1RuntimeBuilder(options CloudV1RuntimeOptions) (V1RuntimeBuilder, 
 		return nil, fmt.Errorf("%w: cloud authorization, retention and limits are required", ErrDurableV1Composition)
 	}
 	return func(ctx context.Context, snapshot *config.Snapshot, _ llm.Engine, clients app.ClientSet) (activity.V1Runtime, error) {
-		if ctx == nil || snapshot == nil || isNilCapability(clients) {
+		if ctx == nil || snapshot == nil || typednil.Is(clients) {
 			return nil, fmt.Errorf("%w: cloud snapshot and clients are required", ErrDurableV1Composition)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		source, ok := clients.(V1RuntimeCapabilitiesSource)
-		if !ok || isNilCapability(source) {
+		if !ok || typednil.Is(source) {
 			return nil, fmt.Errorf("%w: cloud capabilities are unavailable", ErrDurableV1Composition)
 		}
 		capabilities := source.V1RuntimeCapabilities()
@@ -86,7 +87,7 @@ var _ activity.CachedExecutionRuntime = (*cloudV1Runtime)(nil)
 var _ activity.GenerationPlanningRuntime = (*cloudV1Runtime)(nil)
 
 func (r *cloudV1Runtime) QueryV1(ctx context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-	if r == nil || isNilCapability(r.query) {
+	if r == nil || typednil.Is(r.query) {
 		return activity.UnconfiguredV1Runtime{}.QueryV1(ctx, request)
 	}
 	return r.query.Execute(ctx, request)

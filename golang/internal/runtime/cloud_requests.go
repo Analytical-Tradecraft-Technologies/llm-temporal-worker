@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -54,7 +55,7 @@ func cloudResponseFills(repository CloudRequestRepository) (cache.FillRepository
 		return nil, fmt.Errorf("%w: cloud response fill source is missing", ErrProductionFactoryInvalid)
 	}
 	store := source.ResponseFills()
-	if isNilCapability(store) {
+	if typednil.Is(store) {
 		return nil, fmt.Errorf("%w: cloud response fill store is nil", ErrProductionFactoryInvalid)
 	}
 	return snapshotResponseFills{delegate: store}, nil
@@ -81,7 +82,7 @@ func cloudResponseCache(repository CloudRequestRepository) (cache.ResponseReposi
 		return nil, fmt.Errorf("%w: cloud response cache source is missing", ErrProductionFactoryInvalid)
 	}
 	store := source.Responses()
-	if isNilCapability(store) {
+	if typednil.Is(store) {
 		return nil, fmt.Errorf("%w: cloud response cache store is nil", ErrProductionFactoryInvalid)
 	}
 	return snapshotResponseCache{delegate: store}, nil
@@ -104,11 +105,11 @@ func (s snapshotResponseCache) ReadUse(ctx context.Context, scope string, operat
 
 func cloudCheckpointCapabilities(repository CloudRequestRepository, verifier state.CheckpointHandleVerifier, clock func() time.Time) (CheckpointCapabilities, error) {
 	source, ok := repository.(CloudCheckpointSource)
-	if !ok || isNilCapability(verifier) {
+	if !ok || typednil.Is(verifier) {
 		return CheckpointCapabilities{}, fmt.Errorf("%w: cloud checkpoints require a store and handle verifier", ErrProductionFactoryInvalid)
 	}
 	store := source.Checkpoints()
-	if isNilCapability(store) {
+	if typednil.Is(store) {
 		return CheckpointCapabilities{}, fmt.Errorf("%w: cloud checkpoint store is nil", ErrProductionFactoryInvalid)
 	}
 	capabilities := CheckpointCapabilities{
@@ -153,7 +154,7 @@ func (factory *ProductionEngineFactory) buildCloudRequests(ctx context.Context, 
 	repository, err := open(ctx, cloudstate.Config{Provider: parsed, RequestTable: c.RequestTable, PayloadStore: c.PayloadStore, Namespace: c.Namespace, ParentSnapshotStorage: c.ParentSnapshotStorage}, key)
 	// Provider SDK errors can contain resource names or endpoint details. Startup
 	// errors deliberately report only this bounded classification.
-	if err != nil || isNilCapability(repository) {
+	if err != nil || typednil.Is(repository) {
 		return nil, fmt.Errorf("%w: open cloud request storage", ErrDependencyUnavailable)
 	}
 	return repository, nil
