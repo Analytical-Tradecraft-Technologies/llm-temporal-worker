@@ -112,7 +112,7 @@ func refreshTestService(t *testing.T, store *memoryInventoryStore, authorize con
 	if err != nil {
 		t.Fatal(err)
 	}
-	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 512}
+	codec := testCursorCodec(512)
 	handler := &persistedQueryHandler{configDigest: options.ConfigDigest, inventory: store, provider: &fakePersistedProvider{}, refresh: refresher, cursor: codec, clock: func() time.Time { return refreshTestNow }}
 	if authorize == nil {
 		authorize = func(context.Context, control.Authorization) error { return nil }

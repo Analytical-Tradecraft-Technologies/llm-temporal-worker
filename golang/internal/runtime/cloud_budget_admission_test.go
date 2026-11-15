@@ -104,13 +104,10 @@ func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budg
 	if kind == "compact" {
 		input = f.compact
 	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := encodeJSON(t, input)
 	id, _ := cloudstate.NewRequestID()
 	f.store = &admissionPlanStore{record: cloudstate.Record{Request: cloudstate.CreateRequest{
-		ID: id, Scope: cloudstate.Scope{Tenant: "tenant", Project: "project"}, Kind: kind, Manifest: data, CreatedAt: f.attempt.QuotedAt}, Status: cloudstate.StatusRunning}}
+		ID: id, Scope: testRequestScope, Kind: kind, Manifest: data, CreatedAt: f.attempt.QuotedAt}, Status: cloudstate.StatusRunning}}
 	reference, err := durable.NewReferenceBudgetMaterializer(f.attempt.GenerationID, "incarnation-1", func() time.Time { return f.attempt.QuotedAt })
 	if err != nil {
 		t.Fatal(err)
@@ -273,10 +270,7 @@ func TestCloudBudgetAdmissionStorageFailuresNeverReachRedis(t *testing.T) {
 	for _, scenario := range []string{"read failure", "missing request", "missing blob", "load failure", "save failure", "corrupt plan", "pending provider", "unknown outcome", "completed", "wrong kind", "wrong scope", "bad manifest", "old quote"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newCloudAdmissionFixture(t, "generate")
-			f.leaser.accept = func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
-				t.Fatal("invalid preparation reached Redis")
-				return durable.ReserveResult{}, nil
-			}
+			f.leaser.accept = forbidReserve(t, "invalid preparation reached Redis")
 			scope, id := f.store.record.Request.Scope, f.store.record.Request.ID
 			switch scenario {
 			case "read failure":
@@ -335,14 +329,8 @@ func TestCloudBudgetAdmissionRechecksPlanBeforeReserveAndClaim(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				f.leaser.accept = func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
-					t.Fatal("invalid reserve reached Redis")
-					return durable.ReserveResult{}, nil
-				}
-				f.leaser.claim = func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
-					t.Fatal("invalid claim reached Redis")
-					return durable.ClaimReceipt{}, nil
-				}
+				f.leaser.accept = forbidReserve(t, "invalid reserve reached Redis")
+				f.leaser.claim = forbidClaim(t, "invalid claim reached Redis")
 				switch change {
 				case "status":
 					f.store.record.Status = cloudstate.StatusProviderPending

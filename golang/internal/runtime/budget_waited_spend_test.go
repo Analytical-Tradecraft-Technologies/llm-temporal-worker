@@ -41,19 +41,15 @@ func TestBudgetWaitedSpendCountsFromAcceptance(t *testing.T) {
 	f.request.OperationKey = "waiter"
 	v := f.prepareGenerate(t, ctx)
 	waiter := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, waiter)
-	boundedState(t, v, err, llm.ExecutionBudgetWait)
+	f.acquire(t, ctx, waiter, llm.ExecutionBudgetWait)
 
 	// Twelve minutes later the first request's spend has left the window, so
 	// the waiter is admitted on its persisted quote and pays.
 	f.now = f.now.Add(12 * time.Minute)
-	v, err = f.runtime.AcquireBudgetV1(ctx, waiter)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, waiter, llm.ExecutionAcquired)
 	f.restart(t)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, waiter)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, waiter, llm.ExecutionCompleted)
 	if f.submits.Load() != 2 {
 		t.Fatalf("submissions = %d, want 2", f.submits.Load())
 	}
@@ -62,9 +58,6 @@ func TestBudgetWaitedSpendCountsFromAcceptance(t *testing.T) {
 	// spend was accepted and paid inside this window, not twelve minutes ago.
 	f.now = f.now.Add(5 * time.Second)
 	f.request.OperationKey = "after-waiter"
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionBudgetWait)
-	if f.submits.Load() != 2 {
-		t.Fatal("request dispatched while the waiter's spend should still count against the window")
-	}
+	f.step(t, ctx, f.request, llm.ExecutionBudgetWait)
+	requireCount(t, &f.submits, 2, "request dispatched while the waiter's spend should still count against the window")
 }

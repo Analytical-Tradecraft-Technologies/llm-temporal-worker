@@ -191,8 +191,7 @@ func TestCloudRuntimeLineageWalkIsBoundedBySnapshotCadence(t *testing.T) {
 		f.request.Append = []llm.Item{llm.HumanText("next")}
 		f.store.gets.Store(0)
 		f.store.reads.Store(0)
-		v, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request})
-		boundedState(t, v, err, llm.ExecutionBudgetRequired)
+		f.prepare(t, context.Background(), llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionBudgetRequired)
 		return f.store.gets.Load(), f.store.reads.Load()
 	}
 	// Depth 39 is the worst case: seven rows above the snapshot at depth 32.

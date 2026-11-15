@@ -61,10 +61,7 @@ func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFix
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys, err := state.NewKeyring([]state.Key{{ID: "test", Primary: true, Secret: bytes.Repeat([]byte{8}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := testKeyring(t, state.Key{ID: "test", Primary: true, Secret: bytes.Repeat([]byte{8}, 32)})
 	checkpoints := f.repository.Checkpoints()
 	f.cap = b.cap
 	f.cap.Requests = f.repository
@@ -146,8 +143,7 @@ func (f *boundedCloudFixture) finish(t testing.TB) llm.ExecutionResultV1 {
 	}
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
 	ref := f.ref(v)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	f.restart(t)
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
 	if err == nil && v.State == llm.ExecutionPending {
@@ -156,8 +152,7 @@ func (f *boundedCloudFixture) finish(t testing.TB) llm.ExecutionResultV1 {
 	}
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	f.restart(t)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	return boundedState(t, v, err, llm.ExecutionCompleted)
+	return f.complete(t, ctx, ref, llm.ExecutionCompleted)
 }
 func TestCloudExecutionRuntimeGeneration(t *testing.T) {
 	for _, async := range []bool{false, true} {
@@ -188,9 +183,7 @@ func TestCloudExecutionRuntimeGeneration(t *testing.T) {
 					}
 					retried := f.finish(t)
 					assertOriginCost(t, retried.Generate.Diagnostics, result.Generate.OperationID, *result.Generate.Cost.ActualCostUSD)
-					if f.submits.Load() != 1 {
-						t.Fatal("cache retry dispatched")
-					}
+					requireCount(t, &f.submits, 1, "cache retry dispatched")
 					for shard := range cloudstate.PendingShards {
 						page, err := f.repository.ListPending(context.Background(), shard, 100, "")
 						if err != nil || len(page.Requests) != 0 {
@@ -210,12 +203,11 @@ func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 				t.Run(map[bool]string{false: "sync", true: "async"}[async]+map[bool]string{false: "/no-work", true: "/summary"}[work]+fmt.Sprintf("/sample-%d", index), func(t *testing.T) {
 					f := boundedCloud(t, async)
 					if work {
-						policy := json.RawMessage(`{"recent_turns":0}`)
-						f.request.SettingsPatch.CompactionPolicy.Set = &policy
+						keepNoRecentTurns(&f.request)
 					}
 					parent := f.finish(t)
 					f.now = f.now.Add(time.Minute)
-					request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{Variant: index}}
+					request := f.compactRequest(parent, &llm.CachePolicyV1{Variant: index})
 					run := func() llm.ExecutionResultV1 {
 						t.Helper()
 						ctx := context.Background()
@@ -224,9 +216,8 @@ func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 							return v
 						}
 						boundedState(t, v, err, llm.ExecutionBudgetRequired)
-						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-						boundedState(t, v, err, llm.ExecutionAcquired)
+						ref := executionRef(v, request.Context)
+						f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 						f.restart(t)
 						v, err = f.runtime.CompactStepV1(ctx, request)
 						if err == nil && v.State == llm.ExecutionPending {
@@ -235,8 +226,7 @@ func TestCloudExecutionRuntimeCompaction(t *testing.T) {
 						}
 						boundedState(t, v, err, llm.ExecutionProviderCompleted)
 						f.restart(t)
-						v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-						return boundedState(t, v, err, llm.ExecutionCompleted)
+						return f.complete(t, ctx, ref, llm.ExecutionCompleted)
 					}
 					first := run()
 					want := int32(1)
@@ -287,26 +277,22 @@ func TestCloudExecutionRuntimeUnknownRetryGetsNewBudget(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	original := f.adapter.invoke
-	ctx, v, ref, scope, first := startUnknownOutcome(t, f)
+	ctx, _, ref, scope, first := startUnknownOutcome(t, f)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || saved.Execution.Claim == nil || saved.Execution.Settled {
 		t.Fatal("unknown paid claim was lost", err)
 	}
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	next, err := f.repository.LoadRequestAttempt(ctx, scope, first.RootID)
 	if err != nil || next.ID == first.ID || next.PreviousID != first.ID {
 		t.Fatal("reused paid identity", err)
 	}
 	f.adapter.invoke = original
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	paid, err := f.repository.LoadProviderExecution(ctx, scope, next.ID)
 	if err != nil || paid.Execution.Claim == nil || paid.Execution.Claim.OperationID == saved.Execution.Claim.OperationID || !paid.Execution.Settled {
 		t.Fatal("new attempt did not pay independently", err)
@@ -390,18 +376,15 @@ func TestCloudExecutionRuntimeSingleSubmissionUnderConcurrency(t *testing.T) {
 	ctx := context.Background()
 	v := f.prepareGenerate(t, ctx)
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Add(1)
 		go func() { defer wg.Done(); _, _ = f.runtime.GenerateStepV1(ctx, f.request) }()
 	}
 	wg.Wait()
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	if f.submits.Load() != 1 {
 		t.Fatalf("%d submissions", f.submits.Load())
 	}
@@ -419,17 +402,14 @@ func TestCloudExecutionRuntimeStartAcknowledgementLost(t *testing.T) {
 		t.Fatal("HTTP after uncertain cache fence")
 	}
 	f.restart(t)
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	v = f.step(t, ctx, f.request, llm.ExecutionPending)
 	if f.submits.Load() != 0 || fills.starts != 1 {
 		t.Fatal("retry reused dispatch authorization")
 	}
 	f.now = f.now.Add(16 * time.Minute)
 	ref := f.ref(v)
 	f.acquireGenerateComplete(t, ctx, ref)
-	if f.submits.Load() != 1 {
-		t.Fatal("replacement not submitted once")
-	}
+	requireCount(t, &f.submits, 1, "replacement not submitted once")
 }
 
 type boundedFaultFills struct {
@@ -452,19 +432,13 @@ func TestCloudExecutionRuntimeCacheWaitAndBudgetWait(t *testing.T) {
 	ctx, first := f.generateStep(t, llm.ExecutionPending)
 	second := f.request
 	second.OperationKey = "second"
-	v, err := f.runtime.GenerateStepV1(ctx, second)
-	boundedState(t, v, err, llm.ExecutionCacheWait)
-	if f.submits.Load() != 1 {
-		t.Fatal("cache waiter submitted")
-	}
+	v := f.step(t, ctx, second, llm.ExecutionCacheWait)
+	requireCount(t, &f.submits, 1, "cache waiter submitted")
 	f.now = f.now.Add(2 * time.Second)
 	ref := f.ref(first)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	v, err = f.runtime.GenerateStepV1(ctx, second)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
+	v = f.step(t, ctx, second, llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "waiter did not consume cache", v, "hit", 1)
 	// A fresh uncached request tries once and returns a timer instruction.
 	f.cap.Budgets = &admissionLeaser{BudgetLeaser: f.cap.Budgets, accept: func(_ context.Context, request durable.ReserveRequest) (durable.ReserveResult, error) {
@@ -473,8 +447,7 @@ func TestCloudExecutionRuntimeCacheWaitAndBudgetWait(t *testing.T) {
 	f.restart(t)
 	f.request.OperationKey = "budget-wait"
 	f.request.Cache = nil
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionBudgetWait)
+	v = f.step(t, ctx, f.request, llm.ExecutionBudgetWait)
 	if v.RetryAfterSeconds != 2 || f.submits.Load() != 1 {
 		t.Fatal("budget waiter submitted")
 	}
@@ -484,10 +457,7 @@ func TestCloudExecutionRuntimeUnreserved(t *testing.T) {
 	for _, mode := range []string{"free", "unmatched"} {
 		t.Run(mode, func(t *testing.T) {
 			f := boundedCloud(t, false, unreservedPlanning(t, mode))
-			f.cap.Budgets = &admissionLeaser{BudgetLeaser: f.cap.Budgets, accept: func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
-				t.Fatal("unreserved work touched budgets")
-				return durable.ReserveResult{}, nil
-			}}
+			f.cap.Budgets = &admissionLeaser{BudgetLeaser: f.cap.Budgets, accept: forbidReserve(t, "unreserved work touched budgets")}
 			f.restart(t)
 			result := f.finish(t)
 			if result.Generate == nil || f.submits.Load() != 1 {
@@ -502,15 +472,11 @@ func TestCloudExecutionRuntimeFailurePreservesOlderSuccess(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	first := f.finish(t)
 	original := f.adapter.invoke
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		return provider.Result{}, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "rejected")
-	}
+	f.adapter.invoke = invokeFailing(&f.submits, deniedRejection())
 	f.now = f.now.Add(2 * time.Second)
 	f.request.OperationKey = "failing"
 	f.request.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 1}
-	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.step(t, context.Background(), f.request, llm.ExecutionFailed)
 	f.now = f.now.Add(time.Second)
 	f.request.OperationKey = "older-eligible"
 	f.request.Cache = &llm.CachePolicyV1{}
@@ -523,18 +489,15 @@ func TestCloudExecutionRuntimeFailurePreservesOlderSuccess(t *testing.T) {
 	f.request.OperationKey = "fresh-after-failure"
 	f.request.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 1}
 	f.finish(t)
-	if f.submits.Load() != 3 {
-		t.Fatal("failed fill blocked fresh work")
-	}
+	requireCount(t, &f.submits, 3, "failed fill blocked fresh work")
 }
 
 func TestCloudExecutionRuntimeIncompleteCompaction(t *testing.T) {
 	f := boundedCloud(t, false)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	parent := f.finish(t)
 	f.now = f.now.Add(time.Minute)
-	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}
+	request := f.compactRequest(parent, &llm.CachePolicyV1{})
 	original := f.adapter.invoke
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
 		v, err := original(ctx, call, o)
@@ -542,33 +505,27 @@ func TestCloudExecutionRuntimeIncompleteCompaction(t *testing.T) {
 		return v, err
 	}
 	ctx := context.Background()
-	v, err := f.runtime.CompactStepV1(ctx, request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	v := f.compactStep(t, ctx, request, llm.ExecutionFailed)
 	if v.FailureCode != "incomplete_response" {
 		t.Fatal("bad summary accepted")
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	ref := executionRef(v, request.Context)
+	f.complete(t, ctx, ref, llm.ExecutionFailed)
 	f.adapter.invoke = original
 	f.now = f.now.Add(time.Second)
 	request.OperationKey = "new-summary"
-	v, err = f.runtime.CompactStepV1(ctx, request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	if f.submits.Load() != 3 {
-		t.Fatal("incomplete summary cached or fill not closed")
-	}
+	f.compactStep(t, ctx, request, llm.ExecutionProviderCompleted)
+	requireCount(t, &f.submits, 3, "incomplete summary cached or fill not closed")
 }
 
 // Responses reasoning models lead the summary with a reasoning item and Exa
 // appends citations. Neither makes the paid summary unpublishable.
 func TestCloudExecutionRuntimeCompactionIgnoresReasoningAndCitations(t *testing.T) {
 	f := boundedCloud(t, false)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	parent := f.finish(t)
 	f.now = f.now.Add(time.Minute)
-	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}
+	request := f.compactRequest(parent, &llm.CachePolicyV1{})
 	original := f.adapter.invoke
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
 		v, err := original(ctx, call, o)
@@ -577,11 +534,9 @@ func TestCloudExecutionRuntimeCompactionIgnoresReasoningAndCitations(t *testing.
 		return v, err
 	}
 	ctx := context.Background()
-	v, err := f.runtime.CompactStepV1(ctx, request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v := f.compactStep(t, ctx, request, llm.ExecutionProviderCompleted)
+	ref := executionRef(v, request.Context)
+	v = f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	if v.Compact == nil || v.Compact.Checkpoint.Handle == "" {
 		t.Fatal("summary with reasoning and citations did not publish a checkpoint")
 	}
@@ -661,9 +616,7 @@ func TestCloudExecutionRuntimeCacheKeepsExactTemperature(t *testing.T) {
 		}
 		f.now = f.now.Add(time.Second)
 	}
-	if f.submits.Load() != 2 {
-		t.Fatal("exact temperatures collided")
-	}
+	requireCount(t, &f.submits, 2, "exact temperatures collided")
 }
 
 func TestCloudExecutionRuntimeIndependentSamples(t *testing.T) {
@@ -707,16 +660,12 @@ func TestCloudExecutionRuntimeTerminalFillStorageFailureIsRetryable(t *testing.T
 	fills := &boundedCompleteFaultFills{FillRepository: f.cap.ResponseFills, failures: 1}
 	f.cap.ResponseFills = fills
 	f.restart(t)
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		return provider.Result{}, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "rejected")
-	}
+	f.adapter.invoke = invokeFailing(&f.submits, deniedRejection())
 	_, err := f.runtime.GenerateStepV1(context.Background(), f.request)
 	if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 		t.Fatalf("transient fill completion error = %#v, want retryable state_unavailable", err)
 	}
-	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.step(t, context.Background(), f.request, llm.ExecutionFailed)
 	if fills.completes != 2 || f.submits.Load() != 1 {
 		t.Fatalf("fill completes = %d, submits = %d", fills.completes, f.submits.Load())
 	}
@@ -741,12 +690,8 @@ func TestCloudExecutionRuntimePreDispatchContextEndIsRetryable(t *testing.T) {
 		t.Run(cause.Error(), func(t *testing.T) {
 			f := boundedCloud(t, false)
 			original := f.adapter.invoke
-			f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-				f.submits.Add(1)
-				return provider.Result{}, provider.NewPreDispatchContextError(cause)
-			}
-			v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			f.adapter.invoke = invokeFailing(&f.submits, provider.NewPreDispatchContextError(cause))
+			v := f.step(t, context.Background(), f.request, llm.ExecutionFailed)
 			if !v.Retryable {
 				t.Fatalf("pre-dispatch %v became a permanent failure: %#v", cause, v)
 			}
@@ -761,12 +706,8 @@ func TestCloudExecutionRuntimePreDispatchContextEndIsRetryable(t *testing.T) {
 
 func TestCloudExecutionRuntimeRejectedDispatchStaysPermanent(t *testing.T) {
 	f := boundedCloud(t, false)
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		return provider.Result{}, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "canceled without pre-dispatch evidence")
-	}
-	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.adapter.invoke = invokeFailing(&f.submits, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "canceled without pre-dispatch evidence"))
+	v := f.step(t, context.Background(), f.request, llm.ExecutionFailed)
 	if v.Retryable {
 		t.Fatal("cancellation without pre-dispatch evidence became retryable")
 	}
@@ -862,15 +803,16 @@ func compiledProviderState(request llm.Request) int {
 
 func (p *pinnedCloudFixture) checkpoint(t *testing.T, result llm.ExecutionResultV1) state.DurableCheckpoint {
 	t.Helper()
-	id, err := p.options.Keyring.VerifyCheckpointHandle(context.Background(), "trusted-scope", string(result.Generate.Checkpoint.Handle))
-	if err != nil {
-		t.Fatal(err)
+	return p.row(t, result.Generate.Checkpoint.Handle)
+}
+
+// requireProvenance fails the test unless handle's checkpoint records the
+// provider state of turn ordinal on endpoint; what names the checkpoint.
+func (p *pinnedCloudFixture) requireProvenance(t *testing.T, handle llm.CheckpointHandle, ordinal int, endpoint, what string) {
+	t.Helper()
+	if got := p.row(t, handle).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(ordinal, endpoint)) {
+		t.Fatalf("%s provenance = %+v", what, got)
 	}
-	row, err := p.repository.Checkpoints().Get(context.Background(), "trusted-scope", id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return row
 }
 
 // pinnedAccount is the test account identity of an endpoint.
@@ -885,9 +827,7 @@ func pinnedProvenance(ordinal int, endpoint string) []state.ProviderStateProvena
 func TestCloudExecutionRuntimePinnedContinuationRoutesToItsEndpoint(t *testing.T) {
 	p := pinnedCloud(t)
 	first := p.finish(t)
-	if got := p.checkpoint(t, first).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(1, "endpoint")) {
-		t.Fatalf("root provenance = %+v", got)
-	}
+	p.requireProvenance(t, first.Generate.Checkpoint.Handle, 1, "endpoint", "root")
 	// With route-b now ordered first, the pin still selects the endpoint
 	// that produced the reasoning state, and that state is replayed there.
 	p.reorder(t)
@@ -900,9 +840,7 @@ func TestCloudExecutionRuntimePinnedContinuationRoutesToItsEndpoint(t *testing.T
 		t.Fatalf("pinned route lost its state or reported a drop: %+v", second.Generate.Diagnostics)
 	}
 	// The child records only its own response, at its transcript offset.
-	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint")) {
-		t.Fatalf("child provenance = %+v", got)
-	}
+	p.requireProvenance(t, second.Generate.Checkpoint.Handle, 4, "endpoint", "child")
 }
 
 func TestCloudExecutionRuntimeContinuationPinnedWhenPinnedRouteIneligible(t *testing.T) {
@@ -914,7 +852,7 @@ func TestCloudExecutionRuntimeContinuationPinnedWhenPinnedRouteIneligible(t *tes
 	ctx := context.Background()
 	v, err := p.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &p.request})
 	if err == nil && v.State == llm.ExecutionBudgetRequired {
-		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context, Capability: v.Capability})
+		v, err = p.runtime.AcquireBudgetV1(ctx, executionRef(v, p.request.Context))
 	}
 	var failure *provider.Error
 	if !errors.As(err, &failure) {
@@ -953,9 +891,7 @@ func TestCloudExecutionRuntimeBestEffortDropsPinnedState(t *testing.T) {
 		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 	// The transcript stays complete; only the new state is pinned to route-b.
-	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint-b")) {
-		t.Fatalf("child provenance = %+v", got)
-	}
+	p.requireProvenance(t, second.Generate.Checkpoint.Handle, 4, "endpoint-b", "child")
 	// A retry returns the same publication, diagnostic included.
 	again := p.finish(t)
 	if again.Generate.Checkpoint.Handle != second.Generate.Checkpoint.Handle || len(again.Generate.Diagnostics) != 1 || p.submits.Load() != 2 {
@@ -997,9 +933,7 @@ func TestCloudExecutionRuntimeCheckpointWithoutProvenanceKeepsFamilyPinning(t *t
 	if p.served[1] != "endpoint-b" || compiledProviderState(p.lastCompiled(t, "endpoint-b")) != 1 || len(second.Generate.Diagnostics) != 0 {
 		t.Fatalf("served %v diagnostics %+v", p.served, second.Generate.Diagnostics)
 	}
-	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint-b")) {
-		t.Fatalf("child provenance = %+v", got)
-	}
+	p.requireProvenance(t, second.Generate.Checkpoint.Handle, 4, "endpoint-b", "child")
 }
 
 // planFailure runs preparation and budget acquisition for p.request and
@@ -1009,7 +943,7 @@ func (p *pinnedCloudFixture) planFailure(t *testing.T) *provider.Error {
 	ctx := context.Background()
 	v, err := p.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &p.request})
 	if err == nil && v.State == llm.ExecutionBudgetRequired {
-		v, err = p.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: p.request.Context, Capability: v.Capability})
+		v, err = p.runtime.AcquireBudgetV1(ctx, executionRef(v, p.request.Context))
 	}
 	var failure *provider.Error
 	if !errors.As(err, &failure) || failure.Code != provider.CodeNoRoute || failure.SafeDetails["continuation"] != "continuation_pinned" {
@@ -1152,9 +1086,7 @@ func TestCloudExecutionRuntimeCompactionSummarizerIsNotPinned(t *testing.T) {
 	first := p.finish(t)
 	p.child(first, "second-turn")
 	second := p.finish(t)
-	if got := p.checkpoint(t, second).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(4, "endpoint")) {
-		t.Fatalf("second provenance = %+v", got)
-	}
+	p.requireProvenance(t, second.Generate.Checkpoint.Handle, 4, "endpoint", "second")
 	p.reorder(t)
 	p.child(second, "after-compaction")
 	p.plain = true
@@ -1169,9 +1101,7 @@ func TestCloudExecutionRuntimeCompactionSummarizerIsNotPinned(t *testing.T) {
 	}
 	// One retained turn is the model's state and answer, so the compacted
 	// transcript is [summary, state, answer] and the pin moved to ordinal 1.
-	if got := p.row(t, compacted).ProviderStateProvenance; fmt.Sprint(got) != fmt.Sprint(pinnedProvenance(1, "endpoint")) {
-		t.Fatalf("compacted provenance = %+v", got)
-	}
+	p.requireProvenance(t, compacted, 1, "endpoint", "compacted")
 	next := p.finish(t)
 	if len(p.served) != 4 || p.served[3] != "endpoint" || compiledProviderState(p.lastCompiled(t, "endpoint")) != 1 || len(next.Generate.Diagnostics) != 0 {
 		t.Fatalf("served %v diagnostics %+v", p.served, next.Generate.Diagnostics)
@@ -1231,7 +1161,7 @@ func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("validated restore differs: err=%v", err)
 	}
-	loaded, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability})
+	loaded, err := f.runtime.preparation.Load(ctx, executionRef(v, child.Context))
 	if err != nil || !reflect.DeepEqual(loaded.GenerateReplay, want.GenerateReplay) || !reflect.DeepEqual(loaded.Preparation, want.Preparation) {
 		t.Fatalf("Load differs from a fully validated restore: err=%v", err)
 	}
@@ -1265,13 +1195,10 @@ func TestCloudExecutionRuntimeTurnParentSnapshotStorage(t *testing.T) {
 				t.Fatalf("inline=%t referenced=%t with blob storage %t", inline, referenced, blobStorage)
 			}
 			f.now = f.now.Add(time.Second)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
-			v, err = f.runtime.GenerateStepV1(ctx, child)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			ref := executionRef(v, child.Context)
+			f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+			f.step(t, ctx, child, llm.ExecutionProviderCompleted)
+			f.complete(t, ctx, ref, llm.ExecutionCompleted)
 		})
 	}
 }
@@ -1330,7 +1257,7 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 				return f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
 			})
 			boundedState(b, v, err, llm.ExecutionBudgetRequired)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
+			ref := executionRef(v, child.Context)
 			v, err = timed("acquire", func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) })
 			boundedState(b, v, err, llm.ExecutionAcquired)
 			v, err = timed("generate", func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) })
@@ -1371,8 +1298,7 @@ func TestCloudExecutionRuntimeDefaultFallsBackAndSurvivesContinuation(t *testing
 			if root.Generate.Service.Requested != llm.ServiceClassEconomy || root.Generate.Service.Attempted != llm.ServiceClassStandard {
 				t.Fatalf("standard-only model did not adjust default: %+v", root.Generate.Service)
 			}
-			handle := root.Generate.Checkpoint.Handle
-			f.request = llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{llm.HumanText("next")}}
+			f.request = f.followUp(root.Generate.Checkpoint.Handle, "child", "next")
 			child := f.finish(t)
 			if child.Generate.Service.Requested != llm.ServiceClassEconomy || child.Generate.Service.Attempted != llm.ServiceClassStandard {
 				t.Fatalf("continuation lost default: %+v", child.Generate.Service)
@@ -1384,8 +1310,7 @@ func TestCloudExecutionRuntimeDefaultFallsBackAndSurvivesContinuation(t *testing
 // cache.max_age_seconds bounds Compact reuse as it bounds Generate (#1508).
 func TestCloudExecutionRuntimeCompactHonorsCacheMaxAge(t *testing.T) {
 	f := boundedCloud(t, false)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	parent := f.finish(t)
 	ctx := context.Background()
 	compact := func(key string, cachePolicy *llm.CachePolicyV1) llm.CompactResponseV1 {
@@ -1397,11 +1322,9 @@ func TestCloudExecutionRuntimeCompactHonorsCacheMaxAge(t *testing.T) {
 			return *v.Compact // a cache hit completes at Prepare
 		}
 		boundedState(t, v, err, llm.ExecutionBudgetRequired)
-		ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-		v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-		boundedState(t, v, err, llm.ExecutionAcquired)
-		v, err = f.runtime.CompactStepV1(ctx, request)
-		boundedState(t, v, err, llm.ExecutionProviderCompleted)
+		ref := executionRef(v, request.Context)
+		f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+		f.compactStep(t, ctx, request, llm.ExecutionProviderCompleted)
 		v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 		return *boundedState(t, v, err, llm.ExecutionCompleted).Compact
 	}

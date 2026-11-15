@@ -50,17 +50,16 @@ func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 			}
 			f.restart(t)
 			f.rejectRetryably()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			v := f.step(t, ctx, f.request, llm.ExecutionFailed)
 			ref := f.ref(v)
 			restore := f.reload(t)
 			f.now = f.now.Add(time.Minute)
 			for i := 0; i < 2; i++ {
-				_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+				_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 				assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 			}
 			restore()
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 			if exhausted {
 				// The request's own attempt limit applies once a compatible
 				// worker serves it.
@@ -71,9 +70,7 @@ func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 				return
 			}
 			boundedState(t, v, err, llm.ExecutionAcquired)
-			if f.submits.Load() != 1 {
-				t.Fatal("reload dispatched with incompatible configuration")
-			}
+			requireCount(t, &f.submits, 1, "reload dispatched with incompatible configuration")
 		})
 	}
 }
@@ -103,12 +100,9 @@ func TestCloudReloadFailsUnpaidWorkAfterGrace(t *testing.T) {
 			t.Fatalf("retired configuration = %v, want a non-retryable Temporal failure", err)
 		}
 	}
-	if f.submits.Load() != 0 {
-		t.Fatal("retired configuration dispatched")
-	}
+	requireCount(t, &f.submits, 0, "retired configuration dispatched")
 	restore()
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 }
 
 // A worker still on an older configuration may receive a request prepared by
@@ -153,10 +147,7 @@ func TestCloudReloadNewerWorkerFailsRequestPreparedByDrainingWorker(t *testing.T
 	} {
 		assertRecoveryError(t, step(), provider.CodeConfiguration, provider.RetryNever)
 	}
-	if f.submits.Load() != 0 {
-		t.Fatal("retired configuration dispatched")
-	}
+	requireCount(t, &f.submits, 0, "retired configuration dispatched")
 	restore()
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 }

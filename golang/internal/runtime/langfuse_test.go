@@ -55,9 +55,7 @@ func TestCloudLangfuseExportsFinalizedRequestOnce(t *testing.T) {
 	if calls != 1 || !strings.Contains(payload, "answer") || !strings.Contains(payload, "actor") || !strings.Contains(payload, "endpoint_id") {
 		t.Fatalf("unexpected export: calls=%d payload=%s", calls, payload)
 	}
-	if f.submits.Load() != 1 {
-		t.Fatal("export dispatched model again")
-	}
+	requireCount(t, &f.submits, 1, "export dispatched model again")
 }
 
 func TestLangfuseContentPreservesToolArgumentsButExcludesOpaqueState(t *testing.T) {
@@ -219,8 +217,7 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 	}))
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	export := func(v llm.ExecutionResultV1) {
 		t.Helper()
 		if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(v)); err != nil {
@@ -237,13 +234,12 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 		f.request.Parent = &h
 		export(f.finish(t))
 	}
-	compact := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}
+	compact := f.compactRequest(parent, &llm.CachePolicyV1{})
 	ctx := context.Background()
 	v := f.runCompact(t, ctx, compact, false)
 	export(v)
 	compact.OperationKey = "cached-compact"
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.prepare(t, ctx, llm.PrepareExecutionV1{Compact: &compact}, llm.ExecutionCompleted)
 	if v.Compact.Cache.Disposition != "hit" {
 		t.Fatal("compaction fixture missed cache")
 	}
@@ -412,14 +408,10 @@ func TestCloudLangfuseCaptureFailureUsesConfiguredLogger(t *testing.T) {
 	f.cap.Requests = failedLangfuseCapture{f.repository}
 	f.restart(t)
 	var output strings.Builder
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Format: "json"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Output: &output, Format: "json"})
 	ctx := observability.WithLogger(context.Background(), logger)
 	v := f.prepareGenerate(t, ctx)
-	v, err = f.runtime.AcquireBudgetV1(ctx, f.ref(v))
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, f.ref(v), llm.ExecutionAcquired)
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
 		var record map[string]any
@@ -449,9 +441,8 @@ func TestCloudLangfuseNoWorkCompactionExportsOnlyRoot(t *testing.T) {
 	f.restart(t)
 	parent := f.finish(t)
 	compact := llm.CompactRequestV1{OperationKey: "no-work", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
-	v, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Compact: &compact})
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context, Capability: v.Capability}); err != nil {
+	v := f.prepare(t, context.Background(), llm.PrepareExecutionV1{Compact: &compact}, llm.ExecutionCompleted)
+	if err := f.runtime.ExportLangfuseV1(context.Background(), executionRef(v, compact.Context)); err != nil {
 		t.Fatal(err)
 	}
 	if serverCalls != 1 || !strings.Contains(payload, "no_work") || strings.Contains(payload, `\"stringValue\":\"generation\"`) {
@@ -477,10 +468,7 @@ func TestCloudLangfuseGenerationCaptureLogsAStateReadFailure(t *testing.T) {
 	capabilities.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
 	execution := &CloudProviderExecution{capabilities: capabilities, store: unreadableLangfuseState{f.repository}}
 	var output strings.Builder
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Format: "json"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Output: &output, Format: "json"})
 	ctx := observability.WithLogger(context.Background(), logger)
 	call := &CloudBudgetCall{id: "req_attempt"}
 	execution.captureLangfuse(ctx, call, cloudstate.SavedProviderExecution{Plan: cloudstate.BudgetPlan{Route: durable.RoutePlan{EndpointID: "endpoint"}}})

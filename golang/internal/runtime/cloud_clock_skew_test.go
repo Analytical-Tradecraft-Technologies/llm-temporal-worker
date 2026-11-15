@@ -82,16 +82,14 @@ func TestCloudClockSkewBehindPreviousStepReplacesAttempt(t *testing.T) {
 			v := f.prepareGenerate(t, ctx)
 			ref := f.ref(v)
 			lag()
-			v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
+			f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 			lag()
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
+			v, err := f.runtime.GenerateStepV1(ctx, f.request)
 			if unknown {
 				boundedState(t, v, err, llm.ExecutionPending)
 				f.now = f.now.Add(16 * time.Minute)
 				lag()
-				v, err = f.runtime.PollExecutionV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+				v = f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
 			} else {
 				boundedState(t, v, err, llm.ExecutionFailed)
 				if !v.Retryable {
@@ -101,14 +99,11 @@ func TestCloudClockSkewBehindPreviousStepReplacesAttempt(t *testing.T) {
 			}
 			f.adapter.invoke = original
 			lag()
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
+			f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 			lag()
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
+			f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 			lag()
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			f.complete(t, ctx, ref, llm.ExecutionCompleted)
 			if f.submits.Load() != 2 {
 				t.Fatalf("submits=%d, want one per attempt", f.submits.Load())
 			}

@@ -69,12 +69,10 @@ func TestCloudCompleteTransientFillReadIsRetryable(t *testing.T) {
 	fired := f.failNextFillRead(t)
 	_, err := f.runtime.CompleteExecutionV1(ctx, ref)
 	requireRetryableStateUnavailable(t, fired, err)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	second := f.request
 	second.OperationKey = "second"
-	v, err = f.runtime.GenerateStepV1(ctx, second)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.step(t, ctx, second, llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "second caller after retried completion", v, "hit", 1)
 }
 
@@ -91,8 +89,7 @@ func TestCloudTerminalFillTransientFillReadIsRetryable(t *testing.T) {
 	ctx := context.Background()
 	_, err := f.runtime.GenerateStepV1(ctx, f.request)
 	requireRetryableStateUnavailable(t, fired, err)
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.step(t, ctx, f.request, llm.ExecutionFailed)
 	if f.submits.Load() != 1 {
 		t.Fatalf("retry dispatched again: submits=%d", f.submits.Load())
 	}
@@ -101,8 +98,7 @@ func TestCloudTerminalFillTransientFillReadIsRetryable(t *testing.T) {
 	second := f.request
 	second.OperationKey = "second"
 	f.now = f.now.Add(time.Minute)
-	v, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &second})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	f.prepare(t, ctx, llm.PrepareExecutionV1{Generate: &second}, llm.ExecutionBudgetRequired)
 }
 
 func TestCloudUnknownFillTransientFillReadIsRetryable(t *testing.T) {
@@ -114,21 +110,16 @@ func TestCloudUnknownFillTransientFillReadIsRetryable(t *testing.T) {
 	ref := f.ref(v)
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err := f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+	f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
 	fired := f.failNextFillRead(t)
-	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	requireRetryableStateUnavailable(t, fired, err)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	f.adapter.invoke = original
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	second := f.request
 	second.OperationKey = "second"
-	v, err = f.runtime.GenerateStepV1(ctx, second)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.step(t, ctx, second, llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "second caller after recovered unknown fill", v, "hit", 2)
 }

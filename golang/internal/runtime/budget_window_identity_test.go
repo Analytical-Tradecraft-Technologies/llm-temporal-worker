@@ -22,16 +22,10 @@ import (
 func localConfigWithBudgetWindows(t *testing.T, windows string) []byte {
 	t.Helper()
 	directory := t.TempDir()
-	data, err := os.ReadFile("../../deploy/local/config.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustReadFile(t, "../../deploy/local/config.yaml")
 	text := string(data)
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
-		catalogData, err := os.ReadFile(filepath.Join("../../deploy/local", name))
-		if err != nil {
-			t.Fatal(err)
-		}
+		catalogData := mustReadFile(t, filepath.Join("../../deploy/local", name))
 		path := filepath.Join(directory, name)
 		if err := os.WriteFile(path, catalogData, 0o600); err != nil {
 			t.Fatal(err)
@@ -50,10 +44,7 @@ func localConfigWithBudgetWindows(t *testing.T, windows string) []byte {
 // strict configuration compile, then the catalog snapshot loader.
 func loadBudgetPolicies(t *testing.T, windows string) []budget.Policy {
 	t.Helper()
-	compiled, err := config.Compile(context.Background(), localConfigWithBudgetWindows(t, windows), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := mustCompileConfig(t, localConfigWithBudgetWindows(t, windows))
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
 	if err != nil {
@@ -151,15 +142,12 @@ func TestBudgetWindowSpendSurvivesRemovingAnotherWindow(t *testing.T) {
 	f.cap.Snapshot.(*planningSource).value.BudgetPolicies = loadBudgetPolicies(t, budgetWindowYAML("", "24h", "1h", reserved.String()))
 	f.restart(t)
 	f.request.OperationKey = "after-hourly-window-removed"
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionBudgetWait)
-	if f.submits.Load() != 1 {
-		t.Fatal("over-limit request was dispatched after the hourly window was removed")
-	}
+	f.step(t, ctx, f.request, llm.ExecutionBudgetWait)
+	requireCount(t, &f.submits, 1, "over-limit request was dispatched after the hourly window was removed")
 }
 
 func TestReloadRejectsGeometryChangeBehindBudgetWindowIdentity(t *testing.T) {
-	application, err := app.New(context.Background(), app.Options{
+	application := newTestApp(t, app.Options{
 		InitialConfig: localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "24h", "5m", "100")+budgetWindowYAML("", "1h", "1m", "10")),
 		Builder:       app.SnapshotBuilder{},
 		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
@@ -167,17 +155,13 @@ func TestReloadRejectsGeometryChangeBehindBudgetWindowIdentity(t *testing.T) {
 		},
 		ReplacementValidator: newRuntimeReplacementValidator(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close(context.Background()) })
 	before := application.Current()
 
 	for name, windows := range map[string]string{
 		"bucket":   budgetWindowYAML("daily", "24h", "1h", "100"),
 		"duration": budgetWindowYAML("daily", "12h", "5m", "100"),
 	} {
-		err = application.Reload(context.Background(), localConfigWithBudgetWindows(t, windows))
+		err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, windows))
 		if !errors.Is(err, errBudgetWindowGeometryChanged) || !strings.Contains(err.Error(), "budgets.policies[0].windows[0]") {
 			t.Fatalf("Reload() with changed %s = %v, want geometry rejection naming the window", name, err)
 		}
@@ -197,7 +181,7 @@ func TestReloadRejectsGeometryChangeBehindBudgetWindowIdentity(t *testing.T) {
 	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("", "1h", "5m", "10"))); err != nil {
 		t.Fatalf("Reload() removing the daily window = %v", err)
 	}
-	err = application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "12h", "1h", "100")))
+	err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "12h", "1h", "100")))
 	if !errors.Is(err, errBudgetWindowGeometryChanged) {
 		t.Fatalf("Reload() reintroducing a removed id with another geometry = %v, want geometry rejection", err)
 	}

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
@@ -162,10 +161,7 @@ func TestCompactionWithApplicationInstructionsSurvivesBudgetPlanningAndRecovery(
 			if summary.Request.Instructions[0].Level != llm.InstructionLevelPolicy {
 				t.Fatal("planning changed the semantic summarizer request")
 			}
-			binding, err := planned.Provider.RecoveryBinding(planned.Route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			binding := recoveryBinding(t, planned)
 			recovery := mustProviderRecovery(t, f.cap)
 			recovered, err := recovery.Compact(context.Background(), summary, binding)
 			if err != nil {
@@ -211,12 +207,11 @@ func TestCloudExecutionRuntimeCompactionWithApplicationInstructions(t *testing.T
 			// Compile with the real adapter; only the paid call is canned.
 			f.cap.Adapters = engine.AdapterMap{"endpoint": hierarchyInvokeAdapter{Adapter: route.adapter(t), invoke: f.adapter.invoke}}
 			f.restart(t)
-			policy := json.RawMessage(`{"recent_turns":0}`)
-			f.request.SettingsPatch.CompactionPolicy.Set = &policy
+			keepNoRecentTurns(&f.request)
 			f.request.SettingsPatch.Instructions.Set = &[]llm.Instruction{hierarchyApplicationInstruction}
 			parent := f.finish(t)
 			f.now = f.now.Add(time.Minute)
-			request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
+			request := f.compactRequest(parent, nil)
 			ctx := context.Background()
 			v := f.runCompact(t, ctx, request, true)
 			if v.Compact == nil || f.submits.Load() != 2 {

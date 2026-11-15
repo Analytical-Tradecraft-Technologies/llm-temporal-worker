@@ -55,16 +55,11 @@ func TestCloudReloadCompletesSavedSuccessAndWaitsForPendingRecovery(t *testing.T
 				f.cap.ConfigDigest = original
 				source.value.ConfigDigest = original
 				f.restart(t)
-				v, err = f.runtime.PollExecutionV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionProviderCompleted)
+				f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
 			}
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionCompleted)
-			if f.submits.Load() != 1 {
-				t.Fatal("recovery resubmitted paid work")
-			}
+			f.complete(t, ctx, ref, llm.ExecutionCompleted)
+			f.step(t, ctx, f.request, llm.ExecutionCompleted)
+			requireCount(t, &f.submits, 1, "recovery resubmitted paid work")
 		})
 	}
 }
@@ -81,16 +76,12 @@ func TestCloudReloadWaitsBeforeBudgetAdmission(t *testing.T) {
 	f.restart(t)
 	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
-	if f.submits.Load() != 0 {
-		t.Fatal("reload dispatched before compatible admission")
-	}
+	requireCount(t, &f.submits, 0, "reload dispatched before compatible admission")
 	f.cap.ConfigDigest = original
 	source.value.ConfigDigest = original
 	f.restart(t)
 	f.acquireGenerateComplete(t, ctx, ref)
-	if f.submits.Load() != 1 {
-		t.Fatal("request failed to recover exactly once")
-	}
+	requireCount(t, &f.submits, 1, "request failed to recover exactly once")
 }
 
 func bindReloadEndpoints(source *planningSource, digest [32]byte) {
@@ -131,8 +122,7 @@ func TestCloudReloadPollsPendingPaidWorkOnlyOnUnchangedEndpoint(t *testing.T) {
 // a restart). It returns the job's reference and the planning source.
 func pendingUnderNewConfig(t *testing.T, ctx context.Context, f *boundedCloudFixture) (llm.ExecutionReferenceV1, *planningSource) {
 	t.Helper()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	v := f.step(t, ctx, f.request, llm.ExecutionPending)
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
@@ -155,19 +145,14 @@ func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpo
 		if !errors.As(activity.ToTemporalError(err), &mapped) || mapped.NonRetryable() {
 			t.Fatal("changed endpoint became a permanent Temporal failure")
 		}
-		if f.polls.Load() != 0 {
-			t.Fatal("polled a changed endpoint")
-		}
+		requireCount(t, &f.polls, 0, "polled a changed endpoint")
 		// Only the endpoint is restored; the configuration digest still differs.
 		bindReloadEndpoints(source, unchanged)
 		f.restart(t)
 	}
-	v, err := f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionCompleted)
 	if f.submits.Load() != 1 || f.polls.Load() != 1 {
 		t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
 	}
@@ -225,10 +210,8 @@ func TestCloudReloadPollsPendingPaidWorkRecordedWithLegacyEndpointDigest(t *test
 	}
 	f.restart(t)
 	f.now = f.now.Add(2 * time.Second)
-	v, err := f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	if f.submits.Load() != 1 || f.polls.Load() != 1 {
 		t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
 	}

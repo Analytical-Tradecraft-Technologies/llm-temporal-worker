@@ -33,11 +33,9 @@ func TestBudgetDefaultOutputLimitSurvivesRecovery(t *testing.T) {
 				}
 			}
 			check(f.adapter.inputs[len(f.adapter.inputs)-1].Request)
-			binding, err := planned.Provider.RecoveryBinding(planned.Route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			binding := recoveryBinding(t, planned)
 			recovery := mustProviderRecovery(t, f.cap)
+			var err error
 			if compact {
 				_, err = recovery.Compact(context.Background(), f.summary, binding)
 			} else {
@@ -60,16 +58,10 @@ func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 	adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected network call") })})
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
 	planning := f.planning(t)
-	planned, err := planning.Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	planned := f.plan(t, planning, false)
 	check := func(call PlannedProviderCall) {
 		t.Helper()
-		data, err := json.Marshal(call.Call.SDKParams)
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := encodeJSON(t, call.Call.SDKParams)
 		var wire struct {
 			MaxOutputTokens int64 `json:"max_output_tokens"`
 		}
@@ -81,10 +73,7 @@ func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 		}
 	}
 	check(planned.Provider)
-	binding, err := planned.Provider.RecoveryBinding(planned.Route)
-	if err != nil {
-		t.Fatal(err)
-	}
+	binding := recoveryBinding(t, planned)
 	recovery := mustProviderRecovery(t, f.cap)
 	restored, err := recovery.Generate(context.Background(), f.generate, binding)
 	if err != nil {
@@ -126,11 +115,9 @@ func TestBudgetDefaultOutputLimitIsCappedAtRouteCeilingThroughRecovery(t *testin
 				}
 			}
 			check(f.adapter.inputs[len(f.adapter.inputs)-1].Request)
-			binding, err := planned.Provider.RecoveryBinding(planned.Route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			binding := recoveryBinding(t, planned)
 			recovery := mustProviderRecovery(t, f.cap)
+			var err error
 			if compact {
 				_, err = recovery.Compact(context.Background(), f.summary, binding)
 			} else {

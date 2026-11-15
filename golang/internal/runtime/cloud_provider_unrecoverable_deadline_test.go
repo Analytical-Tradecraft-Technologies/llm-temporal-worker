@@ -48,8 +48,7 @@ func TestCloudExecutionCanceledCallStaysUnknown(t *testing.T) {
 	f, _ := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) {
 		return provider.Result{}, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider request canceled")
 	})
-	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	v := f.step(t, context.Background(), f.request, llm.ExecutionPending)
 	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Stage != cloudstate.ExecutionUnknown {
 		t.Fatalf("execution stage=%s failure=%+v", execution.Stage, execution.Failure)
 	}
@@ -92,10 +91,7 @@ func TestCloudExecutionLogsProviderJobNotFound(t *testing.T) {
 		return provider.ResumableResult{State: provider.ResumableNotFound, Dispatch: provider.DispatchAmbiguous}, nil
 	}
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Format: "json", Output: &output})
 	result, err := f.resume(observability.WithLogger(context.Background(), logger))
 	if err != nil || result.Saved.Execution.Stage != cloudstate.ExecutionUnknown {
 		t.Fatalf("resume = %+v, %v", result.Saved.Execution, err)
@@ -144,10 +140,7 @@ func TestCloudExecutionLogsLiftCause(t *testing.T) {
 func generateLoggingAttemptFailure(t *testing.T, f *boundedCloudFixture) (llm.ExecutionResultV1, map[string]any, *bytes.Buffer) {
 	t.Helper()
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Format: "json", Output: &output})
 	v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
 	var logged map[string]any

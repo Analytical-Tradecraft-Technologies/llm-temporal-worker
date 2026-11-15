@@ -24,7 +24,7 @@ func TestRecoveredHistoricalCompactionReplaysPublicGenerate(t *testing.T) {
 			f.request.SettingsPatch.CompactionPolicy.Set = &policy
 			root := f.finish(t)
 			f.now = f.now.Add(time.Minute)
-			original := llm.GenerateRequestV1{OperationKey: "legacy-compacted-public", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("legacy follow-up")}}
+			original := f.followUp(root.Generate.Checkpoint.Handle, "legacy-compacted-public", "legacy follow-up")
 			encoded, _ := original.MarshalJSON()
 			digest := sha256.Sum256(encoded)
 			compact := llm.CompactRequestV1{OperationKey: "llmtw_compact_" + hex.EncodeToString(digest[:]), Context: original.Context, Parent: *original.Parent, Cache: &llm.CachePolicyV1{}}
@@ -32,13 +32,7 @@ func TestRecoveredHistoricalCompactionReplaysPublicGenerate(t *testing.T) {
 			// workflow issued, without the newer original plan/binding metadata.
 			env := publicReplayEnvironment(f)
 			env.ExecuteWorkflow(workflows.CompactWorkflowName, compact)
-			if err := env.GetWorkflowError(); err != nil {
-				t.Fatal(err)
-			}
-			var compacted llm.CompactResponseV1
-			if err := env.GetWorkflowResult(&compacted); err != nil {
-				t.Fatal(err)
-			}
+			compacted := workflowResult[llm.CompactResponseV1](t, env, "legacy Compact")
 			effective := original
 			effective.Parent = &compacted.Checkpoint.Handle
 			f.request = effective
@@ -47,8 +41,7 @@ func TestRecoveredHistoricalCompactionReplaysPublicGenerate(t *testing.T) {
 			if mode == "completed" {
 				want = *f.finish(t).Generate
 			} else {
-				prepared, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &effective})
-				boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+				f.prepare(t, context.Background(), llm.PrepareExecutionV1{Generate: &effective}, llm.ExecutionBudgetRequired)
 			}
 			op := publicGenerationOperation(original, f.now)
 			if _, err := f.repository.LoadGenerationPlan(context.Background(), op); !errors.Is(err, contracts.ErrNotFound) {
@@ -69,13 +62,7 @@ func TestRecoveredHistoricalCompactionReplaysPublicGenerate(t *testing.T) {
 			}
 			env = publicReplayEnvironment(f)
 			env.ExecuteWorkflow(workflows.GenerateWorkflowName, original)
-			if err := env.GetWorkflowError(); err != nil {
-				t.Fatalf("recovered public replay: %v", err)
-			}
-			var got llm.GenerateResponseV1
-			if err := env.GetWorkflowResult(&got); err != nil {
-				t.Fatal(err)
-			}
+			got := workflowResult[llm.GenerateResponseV1](t, env, "recovered public replay")
 			if mode == "completed" {
 				if !reflect.DeepEqual(got, want) || f.submits.Load() != before {
 					t.Fatal("completed replay changed result or dispatched")

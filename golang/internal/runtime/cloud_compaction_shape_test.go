@@ -50,10 +50,7 @@ func compactionWireMessages(t *testing.T, call provider.Call) []compactionWireMe
 	case *bedrockruntime.ConverseInput:
 		return converse(*params)
 	}
-	encoded, err := json.Marshal(call.SDKParams)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeJSON(t, call.SDKParams)
 	var body struct {
 		Messages []struct {
 			Role    string `json:"role"`
@@ -105,15 +102,14 @@ func TestCloudCompactionRequestAndCheckpointShapeOnUserFirstFamilies(t *testing.
 				[]llm.Item{llm.ModelText("the summary")},
 				[]llm.Item{llm.ModelText("after")},
 			)
-			policy := json.RawMessage(`{"recent_turns":0}`)
-			f.request.SettingsPatch.CompactionPolicy.Set = &policy
+			keepNoRecentTurns(&f.request)
 			first := f.finish(t)
 			f.request.SettingsPatch = llm.SettingsPatchV1{}
 			f.continueFrom(first, "second", outputShapeResult("call_1"))
 			parent := f.finish(t)
 
 			f.now = f.now.Add(time.Minute)
-			request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
+			request := f.compactRequest(parent, nil)
 			ctx := context.Background()
 			v := f.runCompact(t, ctx, request, false)
 			if v.Compact == nil || len(calls) != 3 {

@@ -22,22 +22,15 @@ func TestCloudCacheWaiterOwnsFillAfterOwnerEndsUnpublished(t *testing.T) {
 	waiter := f.request
 	waiter.OperationKey = "waiter"
 	f.now = f.now.Add(time.Second)
-	v, err := f.runtime.GenerateStepV1(ctx, waiter)
-	boundedState(t, v, err, llm.ExecutionCacheWait)
+	f.step(t, ctx, waiter, llm.ExecutionCacheWait)
 	original := f.adapter.invoke
-	f.adapter.invoke = func(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		return provider.Result{}, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "rejected")
-	}
+	f.adapter.invoke = invokeFailing(&f.submits, deniedRejection())
 	f.now = f.now.Add(time.Second)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.step(t, ctx, f.request, llm.ExecutionFailed)
 	f.adapter.invoke = original
 	f.now = f.now.Add(31 * time.Second)
-	v, err = f.runtime.GenerateStepV1(ctx, waiter)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context, Capability: v.Capability})
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.step(t, ctx, waiter, llm.ExecutionProviderCompleted)
+	v = f.complete(t, ctx, executionRef(v, waiter.Context), llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "waiter after failed owner", v, "miss_populated", 2)
 }
 
@@ -55,33 +48,26 @@ func TestCloudCacheWaiterBypassesStalledStartedFill(t *testing.T) {
 	waiter := f.request
 	waiter.OperationKey = "waiter"
 	f.now = f.now.Add(cache.StalledFillAfter - time.Second)
-	v, err := f.runtime.GenerateStepV1(ctx, waiter)
-	boundedState(t, v, err, llm.ExecutionCacheWait)
+	f.step(t, ctx, waiter, llm.ExecutionCacheWait)
 	f.now = f.now.Add(time.Second)
-	v, err = f.runtime.GenerateStepV1(ctx, waiter)
-	v = boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context, Capability: v.Capability}
+	v = f.step(t, ctx, waiter, llm.ExecutionPending)
+	ref := executionRef(v, waiter.Context)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	v = boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v = f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
 	ref.Capability = v.Capability
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	if v.Generate.Cache.Disposition != "miss_not_populated" || f.submits.Load() != 2 || f.polls.Load() != 1 {
 		t.Fatalf("waiter on a stalled fill: disposition=%s submits=%d polls=%d", v.Generate.Cache.Disposition, f.submits.Load(), f.polls.Load())
 	}
 	// The owner's started fill is untouched: resuming it finishes the owner's
 	// own dispatch and publishes its response, with no second submission.
-	v, err = f.runtime.PollExecutionV1(ctx, owner)
-	v = boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v = f.poll(t, ctx, owner, llm.ExecutionProviderCompleted)
 	owner.Capability = v.Capability
-	v, err = f.runtime.CompleteExecutionV1(ctx, owner)
-	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.complete(t, ctx, owner, llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "resumed owner", v, "miss_populated", 2)
 	late := f.request
 	late.OperationKey = "late"
-	v, err = f.runtime.GenerateStepV1(ctx, late)
-	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.step(t, ctx, late, llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "request after the owner published", v, "hit", 2)
 }
 
@@ -111,25 +97,19 @@ func TestCloudUnknownAttemptContinuesAfterFillTakeover(t *testing.T) {
 			f.restart(t)
 			ctx, v := f.generateStep(t, llm.ExecutionPending)
 			ref := f.ref(v)
-			if f.submits.Load() != 0 {
-				t.Fatal("HTTP without a started fill")
-			}
+			requireCount(t, &f.submits, 0, "HTTP without a started fill")
 			f.now = f.now.Add(16 * time.Minute)
 			second := f.request
 			second.OperationKey = "second"
-			v, err := f.runtime.GenerateStepV1(ctx, second)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: second.Context, Capability: v.Capability})
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			v = f.step(t, ctx, second, llm.ExecutionProviderCompleted)
+			v = f.complete(t, ctx, executionRef(v, second.Context), llm.ExecutionCompleted)
 			if poll {
-				v, err = f.runtime.PollExecutionV1(ctx, ref)
-				v = boundedState(t, v, err, llm.ExecutionFailed)
+				v = f.poll(t, ctx, ref, llm.ExecutionFailed)
 				if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) {
 					t.Fatalf("unclaimed attempt after takeover = %+v", v)
 				}
 			}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			v = f.acquire(t, ctx, ref, llm.ExecutionCompleted)
 			f.requireCacheOutcome(t, "unknown attempt after takeover", v, "hit", 1)
 		})
 	}

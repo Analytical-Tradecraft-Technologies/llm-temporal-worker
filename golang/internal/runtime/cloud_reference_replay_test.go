@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -48,15 +47,14 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 		return v.Result, nil
 	}
 	// Compaction later summarises the whole transcript, citation included.
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	root := f.finish(t)
 	if root.Generate == nil || len(root.Generate.Output) != 2 || root.Generate.Output[1].ItemKind() != llm.ItemKindReference {
 		t.Fatalf("root response lost its citation: %+v", root.Generate)
 	}
 
 	f.now = f.now.Add(time.Minute)
-	f.request = llm.GenerateRequestV1{OperationKey: "follow-up", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("follow-up")}}
+	f.request = f.followUp(root.Generate.Checkpoint.Handle, "follow-up", "follow-up")
 	child := f.finish(t)
 	if child.Generate == nil || child.Generate.Checkpoint.Parent == nil || *child.Generate.Checkpoint.Parent != root.Generate.Checkpoint.Handle || f.submits.Load() != 2 {
 		t.Fatalf("follow-up turn did not continue the checkpoint: %+v", child.Generate)
@@ -71,7 +69,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 
 	f.now = f.now.Add(time.Minute)
 	ctx := context.Background()
-	compact := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: child.Generate.Checkpoint.Handle}
+	compact := f.compactRequest(child, nil)
 	v := f.runCompact(t, ctx, compact, false)
 	if v.Compact == nil || f.submits.Load() != 3 {
 		t.Fatal("compaction did not summarise the cited transcript")
@@ -80,7 +78,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 	// A plain-text summary cannot hold a citation, so the compacted
 	// transcript carries both citations verbatim after it.
 	f.now = f.now.Add(time.Minute)
-	f.request = llm.GenerateRequestV1{OperationKey: "after-compaction", Context: f.request.Context, Parent: &v.Compact.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("after compaction")}}
+	f.request = f.followUp(v.Compact.Checkpoint.Handle, "after-compaction", "after compaction")
 	if after := f.finish(t); after.Generate == nil || f.submits.Load() != 4 {
 		t.Fatalf("turn after compaction did not continue: %+v", after.Generate)
 	}

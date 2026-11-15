@@ -63,10 +63,7 @@ type cloudWithoutResponses struct {
 }
 
 func TestCloudResponseCapabilitiesRejectIncompleteAndDrainSnapshot(t *testing.T) {
-	verifier, err := state.NewKeyring([]state.Key{{ID: "key", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := testKeyring(t, state.Key{ID: "key", Secret: bytes.Repeat([]byte{7}, 32)})
 	for _, repository := range []CloudRequestRepository{
 		&cloudWithoutResponses{CloudRequestRepository: &recordingCloudRequests{}, CloudCheckpointSource: &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}}},
 		&recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}},
