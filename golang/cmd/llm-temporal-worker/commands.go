@@ -38,6 +38,11 @@ type CommandOptions struct {
 	RunWorkerFile        func(context.Context, string, []byte, io.Writer) error
 	RunBudgetInitialize  func(context.Context, []byte, bool, bool, io.Writer) error
 	RunGenerationRecover func(context.Context, []byte, string, string, bool, io.Writer) error
+	// RunPendingList receives the configuration and the stale-after
+	// threshold. RunPendingRecover also receives the explicit request IDs,
+	// whether to recover every stale orphan instead, and --apply.
+	RunPendingList    func(context.Context, []byte, time.Duration, io.Writer) error
+	RunPendingRecover func(context.Context, []byte, []string, bool, time.Duration, bool, io.Writer) error
 }
 
 func Execute(ctx context.Context, args []string, options CommandOptions) int {
@@ -69,6 +74,10 @@ func Execute(ctx context.Context, args []string, options CommandOptions) int {
 		return executeBudgetInitializeCommand(ctx, args[1:], options)
 	case "generation-recover":
 		return executeGenerationRecoverCommand(ctx, args[1:], options)
+	case "pending-list":
+		return executePendingListCommand(ctx, args[1:], options)
+	case "pending-recover":
+		return executePendingRecoverCommand(ctx, args[1:], options)
 	case "healthcheck":
 		return executeHealthcheckCommand(ctx, args[1:], options)
 	case "help", "-h", "--help":
@@ -339,6 +348,109 @@ func executeGenerationRecoverCommand(ctx context.Context, args []string, options
 	return 0
 }
 
+const (
+	defaultPendingStaleAfter = 24 * time.Hour
+	maxPendingStaleAfter     = 30 * 24 * time.Hour
+	defaultPendingTimeout    = 2 * time.Minute
+	maxPendingTimeout        = 10 * time.Minute
+)
+
+// validPendingWindow checks the shared pending-list/pending-recover bounds.
+func validPendingWindow(staleAfter, timeout time.Duration) bool {
+	return staleAfter > 0 && staleAfter <= maxPendingStaleAfter && timeout > 0 && timeout <= maxPendingTimeout
+}
+
+// executePendingListCommand reports every pending request with what recovery
+// may do for it. It only reads cloud request storage.
+func executePendingListCommand(ctx context.Context, args []string, options CommandOptions) int {
+	flags := flag.NewFlagSet("pending-list", flag.ContinueOnError)
+	flags.SetOutput(options.ErrOut)
+	path := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	staleAfter := flags.Duration("stale-after", defaultPendingStaleAfter, "report a request not advanced for this long as stale, at most 720h")
+	timeout := flags.Duration("timeout", defaultPendingTimeout, "overall timeout, at most 10m")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		writeCommandError(options.ErrOut, errors.New("pending-list takes no positional arguments"))
+		return 2
+	}
+	if !validPendingWindow(*staleAfter, *timeout) {
+		writeCommandError(options.ErrOut, errors.New("pending-list --stale-after must be greater than 0s and at most 720h, and --timeout greater than 0s and at most 10m"))
+		return 2
+	}
+	data, err := readConfig(*path)
+	if err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	if options.RunPendingList == nil {
+		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
+		return 1
+	}
+	bounded, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	if err := options.RunPendingList(bounded, data, *staleAfter, options.Out); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	return 0
+}
+
+type pendingRequestIDs []string
+
+func (ids *pendingRequestIDs) String() string { return strings.Join(*ids, ",") }
+
+func (ids *pendingRequestIDs) Set(value string) error {
+	if value == "" {
+		return errors.New("request ID is required")
+	}
+	*ids = append(*ids, value)
+	return nil
+}
+
+// executePendingRecoverCommand recovers explicitly named pending requests, or
+// with --stale every stale orphan whose recovery is due. Without --apply it
+// only reports the planned action.
+func executePendingRecoverCommand(ctx context.Context, args []string, options CommandOptions) int {
+	flags := flag.NewFlagSet("pending-recover", flag.ContinueOnError)
+	// Report every invalid invocation with one fixed message, like
+	// generation-recover, rather than echoing supplied values.
+	flags.SetOutput(io.Discard)
+	path := flags.String("config", defaultConfigPath, "worker configuration YAML path")
+	var ids pendingRequestIDs
+	flags.Var(&ids, "request-id", "internal request ID from pending-list; may be repeated")
+	stale := flags.Bool("stale", false, "recover every stale orphan whose recovery is due instead of named requests")
+	staleAfter := flags.Duration("stale-after", defaultPendingStaleAfter, "with --stale, treat a request not advanced for this long as stale, at most 720h")
+	apply := flags.Bool("apply", false, "run the recovery steps; without it only report the planned action")
+	timeout := flags.Duration("timeout", defaultPendingTimeout, "overall timeout, at most 10m")
+	valid := flags.Parse(args) == nil && flags.NArg() == 0 && *stale != (len(ids) > 0) && len(ids) <= 100 && validPendingWindow(*staleAfter, *timeout)
+	for _, id := range ids {
+		_, ok := workerruntime.ParsePendingRequestID(id)
+		valid = valid && ok
+	}
+	if !valid {
+		writeCommandError(options.ErrOut, errors.New("pending-recover requires up to 100 internal --request-id values or --stale, not both, with valid flags"))
+		return 2
+	}
+	data, err := readConfig(*path)
+	if err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	if options.RunPendingRecover == nil {
+		writeCommandError(options.ErrOut, errWorkerRuntimeUnavailable)
+		return 1
+	}
+	bounded, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+	if err := options.RunPendingRecover(bounded, data, ids, *stale, *staleAfter, *apply, options.Out); err != nil {
+		writeCommandError(options.ErrOut, err)
+		return 1
+	}
+	return 0
+}
+
 func readConfig(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("config path is required")
@@ -421,5 +533,5 @@ func unsupportedByWorkerBinary(snapshot *config.Snapshot) error {
 }
 
 func writeUsage(output io.Writer) {
-	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-initialize|generation-recover|validate-config|print-effective-config|healthcheck>\n")
+	_, _ = io.WriteString(output, "usage: llm-temporal-worker <version|health-server|worker|budget-initialize|generation-recover|pending-list|pending-recover|validate-config|print-effective-config|healthcheck>\n")
 }

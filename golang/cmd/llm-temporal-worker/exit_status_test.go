@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every invalid invocation exits 2 with one line saying why (#1533).
@@ -28,6 +29,11 @@ func TestInvalidInvocationsExplainExitStatusTwo(t *testing.T) {
 		{"budget-initialize", "--config", config, "--timeout", "10m"},
 		{"budget-initialize", "--config", config, "--timeout", "not-a-duration"},
 		{"generation-recover", "--config", config},
+		{"pending-list", "--config", config, "extra"},
+		{"pending-list", "--config", config, "--stale-after", "0s"},
+		{"pending-list", "--config", config, "--timeout", "11m"},
+		{"pending-recover", "--config", config},
+		{"pending-recover", "--config", config, "--stale", "--request-id", "llmtw_req_00000000-0000-4000-8000-000000000001"},
 	} {
 		var stderr bytes.Buffer
 		code := Execute(context.Background(), args, CommandOptions{
@@ -37,6 +43,14 @@ func TestInvalidInvocationsExplainExitStatusTwo(t *testing.T) {
 				return nil
 			},
 			RunGenerationRecover: func(context.Context, []byte, string, string, bool, io.Writer) error {
+				t.Fatalf("%v reached the runtime", args)
+				return nil
+			},
+			RunPendingList: func(context.Context, []byte, time.Duration, io.Writer) error {
+				t.Fatalf("%v reached the runtime", args)
+				return nil
+			},
+			RunPendingRecover: func(context.Context, []byte, []string, bool, time.Duration, bool, io.Writer) error {
 				t.Fatalf("%v reached the runtime", args)
 				return nil
 			},

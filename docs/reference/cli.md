@@ -198,6 +198,114 @@ be verified. See
 [durable preparation and recovery](cloud-request-preparation.md#durable-preparation-and-recovery)
 for which operations need recovery and the history limits.
 
+## `pending-list`
+
+Report every request in the pending-request index, with what recovery may do
+for it. Use it after a request workflow was terminated or timed out, or
+periodically to find requests no workflow advances. It reads the same
+configuration as `worker`, requires durable cloud storage and the trusted
+Temporal authorization configuration, and opens cloud request storage only:
+no Redis, Temporal, provider or budget client. Every operation is a read; it
+never repairs an index row or touches the terminal rows that
+[budget recovery](redis-budget-leases.md#recovery-after-redis-data-loss)
+reads.
+
+```sh
+llm-temporal-worker pending-list --config /etc/llmtw/config.yaml
+llm-temporal-worker pending-list --config /etc/llmtw/config.yaml --stale-after 6h
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--config PATH` | `/etc/llmtw/config.yaml` | worker configuration YAML |
+| `--stale-after DURATION` | `24h` | report a request not advanced for this long as stale; positive and at most `720h` |
+| `--timeout DURATION` | `2m` | overall timeout; positive and at most ten minutes |
+
+It walks all eight shards, follows every cursor and reads each listed
+request's authoritative record. Output is one JSON line per listed request,
+then a summary line:
+
+```json
+{"type":"request","request_id":"llmtw_req_…","shard":3,"role":"root","kind":"generate","status":"outcome_unknown","revision":7,"updated_at":"…","execution_stage":"outcome_unknown","paid":true,"owner":"workflow","stale":true,"orphan":true,"disposition":"recovery_due","action":"poll"}
+{"type":"summary","scanned":2,"orphans":2,"actionable":2,"unreadable":0}
+```
+
+`role` is `root` (the public operation's request) or `attempt` (one paid
+attempt, with its `root_id`). `owner` is `workflow` when the request workflow
+would still advance the record and `none` for an attempt its root no longer
+uses. Records do not name their workflow, so `stale` (not updated within
+`--stale-after`) only suggests a terminated or timed-out workflow; `orphan` is
+`stale` or `owner: none`. `disposition` and `action` are stable codes, listed
+with their meaning in the
+[terminated-workflow runbook](../runbooks/terminated-workflow-pending-recovery.md#dispositions).
+Lines never contain tenant or project names, prompts, outputs, provider job
+IDs or budget receipts.
+
+The command exits with status `0` when every listed record was read. It exits
+with status `1` after printing every line when any record could not be read
+(`disposition: unreadable` with an `error` code), or when configuration or
+storage is unavailable. Invalid flags or an extra argument exit with status
+`2` before reading configuration.
+
+## `pending-recover`
+
+Recover pending requests that no workflow will advance, using the existing
+runtime steps. Name requests with `--request-id` (repeatable, at most 100), or
+pass `--stale` to recover every orphan whose recovery is due, as
+`pending-list` reports them with the same `--stale-after`.
+
+```sh
+llm-temporal-worker pending-recover --config /etc/llmtw/config.yaml --request-id llmtw_req_…
+llm-temporal-worker pending-recover --config /etc/llmtw/config.yaml --request-id llmtw_req_… --apply
+llm-temporal-worker pending-recover --config /etc/llmtw/config.yaml --stale --stale-after 24h --apply --timeout 10m
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--config PATH` | `/etc/llmtw/config.yaml` | worker configuration YAML |
+| `--request-id ID` | | internal request ID from `pending-list`; repeatable, at most 100 |
+| `--stale` | `false` | recover every orphan whose recovery is due instead of named requests |
+| `--stale-after DURATION` | `24h` | with `--stale`, the staleness threshold; positive and at most `720h` |
+| `--apply` | `false` | run the recovery steps |
+| `--timeout DURATION` | `2m` | overall timeout; positive and at most ten minutes |
+
+Without `--apply` the command opens cloud request storage only, performs reads
+only, and prints the action each request would take. With `--apply` it
+composes the same cloud runtime as `worker` (storage, Redis budget authority,
+provider adapters and catalogs), without a Temporal worker, and runs only the
+steps a request workflow would run next:
+
+- `poll`: the poll Activity step on the request's root. It polls a provider
+  job once, tries documented idempotency recovery once, records an unresolved
+  submission as `outcome_unknown` after its 15-minute recovery window, settles
+  an unknown attempt at its full reservation, applies a saved settlement, or
+  closes a settled failure.
+- `complete`: the completion Activity step, which publishes a settled success
+  as the operation's checkpoint and result. A caller that retries the same
+  operation key replays that result without another provider call.
+- `settle`: for an attempt its root no longer uses, apply its saved settlement
+  or charge an unknown outcome at its full reservation.
+
+An active attempt is recovered through its root. Each request runs at most four
+steps per invocation and stops as soon as a step makes no progress. Recovery
+never acquires budget, submits a provider request, starts a replacement
+attempt, refunds or lowers a charge, or deletes or rewrites a record outside
+those steps. Every step first authorizes the request's saved caller against the
+current `authorization` policy. Because the steps are the same idempotent
+Activity steps a worker runs, recovery is safe to repeat and safe if the
+workflow is in fact still running.
+
+Output is one JSON line per request, with the fields of `pending-list` after
+recovery plus `applied` and `steps`, then a summary line that adds `recovered`
+and `failed` counts. The command exits with status `0` when every request was
+read and every step succeeded, `1` after printing every line when any request
+could not be read or a step failed (its line carries an `error` code), or when
+the configuration, budget initialization, storage, Redis or providers are
+unavailable, and `2` before reading configuration when neither or both of
+`--request-id` and `--stale` are given, more than 100 IDs are given, an ID is
+not an internal request ID, a flag is invalid, or an extra argument is
+supplied.
+
 ## `validate-config`
 
 Parse and validate the strict YAML shape without starting the worker:
