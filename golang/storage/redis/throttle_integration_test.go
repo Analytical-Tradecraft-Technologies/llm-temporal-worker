@@ -34,12 +34,8 @@ func TestLiveRedisThrottleAcquireReplayDenialAndRelease(t *testing.T) {
 	if err != nil || !replay.Existing {
 		t.Fatalf("live throttle replay = %#v, %v", replay, err)
 	}
-	if _, err := store.Acquire(context.Background(), "live-throttle-2", limits); !errors.Is(err, ErrThrottleDenied) {
-		t.Fatalf("live throttle denial = %v", err)
-	}
-	if err := store.Release(context.Background(), first.Reservation); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(store.Acquire(context.Background(), "live-throttle-2", limits)), ErrThrottleDenied, "live throttle denial =")
+	mustNoError(t, store.Release(context.Background(), first.Reservation))
 	if _, err := store.Acquire(context.Background(), "live-throttle-3", limits); err != nil {
 		t.Fatalf("live throttle after release = %v", err)
 	}
@@ -52,10 +48,7 @@ func TestLiveRedisThrottleCountersRollEachWindow(t *testing.T) {
 	client := openLiveRedis(t)
 	keys := liveKeyOptions("throttle-roll")
 	cleanupLivePrefix(t, client, keys.Prefix)
-	store, err := NewThrottleStore(ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewThrottleStore, ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys})
 	limits := []ThrottleLimit{{Kind: ThrottleRequests, Scope: "tenant-roll", Amount: 1, Limit: 3, Window: 2 * time.Second}}
 	for index := 0; index < 4; index++ {
 		if index > 0 {
@@ -74,15 +67,10 @@ func TestLiveRedisThrottleReleaseOnlyRefundsItsOwnWindow(t *testing.T) {
 	client := openLiveRedis(t)
 	keys := liveKeyOptions("throttle-window")
 	cleanupLivePrefix(t, client, keys.Prefix)
-	store, err := NewThrottleStore(ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewThrottleStore, ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: keys})
 	ctx := context.Background()
 	limits := []ThrottleLimit{{Kind: ThrottleRequests, Scope: "tenant-window", Amount: 1, Limit: 2, Window: 2 * time.Second}}
-	if _, err := store.Acquire(ctx, "window-0", limits); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(store.Acquire(ctx, "window-0", limits)))
 	time.Sleep(time.Second)
 	late, err := store.Acquire(ctx, "window-1", limits)
 	if err != nil {
@@ -90,15 +78,11 @@ func TestLiveRedisThrottleReleaseOnlyRefundsItsOwnWindow(t *testing.T) {
 	}
 	// The first window ends at 2s; window-1's reservation lives until 3s.
 	time.Sleep(1200 * time.Millisecond)
-	if _, err := store.Acquire(ctx, "window-2", limits); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(store.Acquire(ctx, "window-2", limits)))
 	if err := store.Release(ctx, late.Reservation); err != nil {
 		t.Fatalf("release of a reservation from the previous window = %v", err)
 	}
-	if _, err := store.Acquire(ctx, "window-3", limits); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(store.Acquire(ctx, "window-3", limits)))
 	if _, err := store.Acquire(ctx, "window-4", limits); !errors.Is(err, ErrThrottleDenied) {
 		t.Fatalf("third acquire in a window of two = %v, want denial", err)
 	}

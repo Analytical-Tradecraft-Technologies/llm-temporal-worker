@@ -3,7 +3,6 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -22,23 +21,15 @@ func TestCheckpointFinalizationPlanIsSavedBeforePublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Checkpoints().Get(ctx, checkpoint.ScopeID, checkpoint.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatal("checkpoint published before resume", err)
-	}
-	if _, err := r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrFinalizationHandoffMissing) {
-		t.Fatal("handoff published before checkpoint", err)
-	}
+	mustSaveCheckpointFinalization(t, r, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt)
+	requireErrorIs(t, errOf(r.Checkpoints().Get(ctx, checkpoint.ScopeID, checkpoint.ID)), contracts.ErrNotFound, "checkpoint published before resume")
+	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), ErrFinalizationHandoffMissing, "handoff published before checkpoint")
 	restarted := reopen(t, table, blobs)
 	got, err := restarted.LoadCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID)
 	if err != nil || !equalCheckpointFinalization(got, plan) {
 		t.Fatal("plan not durable", err)
 	}
-	if _, err := restarted.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(restarted.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt.Add(time.Hour))))
 	cp, err := restarted.Checkpoints().Get(ctx, checkpoint.ScopeID, checkpoint.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -52,24 +43,16 @@ func TestCheckpointFinalizationPlanIsSavedBeforePublication(t *testing.T) {
 	if err != nil || after.Status != StatusRunning {
 		t.Fatal("publication terminalized before settlement", err)
 	}
-	if _, err := restarted.LoadCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrCheckpointFinalizationMissing) {
-		t.Fatal("plan duplicated the readable handoff", err)
-	}
-	if err := restarted.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt.Add(2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := restarted.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt.Add(2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(restarted.LoadCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID)), ErrCheckpointFinalizationMissing, "plan duplicated the readable handoff")
+	mustSaveCheckpointFinalization(t, restarted, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt.Add(2*time.Hour))
+	mustNoError(t, errOf(restarted.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt.Add(2*time.Hour))))
 	again, _ := restarted.Read(ctx, record.Request.Scope, record.Request.ID)
 	if again.Revision != after.Revision {
 		t.Fatal("identical completed retry appended writes")
 	}
 	changed := plan
 	changed.Checkpoint.CompilerEpoch = "other-compiler"
-	if err := restarted.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("changed committed checkpoint accepted", err)
-	}
+	requireErrorIs(t, restarted.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt), contracts.ErrConflict, "changed committed checkpoint accepted")
 }
 
 func TestCheckpointFinalizationRecoveryAtEveryPublicationBoundary(t *testing.T) {
@@ -84,9 +67,7 @@ func TestCheckpointFinalizationRecoveryAtEveryPublicationBoundary(t *testing.T) 
 				ctx := context.Background()
 				plan := CheckpointFinalization{Checkpoint: checkpoint, Handoff: handoff}
 				if !strings.HasPrefix(stage, "plan-") {
-					if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt); err != nil {
-						t.Fatal(err)
-					}
+					mustSaveCheckpointFinalization(t, r, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt)
 				}
 				fired := false
 				table.hook = func(action string, item kv.KeyValueItem) (error, error) {
@@ -130,9 +111,7 @@ func TestCheckpointFinalizationRecoveryAtEveryPublicationBoundary(t *testing.T) 
 				if err != nil || !equalHandoff(got, normalized) {
 					t.Fatal("resume retry", err)
 				}
-				if _, err := restarted.Checkpoints().Get(ctx, checkpoint.ScopeID, checkpoint.ID); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(restarted.Checkpoints().Get(ctx, checkpoint.ScopeID, checkpoint.ID)))
 				current, _ := restarted.Read(ctx, record.Request.Scope, record.Request.ID)
 				if current.Status != StatusRunning {
 					t.Fatal("paid settlement prematurely completed")
@@ -172,18 +151,14 @@ func TestCheckpointFinalizationImmutableConcurrentPlans(t *testing.T) {
 	}
 	changed := handoff
 	changed.Payload = json.RawMessage(`{"version":1,"different":true}`)
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("changed handoff accepted", err)
-	}
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt), contracts.ErrConflict, "changed handoff accepted")
 }
 
 func TestCheckpointFinalizationMissingReferencesRemainRecoverable(t *testing.T) {
 	r, _, blobs, record, checkpoint, handoff := handoffFixture(t)
 	plan := CheckpointFinalization{Checkpoint: checkpoint, Handoff: handoff}
 	ctx := context.Background()
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveCheckpointFinalization(t, r, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt)
 	// Content blobs are prerequisites, not permission to fall back to provider work.
 	tag, _, _ := strings.Cut(strings.TrimPrefix(string(checkpoint.ResponseBlob.ID), checkpointBlobPrefix), ".")
 	delete(blobs.values, blob.BlobKey(r.namespace+"/payload/"+tag))
@@ -193,40 +168,26 @@ func TestCheckpointFinalizationMissingReferencesRemainRecoverable(t *testing.T) 
 	if _, err := r.LoadCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID); err != nil {
 		t.Fatal("lost recovery plan", err)
 	}
-	if _, err := r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrFinalizationHandoffMissing) {
-		t.Fatal("premature handoff", err)
-	}
+	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), ErrFinalizationHandoffMissing, "premature handoff")
 }
 
 func TestCheckpointFinalizationRejectsChangedPlanBeforePublication(t *testing.T) {
 	r, _, _, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
 	plan := CheckpointFinalization{Checkpoint: checkpoint, Handoff: handoff}
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveCheckpointFinalization(t, r, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt)
 	changed := plan
 	changed.Checkpoint.CompilerEpoch = "new-version"
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("changed plan accepted", err)
-	}
+	requireErrorIs(t, r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt), contracts.ErrConflict, "changed plan accepted")
 	handoff.Payload = json.RawMessage(`{"version":1,"response":"different"}`)
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("saved plan bypassed", err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "saved plan bypassed")
 	wrongScope := record.Request.Scope
 	wrongScope.Tenant = "other-tenant"
-	if _, err := r.LoadCheckpointFinalization(ctx, wrongScope, record.Request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatal("cross-tenant plan disclosed", err)
-	}
+	requireErrorIs(t, errOf(r.LoadCheckpointFinalization(ctx, wrongScope, record.Request.ID)), contracts.ErrNotFound, "cross-tenant plan disclosed")
 	wrong := plan
 	wrong.Handoff.CheckpointID = state.CheckpointID("other-checkpoint")
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt); !errors.Is(err, ErrInvalid) {
-		t.Fatal("cross-checkpoint plan accepted", err)
-	}
+	requireErrorIs(t, r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), ErrInvalid, "cross-checkpoint plan accepted")
 }
 
 func TestCheckpointFinalizationDoesNotDuplicateLargeResponse(t *testing.T) {
@@ -234,9 +195,7 @@ func TestCheckpointFinalizationDoesNotDuplicateLargeResponse(t *testing.T) {
 	handoff.Payload, _ = json.Marshal(map[string]any{"version": 1, "response": strings.Repeat("x", maxPayloadBytes/2+1024)})
 	plan := CheckpointFinalization{Checkpoint: checkpoint, Handoff: handoff}
 	ctx := context.Background()
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveCheckpointFinalization(t, r, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt)
 	if _, err := r.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt); err != nil {
 		t.Fatal("large payload duplicated during promotion", err)
 	}
@@ -246,20 +205,12 @@ func TestCheckpointFinalizationHandoffCannotPromoteDifferentCheckpoint(t *testin
 	r, _, _, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
 	plan := CheckpointFinalization{Checkpoint: checkpoint, Handoff: handoff}
-	if err := r.SaveCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveCheckpointFinalization(t, r, record.Request.Scope, record.Request.ID, plan, checkpoint.CreatedAt)
 	changed := checkpoint
 	changed.CompilerEpoch = "competing-compiler"
-	if err := publishCheckpoint(ctx, r.Checkpoints(), changed); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("different committed checkpoint promoted", err)
-	}
-	if _, err := r.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("competing checkpoint overwritten", err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), changed)
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "different committed checkpoint promoted")
+	requireErrorIs(t, errOf(r.ResumeCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID, checkpoint.CreatedAt)), contracts.ErrConflict, "competing checkpoint overwritten")
 	if _, err := r.LoadCheckpointFinalization(ctx, record.Request.Scope, record.Request.ID); err != nil {
 		t.Fatal("pending plan lost", err)
 	}

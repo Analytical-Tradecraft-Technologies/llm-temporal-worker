@@ -32,9 +32,7 @@ func reserveExecutionPlan(t *testing.T, r *Repository, record Record, plan Budge
 		plan.Mode = modes[0]
 		plan.Reservation.Reservations = nil
 	}
-	if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 	if !plan.RequiresReservation() {
 		return plan, durable.ReserveResult{}
 	}
@@ -101,11 +99,34 @@ func advanceExecution(t *testing.T, r *Repository, record Record, saved SavedPro
 	update(&next)
 	next.Revision++
 	next.UpdatedAt = next.UpdatedAt.Add(time.Second)
-	if err := r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next))
 	saved.Execution = next
 	return saved
+}
+
+// markExecutionUnknown records an ambiguous dispatch for saved.
+func markExecutionUnknown(t *testing.T, r *Repository, record Record, saved SavedProviderExecution) SavedProviderExecution {
+	t.Helper()
+	return advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
+		e.Stage = ExecutionUnknown
+		e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+	})
+}
+
+// markExecutionSubmitting records reservation's claim on saved.
+func markExecutionSubmitting(t *testing.T, r *Repository, record Record, saved SavedProviderExecution, reservation durable.ReserveResult) SavedProviderExecution {
+	t.Helper()
+	return advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+}
+
+// markExecutionPending records provider job as pending until pollAfter.
+func markExecutionPending(t *testing.T, r *Repository, record Record, saved SavedProviderExecution, job string, pollAfter time.Time) SavedProviderExecution {
+	t.Helper()
+	return advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
+		e.Stage = ExecutionPending
+		e.ProviderOperationID = job
+		e.PollAfter = pollAfter
+	})
 }
 
 func executionClaim(reservation durable.ReserveResult) *durable.ClaimReceipt {
@@ -116,18 +137,10 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	r, table, blobs, record, plan, reservation := executionFixture(t)
 	saved := startExecution(t, r, record, plan, reservation)
 	ctx := context.Background()
-	if _, err := r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("execution did not fence admission", err)
-	}
-	if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("execution allowed initial replanning", err)
-	}
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionPending
-		e.ProviderOperationID = "sensitive-provider-job"
-		e.PollAfter = plan.QuotedAt.Add(time.Minute)
-	})
+	requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "execution did not fence admission")
+	requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "execution allowed initial replanning")
+	saved = markExecutionSubmitting(t, r, record, saved, reservation)
+	saved = markExecutionPending(t, r, record, saved, "sensitive-provider-job", plan.QuotedAt.Add(time.Minute))
 	restarted := reopen(t, table, blobs)
 	loaded, err := restarted.LoadProviderExecution(ctx, record.Request.Scope, record.Request.ID)
 	if err != nil || !equalExecution(loaded.Execution, saved.Execution) {
@@ -146,9 +159,7 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	}
 	wrong := record.Request.Scope
 	wrong.Project = "different"
-	if _, err := restarted.LoadProviderExecution(ctx, wrong, record.Request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatal("scope leaked", err)
-	}
+	requireErrorIs(t, errOf(restarted.LoadProviderExecution(ctx, wrong, record.Request.ID)), contracts.ErrNotFound, "scope leaked")
 	// Even a replacement reservation or changed time cannot grant a second start.
 	_, fresh, err := restarted.BeginProviderExecution(ctx, record.Request.Scope, record.Request.ID, durable.ReserveResult{}, false, plan.QuotedAt.Add(time.Hour))
 	if err != nil || fresh {
@@ -164,16 +175,12 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	if err != nil || current.Status != StatusRunning {
 		t.Fatal("result is not ready for checkpoint finalization", err)
 	}
-	if _, err := restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("saved result reopened admission", err)
-	}
+	requireErrorIs(t, errOf(restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "saved result reopened admission")
 	// Terminal provider output cannot be replaced, even before checkpoint publication.
 	next := saved.Execution
 	next.Revision++
 	next.Response = &llm.Response{OperationKey: "replacement", Status: llm.ResponseStatusCompleted}
-	if err := restarted.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, next); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("terminal response replaced", err)
-	}
+	requireErrorIs(t, restarted.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, next), contracts.ErrConflict, "terminal response replaced")
 }
 
 func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
@@ -184,7 +191,7 @@ func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
 			r, _, _, record, plan, reservation := executionFixture(t)
 			ctx := context.Background()
 			saved := startExecution(t, r, record, plan, reservation)
-			saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+			saved = markExecutionSubmitting(t, r, record, saved, reservation)
 			next := saved.Execution
 			next.Revision++
 			next.Stage = ExecutionSucceeded
@@ -195,10 +202,7 @@ func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
 			}
 			size := maxPayloadBytes
 			if mode == "record" {
-				current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
+				current := mustRead(t, r, record.Request.Scope, record.Request.ID)
 				// The saved progress replaces the current execution entry.
 				next.Response = response("")
 				encoded, _ := json.Marshal(next)
@@ -233,7 +237,7 @@ func TestProviderExecutionToolCallDepth(t *testing.T) {
 	r, _, _, record, plan, reservation := executionFixture(t)
 	ctx := context.Background()
 	saved := startExecution(t, r, record, plan, reservation)
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+	saved = markExecutionSubmitting(t, r, record, saved, reservation)
 	if err := r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, succeeded(saved, llm.MaxToolArgumentsDepth)); err != nil {
 		t.Fatalf("tool call at the adapter depth limit not saved: %v", err)
 	}
@@ -242,7 +246,7 @@ func TestProviderExecutionToolCallDepth(t *testing.T) {
 	// oversized response, so the paid attempt can still be closed.
 	r, _, _, record, plan, reservation = executionFixture(t)
 	saved = startExecution(t, r, record, plan, reservation)
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+	saved = markExecutionSubmitting(t, r, record, saved, reservation)
 	err := r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, succeeded(saved, llm.DefaultCanonicalMaxDepth))
 	if !errors.Is(err, ErrRecordTooLarge) || !errors.Is(err, ErrInvalid) {
 		t.Fatal("too-deep response not refused as a record limit", err)
@@ -256,9 +260,7 @@ func TestProviderExecutionConcurrentStartsAuthorizeOnlyOneWriter(t *testing.T) {
 	if winners != 1 {
 		t.Fatal("multiple fresh start permissions", winners)
 	}
-	if _, err := r.LoadProviderExecution(context.Background(), record.Request.Scope, record.Request.ID); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.LoadProviderExecution(context.Background(), record.Request.Scope, record.Request.ID)))
 }
 
 func TestProviderExecutionLostStartReplyNeverAuthorizesReplay(t *testing.T) {
@@ -299,12 +301,8 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 		t.Fatal("missing window accepted", err)
 	}
 	saved := startExecution(t, r, record, plan, reservation)
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionPending
-		e.ProviderOperationID = "job"
-		e.PollAfter = plan.QuotedAt.Add(time.Minute)
-	})
+	saved = markExecutionSubmitting(t, r, record, saved, reservation)
+	saved = markExecutionPending(t, r, record, saved, "job", plan.QuotedAt.Add(time.Minute))
 	for _, mutation := range []func(*ProviderExecution){
 		func(e *ProviderExecution) { e.ProviderOperationID = "other-job" },
 		func(e *ProviderExecution) {
@@ -319,9 +317,7 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 		next := saved.Execution
 		next.Revision++
 		mutation(&next)
-		if err := r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next); !errors.Is(err, contracts.ErrConflict) {
-			t.Fatal("changed binding accepted", err)
-		}
+		requireErrorIs(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next), contracts.ErrConflict, "changed binding accepted")
 	}
 	old := saved
 	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.PollAfter = e.PollAfter.Add(time.Second) })
@@ -330,9 +326,7 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 	next.Stage = ExecutionUnknown
 	next.PollAfter = time.Time{}
 	next.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-	if err := r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, old.Execution.Revision, next); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("stale poll overwrote newer state", err)
-	}
+	requireErrorIs(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, old.Execution.Revision, next), contracts.ErrConflict, "stale poll overwrote newer state")
 	// Positive recovery after an unknown outcome can retain the original paid job.
 	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
 		e.Stage = ExecutionUnknown

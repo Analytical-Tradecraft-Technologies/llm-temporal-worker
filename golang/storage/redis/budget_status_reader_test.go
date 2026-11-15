@@ -75,19 +75,13 @@ func testBudgetStatusReader(t *testing.T, invoker BudgetStatusFunctionInvoker) (
 	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
 	members := []BudgetManifestMember{{PolicyID: "policy", WindowID: "window", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), ConfigVersion: "config-1", PriceVersion: "price-1", CoverageStart: start, CoverageEnd: end, BucketCount: 60, BucketWidth: time.Minute, BucketCatalogDigest: strings.Repeat("c", 64), LimitNanoUSD: "1000000000"}}
-	catalog, err := MemberCatalogDigest(members)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCall(t, MemberCatalogDigest, members)
 	manifest := BudgetManifest{Schema: BudgetManifestSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: end, PolicyCount: 1, WindowCount: 1, BucketCount: 60, StreamHighWaterMark: "1-0", RoundingVersion: BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members}
 	pointer, err := manifest.Pointer()
 	if err != nil {
 		t.Fatal(err)
 	}
-	reader, err := NewRedisBudgetStatusReader(BudgetStatusReaderOptions{Generation: budgetStatusGenerationFake{pointer: pointer, manifest: manifest}, Invoker: invoker, Keys: testBudgetKeySpaceForAdapter(t), Clock: func() time.Time { return start.Add(10 * time.Minute) }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	reader := mustCall(t, NewRedisBudgetStatusReader, BudgetStatusReaderOptions{Generation: budgetStatusGenerationFake{pointer: pointer, manifest: manifest}, Invoker: invoker, Keys: testBudgetKeySpaceForAdapter(t), Clock: func() time.Time { return start.Add(10 * time.Minute) }})
 	return reader, manifest, start.Add(10 * time.Minute)
 }
 
@@ -119,21 +113,15 @@ func TestRedisBudgetStatusReaderRejectsHistoryAndV1OrMalformedState(t *testing.T
 	invoker := &budgetStatusInvokerFake{}
 	reader, manifest, activeAt := testBudgetStatusReader(t, invoker)
 	invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
-	if _, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt.Add(-2*time.Second)); !errors.Is(err, ErrBudgetHistoryNotAvailable) {
-		t.Fatalf("history error = %v", err)
-	}
+	requireErrorIs(t, errOf(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt.Add(-2*time.Second))), ErrBudgetHistoryNotAvailable, "history error =")
 	bad := budgetStatusResultForManifest(t, manifest, "1-4")
 	bad[1] = strings.Replace(bad[1].(string), `"schema":"budget-window/v2"`, `"schema":"durable-budget/v1"`, 1)
 	invoker.result = bad
-	if _, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt); !errors.Is(err, ErrBudgetStatusUnavailable) {
-		t.Fatalf("v1 error = %v", err)
-	}
+	requireErrorIs(t, errOf(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)), ErrBudgetStatusUnavailable, "v1 error =")
 	bad = budgetStatusResultForManifest(t, manifest, "1-4")
 	bad[1] = strings.Replace(bad[1].(string), `"reserved_nano_usd":"200000000"`, `"reserved_nano_usd":"not-an-int"`, 1)
 	invoker.result = bad
-	if _, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt); !errors.Is(err, ErrBudgetStatusUnavailable) {
-		t.Fatalf("malformed error = %v", err)
-	}
+	requireErrorIs(t, errOf(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)), ErrBudgetStatusUnavailable, "malformed error =")
 }
 
 func TestRedisBudgetStatusReaderTypesRequestMisses(t *testing.T) {
@@ -329,9 +317,7 @@ func TestRedisBudgetStatusReaderEncodesWindowSelection(t *testing.T) {
 				t.Fatal(err)
 			}
 			var decoded control.BudgetStatusResult
-			if err := json.Unmarshal(data, &decoded); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, json.Unmarshal(data, &decoded))
 			if decoded.Windows == nil || len(decoded.Windows) != test.wantWindows {
 				t.Fatalf("windows = %s, want array with %d entries", data, test.wantWindows)
 			}

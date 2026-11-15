@@ -2,7 +2,6 @@ package cloudstate
 
 import (
 	"context"
-	"errors"
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"strings"
@@ -13,15 +12,9 @@ import (
 func TestRequestExhaustionRequiresSettledFailureAndLimit(t *testing.T) {
 	r, table, blobs, root, a, failure, now := failedRequestFixture(t, true)
 	ctx, scope := context.Background(), root.Request.Scope
-	if _, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("unfinalized child exhausted", err)
-	}
-	if err := r.FinishRequestFailure(ctx, scope, root.Request.ID, a.ID, failure, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 2, now); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("unused attempt capacity discarded", err)
-	}
+	requireErrorIs(t, errOf(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)), contracts.ErrConflict, "unfinalized child exhausted")
+	mustFinishRequestFailure(t, r, scope, root.Request.ID, a.ID, failure, now)
+	requireErrorIs(t, errOf(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 2, now)), contracts.ErrConflict, "unused attempt capacity discarded")
 	result, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)
 	if err != nil || result.Retryable || result.Validate() != nil {
 		t.Fatal("invalid terminal failure", result, err)
@@ -30,24 +23,15 @@ func TestRequestExhaustionRequiresSettledFailureAndLimit(t *testing.T) {
 	if err != nil || !equalExecutionJSON(replay, result) {
 		t.Fatal("exhaustion not durable", err)
 	}
-	if _, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now.Add(time.Second)); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("terminal root renewed", err)
-	}
+	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now.Add(time.Second))), contracts.ErrConflict, "terminal root renewed")
 }
 
 func TestRequestExhaustionCannotCloseNewerAttempt(t *testing.T) {
 	r, _, _, root, a, failure, now := failedRequestFixture(t, true)
 	ctx, scope := context.Background(), root.Request.Scope
-	if err := r.FinishRequestFailure(ctx, scope, root.Request.ID, a.ID, failure, now); err != nil {
-		t.Fatal(err)
-	}
-	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("old attempt closed newer root", err)
-	}
+	mustFinishRequestFailure(t, r, scope, root.Request.ID, a.ID, failure, now)
+	next := mustBeginRequestAttempt(t, r, scope, root.Request.ID, a.ID, now)
+	requireErrorIs(t, errOf(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)), contracts.ErrConflict, "old attempt closed newer root")
 	if _, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, next.ID, 1, now); err == nil {
 		t.Fatal("unused child exhausted")
 	}
@@ -62,9 +46,7 @@ func TestRequestExhaustionRepairsLostWrites(t *testing.T) {
 		t.Run(map[bool]string{false: "index", true: "event"}[event], func(t *testing.T) {
 			r, table, blobs, root, a, failure, now := failedRequestFixture(t, true)
 			ctx, scope := context.Background(), root.Request.Scope
-			if err := r.FinishRequestFailure(ctx, scope, root.Request.ID, a.ID, failure, now); err != nil {
-				t.Fatal(err)
-			}
+			mustFinishRequestFailure(t, r, scope, root.Request.ID, a.ID, failure, now)
 			table.hook = func(action string, item kv.KeyValueItem) (error, error) {
 				if event && action == "create" && strings.Contains(item.PartitionKey, "/request/") {
 					return nil, contracts.ErrOutcomeUnknown
@@ -83,11 +65,7 @@ func TestRequestExhaustionRepairsLostWrites(t *testing.T) {
 			if err != nil || result.Retryable || result.Validate() != nil {
 				t.Fatal("exhaustion recovery failed", err)
 			}
-			shard, _ := PendingShard(root.Request.ID)
-			page, err := r.ListPending(ctx, shard, 100, "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			page := firstPendingPage(t, r, root.Request.ID)
 			for _, entry := range page.Requests {
 				if entry.ID == root.Request.ID {
 					t.Fatal("failed root remains pending")

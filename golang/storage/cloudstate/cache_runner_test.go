@@ -116,10 +116,7 @@ func TestCloudCacheRunnersHundredIndependentMissesAndRetries(t *testing.T) {
 				errs := make(chan error, 100)
 				for i := range 100 {
 					repository := reopen(t, table, blobs)
-					c, err := durable.NewResponseCache(repository.Responses(), repository.ResponseFills(), func() time.Time { return lease.AcquiredAt })
-					if err != nil {
-						t.Fatal(err)
-					}
+					c := mustResponseCache(t, repository.Responses(), repository.ResponseFills(), func() time.Time { return lease.AcquiredAt })
 					attempt := lease
 					if !sameAttempt {
 						attempt.Attempt = fmt.Sprintf("attempt-%d", i)
@@ -147,11 +144,8 @@ func TestCloudCacheRunnersHundredIndependentMissesAndRetries(t *testing.T) {
 				repository := reopen(t, table, blobs)
 				lease.AcquiredAt, lease.ExpiresAt = lease.AcquiredAt.Add(time.Hour), lease.ExpiresAt.Add(time.Hour)
 				lease.Attempt = "next-attempt"
-				c, err := durable.NewResponseCache(repository.Responses(), repository.ResponseFills(), func() time.Time { return lease.AcquiredAt })
-				if err != nil {
-					t.Fatal(err)
-				}
-				err = runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions)
+				c := mustResponseCache(t, repository.Responses(), repository.ResponseFills(), func() time.Time { return lease.AcquiredAt })
+				err := runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions)
 				if !errors.Is(err, durable.ErrCacheRecoveryRequired) || submissions.Load() != 1 || claims.Load() != 1 {
 					t.Fatalf("restart: %v, submissions=%d", err, submissions.Load())
 				}
@@ -175,20 +169,14 @@ func TestCloudCacheRunnerRecoversLostStartAcknowledgement(t *testing.T) {
 		r, table, blobs, entry, _ := responseCacheFixture(t)
 		lease := fillLease(entry)
 		lease.Key.Operation = kind
-		c, err := durable.NewResponseCache(r.Responses(), lostStartAcknowledgement{r.ResponseFills()}, func() time.Time { return lease.AcquiredAt })
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := mustResponseCache(t, r.Responses(), lostStartAcknowledgement{r.ResponseFills()}, func() time.Time { return lease.AcquiredAt })
 		var claims, submissions atomic.Int32
-		err = runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions)
+		err := runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions)
 		if !errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, durable.ErrCacheRecoveryRequired) {
 			t.Fatal(err)
 		}
 		r = reopen(t, table, blobs)
-		c, err = durable.NewResponseCache(r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
-		if err != nil {
-			t.Fatal(err)
-		}
+		c = mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
 		err = runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions)
 		if !errors.Is(err, durable.ErrCacheRecoveryRequired) || claims.Load() != 0 || submissions.Load() != 0 {
 			t.Fatalf("%v claims=%d submissions=%d", err, claims.Load(), submissions.Load())
@@ -204,12 +192,9 @@ func TestCloudCacheWaitRemainsRetryableThroughTemporal(t *testing.T) {
 		mustAcquireFill(t, r.ResponseFills(), lease, cache.FillOwned)
 		waiter := lease
 		waiter.OperationID, waiter.Attempt = "waiting-operation", "waiting-generation"
-		c, err := durable.NewResponseCache(r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
 		var claims, submissions atomic.Int32
-		err = runCloudCacheGate(context.Background(), kind, c, waiter, &claims, &submissions)
+		err := runCloudCacheGate(context.Background(), kind, c, waiter, &claims, &submissions)
 		if !errors.Is(err, durable.ErrCacheWait) {
 			t.Fatal(err)
 		}
@@ -233,26 +218,15 @@ func TestCloudCacheRunnerNewAttemptAfterResolvedUnknownClaimsAgain(t *testing.T)
 		lease := fillLease(entry)
 		lease.Key.Operation = kind
 		var claims, submissions atomic.Int32
-		c, err := durable.NewResponseCache(r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions); !errors.Is(err, errCacheRunnerSubmitted) {
-			t.Fatal(err)
-		}
+		c := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
+		requireErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), errCacheRunnerSubmitted, "")
 		// Simulate the recovery finalizer having durably charged the unknown
 		// attempt. The cache layer itself cannot infer or perform that settlement.
-		if err := r.ResponseFills().Complete(context.Background(), lease, cache.FillCompletion{Outcome: cache.FillUnknown, CompletedAt: lease.AcquiredAt.Add(time.Second)}); err != nil {
-			t.Fatal(err)
-		}
-		if err := runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions); !errors.Is(err, durable.ErrCacheRecoveryRequired) {
-			t.Fatal(err)
-		}
+		mustNoError(t, r.ResponseFills().Complete(context.Background(), lease, cache.FillCompletion{Outcome: cache.FillUnknown, CompletedAt: lease.AcquiredAt.Add(time.Second)}))
+		requireErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), durable.ErrCacheRecoveryRequired, "")
 		lease.Attempt = "fresh-budget-generation"
 		lease.AcquiredAt, lease.ExpiresAt = lease.AcquiredAt.Add(2*time.Second), lease.ExpiresAt.Add(2*time.Second)
-		if err := runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions); !errors.Is(err, errCacheRunnerSubmitted) {
-			t.Fatal(err)
-		}
+		requireErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), errCacheRunnerSubmitted, "")
 		if claims.Load() != 2 || submissions.Load() != 2 {
 			t.Fatalf("claims=%d submissions=%d", claims.Load(), submissions.Load())
 		}

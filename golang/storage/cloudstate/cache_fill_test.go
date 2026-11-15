@@ -139,13 +139,9 @@ func TestCloudFillsExpiryFencesPreviousOwner(t *testing.T) {
 	if ok, err := store.Start(ctx, lease, lease.AcquiredAt); ok || !errors.Is(err, contracts.ErrConflict) {
 		t.Fatalf("stale start = %v %v", ok, err)
 	}
-	if err := store.Release(ctx, lease, next.AcquiredAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, store.Release(ctx, lease, next.AcquiredAt), contracts.ErrConflict, "")
 	mustStartFill(t, store, next, next.AcquiredAt)
-	if err := store.Release(ctx, next, next.AcquiredAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("released started work", err)
-	}
+	requireErrorIs(t, store.Release(ctx, next, next.AcquiredAt), contracts.ErrConflict, "released started work")
 }
 
 func TestCloudFillsWaiterTakesOverExpiredOwnerAtAcquisitionTime(t *testing.T) {
@@ -162,9 +158,7 @@ func TestCloudFillsWaiterTakesOverExpiredOwnerAtAcquisitionTime(t *testing.T) {
 			t.Fatalf("acquire at %s = %v, %v", now, decision, err)
 		}
 	}
-	if _, err := store.Acquire(ctx, waiter, waiter.AcquiredAt.Add(-time.Nanosecond)); !errors.Is(err, ErrInvalid) {
-		t.Fatal("acquisition before the lease", err)
-	}
+	requireErrorIs(t, errOf(store.Acquire(ctx, waiter, waiter.AcquiredAt.Add(-time.Nanosecond))), ErrInvalid, "acquisition before the lease")
 	if decision, err := store.Acquire(ctx, waiter, lease.ExpiresAt); err != nil || decision.Disposition != cache.FillOwned || decision.Record.Lease != waiter {
 		t.Fatalf("acquire at expiry = %v, %v", decision, err)
 	}
@@ -229,13 +223,9 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 				if err := store.Complete(ctx, lease, completion); err == nil {
 					t.Fatal("completed unpublished success")
 				}
-				if err := r.Responses().Publish(ctx, entry); err != nil {
-					t.Fatal(err)
-				}
+				mustPublishResponse(t, r, entry)
 			}
-			if err := store.Complete(ctx, lease, completion); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, store.Complete(ctx, lease, completion))
 			store = reopen(t, table, blobs).ResponseFills()
 			if err := store.Complete(ctx, lease, completion); err != nil {
 				t.Fatal("retry", err)
@@ -246,9 +236,7 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 			}
 			changed := completion
 			changed.CompletedAt = changed.CompletedAt.Add(time.Second)
-			if err := store.Complete(ctx, lease, changed); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatal("mutable completion", err)
-			}
+			requireErrorIs(t, store.Complete(ctx, lease, changed), contracts.ErrConflict, "mutable completion")
 			// Even unknown paid work needs an explicit completion before a NEW
 			// attempt can own the key. This does not grant that attempt budget.
 			next := lease
@@ -257,9 +245,7 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 			if err := store.Complete(ctx, lease, completion); err != nil {
 				t.Fatal("completed attempt lost after new owner", err)
 			}
-			if err := store.Release(ctx, next, next.AcquiredAt); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, store.Release(ctx, next, next.AcquiredAt))
 			mustAcquireFill(t, store, lease, cache.FillAttemptFinished)
 		})
 	}
@@ -278,14 +264,10 @@ func TestCloudFillsWaiterOwnsAfterUnpublishedEnd(t *testing.T) {
 			mustAcquireFill(t, store, waiter, cache.FillWait)
 			ended := entry.CompletedAt
 			if outcome == "" {
-				if err := store.Release(ctx, lease, ended); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, store.Release(ctx, lease, ended))
 			} else {
 				mustStartFill(t, store, lease, lease.AcquiredAt)
-				if err := store.Complete(ctx, lease, cache.FillCompletion{Outcome: outcome, CompletedAt: ended}); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, store.Complete(ctx, lease, cache.FillCompletion{Outcome: outcome, CompletedAt: ended}))
 			}
 			// A lease that had expired by the end stays fenced and sees the record.
 			expired := waiter
@@ -405,14 +387,10 @@ func TestCloudFillsCorruptionAndIsolation(t *testing.T) {
 	key := r.Responses().(*responseCache).key("fill", lease.Key)
 	row := table.rows[key]
 	var pointer cachePointer
-	if err := json.Unmarshal(row.Item.Fields["cache"].(kv.KeyValueBytes), &pointer); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, json.Unmarshal(row.Item.Fields["cache"].(kv.KeyValueBytes), &pointer))
 	data := blobs.values[blob.BlobKey(pointer.Blob)]
 	delete(blobs.values, blob.BlobKey(pointer.Blob))
-	if _, err := r.ResponseFills().Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
-		t.Fatal("dangling fill treated as miss", err)
-	}
+	requireErrorIs(t, errOf(r.ResponseFills().Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill treated as miss")
 	blobs.values[blob.BlobKey(pointer.Blob)] = append([]byte(nil), data...)
 	blobs.values[blob.BlobKey(pointer.Blob)][0] ^= 1
 	if ok, err := r.ResponseFills().Start(ctx, lease, lease.AcquiredAt); ok || !errors.Is(err, ErrCorrupt) {
@@ -432,24 +410,18 @@ func TestCloudFillsInvalidInputCannotMutate(t *testing.T) {
 	} {
 		bad := lease
 		edit(&bad)
-		if _, err := r.ResponseFills().Acquire(ctx, bad, bad.AcquiredAt); !errors.Is(err, ErrInvalid) {
-			t.Fatal(err)
-		}
+		requireErrorIs(t, errOf(r.ResponseFills().Acquire(ctx, bad, bad.AcquiredAt)), ErrInvalid, "")
 	}
 	if _, err := r.ResponseFills().Acquire(nil, lease, lease.AcquiredAt); err == nil {
 		t.Fatal("nil context")
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := r.ResponseFills().Acquire(cancelled, lease, lease.AcquiredAt); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(r.ResponseFills().Acquire(cancelled, lease, lease.AcquiredAt)), context.Canceled, "")
 	if ok, err := r.ResponseFills().Start(ctx, lease, lease.AcquiredAt.Add(-time.Second)); ok || !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
-	if err := r.ResponseFills().Complete(ctx, lease, cache.FillCompletion{Outcome: cache.FillFailed, EntryID: "unexpected", CompletedAt: entry.CompletedAt}); !errors.Is(err, ErrInvalid) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.ResponseFills().Complete(ctx, lease, cache.FillCompletion{Outcome: cache.FillFailed, EntryID: "unexpected", CompletedAt: entry.CompletedAt}), ErrInvalid, "")
 	if len(table.rows) != rows || len(blobs.values) != objects {
 		t.Fatal("invalid input wrote storage")
 	}

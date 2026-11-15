@@ -11,10 +11,8 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -22,18 +20,13 @@ func requestAttemptFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlob
 	t.Helper()
 	r, table, blobs, root, plan := budgetPlanFixture(t)
 	p := RequestPreparation{Version: 1, ConfigDigest: plan.ConfigDigest, CheckpointScope: "opaque", PreparedAt: root.Request.CreatedAt.Add(time.Second)}
-	if err := r.SaveRequestPreparation(context.Background(), root.Request.Scope, root.Request.ID, p); err != nil {
-		t.Fatal(err)
-	}
+	mustSavePreparation(t, r, root.Request.Scope, root.Request.ID, p)
 	return r, table, blobs, root, plan
 }
 
 func saveAttemptPlan(t *testing.T, r *Repository, scope Scope, attempt RequestAttempt, template BudgetPlan) (Record, BudgetPlan, durable.ReserveResult) {
 	t.Helper()
-	child, err := r.Read(context.Background(), scope, attempt.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	child := mustRead(t, r, scope, attempt.ID)
 	plan := copyTestBudgetPlan(t, template)
 	plan.Route.OperationID = durable.OperationID(child.Request.ID)
 	plan.QuotedAt = child.Request.CreatedAt.Add(time.Second)
@@ -43,9 +36,7 @@ func saveAttemptPlan(t *testing.T, r *Repository, scope Scope, attempt RequestAt
 		w := &plan.Reservation.Reservations[i]
 		w.Bucket = plan.QuotedAt.UnixNano() / w.BucketNanos
 	}
-	if err := r.SaveBudgetPlan(context.Background(), scope, attempt.ID, plan, plan.QuotedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveBudgetPlan(t, r, scope, attempt.ID, plan)
 	leaser, err := durable.NewReferenceBudgetMaterializer(plan.Route.GenerationID, "incarnation", func() time.Time { return plan.QuotedAt })
 	if err != nil {
 		t.Fatal(err)
@@ -59,10 +50,7 @@ func saveAttemptPlan(t *testing.T, r *Repository, scope Scope, attempt RequestAt
 
 func initialRequestAttempt(t *testing.T, r *Repository, root Record) RequestAttempt {
 	t.Helper()
-	a, err := r.BeginRequestAttempt(context.Background(), root.Request.Scope, root.Request.ID, "", root.Request.CreatedAt.Add(2*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := mustBeginRequestAttempt(t, r, root.Request.Scope, root.Request.ID, "", root.Request.CreatedAt.Add(2*time.Second))
 	return a
 }
 
@@ -104,11 +92,8 @@ func TestRequestAttemptConcurrentInitializationAndReadOnlyReplay(t *testing.T) {
 	if _, err := r.LoadRequestPreparation(ctx, root.Request.Scope, active.ID); err != nil {
 		t.Fatal("preparation missing", err)
 	}
-	if _, err := r.LoadRequestAttempt(ctx, Scope{Tenant: root.Request.Scope.Tenant, Project: "other"}, root.Request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatal("cross-scope lookup", err)
-	}
-	table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("healthy replay wrote table"); return nil, nil }
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("healthy replay wrote blob"); return nil, nil }
+	requireErrorIs(t, errOf(r.LoadRequestAttempt(ctx, Scope{Tenant: root.Request.Scope.Tenant, Project: "other"}, root.Request.ID)), contracts.ErrNotFound, "cross-scope lookup")
+	forbidWrites(t, table, blobs, "healthy replay")
 	again, err := r.BeginRequestAttempt(ctx, root.Request.Scope, root.Request.ID, "", root.Request.CreatedAt.Add(2*time.Second))
 	if err != nil || !equalExecutionJSON(active, again) {
 		t.Fatal("replay changed attempt", err)
@@ -122,9 +107,7 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	child, plan, accepted := saveAttemptPlan(t, r, scope, first, template)
 	// An unused quote renews within the margin before it expires (#1360).
 	renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
-	if _, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt.Add(-time.Nanosecond)); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("renewed active quote", err)
-	}
+	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt.Add(-time.Nanosecond))), contracts.ErrConflict, "renewed active quote")
 	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt)
 	if err != nil || next.ID == first.ID || next.Number != 2 || next.PreviousID != first.ID {
 		t.Fatal("renewal", err)
@@ -154,9 +137,7 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	if err != nil || replay.ID != next.ID {
 		t.Fatal("uncertain renewal replay advanced again", err)
 	}
-	if _, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, "", newPlan.QuotedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("stale first initializer accepted", err)
-	}
+	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, "", newPlan.QuotedAt)), contracts.ErrConflict, "stale first initializer accepted")
 }
 
 func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *testing.T) {
@@ -165,13 +146,8 @@ func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *
 	first := initialRequestAttempt(t, r, root)
 	child, plan, budget := saveAttemptPlan(t, r, scope, first, template)
 	saved := startExecution(t, r, child, plan, budget)
-	saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionUnknown
-		e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-	})
-	if _, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter.Add(-time.Nanosecond)); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("replaced work inside recovery interval", err)
-	}
+	saved = markExecutionUnknown(t, r, child, saved)
+	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter.Add(-time.Nanosecond))), contracts.ErrConflict, "replaced work inside recovery interval")
 	next, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter)
 	if err != nil || next.Number != 2 {
 		t.Fatal(err)
@@ -187,14 +163,8 @@ func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *
 	if err != nil || !equalExecutionJSON(saved, old) {
 		t.Fatal("old paid receipt changed", err)
 	}
-	if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), next.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
-	shard, _ := PendingShard(first.ID)
-	page, err := r.ListPending(ctx, shard, 100, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustCompleteOperation(t, r, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), next.CreatedAt)
+	page := firstPendingPage(t, r, first.ID)
 	found := false
 	for _, pending := range page.Requests {
 		if pending.ID == first.ID {
@@ -220,20 +190,13 @@ func TestRequestAttemptCannotReplaceKnownPendingOrSuccessfulWork(t *testing.T) {
 			child, plan, budget := saveAttemptPlan(t, r, root.Request.Scope, a, template)
 			saved := startExecution(t, r, child, plan, budget)
 			if stage != ExecutionClaiming {
-				saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(budget) })
+				saved = markExecutionSubmitting(t, r, child, saved, budget)
 			}
 			if stage == ExecutionPending {
-				saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
-					e.Stage = ExecutionPending
-					e.ProviderOperationID = "provider-job"
-					e.PollAfter = e.UpdatedAt.Add(time.Minute)
-				})
+				saved = markExecutionPending(t, r, child, saved, "provider-job", saved.Execution.UpdatedAt.Add(time.Minute))
 			}
 			if stage == ExecutionSucceeded {
-				saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
-					e.Stage = ExecutionUnknown
-					e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-				}) // a known result must win over retirement
+				saved = markExecutionUnknown(t, r, child, saved) // a known result must win over retirement
 				saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
 					e.Stage = ExecutionSucceeded
 					e.Failure = nil
@@ -241,9 +204,7 @@ func TestRequestAttemptCannotReplaceKnownPendingOrSuccessfulWork(t *testing.T) {
 					e.CompletedAt = e.UpdatedAt.Add(time.Second)
 				})
 			}
-			if _, err := r.BeginRequestAttempt(context.Background(), root.Request.Scope, root.Request.ID, a.ID, saved.Execution.RecoverAfter.Add(time.Hour)); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatal("replaced known work", err)
-			}
+			requireErrorIs(t, errOf(r.BeginRequestAttempt(context.Background(), root.Request.Scope, root.Request.ID, a.ID, saved.Execution.RecoverAfter.Add(time.Hour))), contracts.ErrConflict, "replaced known work")
 		})
 	}
 }
@@ -323,15 +284,9 @@ func TestRequestAttemptRetiredUnknownCanRecoverLater(t *testing.T) {
 	first := initialRequestAttempt(t, r, root)
 	child, plan, accepted := saveAttemptPlan(t, r, scope, first, template)
 	saved := startExecution(t, r, child, plan, accepted)
-	saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(accepted) })
-	saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionUnknown
-		e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-	})
-	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter)
-	if err != nil {
-		t.Fatal(err)
-	}
+	saved = markExecutionSubmitting(t, r, child, saved, accepted)
+	saved = markExecutionUnknown(t, r, child, saved)
+	next := mustBeginRequestAttempt(t, r, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter)
 	recovered := saved.Execution
 	recovered.Revision++
 	recovered.Stage, recovered.Failure = ExecutionSucceeded, nil
@@ -344,9 +299,7 @@ func TestRequestAttemptRetiredUnknownCanRecoverLater(t *testing.T) {
 	if err != nil || active.ID != next.ID {
 		t.Fatal("recovery replaced active attempt", err)
 	}
-	if _, err := r.BeginRequestAttempt(ctx, scope, next.ID, "", next.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("allowed a nested paid attempt", err)
-	}
+	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, next.ID, "", next.CreatedAt)), contracts.ErrConflict, "allowed a nested paid attempt")
 }
 
 func TestRequestAttemptHistorySurvivesUnusedRenewalsAndReplay(t *testing.T) {
@@ -357,14 +310,8 @@ func TestRequestAttemptHistorySurvivesUnusedRenewalsAndReplay(t *testing.T) {
 	for paid := 1; paid <= 3; paid++ {
 		child, plan, reservation := saveAttemptPlan(t, r, scope, active, template)
 		saved := startExecution(t, r, child, plan, reservation)
-		saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
-			e.Stage = ExecutionUnknown
-			e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-		})
-		next, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, active.ID, saved.Execution.RecoverAfter)
-		if err != nil {
-			t.Fatal(err)
-		}
+		saved = markExecutionUnknown(t, r, child, saved)
+		next := mustBeginRequestAttempt(t, reopen(t, table, blobs), scope, root.Request.ID, active.ID, saved.Execution.RecoverAfter)
 		if len(next.PriorCandidates) != paid {
 			t.Fatalf("history=%v, paid attempts=%d", next.PriorCandidates, paid)
 		}
@@ -377,10 +324,7 @@ func TestRequestAttemptHistorySurvivesUnusedRenewalsAndReplay(t *testing.T) {
 		if err != nil || !equalExecutionJSON(replay, next) {
 			t.Fatal("retry duplicated history", err)
 		}
-		renewed, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, next.ID, next.CreatedAt.Add(durable.BudgetStartLease))
-		if err != nil {
-			t.Fatal(err)
-		}
+		renewed := mustBeginRequestAttempt(t, r, scope, root.Request.ID, next.ID, next.CreatedAt.Add(durable.BudgetStartLease))
 		if len(renewed.PriorCandidates) != paid {
 			t.Fatal("unused quote renewal consumed provider attempt")
 		}

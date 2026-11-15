@@ -12,8 +12,6 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
@@ -32,10 +30,7 @@ func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, R
 // budgetPlanForOperation begins op and returns its record with a valid plan.
 func budgetPlanForOperation(t *testing.T, r *Repository, op Operation) (Record, BudgetPlan) {
 	t.Helper()
-	record, err := r.BeginOperation(context.Background(), op)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustBeginOperation(t, r, op)
 	entry := pricing.Entry{Provider: "private-provider", Family: "private-family", EndpointID: "private-endpoint", Model: "private-model",
 		Region: "private-region", ProviderTier: "private-tier", Version: "price/v1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.00000000015")},
 		EffectiveUntil: op.Now.Add(time.Hour)}
@@ -58,9 +53,7 @@ func budgetPlanForOperation(t *testing.T, r *Repository, op Operation) (Record, 
 			Bucket: plan.QuotedAt.UnixNano() / int64(window.Bucket), BucketNanos: int64(window.Bucket), DurationNanos: int64(window.Duration),
 			AmountUSD: plan.Estimate.CostUSD, Amount: plan.Estimate.MicroUSD, LimitUSD: pricing.MustUSD("0.01"), Limit: 10000})
 	}
-	if err := plan.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, plan.Validate())
 	return record, plan
 }
 
@@ -71,9 +64,7 @@ func copyTestBudgetPlan(t *testing.T, plan BudgetPlan) BudgetPlan {
 		t.Fatal(err)
 	}
 	var result BudgetPlan
-	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, json.Unmarshal(data, &result))
 	return result
 }
 
@@ -83,11 +74,7 @@ func TestBudgetPlanRestartReplaysExactReservationAndPreservesProgress(t *testing
 			r, table, blobs, record, plan := budgetPlanFixture(t)
 			if kind == "compact" {
 				op := Operation{Scope: record.Request.Scope, Kind: kind, Key: "compact", Manifest: record.Request.Manifest, Now: record.Request.CreatedAt}
-				var err error
-				record, err = r.BeginOperation(context.Background(), op)
-				if err != nil {
-					t.Fatal(err)
-				}
+				record = mustBeginOperation(t, r, op)
 				plan.Kind = kind
 			}
 			ctx := context.Background()
@@ -96,9 +83,7 @@ func TestBudgetPlanRestartReplaysExactReservationAndPreservesProgress(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
-				t.Fatal(err)
-			}
+			mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 			restarted := reopen(t, table, blobs)
 			stored, err := restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil || !reflect.DeepEqual(stored.Reservation, plan.Reservation) || stored.Quote.CatalogDigest != plan.Quote.CatalogDigest ||
@@ -111,11 +96,8 @@ func TestBudgetPlanRestartReplaysExactReservationAndPreservesProgress(t *testing
 			}
 			// Reads and identical saves use the original quote even after its price
 			// interval, bucket and admission expiry have passed.
-			table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("healthy replay wrote a row"); return nil, nil }
-			blobs.hook = func(blob.BlobKey) (error, error) { t.Error("healthy replay wrote a blob"); return nil, nil }
-			if err := restarted.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(48*time.Hour)); err != nil {
-				t.Fatal(err)
-			}
+			forbidWrites(t, table, blobs, "healthy replay")
+			mustNoError(t, restarted.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(48*time.Hour)))
 			stored, err = restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil || !reflect.DeepEqual(stored.Reservation, plan.Reservation) {
 				t.Fatalf("old quote was refreshed: %v", err)
@@ -176,9 +158,7 @@ func TestBudgetPlanUncertainWritesRepairWithoutChangingQuote(t *testing.T) {
 				t.Fatalf("fault not observed: %v", err)
 			}
 			table.hook, blobs.hook = nil, nil
-			if err := reopen(t, table, blobs).SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(time.Hour)); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, reopen(t, table, blobs).SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(time.Hour)))
 			stored, err := reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil || !reflect.DeepEqual(stored.Reservation, plan.Reservation) {
 				t.Fatalf("recovery changed quote: %v", err)
@@ -196,16 +176,12 @@ func TestBudgetPlanLoadRepairsDiscoveryBeforeReturningAdmissionFacts(t *testing.
 	fault := &contracts.StorageError{Kind: contracts.ErrUnavailable}
 	table.hook = failTableWrites("replace", "/pending/", fault, nil)
 	ctx := context.Background()
-	if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); !errors.Is(err, ErrIndexPending) {
-		t.Fatalf("save index failure: %v", err)
-	}
+	requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), ErrIndexPending, "save index failure")
 	if got, err := reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrIndexPending) || got.Version != 0 {
 		t.Fatalf("lagging discovery exposed usable plan: %v", err)
 	}
 	table.hook = nil
-	if _, err := reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)))
 	index, err := table.Get(ctx, r.indexKey(record.Request.ID))
 	if err != nil {
 		t.Fatal(err)
@@ -219,47 +195,26 @@ func TestBudgetPlanLoadRepairsDiscoveryBeforeReturningAdmissionFacts(t *testing.
 func TestBudgetPlanMissingIsDistinctFromWrongScopeCorruptionAndLaterPhases(t *testing.T) {
 	r, _, _, record, plan := budgetPlanFixture(t)
 	ctx := context.Background()
-	if _, err := r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrBudgetPlanMissing) {
-		t.Fatalf("initial planning miss: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), ErrBudgetPlanMissing, "initial planning miss")
 	wrong := record.Request.Scope
 	wrong.Project = "other"
-	if _, err := r.LoadBudgetPlan(ctx, wrong, record.Request.ID); !errors.Is(err, contracts.ErrNotFound) || errors.Is(err, ErrBudgetPlanMissing) {
-		t.Fatalf("scope isolation: %v", err)
-	}
-	if err := r.SaveBudgetPlan(ctx, wrong, record.Request.ID, plan, plan.QuotedAt); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatal(err)
-	}
+	requireErrorIsNot(t, errOf(r.LoadBudgetPlan(ctx, wrong, record.Request.ID)), contracts.ErrNotFound, ErrBudgetPlanMissing, "scope isolation")
+	requireErrorIs(t, r.SaveBudgetPlan(ctx, wrong, record.Request.ID, plan, plan.QuotedAt), contracts.ErrNotFound, "")
 	for _, progress := range []string{`{"version":1,"budget_plan":null}`, `{"version":2}`, `{"version":1,"budget_plan":{"version":2}}`} {
 		_, _, _, other, _ := budgetPlanFixture(t)
 		// Use a distinct operation in the same repository for each corrupt case.
-		other, err := r.BeginOperation(ctx, Operation{Scope: record.Request.Scope, Kind: "generate", Key: string(other.Request.ID), Manifest: record.Request.Manifest, Now: record.UpdatedAt})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.TryUpdate(ctx, other.Request.Scope, other.Request.ID, Update{ExpectedRevision: other.Revision, Token: "corrupt", Status: StatusRunning, Progress: json.RawMessage(progress), UpdatedAt: other.UpdatedAt}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.LoadBudgetPlan(ctx, other.Request.Scope, other.Request.ID); !errors.Is(err, ErrCorrupt) {
-			t.Fatalf("corruption became planning miss: %v", err)
-		}
+		other = mustBeginOperation(t, r, Operation{Scope: record.Request.Scope, Kind: "generate", Key: string(other.Request.ID), Manifest: record.Request.Manifest, Now: record.UpdatedAt})
+		mustTryUpdate(t, r, other.Request.Scope, other.Request.ID, Update{ExpectedRevision: other.Revision, Token: "corrupt", Status: StatusRunning, Progress: json.RawMessage(progress), UpdatedAt: other.UpdatedAt})
+		requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, other.Request.Scope, other.Request.ID)), ErrCorrupt, "corruption became planning miss")
 	}
 	for _, status := range []Status{StatusProviderPending, StatusCompleted, StatusFailed, StatusOutcomeUnknown} {
 		t.Run(string(status), func(t *testing.T) {
 			r, _, _, record, plan := budgetPlanFixture(t)
-			if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
-				t.Fatal(err)
-			}
+			mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 			current, _ := r.Read(ctx, record.Request.Scope, record.Request.ID)
-			if _, err := r.TryUpdate(ctx, current.Request.Scope, current.Request.ID, Update{ExpectedRevision: current.Revision, Token: "later", Status: status, Progress: current.Progress, UpdatedAt: current.UpdatedAt}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatal("later phase resumed initial admission", err)
-			}
-			if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatal("later phase accepted initial plan", err)
-			}
+			mustTryUpdate(t, r, current.Request.Scope, current.Request.ID, Update{ExpectedRevision: current.Revision, Token: "later", Status: status, Progress: current.Progress, UpdatedAt: current.UpdatedAt})
+			requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "later phase resumed initial admission")
+			requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "later phase accepted initial plan")
 		})
 	}
 }
@@ -294,8 +249,7 @@ func TestBudgetPlanValidationRejectsUnsafeBindingsBeforeWriting(t *testing.T) {
 		},
 		"tiny-limit": func(p *BudgetPlan) { p.Reservation.Reservations[0].LimitUSD = pricing.MustUSD("0.0000000001") },
 	}
-	table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("invalid plan wrote a row"); return nil, nil }
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("invalid plan wrote a blob"); return nil, nil }
+	forbidWrites(t, table, blobs, "invalid plan")
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
 			plan := copyTestBudgetPlan(t, original)
@@ -324,43 +278,22 @@ func TestBudgetPlanCannotReplaceSavedValueOrStartDuringFinalization(t *testing.T
 			r, _, _, record, plan := budgetPlanFixture(t)
 			ctx := context.Background()
 			if phase == "budget_plan" {
-				if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
-					t.Fatal(err)
-				}
+				mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 				plan.ConfigDigest[0]++
 			} else {
 				progress, _ := json.Marshal(map[string]any{"version": 1, phase: map[string]any{"version": 1}})
-				if _, err := r.TryUpdate(ctx, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "finalizing", Status: StatusRunning, Progress: progress, UpdatedAt: plan.QuotedAt}); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, contracts.ErrConflict) {
-					t.Fatal("finalizing became planning miss", err)
-				}
+				mustTryUpdate(t, r, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "finalizing", Status: StatusRunning, Progress: progress, UpdatedAt: plan.QuotedAt})
+				requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "finalizing became planning miss")
 			}
-			if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatalf("earlier phases resumed: %v", err)
-			}
+			requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "earlier phases resumed")
 		})
 	}
 }
 
 func TestBudgetPlanPrivateFactsRemainEncrypted(t *testing.T) {
 	r, table, blobs, record, plan := budgetPlanFixture(t)
-	if err := r.SaveBudgetPlan(context.Background(), record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
-		t.Fatal(err)
-	}
-	for _, row := range table.rows {
-		for _, field := range row.Item.Fields {
-			if data, ok := field.(kv.KeyValueBytes); ok && strings.Contains(string(data), "private-") {
-				t.Fatal("private planning data leaked in KV")
-			}
-		}
-	}
-	for _, data := range blobs.values {
-		if strings.Contains(string(data), "private-") {
-			t.Fatal("private planning data leaked in blob storage")
-		}
-	}
+	mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
+	assertNotStoredInPlaintext(t, table, blobs, "private-", "private planning data")
 }
 
 func TestBudgetPlanExplicitUnreservedModes(t *testing.T) {
@@ -374,9 +307,7 @@ func TestBudgetPlanExplicitUnreservedModes(t *testing.T) {
 				plan.Estimate.CostUSD = pricing.MustUSD("0")
 				plan.Estimate.MicroUSD = 0
 			}
-			if err := r.SaveBudgetPlan(context.Background(), record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); err != nil {
-				t.Fatal(err)
-			}
+			mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 			restored, err := reopen(t, table, blobs).LoadBudgetPlan(context.Background(), record.Request.Scope, record.Request.ID)
 			if err != nil || !equalExecutionJSON(plan, restored) {
 				t.Fatal("mode changed on restart", err)
