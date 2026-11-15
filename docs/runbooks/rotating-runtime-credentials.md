@@ -92,6 +92,10 @@ always a rolling restart.
 
 Under compromise, revoke the old key as soon as the rollout finishes. A
 provider call still made with the revoked key fails with `authentication`.
+If the provider already rejected the old key, its route stays held after the
+new key is in place; see
+[provider credential rotation](configuration-and-credentials.md#provider-credential-rotation)
+for the hold and how to release it.
 
 ## Redis ACL password
 

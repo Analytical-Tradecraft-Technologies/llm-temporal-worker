@@ -128,6 +128,9 @@ must accept both until every replica uses the new one.
   or API key file are read at startup and rotate only through their own
   procedures with a rolling restart (see
   [Temporal payload encryption](../reference/configuration.md#temporal-payload-encryption)).
+  The staged procedures for handle keys, codec keys, Temporal credentials and
+  the `key_secret` namespace migration are in
+  [rotating runtime credentials](rotating-runtime-credentials.md).
   Never paste a credential into a ticket, a log query or the configuration
   file itself.
 
