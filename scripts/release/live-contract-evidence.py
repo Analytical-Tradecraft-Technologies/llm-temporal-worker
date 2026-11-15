@@ -12,7 +12,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 SCHEMA_VERSION = 1
@@ -147,6 +147,15 @@ def parse_raw_result(path: Path, selected_profile: str) -> dict[str, Any]:
     return result
 
 
+def require_consistent_spend(known: bool, micro_usd: int, method: str) -> None:
+    """Reject a cost method that disagrees with whether spend is known."""
+    if known:
+        if method not in REPORTED_COST_METHODS:
+            raise rejected()
+    elif micro_usd != 0 or method != "not_reported":
+        raise rejected()
+
+
 def evidence_from_result(
     result: dict[str, Any], selected_profile: str, timestamp: str, revision: str
 ) -> dict[str, Any]:
@@ -161,11 +170,7 @@ def evidence_from_result(
         raise rejected()
     if micro_usd > CEILING_MICRO_USD:
         raise rejected()
-    if known:
-        if method not in REPORTED_COST_METHODS:
-            raise rejected()
-    elif micro_usd != 0 or method != "not_reported":
-        raise rejected()
+    require_consistent_spend(known, micro_usd, method)
     return validate_evidence(
         {
             "schema_version": SCHEMA_VERSION,
@@ -225,11 +230,7 @@ def validate_evidence(candidate: Any) -> dict[str, Any]:
     method = spend["method"]
     if micro_usd < 0 or micro_usd > CEILING_MICRO_USD or not isinstance(method, str):
         raise rejected()
-    if known:
-        if method not in REPORTED_COST_METHODS:
-            raise rejected()
-    elif micro_usd != 0 or method != "not_reported":
-        raise rejected()
+    require_consistent_spend(known, micro_usd, method)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": timestamp,
@@ -321,22 +322,24 @@ def command_verify(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def add_command(
+    commands: Any, name: str, handler: Callable[[argparse.Namespace], int], *required: str
+) -> argparse.ArgumentParser:
+    """Register a subcommand whose listed ``--option`` flags are all required."""
+    command = commands.add_parser(name)
+    for option in required:
+        command.add_argument(f"--{option}", required=True)
+    command.set_defaults(handler=handler)
+    return command
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    record = commands.add_parser("record")
-    record.add_argument("--profile", required=True)
-    record.add_argument("--input", required=True)
-    record.add_argument("--evidence", required=True)
-    record.add_argument("--log", required=True)
-    record.add_argument("--source-revision", required=True)
+    binding = ("evidence", "log", "source-revision")
+    record = add_command(commands, "record", command_record, "profile", "input", *binding)
     record.add_argument("--generated-at")
-    record.set_defaults(handler=command_record)
-    verify = commands.add_parser("verify")
-    verify.add_argument("--evidence", required=True)
-    verify.add_argument("--log", required=True)
-    verify.add_argument("--source-revision", required=True)
-    verify.set_defaults(handler=command_verify)
+    add_command(commands, "verify", command_verify, *binding)
     return parser
 
 

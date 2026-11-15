@@ -241,6 +241,19 @@ def parse_prometheus_count(raw):
     return count
 
 
+def add_prometheus_series(seen, labels, raw_value, total):
+    """Record one unique labelled sample and return the bounded running total."""
+    value = parse_prometheus_count(raw_value)
+    series_key = tuple(sorted(labels.items()))
+    if series_key in seen:
+        reject()
+    seen.add(series_key)
+    total += value
+    if total > MAX_COUNT:
+        reject()
+    return total
+
+
 def worker_error_summary_from_snapshot(data):
     completed_attempts = 0
     worker_failed_attempts = 0
@@ -263,25 +276,13 @@ def worker_error_summary_from_snapshot(data):
         if metric_name == PROMETHEUS_COMPLETED_METRIC:
             if set(labels) != {"status", "error_class"} or labels["status"] != "completed":
                 continue
-            value = parse_prometheus_count(raw_value)
-            series_key = tuple(sorted(labels.items()))
-            if series_key in completed_series:
-                reject()
-            completed_series.add(series_key)
-            completed_attempts += value
-            if completed_attempts > MAX_COUNT:
-                reject()
+            completed_attempts = add_prometheus_series(completed_series, labels, raw_value, completed_attempts)
         elif metric_name == PROMETHEUS_FAILURE_METRIC:
             if set(labels) != {"origin"} or labels["origin"] != "worker":
                 continue
-            value = parse_prometheus_count(raw_value)
-            series_key = tuple(sorted(labels.items()))
-            if series_key in worker_failure_series:
-                reject()
-            worker_failure_series.add(series_key)
-            worker_failed_attempts += value
-            if worker_failed_attempts > MAX_COUNT:
-                reject()
+            worker_failed_attempts = add_prometheus_series(
+                worker_failure_series, labels, raw_value, worker_failed_attempts
+            )
     if not completed_series or not worker_failure_series:
         reject()
     if worker_failed_attempts * 1_000 >= completed_attempts + worker_failed_attempts:
