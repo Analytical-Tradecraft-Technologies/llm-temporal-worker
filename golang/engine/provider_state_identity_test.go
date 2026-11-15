@@ -4,11 +4,8 @@ import (
 	"bytes"
 	"context"
 	"testing"
-	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/memory"
 )
 
 // TestGenerateStoresAdapterProviderStateUnderRoutePinning writes a
@@ -20,15 +17,7 @@ func TestGenerateStoresAdapterProviderStateUnderRoutePinning(t *testing.T) {
 	response := successfulResponse()
 	response.Continuation = &llm.Continuation{Handle: "provider-opaque-handle", ProviderStates: []llm.ProviderState{stateValue}}
 	harness := newHarness(t, &fakeAdapter{name: "provider-state-identity", response: response})
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{4}, 16)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	continuations, err := memory.NewContinuationStore(memory.ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return harness.clock }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	harness.engine.dependencies.Continuations = continuations
+	harness.useMemoryContinuations(t, 3)
 
 	first, err := harness.engine.Generate(context.Background(), baseRequest("provider-state-identity"))
 	if err != nil {
@@ -53,15 +42,7 @@ func TestGenerateRejectsProviderStateFromAnotherFamily(t *testing.T) {
 	response := successfulResponse()
 	response.Continuation = &llm.Continuation{Handle: "provider-opaque-handle", ProviderStates: []llm.ProviderState{{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: []byte(`{}`)}}}
 	harness := newHarness(t, &fakeAdapter{name: "provider-state-mismatch", response: response})
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{5}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{6}, 16)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	continuations, err := memory.NewContinuationStore(memory.ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return harness.clock }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	harness.engine.dependencies.Continuations = continuations
+	harness.useMemoryContinuations(t, 5)
 	if _, err := harness.engine.Generate(context.Background(), baseRequest("provider-state-mismatch")); err == nil {
 		t.Fatal("Messages provider state on an openai_responses route was stored")
 	}

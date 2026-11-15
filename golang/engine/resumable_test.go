@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -36,6 +35,83 @@ type resumableCallCounters struct {
 	polls   int
 }
 
+// add records submits and polls; a nil receiver records nothing.
+func (counters *resumableCallCounters) add(submits, polls int) {
+	if counters == nil {
+		return
+	}
+	counters.mu.Lock()
+	counters.submits += submits
+	counters.polls += polls
+	counters.mu.Unlock()
+}
+
+// callCounts reads how many Submit and Poll calls the adapter received.
+func (adapter *resumableEngineAdapter) callCounts() (submits, polls int) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.submits, adapter.polls
+}
+
+// requireSubmitsAndPolls requires exact Submit and Poll call counts.
+func (adapter *resumableEngineAdapter) requireSubmitsAndPolls(t *testing.T, wantSubmits, wantPolls int) {
+	t.Helper()
+	submits, polls := adapter.callCounts()
+	if submits != wantSubmits {
+		t.Fatalf("Submit calls = %d, want %d", submits, wantSubmits)
+	}
+	if polls != wantPolls {
+		t.Fatalf("Poll calls = %d, want %d", polls, wantPolls)
+	}
+}
+
+// generateCompleted requires Generate to complete; failure names the step in
+// the error message.
+func generateCompleted(t *testing.T, ctx context.Context, harness testHarness, request llm.Request, failure string) llm.Response {
+	t.Helper()
+	response, err := harness.engine.Generate(ctx, request)
+	if err != nil {
+		t.Fatalf("%s failed: %v", failure, err)
+	}
+	if response.Status != llm.ResponseStatusCompleted {
+		t.Fatalf("response status = %q, want completed", response.Status)
+	}
+	return response
+}
+
+// generateFailedOperation requires Generate to fail and returns the durable
+// operation it left behind.
+func generateFailedOperation(t *testing.T, ctx context.Context, harness testHarness, request llm.Request, unexpectedSuccess string) admission.Operation {
+	t.Helper()
+	if _, err := harness.engine.Generate(ctx, request); err == nil {
+		t.Fatal(unexpectedSuccess)
+	}
+	return harness.operation(t, operationIDForTest(t, request))
+}
+
+// seedDispatchingOperation begins request's operation and marks a standard
+// attempt dispatching, as if a worker died mid-dispatch. It returns the
+// operation ID.
+func seedDispatchingOperation(t *testing.T, harness testHarness, request llm.Request) string {
+	t.Helper()
+	identity := preparedIdentityForTest(t, request)
+	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
+		ID: identity.id, ScopeKey: identity.scopeKey, RequestDigest: identity.digest,
+		ExpiresAt: harness.clock.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("seed operation: %v", err)
+	}
+	if err := harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
+		OperationID: started.Operation.ID, DispatchToken: started.Operation.DispatchToken,
+		Attempt:    admission.AttemptFacts{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", ServiceClass: "standard", Dispatch: admission.Accepted},
+		LeaseUntil: harness.clock.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("seed dispatching operation: %v", err)
+	}
+	return identity.id
+}
+
 func (adapter *resumableEngineAdapter) Name() string { return "resumable-fixture" }
 
 func (adapter *resumableEngineAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
@@ -57,11 +133,7 @@ func (adapter *resumableEngineAdapter) Submit(ctx context.Context, _ provider.Ca
 	adapter.mu.Lock()
 	adapter.submits++
 	adapter.mu.Unlock()
-	if adapter.sharedCounters != nil {
-		adapter.sharedCounters.mu.Lock()
-		adapter.sharedCounters.submits++
-		adapter.sharedCounters.mu.Unlock()
-	}
+	adapter.sharedCounters.add(1, 0)
 	if adapter.submitErr != nil {
 		return provider.ResumableResult{}, adapter.submitErr
 	}
@@ -76,11 +148,7 @@ func (adapter *resumableEngineAdapter) Poll(_ context.Context, _ provider.Call, 
 	responses := adapter.pollResponses
 	recoveryPollID := adapter.recoveryPollID
 	adapter.mu.Unlock()
-	if adapter.sharedCounters != nil {
-		adapter.sharedCounters.mu.Lock()
-		adapter.sharedCounters.polls++
-		adapter.sharedCounters.mu.Unlock()
-	}
+	adapter.sharedCounters.add(0, 1)
 	if poll <= len(pollErrors) && pollErrors[poll-1] != nil {
 		return provider.ResumableResult{}, pollErrors[poll-1]
 	}
@@ -132,32 +200,12 @@ func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	metrics := newEngineTestMetrics(t)
 	request := baseRequest("resumable-retry")
 	ctx := observability.WithMetrics(context.Background(), metrics)
-	if _, err := harness.engine.Generate(ctx, request); err == nil {
-		t.Fatal("first attempt unexpectedly completed")
-	}
-	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := generateFailedOperation(t, ctx, harness, request, "first attempt unexpectedly completed")
 	if string(operation.State) != "provider_pending" {
 		t.Fatalf("operation state after interrupted poll = %q, want provider_pending", operation.State)
 	}
-	response, err := harness.engine.Generate(ctx, request)
-	if err != nil {
-		t.Fatalf("resume failed: %v", err)
-	}
-	if response.Status != llm.ResponseStatusCompleted {
-		t.Fatalf("response status = %q, want completed", response.Status)
-	}
-	adapter.mu.Lock()
-	submits, polls := adapter.submits, adapter.polls
-	adapter.mu.Unlock()
-	if submits != 1 {
-		t.Fatalf("Submit calls = %d, want 1", submits)
-	}
-	if polls != 2 {
-		t.Fatalf("Poll calls = %d, want 2", polls)
-	}
+	generateCompleted(t, ctx, harness, request, "resume")
+	adapter.requireSubmitsAndPolls(t, 1, 2)
 	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "started"}, 2)
 	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "retry"}, 1)
 	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "completed"}, 1)
@@ -172,14 +220,8 @@ func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T)
 	first := newHarness(t, firstAdapter)
 	request := baseRequest("resumable-engine-restart")
 
-	if _, err := first.engine.Generate(context.Background(), request); err == nil {
-		t.Fatal("first attempt unexpectedly completed")
-	}
+	operation := generateFailedOperation(t, context.Background(), first, request, "first attempt unexpectedly completed")
 	operationID := operationIDForTest(t, request)
-	operation, err := first.admission.Get(context.Background(), operationID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if operation.State != admission.StateProviderPending {
 		t.Fatalf("operation state after interrupted poll = %q, want provider_pending", operation.State)
 	}
@@ -212,13 +254,7 @@ func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T)
 		recoveryPollID: providerOperationID,
 	}
 	replacement := newHarnessWithAdmission(t, replacementAdapter, first.admission, func() time.Time { return first.clock })
-	response, err := replacement.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatalf("resume after engine restart failed: %v", err)
-	}
-	if response.Status != llm.ResponseStatusCompleted {
-		t.Fatalf("response status = %q, want completed", response.Status)
-	}
+	generateCompleted(t, context.Background(), replacement, request, "resume after engine restart")
 	counters.mu.Lock()
 	submits, polls := counters.submits, counters.polls
 	counters.mu.Unlock()
@@ -233,14 +269,7 @@ func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T)
 func TestGenerateFinalizesTerminalFirstPollOutcome(t *testing.T) {
 	adapter := &resumableEngineAdapter{terminal: true}
 	harness := newHarness(t, adapter)
-	request := baseRequest("resumable-terminal-poll")
-	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
-		t.Fatal("terminal poll unexpectedly completed")
-	}
-	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := generateFailedOperation(t, context.Background(), harness, baseRequest("resumable-terminal-poll"), "terminal poll unexpectedly completed")
 	if operation.State != admission.StateAmbiguous {
 		t.Fatalf("operation state after terminal poll = %q, want ambiguous", operation.State)
 	}
@@ -255,13 +284,7 @@ func TestGenerateRecoversAcceptedSubmitFailureByIdempotencyKey(t *testing.T) {
 		recoveryPollID: "recovered-provider-operation",
 	}, recovered: provider.ResumableResult{State: provider.ResumablePending, ProviderOperationID: "recovered-provider-operation", Dispatch: provider.DispatchAccepted}}
 	harness := newHarness(t, adapter)
-	response, err := harness.engine.Generate(context.Background(), baseRequest("resumable-submit-recovery"))
-	if err != nil {
-		t.Fatalf("recovered submit failed: %v", err)
-	}
-	if response.Status != llm.ResponseStatusCompleted {
-		t.Fatalf("response status = %q, want completed", response.Status)
-	}
+	generateCompleted(t, context.Background(), harness, baseRequest("resumable-submit-recovery"), "recovered submit")
 	adapter.mu.Lock()
 	submits, recoveries, polls := adapter.submits, adapter.recoveries, adapter.polls
 	adapter.mu.Unlock()
@@ -275,14 +298,7 @@ func TestGenerateNotFoundRecoveryRemainsAmbiguous(t *testing.T) {
 		submitErr: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "submit response was lost"),
 	}, recovered: provider.ResumableResult{State: provider.ResumableNotFound, Dispatch: provider.DispatchAmbiguous}}
 	harness := newHarness(t, adapter)
-	_, err := harness.engine.Generate(context.Background(), baseRequest("resumable-submit-not-found"))
-	if err == nil {
-		t.Fatal("not-found recovery unexpectedly completed")
-	}
-	operation, getErr := harness.admission.Get(context.Background(), operationIDForTest(t, baseRequest("resumable-submit-not-found")))
-	if getErr != nil {
-		t.Fatal(getErr)
-	}
+	operation := generateFailedOperation(t, context.Background(), harness, baseRequest("resumable-submit-not-found"), "not-found recovery unexpectedly completed")
 	if operation.State != admission.StateAmbiguous {
 		t.Fatalf("operation state = %q, want ambiguous", operation.State)
 	}
@@ -297,21 +313,11 @@ func TestGenerateNotFoundRecoveryRemainsAmbiguous(t *testing.T) {
 func TestGenerateAcceptedSubmitFailureWithoutRecoveryRemainsAmbiguous(t *testing.T) {
 	adapter := &resumableEngineAdapter{submitErr: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchAccepted, provider.RetryNever, "submit response was lost")}
 	harness := newHarness(t, adapter)
-	request := baseRequest("resumable-submit-no-recovery")
-	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
-		t.Fatal("unsupported recovery unexpectedly completed")
-	}
-	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := generateFailedOperation(t, context.Background(), harness, baseRequest("resumable-submit-no-recovery"), "unsupported recovery unexpectedly completed")
 	if operation.State != admission.StateAmbiguous {
 		t.Fatalf("operation state = %q, want ambiguous", operation.State)
 	}
-	adapter.mu.Lock()
-	submits := adapter.submits
-	adapter.mu.Unlock()
-	if submits != 1 {
+	if submits, _ := adapter.callCounts(); submits != 1 {
 		t.Fatalf("submit calls = %d, want one with no recovery or resubmission", submits)
 	}
 }
@@ -327,36 +333,8 @@ func TestGenerateRecoversDispatchingOperationWithoutResubmitting(t *testing.T) {
 		Result:              provider.Result{Response: recoveredResponse},
 	}}
 	harness := newHarness(t, adapter)
-	normalized, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationID, scopeKey := operationIdentity(normalized, digest)
-	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
-		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest,
-		ExpiresAt: harness.clock.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("seed operation: %v", err)
-	}
-	if err := harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
-		OperationID: started.Operation.ID, DispatchToken: started.Operation.DispatchToken,
-		Attempt:    admission.AttemptFacts{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", ServiceClass: "standard", Dispatch: admission.Accepted},
-		LeaseUntil: harness.clock.Add(time.Minute),
-	}); err != nil {
-		t.Fatalf("seed dispatching operation: %v", err)
-	}
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatalf("dispatching recovery failed: %v", err)
-	}
-	if response.Status != llm.ResponseStatusCompleted {
-		t.Fatalf("response status = %q, want completed", response.Status)
-	}
+	seedDispatchingOperation(t, harness, request)
+	generateCompleted(t, context.Background(), harness, request, "dispatching recovery")
 	adapter.mu.Lock()
 	submits, recoveries := adapter.submits, adapter.recoveries
 	adapter.mu.Unlock()
@@ -372,43 +350,15 @@ func TestGenerateFailsClosedForDispatchingAdapterWithoutRecovery(t *testing.T) {
 	request := baseRequest("resumable-dispatching-no-recovery")
 	adapter := &resumableEngineAdapter{}
 	harness := newHarness(t, adapter)
-	normalized, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationID, scopeKey := operationIdentity(normalized, digest)
-	started, err := harness.admission.Begin(context.Background(), admission.BeginRequest{
-		ID: operationID, ScopeKey: scopeKey, RequestDigest: digest,
-		ExpiresAt: harness.clock.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("seed operation: %v", err)
-	}
-	if err := harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
-		OperationID: started.Operation.ID, DispatchToken: started.Operation.DispatchToken,
-		Attempt:    admission.AttemptFacts{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", ServiceClass: "standard", Dispatch: admission.Accepted},
-		LeaseUntil: harness.clock.Add(time.Minute),
-	}); err != nil {
-		t.Fatalf("seed dispatching operation: %v", err)
-	}
+	operationID := seedDispatchingOperation(t, harness, request)
 	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
 		t.Fatal("dispatching operation without recovery unexpectedly completed")
 	}
-	operation, err := harness.admission.Get(context.Background(), operationID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := harness.operation(t, operationID)
 	if operation.State != admission.StateAmbiguous {
 		t.Fatalf("operation state = %q, want ambiguous", operation.State)
 	}
-	adapter.mu.Lock()
-	submits := adapter.submits
-	adapter.mu.Unlock()
-	if submits != 0 {
+	if submits, _ := adapter.callCounts(); submits != 0 {
 		t.Fatalf("Submit calls without recovery = %d, want zero", submits)
 	}
 }
@@ -417,16 +367,7 @@ func TestGenerateFailsClosedForDispatchingAdapterWithoutRecovery(t *testing.T) {
 // without exposing the internal hash helper to the fixture package.
 func operationIDForTest(t *testing.T, request llm.Request) string {
 	t.Helper()
-	normalized, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, _ := operationIdentity(normalized, digest)
-	return id
+	return preparedIdentityForTest(t, request).id
 }
 
 func TestGenerateKeepsOperationPendingWhenPollIsRateLimited(t *testing.T) {
@@ -456,44 +397,19 @@ func TestGenerateKeepsOperationPendingWhenPollIsRateLimited(t *testing.T) {
 		if mapped.RetryAfter != wantDelay {
 			t.Fatalf("attempt %d RetryAfter = %v, want %v", attempt+1, mapped.RetryAfter, wantDelay)
 		}
-		operation, err := harness.admission.Get(context.Background(), operationID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if operation.State != admission.StateProviderPending {
+		if operation := harness.operation(t, operationID); operation.State != admission.StateProviderPending {
 			t.Fatalf("operation state after rate-limited poll %d = %q, want provider_pending", attempt+1, operation.State)
 		}
 	}
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatalf("resume after rate-limited polls failed: %v", err)
-	}
-	if response.Status != llm.ResponseStatusCompleted {
-		t.Fatalf("response status = %q, want completed", response.Status)
-	}
-	adapter.mu.Lock()
-	submits, polls := adapter.submits, adapter.polls
-	adapter.mu.Unlock()
-	if submits != 1 {
-		t.Fatalf("Submit calls = %d, want 1", submits)
-	}
-	if polls != 3 {
-		t.Fatalf("Poll calls = %d, want 3", polls)
-	}
+	generateCompleted(t, context.Background(), harness, request, "resume after rate-limited polls")
+	adapter.requireSubmitsAndPolls(t, 1, 3)
 }
 
 func TestGenerateFinalizesDefinitePollFailure(t *testing.T) {
 	failure := provider.NewError(provider.CodeAuthentication, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "provider rejected credentials")
 	adapter := &resumableEngineAdapter{pollErrors: []error{failure}}
 	harness := newHarness(t, adapter)
-	request := baseRequest("resumable-definite-poll-failure")
-	if _, err := harness.engine.Generate(context.Background(), request); err == nil {
-		t.Fatal("definite poll failure unexpectedly completed")
-	}
-	operation, err := harness.admission.Get(context.Background(), operationIDForTest(t, request))
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := generateFailedOperation(t, context.Background(), harness, baseRequest("resumable-definite-poll-failure"), "definite poll failure unexpectedly completed")
 	if operation.State == admission.StateProviderPending {
 		t.Fatal("definite poll failure left the operation provider_pending")
 	}

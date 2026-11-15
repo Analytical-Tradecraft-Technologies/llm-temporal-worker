@@ -26,16 +26,19 @@ func (adapter *resumableTestAdapter) Compile(context.Context, provider.CompileIn
 	return provider.Call{OperationKey: "operation-key"}, nil
 }
 func (adapter *resumableTestAdapter) Invoke(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
-	adapter.mu.Lock()
-	adapter.submits++
-	adapter.mu.Unlock()
+	adapter.countSubmit()
 	return provider.Result{}, nil
 }
 func (adapter *resumableTestAdapter) Submit(context.Context, provider.Call, provider.Observer) (provider.ResumableResult, error) {
+	adapter.countSubmit()
+	return provider.ResumableResult{}, nil
+}
+
+// countSubmit records a write-capable call; polling must never make one.
+func (adapter *resumableTestAdapter) countSubmit() {
 	adapter.mu.Lock()
 	adapter.submits++
 	adapter.mu.Unlock()
-	return provider.ResumableResult{}, nil
 }
 func (adapter *resumableTestAdapter) Poll(_ context.Context, _ provider.Call, id string, _ provider.Observer) (provider.ResumableResult, error) {
 	adapter.mu.Lock()
@@ -50,6 +53,35 @@ func (adapter *resumableTestAdapter) RecoverByIdempotencyKey(context.Context, pr
 }
 
 var _ provider.ResumableAdapter = (*resumableTestAdapter)(nil)
+
+// completedProviderOp is a completed poll of provider-op for operation-key.
+func completedProviderOp() provider.ResumableResult {
+	return provider.ResumableResult{
+		State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted,
+		Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}},
+	}
+}
+
+// recordSleeps returns a poll sleeper that appends each delay to slept.
+func recordSleeps(slept *[]time.Duration) func(context.Context, time.Duration) error {
+	return func(_ context.Context, delay time.Duration) error {
+		*slept = append(*slept, delay)
+		return nil
+	}
+}
+
+// pollOnceError polls provider-op once for call, requires an error, and
+// returns the *provider.Error it is (nil when it is another type) and the raw
+// error.
+func pollOnceError(t *testing.T, ctx context.Context, adapter *resumableTestAdapter, call provider.Call, unexpectedSuccess string) (*provider.Error, error) {
+	t.Helper()
+	_, err := PollProviderOperation(ctx, adapter, call, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
+	if err == nil {
+		t.Fatal(unexpectedSuccess)
+	}
+	mapped, _ := err.(*provider.Error)
+	return mapped, err
+}
 
 type pollProgressObserver struct {
 	phases []string
@@ -66,13 +98,13 @@ func (observer *pollProgressObserver) OnProgress(_ context.Context, progress pro
 func TestPollProviderOperationNeverSubmitsAndResumesPendingID(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{
 		{State: provider.ResumablePending, ProviderOperationID: "provider-op", NextPollAfter: 5 * time.Second, Dispatch: provider.DispatchAccepted},
-		{State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted, Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}}},
+		completedProviderOp(),
 	}}
 	observer := &pollProgressObserver{}
 	var slept []time.Duration
 	result, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", observer, ProviderPollOptions{
 		MaxPolls: 2,
-		Sleep:    func(_ context.Context, delay time.Duration) error { slept = append(slept, delay); return nil },
+		Sleep:    recordSleeps(&slept),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,15 +127,12 @@ func TestPollProviderOperationNeverSubmitsAndResumesPendingID(t *testing.T) {
 }
 
 func TestPollProviderOperationHonorsInitialProviderGuidance(t *testing.T) {
-	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{
-		State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted,
-		Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}},
-	}}}
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{completedProviderOp()}}
 	var slept []time.Duration
 	result, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", nil, ProviderPollOptions{
 		MaxPolls:     1,
 		InitialDelay: 5 * time.Second,
-		Sleep:        func(_ context.Context, delay time.Duration) error { slept = append(slept, delay); return nil },
+		Sleep:        recordSleeps(&slept),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,16 +146,13 @@ func TestPollProviderOperationHonorsInitialProviderGuidance(t *testing.T) {
 }
 
 func TestPollProviderOperationCapsInitialGuidance(t *testing.T) {
-	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{
-		State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted,
-		Result: provider.Result{Response: llm.Response{OperationKey: "operation-key", Status: llm.ResponseStatusCompleted}},
-	}}}
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{completedProviderOp()}}
 	var slept []time.Duration
 	if _, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", nil, ProviderPollOptions{
 		MaxPolls:        1,
 		MaxPollInterval: time.Second,
 		InitialDelay:    5 * time.Second,
-		Sleep:           func(_ context.Context, delay time.Duration) error { slept = append(slept, delay); return nil },
+		Sleep:           recordSleeps(&slept),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +170,7 @@ func TestPollProviderOperationCapsGuidanceAndLeavesPendingRetryable(t *testing.T
 	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{
 		MaxPolls:        2,
 		MaxPollInterval: time.Second,
-		Sleep:           func(_ context.Context, delay time.Duration) error { slept = append(slept, delay); return nil },
+		Sleep:           recordSleeps(&slept),
 	})
 	if err == nil {
 		t.Fatal("polling unexpectedly completed")
@@ -163,12 +189,8 @@ func TestPollProviderOperationCapsGuidanceAndLeavesPendingRetryable(t *testing.T
 
 func TestPollProviderOperationRejectsChangedProviderIdentity(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{State: provider.ResumablePending, ProviderOperationID: "other-op", Dispatch: provider.DispatchAccepted}}}
-	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
-	if err == nil {
-		t.Fatal("changed provider operation identity was accepted")
-	}
-	mapped, ok := err.(*provider.Error)
-	if !ok || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
+	mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{}, "changed provider operation identity was accepted")
+	if mapped == nil || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
 		t.Fatalf("error = %#v, want ambiguous state corruption", err)
 	}
 }
@@ -178,12 +200,8 @@ func TestPollProviderOperationRejectsMalformedPendingResult(t *testing.T) {
 		State:    provider.ResumablePending,
 		Dispatch: provider.DispatchAccepted,
 	}}}
-	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
-	if err == nil {
-		t.Fatal("pending result without a provider operation id was accepted")
-	}
-	mapped, ok := err.(*provider.Error)
-	if !ok || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
+	mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{}, "pending result without a provider operation id was accepted")
+	if mapped == nil || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
 		t.Fatalf("error = %#v, want ambiguous non-retryable invalid response", err)
 	}
 	if adapter.submits != 0 || adapter.polls != 1 {
@@ -202,12 +220,8 @@ func TestPollProviderOperationRejectsChangedTerminalIdentity(t *testing.T) {
 				response.Failure = provider.NewError(provider.CodeProviderUnavailable, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "provider operation failed")
 			}
 			adapter := &resumableTestAdapter{responses: []provider.ResumableResult{response}}
-			_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
-			if err == nil {
-				t.Fatal("changed terminal provider operation identity was accepted")
-			}
-			mapped, ok := err.(*provider.Error)
-			if !ok || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
+			mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{}, "changed terminal provider operation identity was accepted")
+			if mapped == nil || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
 				t.Fatalf("error = %#v, want ambiguous state corruption", err)
 			}
 		})
@@ -224,12 +238,8 @@ func TestPollProviderOperationRejectsCompletedResponseForAnotherOperation(t *tes
 			Status:       llm.ResponseStatusCompleted,
 		}},
 	}}}
-	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "requested-operation"}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
-	if err == nil {
-		t.Fatal("completed response for another operation was accepted")
-	}
-	mapped, ok := err.(*provider.Error)
-	if !ok || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous {
+	mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{OperationKey: "requested-operation"}, "completed response for another operation was accepted")
+	if mapped == nil || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous {
 		t.Fatalf("error = %#v, want ambiguous invalid provider response", err)
 	}
 }
@@ -238,12 +248,8 @@ func TestPollProviderOperationPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{State: provider.ResumablePending, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted}}}
-	_, err := PollProviderOperation(ctx, adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
-	if err == nil {
-		t.Fatal("canceled polling unexpectedly completed")
-	}
-	mapped, ok := err.(*provider.Error)
-	if !ok || mapped.Code != provider.CodeCanceled || mapped.Retry != provider.RetryNever {
+	mapped, err := pollOnceError(t, ctx, adapter, provider.Call{}, "canceled polling unexpectedly completed")
+	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Retry != provider.RetryNever {
 		t.Fatalf("error = %#v, want non-retryable canceled result", err)
 	}
 	if adapter.polls != 0 {
