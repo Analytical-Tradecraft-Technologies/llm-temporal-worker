@@ -1,13 +1,13 @@
 # Dependency Baseline
 
-Recorded: 2026-08-20; Go patch refreshed: 2026-10-09
+Toolchain checked: 2026-11-15. Module versions are not recorded here.
 
-This baseline records the toolchain and the direct dependency versions checked
-into `go.mod`. The implementation layers that own these dependencies have
-landed; this document is now an upgrade reference rather than a plan for adding
-the modules. Provider SDKs, Temporal, storage clients, and process wiring stay
-behind their package boundaries, and no provider SDK is allowed to leak into
-the `llm` package.
+This document records the reviewed Go toolchain, what each direct Go module is
+for, and how dependencies are upgraded. It does not record module versions:
+[`golang/go.mod`](../../golang/go.mod) and `golang/go.sum` are the only source
+of truth for the module graph. Provider SDKs, Temporal, storage clients, and
+process wiring stay behind their package boundaries, and no provider SDK is
+allowed to leak into the `llm` package.
 
 ## Toolchain
 
@@ -18,43 +18,139 @@ the `llm` package.
 | Minimum bootstrap for Go 1.26 | `go1.24.6` | [Go 1.26 release notes](https://go.dev/doc/go1.26), checked 2026-07-13. |
 | Local version hint | `.go-version` = `1.26.11` | CI and the container use the reviewed Go 1.26.11 patch through `actions/setup-go`. |
 
+The architecture tests keep the patch rows above aligned with
+`golang/.go-version`, so a Go patch upgrade updates this table in the same
+change.
+
 ## Direct modules
 
-| Module | Selected release | Use | License/source |
-| --- | --- | --- | --- |
-| `github.com/openai/openai-go/v3` | `v3.50.0` | Official OpenAI Responses and Chat Completions clients | Apache-2.0; [official repository](https://github.com/openai/openai-go) |
-| `github.com/Azure/azure-sdk-for-go/sdk/azcore` | `v1.22.0` | Official Azure OpenAI endpoint/auth middleware used by the Chat profile | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
-| `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | `v1.14.0` | Azure workload/default credential resolution | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
-| `github.com/anthropics/anthropic-sdk-go` | `v1.61.0` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
-| `github.com/aws/aws-sdk-go-v2` | `v1.43.3` | AWS SDK base types and request configuration | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/aws/aws-sdk-go-v2/config` | `v1.32.34` | AWS region and default credential-chain loading | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/aws/aws-sdk-go-v2/credentials` | `v1.19.33` | Explicit AWS credential providers used by runtime composition | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | `v1.57.0` | Official AWS Bedrock Runtime Converse API client | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` | Local Draft 2020-12 schema compilation and validation | MIT; [official repository](https://github.com/santhosh-tekuri/jsonschema-go) |
-| `go.yaml.in/yaml/v4` | `v4.0.0-rc.6` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/yaml/go-yaml) |
-| `go.temporal.io/api` | `v1.63.4` | Temporal API protocol types used by the worker boundary | MIT; [official repository](https://github.com/temporalio/api) |
-| `go.temporal.io/sdk` | `v1.47.0` | Temporal Activity payload, heartbeat, error, and worker registration boundary | MIT; [official release](https://github.com/temporalio/sdk-go/releases/tag/v1.47.0) |
-| `github.com/aws/aws-sdk-go-v2/service/s3` | `v1.106.3` | Official AWS S3 client for production content-addressed blobs | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
-| `github.com/aws/smithy-go` | `v1.27.6` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
-| `github.com/google/uuid` | `v1.6.0` | UUIDv7 identifiers for durable repository records | BSD-3-Clause; [official repository](https://github.com/google/uuid) |
-| `github.com/prometheus/client_golang` | `v1.24.1` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |
-| `github.com/prometheus/client_model` | `v0.6.2` | Prometheus metric model types used by tests and exposition boundaries | Apache-2.0; [official repository](https://github.com/prometheus/client_model) |
-| `github.com/prometheus/common` | `v0.70.1` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
-| `go.opentelemetry.io/otel`, `/sdk`, and `/trace` | `v1.45.0` | Sanitized OpenTelemetry spans and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
-| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | `v1.45.0` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
-| `github.com/redis/go-redis/v9` | `v9.21.0` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
-| `google.golang.org/grpc` | `v1.83.0` | OTLP transport and Temporal SDK gRPC connectivity | Apache-2.0; [official repository](https://github.com/grpc/grpc-go) |
+The table lists each direct requirement of `golang/go.mod`, what it is used for,
+and its license. It deliberately has no version column. Dependabot opens
+version-only pull requests that change just `go.mod` and `go.sum`, and a copy of
+the versions here would either go stale or force a documentation edit on every
+one of them. To list the versions in a checkout, run this from `golang/`:
 
-The versions in this table match the direct requirements in `go.mod` on the
-recorded date. The table intentionally does not enumerate indirect requirements;
-`go.mod` and `go.sum` are authoritative for the complete module graph. The
-schema and YAML modules are in active use by the schema and configuration
-packages, while provider SDKs remain outside the provider-neutral `llm` API.
+```sh
+go list -m -f '{{if not (or .Main .Indirect)}}{{.Path}} {{.Version}}{{end}}' all
+```
 
-This table is a dated explanatory snapshot, not a CI allowlist. Version-only
-updates do not require a matching documentation or policy edit. Re-check the
-affected source contract, capability/price fixtures, wire fixtures, and
-retry/error/stream/usage assertions when an update changes relevant behavior.
+| Module | Use | License/source |
+| --- | --- | --- |
+| `github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing` | Event-sourced records behind the durable cloud state repository | Apache-2.0; [ATT repository](https://github.com/Analytical-Tradecraft-Technologies/cloud-storage) |
+| `github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts` | Provider-neutral storage contracts used by the runtime cache, preparation, and recovery paths | Apache-2.0; [ATT repository](https://github.com/Analytical-Tradecraft-Technologies/cloud-storage) |
+| `github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers` | Storage provider construction from cloud state configuration | Apache-2.0; [ATT repository](https://github.com/Analytical-Tradecraft-Technologies/cloud-storage) |
+| `github.com/openai/openai-go/v3` | Official OpenAI Responses and Chat Completions clients | Apache-2.0; [official repository](https://github.com/openai/openai-go) |
+| `github.com/Azure/azure-sdk-for-go/sdk/azcore` | Official Azure OpenAI endpoint/auth middleware used by the Chat profile | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
+| `github.com/Azure/azure-sdk-for-go/sdk/azidentity` | Azure workload/default credential resolution | MIT; [official repository](https://github.com/Azure/azure-sdk-for-go) |
+| `github.com/anthropics/anthropic-sdk-go` | Official Anthropic Messages client | MIT; [official repository](https://github.com/anthropics/anthropic-sdk-go) |
+| `github.com/aws/aws-sdk-go-v2` | AWS SDK base types and request configuration | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2/config` | AWS region and default credential-chain loading | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2/credentials` | Explicit AWS credential providers used by runtime composition | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | Official AWS Bedrock Runtime Converse API client | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2/service/dynamodb` | Official AWS DynamoDB client for regional cloud state | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/aws-sdk-go-v2/service/s3` | Official AWS S3 client for production content-addressed blobs | Apache-2.0; [official repository](https://github.com/aws/aws-sdk-go-v2) |
+| `github.com/aws/smithy-go` | AWS SDK transport and protocol support | Apache-2.0; [official repository](https://github.com/aws/smithy-go) |
+| `github.com/santhosh-tekuri/jsonschema/v6` | Local Draft 2020-12 schema compilation and validation | MIT; [official repository](https://github.com/santhosh-tekuri/jsonschema-go) |
+| `go.yaml.in/yaml/v4` | Strict YAML configuration parsing | MIT; [official repository](https://github.com/yaml/go-yaml) |
+| `go.temporal.io/api` | Temporal API protocol types used by the worker boundary | MIT; [official repository](https://github.com/temporalio/api) |
+| `go.temporal.io/sdk` | Temporal workflow, Activity, client, and worker registration boundary | MIT; [official releases](https://github.com/temporalio/sdk-go/releases) |
+| `github.com/google/uuid` | UUIDv7 identifiers for durable repository records | BSD-3-Clause; [official repository](https://github.com/google/uuid) |
+| `github.com/prometheus/client_golang` | Bounded Prometheus worker/activity metrics exposition | Apache-2.0; [official repository](https://github.com/prometheus/client_golang) |
+| `github.com/prometheus/client_model` | Prometheus metric model types used by tests and exposition boundaries | Apache-2.0; [official repository](https://github.com/prometheus/client_model) |
+| `github.com/prometheus/common` | Prometheus exposition and helper types | Apache-2.0; [official repository](https://github.com/prometheus/common) |
+| `go.opentelemetry.io/otel` | OpenTelemetry API for sanitized spans | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel/sdk` | OpenTelemetry tracer provider and exporter lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel/trace` | OpenTelemetry trace types used at instrumentation boundaries | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc` | Official OTLP/gRPC trace exporter used by the bounded telemetry lifecycle | Apache-2.0; [official repository](https://github.com/open-telemetry/opentelemetry-go) |
+| `github.com/redis/go-redis/v9` | Official Redis client for atomic admission Functions and immutable state records | BSD-2-Clause; [official repository](https://github.com/redis/go-redis) |
+| `google.golang.org/grpc` | OTLP transport and Temporal SDK gRPC connectivity | Apache-2.0; [official repository](https://github.com/grpc/grpc-go) |
+| `google.golang.org/protobuf` | Sizing recorded Temporal history events during generation recovery | BSD-3-Clause; [official repository](https://github.com/protocolbuffers/protobuf-go) |
+
+The table intentionally does not enumerate indirect requirements. The schema
+and YAML modules are in active use by the schema and configuration packages,
+while provider SDKs remain outside the provider-neutral `llm` API. A change
+that adds or removes a direct requirement updates this table and, for a module
+outside an already reviewed root, the supply-chain policy below. The
+documentation tests check that the table names exactly the direct requirements
+in `go.mod` and carries no versions; a version-only update never fails them.
+
+## Upgrade policy
+
+### Routine module updates
+
+Dependabot checks `golang/go.mod` daily with a three-day cooldown (see
+[`.github/dependabot.yml`](../../.github/dependabot.yml)). Each pull request
+covers one module or one group of closely related modules (OpenTelemetry, AWS,
+Azure, Prometheus, Temporal, cloud-storage), and the owner queues them by hand.
+Version-only updates need no documentation or policy edit. When an update
+changes relevant behavior, re-check the affected source contract,
+capability/price fixtures, wire fixtures, and retry/error/stream/usage
+assertions in the same pull request.
+
+### Temporal Go SDK cadence
+
+`go.temporal.io/sdk` and `go.temporal.io/api` move together in Dependabot's
+`temporal` group, so the SDK and its protocol types do not diverge.
+
+- Patch releases are taken as Dependabot proposes them, once the pull request
+  is green.
+- Minor releases are taken within one month of publication, so the worker is at
+  most one minor release behind. Read the
+  [release notes](https://github.com/temporalio/sdk-go/releases) of every
+  version the update spans, looking for changed workflow command sequences, new
+  default SDK flags, and deprecations.
+- A major release, or any upgrade that changes the commands the workflows
+  produce, is a planned change: keep existing histories replaying with workflow
+  versioning and record new histories rather than editing existing ones.
+
+The replay gate is the set of histories recorded from a real Temporal server in
+`golang/workflows/testdata/replay`. `TestRecordedHistoriesReplay` and the
+pinned-limit replay tests in `golang/workflows/replay_history_test.go` replay
+them as part of `make test`. Pull request CI also runs
+`make cloud-workflow-integration` (the Go worker against a real Temporal server
+and Redis) and `make cloud-workflow-ocaml-integration` (the OCaml clients and
+child workflows against the same worker), so a Temporal SDK pull request
+exercises both languages before it merges. The local Temporal server image in
+`golang/compose.yaml` is a separate Dependabot Docker update.
+
+### ocaml-temporal commit pin
+
+The OCaml package depends on
+[ocaml-temporal](https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal)
+(opam package `temporal-sdk`) at one full 40-character commit, not a branch or
+tag. No bot proposes updates to it. Re-evaluate the pin when ocaml-temporal
+lands a change this package needs (for example
+[ocaml-temporal#496](https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal/issues/496),
+direct TLS and authentication), and otherwise at least once a quarter.
+
+[`scripts/check-ocaml-temporal-pin.sh`](../../scripts/check-ocaml-temporal-pin.sh)
+runs in the `OCaml package` CI job. It fails unless the package metadata, the
+README install recipe, both CI workflows, and the Cargo prefetch helper name the
+same commit of the canonical repository. To move the pin:
+
+1. Pick the target commit on ocaml-temporal's default branch. Review the diff
+   since the current pin, including `rust/Cargo.lock` (the Temporal Core
+   revision it builds) and any change to the API that
+   `ocaml/llm_temporal_worker/lib` uses.
+2. Replace the old commit everywhere it appears. `git grep -l <old-commit>`
+   lists the copies:
+   - `ocaml/llm_temporal_worker/llm-temporal-ocaml.opam` (`pin-depends`)
+   - `ocaml/llm_temporal_worker/README.md` (install recipe)
+   - `.github/workflows/pull-request.yml` and `.github/workflows/master.yml`
+     (`opam pin add` steps)
+   - `scripts/ci/prefetch-temporal-sdk-cargo.sh` (`temporal_sdk_commit`)
+   - `ocaml_readme_install_test.go`, `ocaml_temporal_pin_test.go`, and
+     `prefetch_temporal_sdk_cargo_test.go` in
+     `golang/internal/architecturetest`, which pin the same value
+3. Run `bash scripts/check-ocaml-temporal-pin.sh` from the repository root and
+   `go test ./internal/architecturetest` from `golang/`.
+4. Update the README if the new commit changes what the client supports, such
+   as the transport-security limits.
+5. Open the pull request. The `OCaml package` job builds and tests the package
+   against the new pin and runs `make cloud-workflow-ocaml-integration`; the
+   `OCaml README install` job runs the README recipe verbatim on a fresh switch.
+   To build locally first, use an isolated `OPAMROOT` with the switch and
+   opam-repository commit from `scripts/ci/setup-opam.sh`.
 
 ## Verified supply-chain gate
 

@@ -411,3 +411,82 @@ func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 		}
 	}
 }
+
+// The direct-modules table names exactly the direct requirements of go.mod and
+// carries no versions, so a version-only Dependabot update never needs a
+// documentation edit while an added or removed direct module does (#1571).
+func TestDependencyBaselineListsDirectModulesWithoutVersions(t *testing.T) {
+	goMod, err := os.ReadFile(filepath.Join(moduleRoot(t), "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := directRequirements(string(goMod))
+	if len(direct) == 0 {
+		t.Fatal("go.mod declares no direct requirements")
+	}
+	docBytes, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "reference", "dependency-baseline.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(docBytes)
+	start := strings.Index(doc, "\n## Direct modules\n")
+	if start < 0 {
+		t.Fatal("dependency baseline has no Direct modules section")
+	}
+	section := doc[start+1:]
+	if end := strings.Index(section[len("## "):], "\n## "); end >= 0 {
+		section = section[:len("## ")+end]
+	}
+	documented := map[string]bool{}
+	for _, line := range strings.Split(section, "\n") {
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		module := strings.TrimPrefix(line, "| `")
+		module = module[:strings.Index(module, "`")]
+		if documented[module] {
+			t.Errorf("dependency baseline lists %s more than once", module)
+		}
+		documented[module] = true
+	}
+	for module := range direct {
+		if !documented[module] {
+			t.Errorf("dependency baseline does not list direct requirement %s", module)
+		}
+	}
+	for module := range documented {
+		if !direct[module] {
+			t.Errorf("dependency baseline lists %s, which is not a direct requirement in go.mod", module)
+		}
+	}
+	if version := regexp.MustCompile("`v[0-9]+\\.[0-9]+\\.[0-9]+[^`]*`").FindString(section); version != "" {
+		t.Errorf("dependency baseline Direct modules section records version %s; go.mod is the source of truth", version)
+	}
+}
+
+func directRequirements(goMod string) map[string]bool {
+	direct := map[string]bool{}
+	inBlock := false
+	for _, line := range strings.Split(goMod, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "require (":
+			inBlock = true
+			continue
+		case inBlock && line == ")":
+			inBlock = false
+			continue
+		case strings.HasPrefix(line, "require "):
+			line = strings.TrimPrefix(line, "require ")
+		case !inBlock:
+			continue
+		}
+		if line == "" || strings.HasPrefix(line, "//") || strings.Contains(line, "// indirect") {
+			continue
+		}
+		if fields := strings.Fields(line); len(fields) >= 2 {
+			direct[fields[0]] = true
+		}
+	}
+	return direct
+}
