@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -132,9 +132,7 @@ func TestAzureResponsesTokenClientRejectsMissingCredential(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			base.TokenCredential = credential
 			_, err := NewAzureTokenClient(base)
-			if err == nil || !strings.Contains(err.Error(), "token credential is required") {
-				t.Fatalf("missing token credential error = %v", err)
-			}
+			testassert.ErrorContains(t, err, "token credential is required")
 		})
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -22,9 +23,7 @@ func TestCompileRejectsAnUnsupportedOutputSchemaBeforeDispatch(t *testing.T) {
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Schema: json.RawMessage(`{"type":"object","patternProperties":{"^x":{"type":"string"}}}`)}}},
 		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "output schema") {
-		t.Fatalf("compile = %v, want an output schema rejection", err)
-	}
+	testassert.ErrorContains(t, err, "output schema")
 }
 
 // A schema whose validation would cost exponential time is refused before

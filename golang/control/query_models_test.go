@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -209,9 +210,7 @@ func TestTypedQueryResponseRequiresStableResultOrdering(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := EncodeQueryResponse(QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
-			if err == nil || !strings.Contains(err.Error(), "sorted and unique") {
-				t.Fatalf("unordered result error = %v, want stable-order rejection", err)
-			}
+			testassert.ErrorContains(t, err, "sorted and unique")
 		})
 	}
 }
@@ -240,9 +239,7 @@ func TestTypedQueryResponseRejectsDuplicateResultKey(t *testing.T) {
 		}},
 		Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero},
 	}
-	if _, err := EncodeQueryResponse(response); err == nil || !strings.Contains(err.Error(), "sorted and unique") {
-		t.Fatalf("duplicate result key error = %v, want stable-order rejection", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(EncodeQueryResponse(response)), "sorted and unique")
 }
 
 func TestBudgetWindowRetryDurationUsesWireSeconds(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -442,9 +443,7 @@ func TestQueryResponseV1RequiresExplicitActualCost(t *testing.T) {
 	t.Run("missing unknown actual cost", func(t *testing.T) {
 		var response llm.QueryResponseV1
 		err := json.Unmarshal(unknownPayload(""), &response)
-		if err == nil || !strings.Contains(err.Error(), `missing required JSON field "actual_cost_usd"`) {
-			t.Fatalf("error = %v, want missing actual_cost_usd rejection", err)
-		}
+		testassert.ErrorContains(t, err, `missing required JSON field "actual_cost_usd"`)
 	})
 
 	t.Run("explicit null unknown actual cost", func(t *testing.T) {

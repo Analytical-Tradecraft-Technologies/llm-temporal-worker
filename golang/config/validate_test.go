@@ -7,15 +7,14 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testing.T) {
 	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout))
-	if err := loaded.Validate(); err == nil || !strings.Contains(err.Error(), "server.shutdown_timeout must exceed temporal.worker.graceful_stop_timeout + server.finalization_timeout") {
-		t.Fatalf("shutdown budget validation error = %v", err)
-	}
+	testassert.ErrorContains(t, loaded.Validate(), "server.shutdown_timeout must exceed temporal.worker.graceful_stop_timeout + server.finalization_timeout")
 
 	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout) + time.Second)
 	if err := loaded.Validate(); err != nil {
@@ -424,9 +423,7 @@ func TestConfigValidationRejectsS3BlobAuthTheWorkerCannotBuild(t *testing.T) {
 			if schemaErr == nil {
 				t.Fatalf("the configuration schema accepts blob_store.s3.auth.kind %s", kind)
 			}
-			if err == nil || !strings.Contains(err.Error(), "blob_store.s3.auth.kind") {
-				t.Fatalf("Validate = %v, want an error naming blob_store.s3.auth.kind", err)
-			}
+			testassert.ErrorContains(t, err, "blob_store.s3.auth.kind")
 		})
 	}
 }

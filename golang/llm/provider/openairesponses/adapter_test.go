@@ -11,6 +11,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -191,9 +192,7 @@ func TestInvokeOmitsContinuationForUnstoredResponse(t *testing.T) {
 func TestCapabilitiesRejectMismatchedFamily(t *testing.T) {
 	adapter := newFixtureAdapter(t, []byte(`{}`))
 	_, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{Family: provider.FamilyOpenAIChat})
-	if err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("mismatched family error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "does not match")
 }
 
 func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {

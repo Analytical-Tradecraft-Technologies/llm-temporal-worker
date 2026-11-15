@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -388,9 +389,7 @@ func TestNewProductionEngineFactoryLeavesPartialPhaseCompositionUnconfigured(t *
 
 func TestV1RuntimeCapabilitiesBuildDurableCompositionFailsClosedWithoutFactory(t *testing.T) {
 	capabilities := completeGenerateCapabilities(nil)
-	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil || !strings.Contains(err.Error(), "factory is not configured") {
-		t.Fatalf("missing composition factory error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(capabilities.BuildDurableComposition(context.Background())), "factory is not configured")
 }
 
 func TestV1RuntimeCapabilitiesBuildDurableCompositionValidatesFactoryResult(t *testing.T) {
@@ -400,9 +399,7 @@ func TestV1RuntimeCapabilitiesBuildDurableCompositionValidatesFactoryResult(t *t
 		called = true
 		return durable.Composition{}, nil
 	}
-	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil || !strings.Contains(err.Error(), "validate durable composition") {
-		t.Fatalf("invalid composition error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(capabilities.BuildDurableComposition(context.Background())), "validate durable composition")
 	if !called {
 		t.Fatal("composition factory was not called")
 	}

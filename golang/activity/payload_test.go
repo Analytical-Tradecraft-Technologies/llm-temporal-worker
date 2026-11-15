@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"go.temporal.io/sdk/converter"
 )
@@ -170,9 +171,7 @@ func TestPayloadUnmarshalRejectsOversizeBeforeJSONDecode(t *testing.T) {
 	} {
 		t.Run(decode.name, func(t *testing.T) {
 			err := decode.call()
-			if err == nil || !strings.Contains(err.Error(), "payload is 128 bytes; limit is 64") {
-				t.Fatalf("oversize malformed payload error = %v, want size rejection", err)
-			}
+			testassert.ErrorContains(t, err, "payload is 128 bytes; limit is 64")
 		})
 	}
 }
@@ -185,9 +184,7 @@ func TestBoundedDataConverterRejectsBeforeTemporalDecode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded string
-	if err := bounded.FromPayload(oversize, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is 130 bytes; limit is 64") {
-		t.Fatalf("bounded converter error = %v, want pre-decode size rejection", err)
-	}
+	testassert.ErrorContains(t, bounded.FromPayload(oversize, &decoded), "Temporal payload is 130 bytes; limit is 64")
 	if _, err := bounded.ToPayload(strings.Repeat("x", 128)); err == nil {
 		t.Fatal("bounded converter accepted oversized encode")
 	}

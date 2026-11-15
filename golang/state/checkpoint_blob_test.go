@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
@@ -140,9 +141,7 @@ func TestCheckpointBlobCodecRejectsVersionKindAndEnvelopeTampering(t *testing.T)
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := codec.DecodeDelta([]byte(test.data)); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("DecodeDelta() = %v, want error containing %q", err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(codec.DecodeDelta([]byte(test.data))), test.want)
 		})
 	}
 	if _, err := codec.DecodeDelta(append(encoded, byte('x'))); err == nil {
@@ -188,9 +187,7 @@ func TestCheckpointBlobDecodersCheckNestedPayloadLimits(t *testing.T) {
 				return []byte(fmt.Sprintf(`{"version":"checkpoint-blob/v1","kind":%q,"payload":%s}`, kind, payload))
 			}
 			duplicate := envelope(`{"nested":{"x":1,"\u0078":2}}`)
-			if err := decode(CheckpointBlobCodec{}, duplicate); err == nil || !strings.Contains(err.Error(), "duplicate") {
-				t.Fatalf("nested duplicate: %v", err)
-			}
+			testassert.ErrorContains(t, decode(CheckpointBlobCodec{}, duplicate), "duplicate")
 			if err := decode(CheckpointBlobCodec{MaxDepth: 2}, envelope(`[[[]]]`)); !errors.Is(err, ErrLimitExceeded) {
 				t.Fatalf("nested depth limit: %v", err)
 			}
@@ -216,9 +213,7 @@ func TestCheckpointSnapshotDecodeStillValidatesToolFrontier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (CheckpointBlobCodec{}).DecodeSnapshot(data); err == nil || !strings.Contains(err.Error(), "unmatched tool result") {
-		t.Fatalf("invalid tool frontier: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err((CheckpointBlobCodec{}).DecodeSnapshot(data)), "unmatched tool result")
 }
 
 func TestScopedBlobReaderBindsScopeAndReferenceMetadata(t *testing.T) {
@@ -277,9 +272,7 @@ func TestScopedBlobReaderRejectsCorruptedPayload(t *testing.T) {
 	reference := CheckpointBlobReference{
 		ID: "blob-corrupt", Digest: digest, ByteLength: int64(len(written)), MediaType: "application/json",
 	}
-	if _, err := reader.Read(context.Background(), "scope-a", reference); err == nil || !strings.Contains(err.Error(), "digest or length mismatch") {
-		t.Fatalf("Read() = %v, want corrupted-payload digest error", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(reader.Read(context.Background(), "scope-a", reference)), "digest or length mismatch")
 }
 
 type testCheckpointBlobStore struct {

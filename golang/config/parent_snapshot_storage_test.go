@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // withParentSnapshotStorage sets state.requests.parent_snapshot_storage in the
@@ -41,9 +42,7 @@ func TestParentSnapshotStorageDefaultsInlineWithoutChangingDigest(t *testing.T) 
 	if blob.ConfigVersion() == unset.ConfigVersion() || blob.Config().State.Requests.ParentSnapshotStorage != config.ParentSnapshotStorageBlob {
 		t.Fatal("blob storage was not part of the effective configuration")
 	}
-	if _, err := config.Load(withParentSnapshotStorage(t, "sideways")); err == nil || !strings.Contains(err.Error(), "state.requests.parent_snapshot_storage") {
-		t.Fatalf("Load() accepted an unknown storage: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load(withParentSnapshotStorage(t, "sideways"))), "state.requests.parent_snapshot_storage")
 }
 
 func TestConfigSchemaParentSnapshotStorage(t *testing.T) {

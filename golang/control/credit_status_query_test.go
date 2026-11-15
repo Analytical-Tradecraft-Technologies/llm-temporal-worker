@@ -1,7 +1,7 @@
 package control
 
 import (
-	"strings"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -54,9 +54,7 @@ func TestCreditStatusValidationRejectsUnsafeAndUnorderedPages(t *testing.T) {
 		{Provider: "provider", EndpointID: "endpoint-b", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
 		{Provider: "provider", EndpointID: "endpoint-a", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
 	}}
-	if err := page.Validate(); err == nil || !strings.Contains(err.Error(), "sorted") {
-		t.Fatalf("unordered page error = %v", err)
-	}
+	testassert.ErrorContains(t, page.Validate(), "sorted")
 	if page := (CreditStatusPage{Endpoints: []CreditStatus{
 		{Provider: "provider-a", EndpointID: "endpoint", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
 		{Provider: "provider-b", EndpointID: "endpoint", Credit: CreditOK, Billing: BillingOK, EvidenceSource: CreditEvidenceUnknown},
@@ -72,9 +70,7 @@ func TestCreditStatusValidationRequiresOrderedProvenance(t *testing.T) {
 		ObservedAt: observed, StaleAfter: observed,
 		EvidenceSource: CreditEvidenceUnknown,
 	}
-	if err := status.Validate(); err == nil || !strings.Contains(err.Error(), "stale timestamp") {
-		t.Fatalf("equal stale/provenance timestamps accepted: %v", err)
-	}
+	testassert.ErrorContains(t, status.Validate(), "stale timestamp")
 	status.StaleAfter = observed.Add(time.Minute)
 	if err := status.Validate(); err != nil {
 		t.Fatalf("ordered provenance rejected: %v", err)

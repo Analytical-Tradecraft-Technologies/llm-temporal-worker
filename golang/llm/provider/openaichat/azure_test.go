@@ -3,9 +3,9 @@ package openaichat
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -78,7 +78,5 @@ func TestAzureChatRejectsUnsupportedEconomyBeforeDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "economy-op", Model: "deployment-a", ServiceClass: llm.ServiceClassEconomy}, Query: provider.CapabilityQuery{EndpointID: "azure-a", Family: provider.FamilyOpenAIChat, Model: "deployment-a"}, Strict: true})
-	if err == nil || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("economy compile error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "unsupported")
 }

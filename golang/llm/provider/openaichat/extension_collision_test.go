@@ -3,9 +3,9 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -40,9 +40,7 @@ func TestNewProfileAllowsSharedReservedExtensionWireField(t *testing.T) {
 	}
 	adapter := &Adapter{endpointID: "chat-prod", profile: validated}
 	request := collisionRequest(map[string]json.RawMessage{"alpha": json.RawMessage(`{"first":{}}`)})
-	if _, err := adapter.Compile(context.Background(), collisionInput(request)); err == nil || !strings.Contains(err.Error(), "reserved wire field") {
-		t.Fatalf("Compile() = %v, want reserved-field refusal", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(adapter.Compile(context.Background(), collisionInput(request))), "reserved wire field")
 }
 
 func TestCompileRejectsCollidingExtensionWireFields(t *testing.T) {

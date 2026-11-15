@@ -1,10 +1,10 @@
 package provider_test
 
 import (
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -71,9 +71,7 @@ func TestResumableResultValidation(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Validate() = %v, want substring %q", err, tc.want)
-			}
+			testassert.ErrorContains(t, err, tc.want)
 		})
 	}
 }
@@ -96,7 +94,5 @@ func TestResumableResultValidationBindsCompletedResponseToCall(t *testing.T) {
 		Result:   provider.Result{Response: llm.Response{OperationKey: "other-operation", Status: llm.ResponseStatusCompleted}},
 	}
 	err := result.ValidateForCall(provider.Call{OperationKey: "requested-operation"})
-	if err == nil || !strings.Contains(err.Error(), "does not match call") {
-		t.Fatalf("ValidateForCall() = %v, want operation-key mismatch", err)
-	}
+	testassert.ErrorContains(t, err, "does not match call")
 }

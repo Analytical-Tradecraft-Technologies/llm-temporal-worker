@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -122,9 +122,7 @@ func TestProductionFactoryV1RuntimeBuilderFailureClosesSnapshotClients(t *testin
 	}}
 	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
 	_, _, err := factory.attachV1Runtime(context.Background(), &config.Snapshot{}, testEngine{}, clients)
-	if err == nil || !strings.Contains(err.Error(), "construct durable v1 runtime") {
-		t.Fatalf("attachV1Runtime() error = %v, want wrapped builder failure", err)
-	}
+	testassert.ErrorContains(t, err, "construct durable v1 runtime")
 	if !closed {
 		t.Fatal("builder failure did not close snapshot clients")
 	}
@@ -140,9 +138,7 @@ func TestProductionFactoryRejectsTypedNilV1RuntimeAndClosesSnapshotClients(t *te
 	}}
 	clients := &productionClientSet{close: func(context.Context) error { closed = true; return nil }}
 	_, _, err := factory.attachV1Runtime(context.Background(), &config.Snapshot{}, testEngine{}, clients)
-	if err == nil || !strings.Contains(err.Error(), "nil runtime") {
-		t.Fatalf("attachV1Runtime() error = %v, want typed-nil runtime rejection", err)
-	}
+	testassert.ErrorContains(t, err, "nil runtime")
 	if !closed {
 		t.Fatal("typed-nil runtime rejection did not close snapshot clients")
 	}
@@ -510,18 +506,14 @@ func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 	}}
 	snapshot := singleRouteSnapshot("model", "unknown", "cap-v1")
 	_, err := factory.buildAdapter(context.Background(), value, snapshot, "unknown", nil)
-	if err == nil || !strings.Contains(err.Error(), "unsupported provider family") {
-		t.Fatalf("error = %v, want unsupported provider family", err)
-	}
+	testassert.ErrorContains(t, err, "unsupported provider family")
 }
 
 func TestChatProfileRequiresSpecializedDialect(t *testing.T) {
 	factory := &ProductionEngineFactory{}
 	endpoint := config.EndpointConfig{Family: "openai_chat", BaseURL: "https://openrouter.ai/api/v1"}
 	_, err := factory.chatProfile("openrouter", endpoint, provider.CapabilitySet{Version: "cap-v1"}, EndpointProfile{}, false, openRouterUpstreams(nil), config.OpenRouterUpstreamConfig{})
-	if err == nil || !strings.Contains(err.Error(), "specialized chat dialect must be explicit") {
-		t.Fatalf("error = %v, want explicit dialect failure", err)
-	}
+	testassert.ErrorContains(t, err, "specialized chat dialect must be explicit")
 }
 
 func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
@@ -560,9 +552,7 @@ func TestProductionFactoryBuildsAzureOpenAIChatAdapter(t *testing.T) {
 		Query:   provider.CapabilityQuery{EndpointID: "azure-chat", Family: provider.FamilyOpenAIChat, Model: "other-deployment"},
 		Strict:  true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "pinned profile model") {
-		t.Fatalf("model pin error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "pinned profile model")
 }
 
 func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *testing.T) {
@@ -600,9 +590,7 @@ func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *te
 			test.mutate(&endpoint)
 			value.Endpoints["azure-chat"] = endpoint
 			_, err = factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat", nil)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("buildAdapter() error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 			if resolved {
 				t.Fatal("invalid Azure Chat configuration resolved a secret")
 			}

@@ -4,13 +4,13 @@ import (
 	"context"
 	"net/http"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -41,9 +41,7 @@ func TestEndpointCapabilitiesRejectsSameVersionFeatureConflicts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := endpointCapabilities(capabilityConflictSnapshot(test.left, test.right), "bedrock")
-			if err == nil || !strings.Contains(err.Error(), "conflicting capability declaration") {
-				t.Fatalf("endpointCapabilities() error = %v, want a feature declaration conflict", err)
-			}
+			testassert.ErrorContains(t, err, "conflicting capability declaration")
 		})
 	}
 }

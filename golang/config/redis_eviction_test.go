@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestDurableEphemeralRedisPolicy(t *testing.T) {
@@ -26,9 +27,7 @@ func TestDurableEphemeralRedisPolicy(t *testing.T) {
 	fixture := strings.Replace(data, "kind: durable", "kind: redis", 1)
 	fixture = strings.Replace(fixture, cloudRequestSettings, "", 1)
 	fixture = strings.Replace(fixture, "environment: production", "environment: development", 1)
-	if _, err := config.Load([]byte(fixture)); err == nil || !strings.Contains(err.Error(), "maxmemory_policy") {
-		t.Fatalf("legacy Redis-only fixture did not reject expiring budget keys: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(fixture))), "maxmemory_policy")
 }
 
 func TestRedisEvictionDefaultsAndSnapshotDigest(t *testing.T) {

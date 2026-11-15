@@ -3,8 +3,8 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -24,7 +24,5 @@ func TestGenerateResponseV1RequiresServiceFallbackIndex(t *testing.T) {
 		t.Fatal("fixture no longer contains the service fallback_index")
 	}
 	var response GenerateResponseV1
-	if err := json.Unmarshal(missing, &response); err == nil || !strings.Contains(err.Error(), "fallback_index") {
-		t.Fatalf("decode without fallback_index = %v, want a fallback_index error", err)
-	}
+	testassert.ErrorContains(t, json.Unmarshal(missing, &response), "fallback_index")
 }

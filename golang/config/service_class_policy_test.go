@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -32,9 +33,7 @@ func TestServiceClassPoliciesLoadAndKeepStandard(t *testing.T) {
 				t.Fatal("example policy missing")
 			}
 			_, err := config.Load([]byte(strings.Replace(data, example, tc.replace, 1)))
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("Load = %v, want %q", err, tc.want)
-			}
+			testassert.ErrorContains(t, err, tc.want)
 		})
 	}
 }

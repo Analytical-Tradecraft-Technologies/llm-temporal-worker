@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -104,26 +105,18 @@ func TestAWSClientRequiresContextAndHTTPClient(t *testing.T) {
 
 func TestAWSClientRequiresExplicitRegionAndWorkspace(t *testing.T) {
 	_, err := NewAWSClient(context.Background(), AWSClientConfig{BaseURL: "http://127.0.0.1/aws-contract", HTTPClient: http.DefaultClient, AWSConfig: anthropicaws.ClientConfig{WorkspaceID: "ws-contract", SkipAuth: true}})
-	if err == nil || !strings.Contains(err.Error(), "AWS region is required") {
-		t.Fatalf("missing AWS region error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "AWS region is required")
 	_, err = NewAWSClient(context.Background(), AWSClientConfig{BaseURL: "http://127.0.0.1/aws-contract", HTTPClient: http.DefaultClient, AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1"}})
-	if err == nil || !strings.Contains(err.Error(), "AWS workspace ID is required") {
-		t.Fatalf("missing AWS workspace ID error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "AWS workspace ID is required")
 }
 
 func TestAWSGatewayClientRejectsSecretOnlyAuthentication(t *testing.T) {
 	base := AWSClientConfig{BaseURL: "http://127.0.0.1/aws-contract", HTTPClient: http.DefaultClient, AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract"}}
 	static := base
 	static.AWSConfig.APIKey = "test-key"
-	if _, err := NewAWSGatewayClient(context.Background(), static); err == nil || !strings.Contains(err.Error(), "aws_default_chain") {
-		t.Fatalf("static credential error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(NewAWSGatewayClient(context.Background(), static)), "aws_default_chain")
 	t.Setenv("ANTHROPIC_AWS_API_KEY", "test-key")
-	if _, err := NewAWSGatewayClient(context.Background(), base); err == nil || !strings.Contains(err.Error(), "ANTHROPIC_AWS_API_KEY") {
-		t.Fatalf("environment API key error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(NewAWSGatewayClient(context.Background(), base)), "ANTHROPIC_AWS_API_KEY")
 }
 
 func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
