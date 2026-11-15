@@ -8,8 +8,9 @@ provider credentials, or calls a live LLM provider.
 ## Master image publication
 
 The master workflow's separate `container` job does publish. On every master
-run (push, the daily schedule and manual dispatch) it runs
-`scripts/ci/build-scanned-image.sh` on Docker Build Cloud, which:
+run (push, the daily schedule and manual dispatch) the `container-build` job
+starts with the run and executes `scripts/ci/build-scanned-image.sh` on Docker
+Build Cloud, which:
 
 1. builds linux/amd64 and linux/arm64 as two single-platform builds, each
    exported to its own OCI layout with provenance (`mode=max`) and SBOM
@@ -27,9 +28,15 @@ run (push, the daily schedule and manual dispatch) it runs
    `vnd.docker.reference.*` annotations, which is the index a single
    multi-platform build produces.
 
-Nothing is pushed until both platforms pass. The job then copies those exact
-scanned bytes to `docker.io/analyticaltradecraft/llm-temporal-worker:<version>`
-with `skopeo copy --all --preserve-digests`. It checks that the tag resolves to
+Nothing is pushed until both platforms pass. `container-build` never
+publishes; it retains the scanned layout as a one-day `image-candidate` run
+artifact and exposes its index digest. The `container` job publishes only after
+every verification job, the OCaml package and every fuzz shard have passed, as
+before the build moved out of it (#1570). It first checks every blob of the
+downloaded candidate against the scanned index digest with `ocimerge verify`,
+then copies those exact scanned bytes to
+`docker.io/analyticaltradecraft/llm-temporal-worker:<version>` with
+`skopeo copy --all --preserve-digests`. It checks that the tag resolves to
 the local index digest and lists exactly linux/amd64 and linux/arm64. It
 exposes the index digest and both platform digests as job outputs (`digest`,
 `amd64_digest`, `arm64_digest`). The `release-evidence` job then binds the whole

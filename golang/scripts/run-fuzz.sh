@@ -7,6 +7,7 @@ set -euo pipefail
 
 GO="${GO:-go}"
 mode="${1:-smoke}"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 created_cache=""
 if [[ -z "${GOCACHE:-}" ]]; then
@@ -49,13 +50,14 @@ targets=(
   "./storage/redis FuzzProviderStatusDecode"
 )
 
-# Balanced using median target durations from three successful master runs.
-# Keep this assignment aligned with targets; smoke mode still replays all seeds.
-target_shards=(2 1 0 0 0 1 0 1 1 1 2 2 2 0 2 1 0 0 2 2 2 1 1 1 2 0)
-if (( ${#target_shards[@]} != ${#targets[@]} )); then
-  echo "fuzz target/shard assignment length mismatch" >&2
-  exit 64
-fi
+# Shards are balanced by each target's measured duration in fuzz-weights.tsv
+# (#1570): the heaviest remaining target goes to the lightest shard. Every
+# target needs a weight and every weight needs a target, so adding or renaming
+# a target fails here until its measured duration is recorded. Master records
+# each target's duration in the fuzz evidence (FUZZ_TIMINGS_OUTPUT) in the same
+# format, so the weights can be refreshed from recent runs.
+fuzz_weights="$script_dir/fuzz-weights.tsv"
+balancer="$script_dir/../../scripts/ci/balance-shards.py"
 
 run_seed_replay() {
   local package="$1"
@@ -68,8 +70,15 @@ run_fuzz() {
   local package="$1"
   local target="$2"
   local duration="$3"
+  local started elapsed
   echo "fuzz $package $target for $duration"
+  started="$(date +%s)"
   "$GO" test "$package" -run '^$' -fuzz "^${target}$" -fuzztime "$duration" -parallel=1
+  elapsed=$(($(date +%s) - started))
+  if [[ -n "${FUZZ_TIMINGS_OUTPUT:-}" ]]; then
+    # Weights must be positive; a sub-second target still costs a second.
+    printf '%s %s\t%s\n' "$package" "$target" "$((elapsed > 0 ? elapsed : 1))" >>"$FUZZ_TIMINGS_OUTPUT"
+  fi
 }
 
 case "$mode" in
@@ -79,26 +88,30 @@ case "$mode" in
       run_seed_replay "$package" "$target"
     done
     ;;
-  shard)
-    shard="${2:?usage: scripts/run-fuzz.sh shard <0|1|2>}"
-    if [[ ! "$shard" =~ ^[0-2]$ ]]; then
-      echo "fuzz shard must be 0, 1, or 2" >&2
+  shard | list)
+    shard="${2:-}"
+    count="${3:-}"
+    if [[ ! "$shard" =~ ^[0-9]+$ || ! "$count" =~ ^[1-9][0-9]*$ ]] || (( shard >= count )); then
+      echo "usage: scripts/run-fuzz.sh $mode <index> <count> (0 <= index < count)" >&2
       exit 64
+    fi
+    assigned="$(printf '%s\n' "${targets[@]}" | python3 "$balancer" "$fuzz_weights" "$shard" "$count")"
+    if [[ "$mode" == list ]]; then
+      # Print the shard's targets without fuzzing, for planning and tests.
+      printf '%s\n' "$assigned"
+      exit 0
     fi
     # Go accepts a duration or an Nx execution budget for -fuzztime. Trusted
     # master supplies 250000x so each target has a fixed workload; the local
     # default remains a short duration for ad-hoc shard runs.
     duration="${FUZZ_TIME:-45s}"
-    for index in "${!targets[@]}"; do
-      if (( target_shards[index] != shard )); then
-        continue
-      fi
-      read -r package target <<<"${targets[$index]}"
+    while IFS= read -r entry; do
+      read -r package target <<<"$entry"
       run_fuzz "$package" "$target" "$duration"
-    done
+    done <<<"$assigned"
     ;;
   *)
-    echo "usage: scripts/run-fuzz.sh [smoke|shard <0|1|2>]" >&2
+    echo "usage: scripts/run-fuzz.sh [smoke|shard <index> <count>|list <index> <count>]" >&2
     exit 64
     ;;
 esac
