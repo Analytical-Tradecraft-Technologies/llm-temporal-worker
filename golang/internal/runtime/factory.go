@@ -1113,6 +1113,14 @@ func (factory *ProductionEngineFactory) loadSnapshot(ctx context.Context, snapsh
 	return loaded.snapshot, syncRuntime, nil
 }
 
+// modelSyncHTTPClient applies the endpoint's egress policy to the catalog
+// fetch. A catalog has its own size bound, not limits.provider_response_bytes:
+// that limit sizes a paid response to fit the durable record that saves it
+// (#1319), and a catalog is never saved there.
+func (factory *ProductionEngineFactory) modelSyncHTTPClient(endpoint config.EndpointConfig) (*http.Client, error) {
+	return newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, modelsync.MaxResponseBytes)
+}
+
 // startModelSync starts the refresher. The OpenRouter fetch uses the
 // OpenRouter endpoint's egress policy, and its credential when the endpoint
 // is enabled; OpenRouter's model lists are public, so prices still sync when
@@ -1120,11 +1128,7 @@ func (factory *ProductionEngineFactory) loadSnapshot(ctx context.Context, snapsh
 func (factory *ProductionEngineFactory) startModelSync(ctx context.Context, value config.Config, syncRuntime *modelSyncRuntime, store modelsync.Store, adapters map[string]provider.Adapter) error {
 	endpointID := value.ModelSync.OpenRouter.Endpoint
 	endpoint := value.Endpoints[endpointID]
-	providerResponseBytes := value.Limits.ProviderResponseBytes
-	if providerResponseBytes == 0 {
-		providerResponseBytes = config.DefaultProviderResponseBytes
-	}
-	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, providerResponseBytes)
+	client, err := factory.modelSyncHTTPClient(endpoint)
 	if err != nil {
 		return fmt.Errorf("model_sync endpoint %q: provider egress policy: %w", endpointID, err)
 	}

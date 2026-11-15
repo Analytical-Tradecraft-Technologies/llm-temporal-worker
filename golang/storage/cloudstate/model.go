@@ -18,7 +18,12 @@ import (
 const (
 	RequestIDPrefix = "llmtw_req_"
 	PendingShards   = 8
-	maxPayloadBytes = 8 << 20
+	// MaxRecordBytes is the largest encoded request record and its progress.
+	// A provider attempt saves its response in one record, so
+	// config.DurableRecordBytes mirrors it to bound
+	// limits.provider_response_bytes (#1319).
+	MaxRecordBytes  = 8 << 20
+	maxPayloadBytes = MaxRecordBytes
 	maxRevisions    = 10000
 )
 

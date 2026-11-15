@@ -25,6 +25,13 @@ import (
 func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Record, BudgetPlan) {
 	t.Helper()
 	r, table, blobs, op := operationFixture(t)
+	record, plan := budgetPlanForOperation(t, r, op)
+	return r, table, blobs, record, plan
+}
+
+// budgetPlanForOperation begins op and returns its record with a valid plan.
+func budgetPlanForOperation(t *testing.T, r *Repository, op Operation) (Record, BudgetPlan) {
+	t.Helper()
 	record, err := r.BeginOperation(context.Background(), op)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +61,7 @@ func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, R
 	if err := plan.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	return r, table, blobs, record, plan
+	return record, plan
 }
 
 func copyTestBudgetPlan(t *testing.T, plan BudgetPlan) BudgetPlan {
