@@ -75,22 +75,22 @@ func (space keySpace) admissionKey(kind string, values ...string) string {
 }
 
 func (space keySpace) budgetKey(policy, window string) string {
-	return space.admissionPrefix() + "budget:" + space.digest("budget", policy, window)
+	return space.admissionKey("budget", policy, window)
 }
 
 // durableBudgetKey and durableBudgetExpiryKey are kept separate from the
 // legacy admission budget hash. The durable materializer stores nano-USD
 // values and must never be read as legacy micro-USD state.
 func (space keySpace) durableBudgetKey(policy, window string) string {
-	return space.admissionPrefix() + "durable-budget:" + space.digest("durable-budget", policy, window)
+	return space.admissionKey("durable-budget", policy, window)
 }
 
 func (space keySpace) durableBudgetExpiryKey(policy, window string) string {
-	return space.admissionPrefix() + "durable-budget-expiry:" + space.digest("durable-budget-expiry", policy, window)
+	return space.admissionKey("durable-budget-expiry", policy, window)
 }
 
 func (space keySpace) durableBudgetOperationKey(generation, operation string) string {
-	return space.admissionPrefix() + "durable-budget-operation:" + space.digest("durable-budget-operation", generation, operation)
+	return space.admissionKey("durable-budget-operation", generation, operation)
 }
 
 func (space keySpace) throttleDigest(kind, scope string) string {

@@ -56,20 +56,12 @@ func CompileUSD(version string, entries []Entry) (Catalog, error) {
 		if entry.Provider == "" || entry.Family == "" || entry.EndpointID == "" || entry.Model == "" || entry.ProviderTier == "" {
 			return Catalog{}, fmt.Errorf("pricing entry %d identity is incomplete", index)
 		}
-		for name, price := range map[string]DecimalUSD{
-			"input": entry.Prices.InputPerMillion, "output": entry.Prices.OutputPerMillion, "cache_read": entry.Prices.CacheReadPerMillion, "cache_write": entry.Prices.CacheWritePerMillion, "reasoning": entry.Prices.ReasoningPerMillion, "per_request": entry.Prices.PerRequest,
-		} {
-			if err := price.valid(); err != nil {
-				return Catalog{}, fmt.Errorf("pricing entry %d %s: %w", index, name, err)
-			}
+		if name, err := entry.Prices.invalidPrice(); err != nil {
+			return Catalog{}, fmt.Errorf("pricing entry %d %s: %w", index, name, err)
 		}
 		if long := entry.LongPrompt; long != nil {
-			for name, price := range map[string]DecimalUSD{
-				"input": long.Prices.InputPerMillion, "output": long.Prices.OutputPerMillion, "cache_read": long.Prices.CacheReadPerMillion, "cache_write": long.Prices.CacheWritePerMillion, "reasoning": long.Prices.ReasoningPerMillion, "per_request": long.Prices.PerRequest,
-			} {
-				if err := price.valid(); err != nil {
-					return Catalog{}, fmt.Errorf("pricing entry %d long-prompt %s: %w", index, name, err)
-				}
+			if name, err := long.Prices.invalidPrice(); err != nil {
+				return Catalog{}, fmt.Errorf("pricing entry %d long-prompt %s: %w", index, name, err)
 			}
 		}
 		seenUnknown := make(map[PriceComponent]struct{}, len(entry.UnknownComponents))

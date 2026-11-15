@@ -92,11 +92,7 @@ func NewAzureProfile(config AzureProfileConfig) (Profile, error) {
 }
 
 func NewAzureAdapter(client *Client, endpointID string, config AzureProfileConfig) (*Adapter, error) {
-	profile, err := NewAzureProfile(config)
-	if err != nil {
-		return nil, err
-	}
-	return New(client, endpointID, profile)
+	return newConfiguredAdapter(client, endpointID, config, NewAzureProfile)
 }
 
 // Aliases keep the provider name explicit at call sites that construct more

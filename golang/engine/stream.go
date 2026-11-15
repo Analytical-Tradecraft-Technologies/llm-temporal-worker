@@ -187,9 +187,7 @@ func (engine *Engine) preparedStreamError(ctx context.Context, setup streamSetup
 // completed operation is never mutated merely because its reader canceled.
 func (engine *Engine) cancelPreparedStream(ctx context.Context, setup streamSetup, operation admission.Operation, cause error) error {
 	if operation.State != admission.StateReserved {
-		failure := engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause)
-		failure.OperationID = operation.ID
-		return failure
+		return withOperationID(engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause), operation.ID)
 	}
 	candidate := routing.Candidate{}
 	if len(setup.quoted.candidates) > 0 {
@@ -307,7 +305,7 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 			return engine.finishFailed(ctx, operation, candidate.candidate, classifyProviderError(streamErr, observer.marked), candidate.estimate.MicroUSD)
 		}
 		if observer.heartbeatErr != nil {
-			return engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "progress heartbeat failed", observer.heartbeatErr), candidate.estimate.MicroUSD)
+			return engine.finishFailed(ctx, operation, candidate.candidate, heartbeatFailed(provider.DispatchAccepted, observer.heartbeatErr), candidate.estimate.MicroUSD)
 		}
 		if response.Provider.RequestID == "" {
 			response.Provider.RequestID = result.Metadata.RequestID
@@ -392,9 +390,7 @@ func (engine *Engine) finishUnavailableStream(ctx context.Context, operation adm
 			return err
 		}
 	}
-	result := engineError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming", nil)
-	result.OperationID = operation.ID
-	return result
+	return withOperationID(engineError(provider.CodeUnsupportedCapability, provider.PhaseStream, provider.DispatchNotDispatched, provider.RetryNever, "no eligible adapter implements provider streaming", nil), operation.ID)
 }
 
 type streamEmitter struct {

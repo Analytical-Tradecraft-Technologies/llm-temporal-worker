@@ -242,30 +242,41 @@ func (metrics *Metrics) exportRouteHealthSeries() {
 // bucket rather than interpolated (#1497).
 var latencyBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 450, 600}
 
+// counterVec is a counter family with the given labels.
+func counterVec(name, help string, labels ...string) *prometheus.CounterVec {
+	return prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: help}, labels)
+}
+
+// histogramVec is a histogram family with the given buckets (nil for the
+// Prometheus defaults) and labels.
+func histogramVec(name, help string, buckets []float64, labels ...string) *prometheus.HistogramVec {
+	return prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: name, Help: help, Buckets: buckets}, labels)
+}
+
 func NewMetrics(allowed AllowedValues) (*Metrics, error) {
 	m := &Metrics{registry: prometheus.NewRegistry(), allowed: allowed.lists()}
-	m.activityTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_total", Help: "Completed and failed Temporal activity calls."}, []string{"status", "error_class"})
-	m.activityFailureTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_activity_failure_total", Help: "Failed Temporal activity attempts by bounded error origin."}, []string{"origin"})
-	m.activityDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_activity_duration_seconds", Help: "Activity duration by lifecycle phase.", Buckets: latencyBuckets}, []string{"phase"})
-	m.providerAttemptTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_attempt_total", Help: "Provider attempts by configured route."}, []string{"endpoint", "model", "class", "outcome"})
-	m.providerDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_provider_duration_seconds", Help: "Provider attempt duration by configured route.", Buckets: latencyBuckets}, []string{"endpoint", "model", "class"})
-	m.serviceClassActual = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_service_class_actual_total", Help: "Requested and actual public service classes."}, []string{"requested", "actual", "endpoint"})
-	m.budgetAdmission = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_budget_admission_total", Help: "Budget admission outcomes."}, []string{"policy", "outcome"})
-	m.costExactTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_usd_total", Help: "Count of accounted exact-USD cost events; amount remains in the durable ledger."}, []string{"endpoint", "model", "class", "method"})
-	m.operationState = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_operation_state_total", Help: "Operation state transitions."}, []string{"state"})
-	m.ambiguousTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_ambiguous_total", Help: "Operations whose provider dispatch is unresolved."}, []string{"endpoint"})
-	m.continuationTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_continuation_total", Help: "Continuation decisions."}, []string{"decision"})
-	m.configReloadTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_config_reload_total", Help: "Configuration reload outcomes."}, []string{"outcome"})
-	m.maintenanceRows = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_maintenance_rows_total", Help: "Bounded maintenance rows by resource and outcome."}, []string{"resource", "outcome"})
-	m.maintenanceFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_maintenance_failures_total", Help: "Bounded maintenance pass failures by resource."}, []string{"resource"})
-	m.maintenanceDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_maintenance_duration_seconds", Help: "Duration of bounded maintenance passes by resource."}, []string{"resource"})
-	m.cacheEvents = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cache_events_total", Help: "Response cache hits, uses, fills, misses, and bounded failures."}, []string{"event"})
-	m.pendingPolls = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_provider_poll_total", Help: "Provider-owned operation poll outcomes."}, []string{"outcome"})
-	m.costStatus = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_cost_status_total", Help: "Exact and unknown cost accounting events; amounts remain in the durable ledger."}, []string{"endpoint", "model", "class", "status", "method"})
-	m.langfuseExportFailed = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_langfuse_export_failures_total", Help: "Failed Langfuse export Activity attempts by bounded reason."}, []string{"reason"})
-	m.routeHeldTotal = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_held_total", Help: "Route candidates provider planning skipped because shared route health holds them."}, []string{"endpoint", "reason"})
-	m.executionStep = prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "llmtw_execution_step_duration_seconds", Help: "v1 durable execution step Activity duration by step.", Buckets: latencyBuckets}, []string{"step"})
-	m.routeHealthFlips = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "llmtw_route_health_transition_total", Help: "Flips of the shared route health record, counted once by the worker whose observation made them."}, []string{"endpoint", "to"})
+	m.activityTotal = counterVec("llmtw_activity_total", "Completed and failed Temporal activity calls.", "status", "error_class")
+	m.activityFailureTotal = counterVec("llmtw_activity_failure_total", "Failed Temporal activity attempts by bounded error origin.", "origin")
+	m.activityDuration = histogramVec("llmtw_activity_duration_seconds", "Activity duration by lifecycle phase.", latencyBuckets, "phase")
+	m.providerAttemptTotal = counterVec("llmtw_provider_attempt_total", "Provider attempts by configured route.", "endpoint", "model", "class", "outcome")
+	m.providerDuration = histogramVec("llmtw_provider_duration_seconds", "Provider attempt duration by configured route.", latencyBuckets, "endpoint", "model", "class")
+	m.serviceClassActual = counterVec("llmtw_service_class_actual_total", "Requested and actual public service classes.", "requested", "actual", "endpoint")
+	m.budgetAdmission = counterVec("llmtw_budget_admission_total", "Budget admission outcomes.", "policy", "outcome")
+	m.costExactTotal = counterVec("llmtw_cost_usd_total", "Count of accounted exact-USD cost events; amount remains in the durable ledger.", "endpoint", "model", "class", "method")
+	m.operationState = counterVec("llmtw_operation_state_total", "Operation state transitions.", "state")
+	m.ambiguousTotal = counterVec("llmtw_ambiguous_total", "Operations whose provider dispatch is unresolved.", "endpoint")
+	m.continuationTotal = counterVec("llmtw_continuation_total", "Continuation decisions.", "decision")
+	m.configReloadTotal = counterVec("llmtw_config_reload_total", "Configuration reload outcomes.", "outcome")
+	m.maintenanceRows = counterVec("llmtw_maintenance_rows_total", "Bounded maintenance rows by resource and outcome.", "resource", "outcome")
+	m.maintenanceFailures = counterVec("llmtw_maintenance_failures_total", "Bounded maintenance pass failures by resource.", "resource")
+	m.maintenanceDuration = histogramVec("llmtw_maintenance_duration_seconds", "Duration of bounded maintenance passes by resource.", nil, "resource")
+	m.cacheEvents = counterVec("llmtw_cache_events_total", "Response cache hits, uses, fills, misses, and bounded failures.", "event")
+	m.pendingPolls = counterVec("llmtw_provider_poll_total", "Provider-owned operation poll outcomes.", "outcome")
+	m.costStatus = counterVec("llmtw_cost_status_total", "Exact and unknown cost accounting events; amounts remain in the durable ledger.", "endpoint", "model", "class", "status", "method")
+	m.langfuseExportFailed = counterVec("llmtw_langfuse_export_failures_total", "Failed Langfuse export Activity attempts by bounded reason.", "reason")
+	m.routeHeldTotal = counterVec("llmtw_route_held_total", "Route candidates provider planning skipped because shared route health holds them.", "endpoint", "reason")
+	m.executionStep = histogramVec("llmtw_execution_step_duration_seconds", "v1 durable execution step Activity duration by step.", latencyBuckets, "step")
+	m.routeHealthFlips = counterVec("llmtw_route_health_transition_total", "Flips of the shared route health record, counted once by the worker whose observation made them.", "endpoint", "to")
 	m.priceExpiry = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "llmtw_catalog_price_expiry_timestamp_seconds", Help: "Unix time at which the earliest current priced window of a published route ends, or ended; +Inf when no published route's price expires."}, m.catalogPriceExpiry)
 	m.workerPolling = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_worker_polling", Help: "Whether the Temporal worker is polling."})
 	m.heartbeatAge = prometheus.NewGauge(prometheus.GaugeOpts{Name: "llmtw_heartbeat_age_seconds", Help: "Age of the most recent Activity heartbeat."})
