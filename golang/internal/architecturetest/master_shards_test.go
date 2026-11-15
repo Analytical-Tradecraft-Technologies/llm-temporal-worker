@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -38,7 +39,8 @@ func commandLines(t *testing.T, directory, name string, args ...string) []string
 	output, err := command.Output()
 	if err != nil {
 		var stderr []byte
-		if exitError, ok := err.(*exec.ExitError); ok {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
 			stderr = exitError.Stderr
 		}
 		t.Fatalf("%s %s: %v: %s", name, strings.Join(args, " "), err, stderr)
