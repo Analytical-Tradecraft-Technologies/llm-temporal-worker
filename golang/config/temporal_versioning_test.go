@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"os"
 	"strings"
@@ -26,18 +25,12 @@ func withoutTemporalControllerEnvironment(t *testing.T) {
 }
 func TestTemporalVersioningOptionalAndControllerOverrides(t *testing.T) {
 	withoutTemporalControllerEnvironment(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if loaded.Temporal.Worker.Versioning.Enabled {
 		t.Fatal("versioning must default off")
 	}
 	data := strings.Replace(string(exampleYAML(t)), "  worker:\n", "  worker:\n    versioning: {enabled: true, deployment_name: yaml-worker, build_id: yaml-build}\n", 1)
-	loaded, err = config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, []byte(data))
 	if loaded.Temporal.Worker.Versioning.BuildID != "yaml-build" {
 		t.Fatal("YAML identity lost")
 	}
@@ -45,10 +38,7 @@ func TestTemporalVersioningOptionalAndControllerOverrides(t *testing.T) {
 	t.Setenv("TEMPORAL_NAMESPACE", "controller-namespace")
 	t.Setenv("TEMPORAL_DEPLOYMENT_NAME", "controller-worker")
 	t.Setenv("TEMPORAL_WORKER_BUILD_ID", "controller-build")
-	loaded, err = config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, []byte(data))
 	if loaded.Temporal.Target != "controller.example.internal:7233" || loaded.Temporal.Namespace != "controller-namespace" || loaded.Temporal.Worker.Versioning != (config.WorkerVersioningConfig{Enabled: true, DeploymentName: "controller-worker", BuildID: "controller-build"}) {
 		t.Fatalf("controller identity not effective: %+v", loaded.Temporal)
 	}
@@ -127,10 +117,7 @@ func TestTemporalVersioningRejectsIdentitiesTemporalRejects(t *testing.T) {
 func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {
 	withoutTemporalControllerEnvironment(t)
 	compiled := configSchema(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	long := strings.Repeat("a", config.WorkerVersioningIdentityMaxBytes+1)
 	for name, test := range map[string]struct {
 		deployment, build string
@@ -148,10 +135,7 @@ func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {
 	} {
 		value := loaded.Clone()
 		value.Temporal.Worker.Versioning = config.WorkerVersioningConfig{Enabled: true, DeploymentName: test.deployment, BuildID: test.build}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshalJSON(t, value)
 		if err := compiled.Validate(encoded); (err == nil) != test.valid {
 			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}

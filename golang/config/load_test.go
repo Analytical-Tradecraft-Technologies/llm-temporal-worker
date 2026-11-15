@@ -22,11 +22,21 @@ func exampleYAML(t *testing.T) []byte {
 	return data
 }
 
-func TestLoadCompleteExample(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
+// assertExampleEditRejected replaces the first from in the example with to and
+// checks that Load rejects the result with an error containing want.
+func assertExampleEditRejected(t *testing.T, from, to, want string) {
+	t.Helper()
+	data := strings.Replace(string(exampleYAML(t)), from, to, 1)
+	if data == string(exampleYAML(t)) {
+		t.Fatalf("example does not contain %q", from)
 	}
+	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load(%s) error = %v, want %q", to, err, want)
+	}
+}
+
+func TestLoadCompleteExample(t *testing.T) {
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if loaded.Version != config.APIVersion || loaded.Environment != "production" {
 		t.Fatalf("loaded identity = %#v", loaded)
 	}
@@ -80,19 +90,13 @@ func TestLoadCompleteExample(t *testing.T) {
 
 func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
 	withoutSetting := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 16777216\n", "", 1)
-	loaded, err := config.Load([]byte(withoutSetting))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(withoutSetting))
 	if got, want := loaded.Limits.ProviderResponseBytes, int64(16<<20); got != want {
 		t.Fatalf("default provider response bytes = %d, want %d", got, want)
 	}
 
 	configured := strings.Replace(withoutSetting, "  provider_timeout: 120s\n", "  provider_timeout: 120s\n  provider_response_bytes: 8388608\n", 1)
-	loaded, err = config.Load([]byte(configured))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, []byte(configured))
 	if got, want := loaded.Limits.ProviderResponseBytes, int64(8<<20); got != want {
 		t.Fatalf("configured provider response bytes = %d, want %d", got, want)
 	}
@@ -110,10 +114,7 @@ func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
 
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 	withoutSetting := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s\n", "", 1)
-	loaded, err := config.Load([]byte(withoutSetting))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(withoutSetting))
 	if got, want := time.Duration(loaded.Temporal.Worker.HeartbeatKeepaliveInterval), time.Second; got != want {
 		t.Fatalf("default worker heartbeat keepalive interval = %s, want %s", got, want)
 	}
@@ -126,10 +127,7 @@ func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 
 func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 	withoutStreamFields := strings.Replace(string(exampleYAML(t)), "    coordination_stream_enabled: true\n    stream_trim_safety: 10m\n", "", 1)
-	loaded, err := config.Load([]byte(withoutStreamFields))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(withoutStreamFields))
 	if loaded.State.Redis.CoordinationStreamEnabled == nil || !*loaded.State.Redis.CoordinationStreamEnabled {
 		t.Fatal("durable state must default coordination stream readiness on")
 	}
@@ -139,19 +137,13 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 
 	fixture := strings.Replace(withoutCloudRequests(withoutStreamFields), "kind: durable", "kind: redis", 1)
 	fixture = strings.Replace(fixture, "environment: production", "environment: development", -1)
-	loaded, err = config.Load([]byte(fixture))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, []byte(fixture))
 	if loaded.State.Redis.CoordinationStreamEnabled == nil || *loaded.State.Redis.CoordinationStreamEnabled {
 		t.Fatal("Redis-only fixture must default coordination stream readiness off")
 	}
 
 	explicitFalse := strings.Replace(withoutStreamFields, "    required_persistence: aof_and_rdb\n", "    required_persistence: aof_and_rdb\n    coordination_stream_enabled: false\n", 1)
-	loaded, err = config.Load([]byte(explicitFalse))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, []byte(explicitFalse))
 	if loaded.State.Redis.CoordinationStreamEnabled == nil || *loaded.State.Redis.CoordinationStreamEnabled {
 		t.Fatal("explicitly disabled coordination stream unexpectedly enabled")
 	}
@@ -172,14 +164,8 @@ func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
   inline_bytes: 262144
   file:
     root: /var/lib/llmtw/blobs`, 1)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(data))
+	encoded := mustMarshalJSON(t, loaded)
 	var document struct {
 		BlobStore struct {
 			Kind string `json:"kind"`
@@ -273,10 +259,7 @@ func TestLoadBudgetPolicyAcceptsEveryDocumentedMatcher(t *testing.T) {
 		"match:\n        project: invoice-processing\n        actor_prefix: service-\n        logical_model: invoice-summarizer\n        endpoint: openai-prod\n        service_class: priority",
 		1,
 	)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(data))
 	match := loaded.Budgets.Policies[0].Match
 	if match.Project != "invoice-processing" || match.ActorPrefix != "service-" || match.LogicalModel != "invoice-summarizer" || match.EndpointID != "openai-prod" || match.ServiceClass != llm.ServiceClassPriority {
 		t.Fatalf("budget matcher = %#v", match)
@@ -328,14 +311,8 @@ func TestLoadAcceptsWildcardAlongsideBudgetRestriction(t *testing.T) {
 }
 
 func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
+	encoded := mustMarshalJSON(t, loaded)
 	var document map[string]any
 	if err := json.Unmarshal(encoded, &document); err != nil {
 		t.Fatal(err)
@@ -375,10 +352,7 @@ func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 		"admission_digest: 1B7248F3703F71F4E27D847E82ADE143076F38D0B62E819D807F9CA48AC3D78F",
 		1,
 	)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(data))
 	if got, want := loaded.State.Redis.AdmissionDigest, "1b7248f3703f71f4e27d847e82ade143076f38d0b62e819d807f9ca48ac3d78f"; got != want {
 		t.Fatalf("admission digest = %q, want canonical lowercase %q", got, want)
 	}
@@ -398,20 +372,14 @@ func TestLoadCanonicalizesOutboundProviderHosts(t *testing.T) {
 		"outbound_hosts: [API.OPENAI.COM.]",
 		1,
 	)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(data))
 	if got, want := loaded.Endpoints["openai-prod"].OutboundHosts, []string{"api.openai.com"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("outbound hosts = %#v, want %#v", got, want)
 	}
 }
 
 func TestLoadAcceptsConfiguredAnthropicAWSGatewayEndpoint(t *testing.T) {
-	loaded, err := config.Load([]byte(anthropicAWSGatewayYAML(t)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(anthropicAWSGatewayYAML(t)))
 	endpoint, ok := loaded.Endpoints["anthropic-aws-us-east-1"]
 	if !ok {
 		t.Fatal("Anthropic AWS gateway endpoint was not loaded")
@@ -551,10 +519,7 @@ func withoutCloudRequests(value string) string {
 }
 
 func TestExampleAzureAPIVersionIsAString(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if got := loaded.Endpoints["azure-openai-au"].Extensions["azure"]["api_version"]; got != "v1" {
 		t.Fatalf("example Azure api_version = %#v, want string v1", got)
 	}
@@ -582,13 +547,7 @@ func TestLoadRejectsActivityBoundsTheWorkflowCannotHonour(t *testing.T) {
 		{from: "heartbeat_keepalive_interval: 1s", to: "heartbeat_keepalive_interval: 11s", want: "heartbeat_keepalive_interval must be at most 10s"},
 		{from: "inline_payload_bytes: 524288", to: "inline_payload_bytes: 4194304", want: "server.inline_payload_bytes must be between 1 and 2097152"},
 	} {
-		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
-		if data == string(exampleYAML(t)) {
-			t.Fatalf("example does not contain %q", test.from)
-		}
-		if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("Load(%s) error = %v, want %q", test.to, err, test.want)
-		}
+		assertExampleEditRejected(t, test.from, test.to, test.want)
 	}
 	for _, test := range []struct{ from, to string }{
 		{from: "provider_timeout: 120s", to: "provider_timeout: 9m59s"},
@@ -644,13 +603,7 @@ func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
 		{from: "metrics_address: 0.0.0.0:9090", to: "metrics_address: 0.0.0.0:99999", want: "port must be between 0 and 65535"},
 		{from: "max_output_tokens: 32768", to: "max_output_tokens: 3000000000", want: "limits.max_output_tokens must not exceed 2147483647"},
 	} {
-		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
-		if data == string(exampleYAML(t)) {
-			t.Fatalf("example does not contain %q", test.from)
-		}
-		if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("Load(%s) error = %v, want %q", test.to, err, test.want)
-		}
+		assertExampleEditRejected(t, test.from, test.to, test.want)
 	}
 	shared := strings.Replace(string(exampleYAML(t)), "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:8080", 1)
 	if _, err := config.Load([]byte(shared)); err != nil {
@@ -660,20 +613,14 @@ func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
 
 func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
 	example := string(exampleYAML(t))
-	loaded, err := config.Load([]byte(example))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(example))
 	if loaded.Server.ResponsesAPIListenAddress != "" {
 		t.Fatalf("the example enables the responses API: %q", loaded.Server.ResponsesAPIListenAddress)
 	}
 	withAddress := func(address string) []byte {
 		return []byte(strings.Replace(example, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:9090\n  responses_api_listen_address: "+address, 1))
 	}
-	enabled, err := config.Load(withAddress("127.0.0.1:8000"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	enabled := mustLoadConfig(t, withAddress("127.0.0.1:8000"))
 	if enabled.Server.ResponsesAPIListenAddress != "127.0.0.1:8000" {
 		t.Fatalf("address = %q", enabled.Server.ResponsesAPIListenAddress)
 	}
@@ -693,10 +640,7 @@ func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
 }
 
 func TestWorkloadIdentityPathsListsEveryReference(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if paths := loaded.WorkloadIdentityPaths(); len(paths) != 0 {
 		t.Fatalf("example workload identity paths = %v", paths)
 	}
@@ -716,19 +660,10 @@ func TestLoadRejectsContinuationAndCapabilitySettingsTheRuntimeDoesNotImplement(
 		{from: "retain_canonical_transcript: true", to: "retain_canonical_transcript: false", want: "continuation.retain_canonical_transcript must be true"},
 		{from: "unknown_in_strict_mode: reject", to: "unknown_in_strict_mode: allow", want: "capabilities.unknown_in_strict_mode must be reject"},
 	} {
-		data := strings.Replace(string(exampleYAML(t)), test.from, test.to, 1)
-		if data == string(exampleYAML(t)) {
-			t.Fatalf("example does not contain %q", test.from)
-		}
-		if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("Load(%s) error = %v, want %q", test.to, err, test.want)
-		}
+		assertExampleEditRejected(t, test.from, test.to, test.want)
 	}
 	omitted := strings.Replace(string(exampleYAML(t)), "  retain_canonical_transcript: true\n", "", 1)
-	loaded, err := config.Load([]byte(omitted))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(omitted))
 	if loaded.Continuation.RetainCanonicalTranscript == nil || !*loaded.Continuation.RetainCanonicalTranscript {
 		t.Fatalf("omitted retain_canonical_transcript = %v, want default true", loaded.Continuation.RetainCanonicalTranscript)
 	}

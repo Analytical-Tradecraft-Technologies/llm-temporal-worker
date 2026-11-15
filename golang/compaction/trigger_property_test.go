@@ -45,10 +45,7 @@ func TestEvaluateTriggerIsMonotonicInProjectedCounters(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			input := base
 			test.edit(&input)
-			decision, err := policy.EvaluateTrigger(input)
-			if err != nil {
-				t.Fatalf("EvaluateTrigger() error = %v", err)
-			}
+			decision := mustEvaluateTrigger(t, policy, input)
 			if !decision.ShouldCompact {
 				t.Fatalf("projected limit crossed without compaction: %#v", input)
 			}
@@ -64,19 +61,13 @@ func TestEvaluateTriggerDisablesZeroProviderLimits(t *testing.T) {
 		ProjectedLineageDepth: 1_000_000,
 		ProjectedBytes:        policy.MaterializationThresholdBytes - 1,
 	}
-	decision, err := policy.EvaluateTrigger(input)
-	if err != nil {
-		t.Fatalf("EvaluateTrigger() error = %v", err)
-	}
+	decision := mustEvaluateTrigger(t, policy, input)
 	if decision.ShouldCompact {
 		t.Fatalf("zero provider limits unexpectedly triggered compaction: %#v", decision)
 	}
 
 	input.ProjectedTokens = policy.TriggerTokens
-	decision, err = policy.EvaluateTrigger(input)
-	if err != nil {
-		t.Fatalf("EvaluateTrigger() at policy threshold error = %v", err)
-	}
+	decision = mustEvaluateTrigger(t, policy, input)
 	if !decision.ShouldCompact || decision.Reason != TriggerReasonTokens {
 		t.Fatalf("policy threshold decision = %#v, want token trigger", decision)
 	}
@@ -122,10 +113,7 @@ func TestEvaluateTriggerReasonPrecedenceCoversEveryBoundary(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			decision, err := policy.EvaluateTrigger(test.input)
-			if err != nil {
-				t.Fatalf("EvaluateTrigger() error = %v", err)
-			}
+			decision := mustEvaluateTrigger(t, policy, test.input)
 			if !decision.ShouldCompact || decision.Reason != test.reason {
 				t.Fatalf("decision = %#v, want compact reason %q", decision, test.reason)
 			}

@@ -10,7 +10,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"go.temporal.io/sdk/temporal"
 )
 
 type queryServiceStub struct {
@@ -39,12 +38,18 @@ func (stub *queryServiceStub) Execute(_ context.Context, request llm.QueryReques
 	if stub.err != nil {
 		return llm.QueryResponseV1{}, stub.err
 	}
+	return providerStatusQueryResponse(request, "query-execution-1"), nil
+}
+
+// providerStatusQueryResponse is a complete, zero-cost provider status page
+// answering request.
+func providerStatusQueryResponse(request llm.QueryRequestV1, executionID string) llm.QueryResponseV1 {
 	return llm.QueryResponseV1{
-		APIVersion: llm.QueryAPIVersion, OperationKey: request.OperationKey, QueryExecutionID: "query-execution-1", Kind: request.Kind,
+		APIVersion: llm.QueryAPIVersion, OperationKey: request.OperationKey, QueryExecutionID: executionID, Kind: request.Kind,
 		ObservedAt: "2026-07-20T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true,
 		Result: llm.ProviderStatusPage{Routes: []json.RawMessage{}},
 		Cost:   llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
-	}, nil
+	}
 }
 
 func TestQueryV1UsesIndependentQueryService(t *testing.T) {
@@ -65,12 +70,8 @@ func TestQueryV1UsesIndependentQueryService(t *testing.T) {
 func TestQueryV1RejectsInconsistentPaginationCompletion(t *testing.T) {
 	request := validQueryV1Request()
 	cursor := "page-2"
-	response := llm.QueryResponseV1{
-		APIVersion: llm.QueryAPIVersion, OperationKey: request.OperationKey, QueryExecutionID: "query-execution-1", Kind: request.Kind,
-		ObservedAt: "2026-07-20T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true, NextCursor: &cursor,
-		Result: llm.ProviderStatusPage{Routes: []json.RawMessage{}},
-		Cost:   llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
-	}
+	response := providerStatusQueryResponse(request, "query-execution-1")
+	response.NextCursor = &cursor
 	activities := &Activities{QueryService: queryResponseServiceStub{response: response}}
 	if result, err := activities.QueryV1(context.Background(), request); result != nil || err == nil {
 		t.Fatalf("QueryV1 result = %#v, error = %v; want contract rejection", result, err)
@@ -100,16 +101,9 @@ func TestQueryV1MapsStateOutageToRetryableSanitizedTemporalError(t *testing.T) {
 	if response != nil {
 		t.Fatalf("response = %#v, want nil on error", response)
 	}
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(err, &applicationErr) {
-		t.Fatalf("error = %T %v, want Temporal application error", err, err)
-	}
+	applicationErr, details := safeApplicationError(t, err)
 	if applicationErr.Type() != ErrorTypeProviderTransient || applicationErr.NonRetryable() {
 		t.Fatalf("application error = type %q non_retryable=%v", applicationErr.Type(), applicationErr.NonRetryable())
-	}
-	var details SafeErrorDetails
-	if detailsErr := applicationErr.Details(&details); detailsErr != nil {
-		t.Fatalf("details error = %v", detailsErr)
 	}
 	if details.Code != string(provider.CodeStateUnavailable) || details.Phase != string(provider.PhaseStateLoad) || details.Dispatch != string(provider.DispatchNotDispatched) {
 		t.Fatalf("safe details = %#v", details)

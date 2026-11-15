@@ -2,7 +2,6 @@ package activity
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -65,12 +64,9 @@ func (runtime *v1RuntimeStub) QueryV1(_ context.Context, request llm.QueryReques
 	if runtime.err != nil {
 		return llm.QueryResponseV1{}, runtime.err
 	}
-	return llm.QueryResponseV1{
-		APIVersion: llm.QueryAPIVersion, OperationKey: request.OperationKey, QueryExecutionID: "query-1",
-		Kind: llm.QueryProviderStatus, ObservedAt: "2026-07-20T00:00:00Z", Source: "persisted", Freshness: "current", Complete: true,
-		Result: llm.ProviderStatusPage{Routes: []json.RawMessage{}},
-		Cost:   llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"},
-	}, nil
+	response := providerStatusQueryResponse(request, "query-1")
+	response.Kind = llm.QueryProviderStatus
+	return response, nil
 }
 
 type v1Registry struct {
@@ -187,16 +183,7 @@ func TestUnconfiguredV1RuntimeFailsClosedForEveryOperation(t *testing.T) {
 			if err == nil {
 				t.Fatal("unconfigured v1 runtime unexpectedly succeeded")
 			}
-			var providerErr *provider.Error
-			if !errors.As(err, &providerErr) {
-				t.Fatalf("error = %T %v, want provider error", err, err)
-			}
-			if providerErr.Code != provider.CodeConfiguration ||
-				providerErr.Phase != provider.PhaseStateLoad ||
-				providerErr.Dispatch != provider.DispatchNotDispatched ||
-				providerErr.Retry != provider.RetryNever {
-				t.Fatalf("provider error = %#v, want configuration/state-load/not-dispatched/never", providerErr)
-			}
+			assertProviderError(t, err, provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever)
 			if got, want := err.Error(), "durable v1 runtime is not configured"; got != want {
 				t.Fatalf("error text = %q, want stable redacted message %q", got, want)
 			}

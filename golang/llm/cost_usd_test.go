@@ -11,10 +11,7 @@ import (
 func TestCostExactUSDJSONPreservesUnknownAndKnownFree(t *testing.T) {
 	free := pricing.MustUSD("0")
 	known := llm.Cost{Status: llm.CostStatusKnown, ReservedCostUSD: &free, ActualCostUSD: &free, Method: "catalog_usage"}
-	encoded, err := json.Marshal(known)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshal(t, known)
 	if string(encoded) != `{"actual_cost_usd":"0.000000000000000000","catalog_version":"","cost_status":"known","method":"catalog_usage","reserved_cost_usd":"0.000000000000000000"}` {
 		t.Fatalf("exact cost JSON = %s", encoded)
 	}
@@ -26,10 +23,7 @@ func TestCostExactUSDJSONPreservesUnknownAndKnownFree(t *testing.T) {
 		t.Fatalf("known zero cost did not round trip: %#v", decoded)
 	}
 	unknown := llm.Cost{Status: llm.CostStatusUnknown}
-	unknownJSON, err := json.Marshal(unknown)
-	if err != nil {
-		t.Fatal(err)
-	}
+	unknownJSON := mustMarshal(t, unknown)
 	if string(unknownJSON) != `{"actual_cost_usd":null,"catalog_version":"","cost_status":"unknown","method":"","reserved_cost_usd":null}` {
 		t.Fatalf("unknown cost JSON = %s", unknownJSON)
 	}

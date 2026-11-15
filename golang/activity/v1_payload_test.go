@@ -115,51 +115,18 @@ func TestV1PayloadCodecsRoundTripContractMatrix(t *testing.T) {
 		"query-spend-summary-response.json",
 	} {
 		t.Run(name, func(t *testing.T) {
-			data := readV1PayloadFixture(t, name)
-			var encoded []byte
-			var err error
+			codec := payloadRoundTrip(MarshalGenerateV1, UnmarshalGenerateV1)
 			switch {
 			case name == "compact-request-no-cache.json":
-				var value llm.CompactRequestV1
-				if err = json.Unmarshal(data, &value); err == nil {
-					encoded, err = MarshalCompactV1(value, limits)
-					if err == nil {
-						_, err = UnmarshalCompactV1(encoded, limits)
-					}
-				}
+				codec = payloadRoundTrip(MarshalCompactV1, UnmarshalCompactV1)
 			case strings.HasPrefix(name, "generate-response-"):
-				var value llm.GenerateResponseV1
-				if err = json.Unmarshal(data, &value); err == nil {
-					encoded, err = MarshalGenerateResponseV1(value, limits)
-					if err == nil {
-						_, err = UnmarshalGenerateResponseV1(encoded, limits)
-					}
-				}
+				codec = payloadRoundTrip(MarshalGenerateResponseV1, UnmarshalGenerateResponseV1)
 			case strings.HasPrefix(name, "query-") && strings.HasSuffix(name, "-response.json"):
-				var value llm.QueryResponseV1
-				if err = json.Unmarshal(data, &value); err == nil {
-					encoded, err = MarshalQueryResponseV1(value, limits)
-					if err == nil {
-						_, err = UnmarshalQueryResponseV1(encoded, limits)
-					}
-				}
+				codec = payloadRoundTrip(MarshalQueryResponseV1, UnmarshalQueryResponseV1)
 			case strings.HasPrefix(name, "query-"):
-				var value llm.QueryRequestV1
-				if err = json.Unmarshal(data, &value); err == nil {
-					encoded, err = MarshalQueryV1(value, limits)
-					if err == nil {
-						_, err = UnmarshalQueryV1(encoded, limits)
-					}
-				}
-			default:
-				var value llm.GenerateRequestV1
-				if err = json.Unmarshal(data, &value); err == nil {
-					encoded, err = MarshalGenerateV1(value, limits)
-					if err == nil {
-						_, err = UnmarshalGenerateV1(encoded, limits)
-					}
-				}
+				codec = payloadRoundTrip(MarshalQueryV1, UnmarshalQueryV1)
 			}
+			_, encoded, err := codec(readV1PayloadFixture(t, name), limits)
 			if err != nil {
 				t.Fatalf("matrix codec round trip: %v", err)
 			}

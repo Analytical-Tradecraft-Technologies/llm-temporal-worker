@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +13,7 @@ import (
 // endpoint and an optional direct OpenAI endpoint.
 func modelSyncConfig(t *testing.T) config.Config {
 	t.Helper()
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.Endpoints["openrouter-sync"] = config.EndpointConfig{
 		Family: "openai_chat", BaseURL: "https://openrouter.ai/api/v1", OutboundHosts: []string{"openrouter.ai"},
 		Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENROUTER_API_KEY"}, AccountRegion: "global", Timeout: config.Duration(115 * time.Second),
@@ -57,12 +53,7 @@ func TestModelSyncConfigValidates(t *testing.T) {
 	if err := value.Validate(); err != nil {
 		t.Fatalf("sync-only configuration rejected: %v", err)
 	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	if err := validateConfigSchema(t, value); err != nil {
 		t.Fatalf("sync-only configuration does not match the schema: %v", err)
 	}
 }
@@ -129,24 +120,15 @@ model_sync:
 	}
 	_ = value
 	unpinned := strings.Replace(data, "        provider_order: [ProviderA]\n", "", 1)
-	value, err = config.Load([]byte(unpinned))
-	if err != nil {
-		t.Fatal(err)
-	}
+	value = mustLoadConfig(t, []byte(unpinned))
 	if value.ModelSync.RefreshIntervalMin != config.Duration(55*time.Minute) || value.ModelSync.RefreshIntervalMax != config.Duration(65*time.Minute) {
 		t.Fatalf("refresh intervals = %v..%v, want 55m..65m", value.ModelSync.RefreshIntervalMin, value.ModelSync.RefreshIntervalMax)
 	}
 }
 
 func TestConfigWithoutModelSyncKeepsItsCanonicalDigest(t *testing.T) {
-	value, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	value := mustLoadConfig(t, exampleYAML(t))
+	encoded := mustMarshalJSON(t, value)
 	if strings.Contains(string(encoded), "model_sync") || strings.Contains(string(encoded), `"optional"`) {
 		t.Fatal("unused model-sync fields entered canonical configuration JSON")
 	}

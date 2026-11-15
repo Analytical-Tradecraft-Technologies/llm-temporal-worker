@@ -11,10 +11,7 @@ import (
 )
 
 func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout))
 	if err := loaded.Validate(); err == nil || !strings.Contains(err.Error(), "server.shutdown_timeout must exceed temporal.worker.graceful_stop_timeout + server.finalization_timeout") {
 		t.Fatalf("shutdown budget validation error = %v", err)
@@ -28,29 +25,15 @@ func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testin
 
 func TestConfigExampleMatchesJSONSchema(t *testing.T) {
 	configData := exampleYAML(t)
-	loaded, err := config.Load(configData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	loaded := mustLoadConfig(t, configData)
+	if err := validateConfigSchema(t, loaded); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
+	encoded := mustMarshalJSON(t, loaded)
 	var document map[string]any
 	if err := json.Unmarshal(encoded, &document); err != nil {
 		t.Fatal(err)
@@ -70,10 +53,7 @@ func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			aws["allow_mrsc"] = tc.value
-			encoded, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := mustMarshalJSON(t, document)
 			if err := compiled.Validate(encoded); (err == nil) != tc.valid {
 				t.Fatalf("allow_mrsc = %v: validation error = %v, want valid = %v", tc.value, err, tc.valid)
 			}
@@ -82,25 +62,14 @@ func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
 }
 
 func TestConfigSchemaAcceptsDevelopmentFileBlobStore(t *testing.T) {
-	loaded, err := config.Load(developmentFileBlobYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
+	if err := validateConfigSchema(t, loaded); err != nil {
 		t.Fatalf("development file blob store schema error: %v", err)
 	}
 }
 
 func TestConfigSchemaAcceptsDevelopmentMemoryState(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.Environment = "development"
 	loaded.State.Kind = config.StateKindMemory
 	loaded.State.Redis = config.RedisConfig{}
@@ -108,59 +77,30 @@ func TestConfigSchemaAcceptsDevelopmentMemoryState(t *testing.T) {
 	loaded.BlobStore.Kind = "memory"
 	loaded.BlobStore.File = config.FileBlobConfig{}
 	loaded.BlobStore.S3 = config.S3Config{}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	if err := validateConfigSchema(t, loaded); err != nil {
 		t.Fatalf("development memory state schema error: %v", err)
 	}
 }
 
 func TestConfigSchemaRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
-	loaded, err := config.Load(developmentFileBlobYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 	loaded.Environment = "production"
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err == nil {
+	if err := validateConfigSchema(t, loaded); err == nil {
 		t.Fatal("schema accepted a production file blob store")
 	}
 }
 
 func TestConfigSchemaRejectsProductionRedisWithoutTLS(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.State.Redis.TLS.Enabled = false
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err == nil {
+	if err := validateConfigSchema(t, loaded); err == nil {
 		t.Fatal("schema accepted a production Redis configuration without TLS")
 	}
 }
 
 func TestConfigSchemaAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
-	loaded, err := config.Load([]byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	loaded := mustLoadConfig(t, []byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)))
+	if err := validateConfigSchema(t, loaded); err != nil {
 		t.Fatalf("development Redis without TLS schema error: %v", err)
 	}
 }
@@ -188,15 +128,9 @@ func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			loaded, err := config.Load(developmentFileBlobYAML(t))
-			if err != nil {
-				t.Fatal(err)
-			}
+			loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 			test.input(&loaded)
-			encoded, err := json.Marshal(loaded)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := mustMarshalJSON(t, loaded)
 			if err := compiled.Validate(encoded); err == nil {
 				t.Fatal("schema accepted populated s3 fields beside a file blob store")
 			}
@@ -205,19 +139,13 @@ func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
 }
 
 func TestConfigValidationRejectsMixedBlobStoreBranches(t *testing.T) {
-	fileStore, err := config.Load(developmentFileBlobYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fileStore := mustLoadConfig(t, developmentFileBlobYAML(t))
 	fileStore.BlobStore.S3.Auth.Path = "/unexpected/credentials"
 	if err := fileStore.Validate(); err == nil {
 		t.Fatal("config validation accepted inactive s3 auth metadata beside a file blob store")
 	}
 
-	s3Store, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s3Store := mustLoadConfig(t, exampleYAML(t))
 	s3Store.BlobStore.File.Root = " "
 	if err := s3Store.Validate(); err == nil {
 		t.Fatal("config validation accepted a non-empty inactive file root beside an s3 blob store")
@@ -225,10 +153,7 @@ func TestConfigValidationRejectsMixedBlobStoreBranches(t *testing.T) {
 }
 
 func TestConfigValidationBoundsAdmissionRouteFields(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	model := loaded.Models["invoice-summarizer"]
 	model.Routes[0].ID = strings.Repeat("r", 257)
 	loaded.Models["invoice-summarizer"] = model
@@ -236,10 +161,7 @@ func TestConfigValidationBoundsAdmissionRouteFields(t *testing.T) {
 		t.Fatal("config accepted an oversized route identifier")
 	}
 
-	loaded, err = config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, exampleYAML(t))
 	model = loaded.Models["invoice-summarizer"]
 	model.Routes[0].Model = strings.Repeat("m", 257)
 	loaded.Models["invoice-summarizer"] = model
@@ -247,10 +169,7 @@ func TestConfigValidationBoundsAdmissionRouteFields(t *testing.T) {
 		t.Fatal("config accepted an oversized route model")
 	}
 
-	loaded, err = config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, exampleYAML(t))
 	endpoints := loaded.Endpoints
 	endpoint := endpoints["openai-prod"]
 	delete(endpoints, "openai-prod")
@@ -270,15 +189,9 @@ func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {
 	compiled := configSchema(t)
 	for _, root := range []string{"/", "relative/blobs", "/var/lib/../"} {
 		t.Run(root, func(t *testing.T) {
-			loaded, err := config.Load(developmentFileBlobYAML(t))
-			if err != nil {
-				t.Fatal(err)
-			}
+			loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 			loaded.BlobStore.File.Root = root
-			encoded, err := json.Marshal(loaded)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := mustMarshalJSON(t, loaded)
 			if err := compiled.Validate(encoded); err == nil {
 				t.Fatalf("schema accepted unsafe file blob root %q", root)
 			}
@@ -289,10 +202,7 @@ func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {
 func TestConfigValidationRejectsUnsafeFileBlobRoots(t *testing.T) {
 	for _, root := range []string{"/", "relative/blobs", "/var/lib/../"} {
 		t.Run(root, func(t *testing.T) {
-			loaded, err := config.Load(developmentFileBlobYAML(t))
-			if err != nil {
-				t.Fatal(err)
-			}
+			loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 			loaded.BlobStore.File.Root = root
 			if err := loaded.Validate(); err == nil {
 				t.Fatalf("config validation accepted unsafe file blob root %q", root)
@@ -303,15 +213,9 @@ func TestConfigValidationRejectsUnsafeFileBlobRoots(t *testing.T) {
 
 func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 	compiled := configSchema(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.Endpoints["openai-prod"].ServiceClasses["turbo"] = loaded.Endpoints["openai-prod"].ServiceClasses["standard"]
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshalJSON(t, loaded)
 	if err := compiled.Validate(encoded); err == nil {
 		t.Fatal("schema accepted a fourth public service class")
 	}
@@ -319,17 +223,11 @@ func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 
 func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 	compiled := configSchema(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	endpoint := loaded.Endpoints["anthropic-aws-us-east-1"]
 	endpoint.AWSWorkspaceID = ""
 	loaded.Endpoints["anthropic-aws-us-east-1"] = endpoint
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshalJSON(t, loaded)
 	if err := compiled.Validate(encoded); err == nil {
 		t.Fatal("schema accepted an Anthropic AWS gateway endpoint without a workspace ID")
 	}
@@ -337,10 +235,7 @@ func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 	endpoint.AWSWorkspaceID = "ws-example-123"
 	endpoint.Auth.Kind = "bearer_env"
 	loaded.Endpoints["anthropic-aws-us-east-1"] = endpoint
-	encoded, err = json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded = mustMarshalJSON(t, loaded)
 	if err := compiled.Validate(encoded); err == nil {
 		t.Fatal("schema accepted secret auth for an Anthropic AWS gateway endpoint")
 	}
@@ -354,48 +249,26 @@ func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 		"match:\n        project: invoice-processing\n        actor_prefix: service-\n        logical_model: invoice-summarizer\n        endpoint: openai-prod\n        service_class: priority",
 		1,
 	)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	loaded := mustLoadConfig(t, []byte(data))
+	if err := validateConfigSchema(t, loaded); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
 	data := strings.Replace(string(exampleYAML(t)), "family: openai_responses", "family: azure_openai_chat", 1)
-	loaded, err := config.Load([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(data))
 	if got := loaded.Endpoints["openai-prod"].Family; got != "azure_openai_chat" {
 		t.Fatalf("endpoint family = %q, want azure_openai_chat", got)
 	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled := configSchema(t)
-	if err := compiled.Validate(encoded); err != nil {
+	if err := validateConfigSchema(t, loaded); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
+	encoded := mustMarshalJSON(t, loaded)
 	compiled := configSchema(t)
 	for _, variant := range []string{"missing-cloud", "obsolete-sql"} {
 		t.Run(variant, func(t *testing.T) {
@@ -409,10 +282,7 @@ func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 			} else {
 				state["postgres"] = map[string]any{"database": "old_worker"}
 			}
-			invalid, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
+			invalid := mustMarshalJSON(t, document)
 			if err := compiled.Validate(invalid); err == nil {
 				t.Fatal("schema accepted invalid durable storage")
 			}
@@ -439,20 +309,14 @@ func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T
 				t.Fatalf("environment %q %s error = %v, want %q", environment, name, err, test.want)
 			}
 		}
-		loaded, err := config.Load(exampleYAML(t))
-		if err != nil {
-			t.Fatal(err)
-		}
+		loaded := mustLoadConfig(t, exampleYAML(t))
 		loaded.Environment, loaded.State.Redis.TLS.Enabled = environment, false
 		for index := range loaded.Budgets.Policies {
 			if loaded.Budgets.Policies[index].Match.Environment != "" {
 				loaded.Budgets.Policies[index].Match.Environment = environment
 			}
 		}
-		encoded, err := json.Marshal(loaded)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshalJSON(t, loaded)
 		if err := compiled.Validate(encoded); err == nil {
 			t.Fatalf("schema accepted environment %q with Redis TLS disabled", environment)
 		}
@@ -476,10 +340,7 @@ func TestRedisServiceMeshSecurityContract(t *testing.T) {
 		}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			value, err := config.Load(exampleYAML(t))
-			if err != nil {
-				t.Fatal(err)
-			}
+			value := mustLoadConfig(t, exampleYAML(t))
 			value.State.Redis.ServiceMesh = true
 			value.State.Redis.TLS = config.TLSConfig{}
 			value.State.Redis.Username = config.SecretRef{}
@@ -488,10 +349,7 @@ func TestRedisServiceMeshSecurityContract(t *testing.T) {
 			if err := value.Validate(); (err == nil) != test.valid {
 				t.Fatalf("validation = %v, valid = %v", err, test.valid)
 			}
-			data, err := json.Marshal(value)
-			if err != nil {
-				t.Fatal(err)
-			}
+			data := mustMarshalJSON(t, value)
 			compiled := configSchema(t)
 			if err := compiled.Validate(data); (err == nil) != test.valid {
 				t.Fatalf("schema validation = %v, valid = %v", err, test.valid)
@@ -509,10 +367,7 @@ func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
 	if !strings.Contains(base, anchor) {
 		t.Fatal("example no longer sets continuation.handle_keys[0].id to key-2026-07")
 	}
-	loaded, err := config.Load([]byte(base))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(base))
 	compiled := configSchema(t)
 	for _, id := range []string{
 		"key-2026-07",
@@ -532,10 +387,7 @@ func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
 		}
 		value := loaded.Clone()
 		value.Continuation.HandleKeys[0].ID = id
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshalJSON(t, value)
 		if schemaErr := compiled.Validate(encoded); (schemaErr == nil) != (keyringErr == nil) {
 			t.Errorf("id %q: schema validation = %v, NewKeyring() = %v", id, schemaErr, keyringErr)
 		}
@@ -558,17 +410,11 @@ func TestConfigValidationRejectsS3BlobAuthTheWorkerCannotBuild(t *testing.T) {
 			if err := auth.Validate("blob_store.s3.auth"); err != nil {
 				t.Fatalf("generic auth validation rejects %s: %v", kind, err)
 			}
-			loaded, err := config.Load(exampleYAML(t))
-			if err != nil {
-				t.Fatal(err)
-			}
+			loaded := mustLoadConfig(t, exampleYAML(t))
 			loaded.BlobStore.S3.Auth = auth
-			encoded, err := json.Marshal(loaded)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := mustMarshalJSON(t, loaded)
 			schemaErr := compiled.Validate(encoded)
-			err = loaded.Validate()
+			err := loaded.Validate()
 			if kind == "aws_default_chain" {
 				if err != nil || schemaErr != nil {
 					t.Fatalf("Validate = %v, schema = %v", err, schemaErr)

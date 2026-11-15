@@ -35,6 +35,29 @@ func childCheckpoint(handle, parent, tenant, operation, text string) Checkpoint 
 	return Checkpoint{Handle: Handle(handle), Parent: &parentHandle, Tenant: tenant, OperationKey: operation, Delta: []llm.Item{message(text)}}
 }
 
+func mustPutRoot(t testing.TB, graph *CheckpointGraph, checkpoint Checkpoint) {
+	t.Helper()
+	if err := graph.PutRoot(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustPutChild(t testing.TB, graph *CheckpointGraph, checkpoint Checkpoint) {
+	t.Helper()
+	if err := graph.PutChild(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustMaterialize(t testing.TB, graph *CheckpointGraph, tenant string, handle Handle) MaterializedState {
+	t.Helper()
+	state, err := graph.Materialize(tenant, handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
 func canonicalItemsForTest(t *testing.T, items []llm.Item) []byte {
 	t.Helper()
 	raw, err := json.Marshal(items)
@@ -54,9 +77,7 @@ func TestCheckpointGraphUsesInjectedClockForExpiry(t *testing.T) {
 	graph.Now = func() time.Time { return clock }
 	checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
 	checkpoint.ExpiresAt = clock.Add(time.Hour)
-	if err := graph.PutRoot(checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, checkpoint)
 	if _, err := graph.Materialize("tenant-a", "root"); err != nil {
 		t.Fatalf("materialize with injected live clock: %v", err)
 	}
@@ -69,15 +90,11 @@ func TestCheckpointGraphLiveChildOutlivesRetainedAncestor(t *testing.T) {
 	graph.Now = func() time.Time { return clock }
 	root := rootCheckpoint("root", "tenant-a", "operation-root")
 	root.ExpiresAt = start.Add(time.Hour)
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
 	clock = start.Add(50 * time.Minute)
 	child := childCheckpoint("child", "root", "tenant-a", "operation-child", "child")
 	child.ExpiresAt = clock.Add(time.Hour)
-	if err := graph.PutChild(child); err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, child)
 	clock = start.Add(70 * time.Minute)
 	if _, err := graph.Materialize("tenant-a", "child"); err != nil {
 		t.Fatalf("materialize live child of expired root: %v", err)
@@ -104,23 +121,11 @@ func TestCheckpointGraphLiveChildOutlivesRetainedAncestor(t *testing.T) {
 
 func TestCheckpointGraphRootLinearAndSiblingMaterialization(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{})
-	if err := graph.PutRoot(rootCheckpoint("root", "tenant-a", "op-root")); err != nil {
-		t.Fatal(err)
-	}
-	if err := graph.PutChild(childCheckpoint("one", "root", "tenant-a", "op-one", "one")); err != nil {
-		t.Fatal(err)
-	}
-	if err := graph.PutChild(childCheckpoint("two", "root", "tenant-a", "op-two", "two")); err != nil {
-		t.Fatal(err)
-	}
-	first, err := graph.Materialize("tenant-a", "one")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := graph.Materialize("tenant-a", "two")
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, rootCheckpoint("root", "tenant-a", "op-root"))
+	mustPutChild(t, graph, childCheckpoint("one", "root", "tenant-a", "op-one", "one"))
+	mustPutChild(t, graph, childCheckpoint("two", "root", "tenant-a", "op-two", "two"))
+	first := mustMaterialize(t, graph, "tenant-a", "one")
+	second := mustMaterialize(t, graph, "tenant-a", "two")
 	if first.Depth != 1 || second.Depth != 1 || len(first.Items) != 2 || len(second.Items) != 2 {
 		t.Fatalf("unexpected materialized branches: %#v %#v", first, second)
 	}
@@ -134,9 +139,7 @@ func TestCheckpointGraphRootLinearAndSiblingMaterialization(t *testing.T) {
 
 func TestCheckpointGraphScopesOperationKeysByTenantAndProject(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{})
-	if err := graph.PutRoot(rootCheckpoint("tenant-a-root", "tenant-a", "same-operation")); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, rootCheckpoint("tenant-a-root", "tenant-a", "same-operation"))
 	// Operation keys are stable retry identities within a caller scope, not
 	// globally unique values. Independent tenants may safely reuse a key.
 	otherTenant := rootCheckpoint("tenant-b-root", "tenant-b", "same-operation")
@@ -161,9 +164,7 @@ func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
 		Name:        "lookup",
 		InputSchema: []byte(`{"type":"object"}`),
 	}})
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
 	branches := []struct {
 		handle string
 		text   string
@@ -173,17 +174,12 @@ func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
 		{handle: "three", text: "three"},
 	}
 	for _, branch := range branches {
-		if err := graph.PutChild(childCheckpoint(branch.handle, "root", "tenant-a", "op-"+branch.handle, branch.text)); err != nil {
-			t.Fatal(err)
-		}
+		mustPutChild(t, graph, childCheckpoint(branch.handle, "root", "tenant-a", "op-"+branch.handle, branch.text))
 	}
 
 	materialized := make(map[string]MaterializedState, len(branches))
 	for _, branch := range branches {
-		state, err := graph.Materialize("tenant-a", Handle(branch.handle))
-		if err != nil {
-			t.Fatal(err)
-		}
+		state := mustMaterialize(t, graph, "tenant-a", Handle(branch.handle))
 		if len(state.Items) != 2 || state.Items[0].(llm.Message).Content[0].(llm.TextPart).Text != "root" || state.Items[1].(llm.Message).Content[0].(llm.TextPart).Text != branch.text {
 			t.Fatalf("branch %s materialized unexpected items: %#v", branch.handle, state.Items)
 		}
@@ -214,10 +210,7 @@ func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
 	}
 
 	for _, branch := range branches {
-		state, err := graph.Materialize("tenant-a", Handle(branch.handle))
-		if err != nil {
-			t.Fatal(err)
-		}
+		state := mustMaterialize(t, graph, "tenant-a", Handle(branch.handle))
 		if got := state.Items[0].(llm.Message).Content[0].(llm.TextPart).Text; got != "root" {
 			t.Fatalf("mutating branch one changed graph root for %s to %q", branch.handle, got)
 		}
@@ -271,20 +264,11 @@ func TestSettingsPatchOmittedSetAndClearRemainDistinct(t *testing.T) {
 
 func TestMaterializationCarriesEveryAncestorAndSnapshotMatchesReplay(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{})
-	if err := graph.PutRoot(rootCheckpoint("root", "tenant-a", "op-root")); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, rootCheckpoint("root", "tenant-a", "op-root"))
 	parent := childCheckpoint("one", "root", "tenant-a", "op-one", "one")
-	if err := graph.PutChild(parent); err != nil {
-		t.Fatal(err)
-	}
-	if err := graph.PutChild(childCheckpoint("two", "one", "tenant-a", "op-two", "two")); err != nil {
-		t.Fatal(err)
-	}
-	full, err := graph.Materialize("tenant-a", "two")
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, parent)
+	mustPutChild(t, graph, childCheckpoint("two", "one", "tenant-a", "op-two", "two"))
+	full := mustMaterialize(t, graph, "tenant-a", "two")
 	snapshot := NewCheckpointSnapshot(full)
 	leaf := childCheckpoint("three", "two", "tenant-a", "op-three", "three")
 	snapshot.Items = append(snapshot.Items, message("three"))
@@ -293,13 +277,8 @@ func TestMaterializationCarriesEveryAncestorAndSnapshotMatchesReplay(t *testing.
 	snapshot.Digest = snapshot.digest()
 	leaf.Delta = nil // the self-contained snapshot already includes this node
 	leaf.Snapshot = snapshot
-	if err := graph.PutChild(leaf); err != nil {
-		t.Fatal(err)
-	}
-	withSnapshot, err := graph.Materialize("tenant-a", "three")
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, leaf)
+	withSnapshot := mustMaterialize(t, graph, "tenant-a", "three")
 	if !reflect.DeepEqual(full.Items, withSnapshot.Items[:len(full.Items)]) || withSnapshot.Depth != 3 {
 		t.Fatalf("snapshot replay diverged: full=%#v snapshot=%#v", full, withSnapshot)
 	}
@@ -429,24 +408,18 @@ func TestMaterializationRejectsUnmatchedToolFrontierAndLimits(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxItems: 2})
 	root := rootCheckpoint("root", "tenant-a", "op-root")
 	root.Delta = []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"x"}`)}}
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
 	if _, err := graph.Materialize("tenant-a", "root"); err != nil {
 		t.Fatalf("root with pending tool call should be materializable: %v", err)
 	}
 	bad := childCheckpoint("bad", "root", "tenant-a", "op-bad", "message before result")
-	if err := graph.PutChild(bad); err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, bad)
 	if _, err := graph.Materialize("tenant-a", "bad"); err == nil {
 		t.Fatal("child began inside an unmatched tool exchange")
 	}
 	good := childCheckpoint("good", "root", "tenant-a", "op-good", "")
 	good.Delta = []llm.Item{llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "ok"}}}}
-	if err := graph.PutChild(good); err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, good)
 	if _, err := graph.Materialize("tenant-a", "good"); err != nil {
 		t.Fatalf("matching tool result rejected: %v", err)
 	}
@@ -459,13 +432,8 @@ func TestMaterializationAllowsParallelToolCalls(t *testing.T) {
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"one"}`)},
 		llm.ToolCall{ID: "call-2", Name: "lookup", Arguments: []byte(`{"q":"two"}`)},
 	}
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
-	materialized, err := graph.Materialize("tenant-a", "parallel")
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
+	materialized := mustMaterialize(t, graph, "tenant-a", "parallel")
 	if !reflect.DeepEqual(materialized.PendingToolCalls, []string{"call-1", "call-2"}) {
 		t.Fatalf("pending tool calls = %#v", materialized.PendingToolCalls)
 	}
@@ -478,18 +446,14 @@ func TestMaterializationRejectsToolCallAfterParallelResultsBegin(t *testing.T) {
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"one"}`)},
 		llm.ToolCall{ID: "call-2", Name: "lookup", Arguments: []byte(`{"q":"two"}`)},
 	}
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
 	parent := Handle("interleaved")
 	child := childCheckpoint("bad-interleaved", parent.String(), "tenant-a", "op-interleaved-child", "")
 	child.Delta = []llm.Item{
 		llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "one"}}},
 		llm.ToolCall{ID: "call-3", Name: "lookup", Arguments: []byte(`{"q":"three"}`)},
 	}
-	if err := graph.PutChild(child); err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, child)
 	if _, err := graph.Materialize("tenant-a", child.Handle); err == nil {
 		t.Fatal("materialization accepted a new tool call after parallel results began")
 	}
@@ -505,26 +469,16 @@ func TestMaterializationAllowsTextWithinParallelToolResponse(t *testing.T) {
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "Checking another source"}}},
 		llm.ToolCall{ID: "b", Name: "lookup", Arguments: []byte("{}")},
 	}
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
-	materialized, err := graph.Materialize("tenant-a", root.Handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
+	materialized := mustMaterialize(t, graph, "tenant-a", root.Handle)
 	if !reflect.DeepEqual(materialized.PendingToolCalls, []string{"a", "b"}) {
 		t.Fatalf("pending = %v", materialized.PendingToolCalls)
 	}
 	child := childCheckpoint("mixed-child", root.Handle.String(), "tenant-a", "mixed-child-op", "")
 	child.Delta = []llm.Item{llm.ToolResult{CallID: "b"}, llm.ToolResult{CallID: "a"}}
 	child.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "Done"}}}}
-	if err := graph.PutChild(child); err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := graph.Materialize("tenant-a", child.Handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustPutChild(t, graph, child)
+	resolved := mustMaterialize(t, graph, "tenant-a", child.Handle)
 	if len(resolved.PendingToolCalls) != 0 {
 		t.Fatalf("pending = %v", resolved.PendingToolCalls)
 	}

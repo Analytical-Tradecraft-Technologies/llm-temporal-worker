@@ -36,16 +36,23 @@ func TestToolBatchAcceptsModelTurnContent(t *testing.T) {
 		{"unmatched result after state", []llm.Item{call("a"), thinking, result("b")}, nil, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := ValidateTranscript(test.items)
-			if test.invalid {
-				if err == nil {
-					t.Fatal("accepted invalid transcript")
-				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(got, test.pending) {
-				t.Fatalf("pending=%v error=%v", got, err)
-			}
+			assertTranscriptPending(t, test.items, test.pending, test.invalid)
 		})
+	}
+}
+
+// assertTranscriptPending checks ValidateTranscript rejects items when invalid
+// is set and otherwise reports pending as the open tool calls.
+func assertTranscriptPending(t *testing.T, items []llm.Item, pending []string, invalid bool) {
+	t.Helper()
+	got, err := ValidateTranscript(items)
+	if invalid {
+		if err == nil {
+			t.Fatal("accepted invalid transcript")
+		}
+		return
+	}
+	if err != nil || !reflect.DeepEqual(got, pending) {
+		t.Fatalf("pending=%v error=%v", got, err)
 	}
 }

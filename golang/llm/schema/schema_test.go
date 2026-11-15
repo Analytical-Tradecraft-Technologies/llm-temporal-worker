@@ -102,14 +102,7 @@ func TestPublicAPISchemasCompileLocally(t *testing.T) {
 }
 
 func TestGenerateResponseSchemaAcceptsExactUSDWithoutLegacyMoneyFields(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", "generate-response.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(data)
-	if err != nil {
-		t.Fatalf("parse response schema: %v", err)
-	}
+	compiled := readV1Schema(t, "generate-response.schema.json")
 	instance := []byte(`{
   "api_version": "llm.temporal/v1",
   "operation_key": "exact-usd",

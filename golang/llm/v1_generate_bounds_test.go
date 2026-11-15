@@ -114,10 +114,7 @@ func TestGenerateRequestV1RejectsValuesBeyondSchemaBounds(t *testing.T) {
 			if _, err := json.Marshal(request); err == nil {
 				t.Fatal("Marshal() accepted a value beyond the schema bound")
 			}
-			encoded, err := json.Marshal(wire)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := mustMarshal(t, wire)
 			var decoded llm.GenerateRequestV1
 			if err := json.Unmarshal(encoded, &decoded); err == nil {
 				t.Fatal("Unmarshal() accepted a value beyond the schema bound")

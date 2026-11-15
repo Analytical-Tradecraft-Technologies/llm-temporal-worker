@@ -106,18 +106,12 @@ func TestCanonicalJSONStringsMatchJSONMarshal(t *testing.T) {
 		values = append(values, "a"+string([]byte{byte(b)})+"z")
 	}
 	for _, value := range values {
-		input, err := json.Marshal(map[string]string{value: value})
-		if err != nil {
-			t.Fatal(err)
-		}
+		input := mustMarshal(t, map[string]string{value: value})
 		var decoded map[string]string
 		if err := json.Unmarshal(input, &decoded); err != nil {
 			t.Fatal(err)
 		}
-		want, err := json.Marshal(decoded)
-		if err != nil {
-			t.Fatal(err)
-		}
+		want := mustMarshal(t, decoded)
 		got, err := llm.CanonicalJSON(input)
 		if err != nil {
 			t.Fatal(err)

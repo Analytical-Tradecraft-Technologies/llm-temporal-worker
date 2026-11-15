@@ -40,10 +40,7 @@ func TestCheckpointGraphLargeCheckpointConflictIsDetected(t *testing.T) {
 	if err := graph.PutRoot(conflicting); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflicting large checkpoint returned %v, want %v", err, ErrConflict)
 	}
-	materialized, err := graph.Materialize("tenant-a", "root")
-	if err != nil {
-		t.Fatal(err)
-	}
+	materialized := mustMaterialize(t, graph, "tenant-a", "root")
 	if got := materialized.Items[0].(llm.Message).Content[0].(llm.TextPart).Text[0]; got != 'a' {
 		t.Fatalf("retained content first byte = %q, want 'a'", got)
 	}

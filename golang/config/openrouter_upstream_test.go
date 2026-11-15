@@ -26,10 +26,7 @@ func withoutOpenRouterUpstreamOverrides(t *testing.T) {
 
 func TestOpenRouterUpstreamDefaultsToCore5WithNoFilters(t *testing.T) {
 	withoutOpenRouterUpstreamOverrides(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if loaded.OpenRouterUpstream != nil {
 		t.Fatalf("unset upstream settings = %+v, want omitted so the digest is unchanged", loaded.OpenRouterUpstream)
 	}
@@ -44,10 +41,7 @@ func TestOpenRouterUpstreamEnvironmentOverrides(t *testing.T) {
 	t.Setenv(config.EnvOpenRouterRequireNativePrecision, "true")
 	t.Setenv(config.EnvOpenRouterRequireZeroRetention, "false")
 	t.Setenv(config.EnvOpenRouterDenyPromptTraining, "1")
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	want := config.OpenRouterUpstreamConfig{Countries: "Core2", RequireNativePrecision: true, DenyPromptTraining: true}
 	if got := loaded.OpenRouterUpstreamSettings(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("upstream settings = %+v, want %+v", got, want)
@@ -87,10 +81,7 @@ func TestOpenRouterProviderLocationsLayerTheConfigOverTheEnvironment(t *testing.
 	withoutOpenRouterUpstreamOverrides(t)
 	t.Setenv(config.EnvOpenRouterProviderLocations, "google-vertex=US, xai=US,google-ai-studio=US")
 	data := append(exampleYAML(t), []byte("openrouter_upstream:\n  provider_locations:\n    xai: [CA, GB]\n    google-ai-studio: []\n    acme: [FR]\n")...)
-	loaded, err := config.Load(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, data)
 	want := map[string][]string{"google-vertex": {"US"}, "xai": {"CA", "GB"}, "acme": {"FR"}}
 	if got := loaded.OpenRouterUpstreamSettings().ProviderLocations; !reflect.DeepEqual(got, want) {
 		t.Fatalf("provider locations = %v, want %v", got, want)
@@ -98,10 +89,7 @@ func TestOpenRouterProviderLocationsLayerTheConfigOverTheEnvironment(t *testing.
 
 	withoutOpenRouterUpstreamOverrides(t)
 	t.Setenv(config.EnvOpenRouterProviderLocations, "")
-	loaded, err = config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded = mustLoadConfig(t, exampleYAML(t))
 	if loaded.OpenRouterUpstream != nil {
 		t.Fatalf("an empty environment value left upstream settings %+v", loaded.OpenRouterUpstream)
 	}

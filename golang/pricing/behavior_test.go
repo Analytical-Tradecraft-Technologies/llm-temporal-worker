@@ -32,10 +32,7 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 		},
 		Version: "entry-v1",
 	}
-	catalog, err := CompileUSD("catalog-v1", []Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCompileUSD(t, "catalog-v1", []Entry{entry})
 
 	resolver := NewResolver(catalog)
 	quote, err := resolver.Resolve(Query{
@@ -158,10 +155,7 @@ func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
 	}
 
 	valid.EffectiveFrom, valid.EffectiveUntil = from, from.Add(time.Hour)
-	catalog, err := CompileUSD("v1", []Entry{valid})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCompileUSD(t, "v1", []Entry{valid})
 	if _, err := catalog.Resolve(Query{Provider: valid.Provider, Family: valid.Family, EndpointID: valid.EndpointID, Region: valid.Region, Model: valid.Model, ProviderTier: valid.ProviderTier, At: from.Add(time.Hour)}); !errors.Is(err, ErrNoActivePrice) {
 		t.Fatalf("price at exclusive end = %v", err)
 	}

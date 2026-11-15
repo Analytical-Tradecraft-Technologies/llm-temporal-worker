@@ -25,10 +25,7 @@ func withoutRedisPrefixOverride(t *testing.T) {
 
 func TestRedisKeyPrefixDefaultsToLlmtw(t *testing.T) {
 	withoutRedisPrefixOverride(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if got, want := loaded.State.Redis.KeyPrefix, "llmtw"; got != want {
 		t.Fatalf("default Redis key prefix = %q, want %q", got, want)
 	}
@@ -36,10 +33,7 @@ func TestRedisKeyPrefixDefaultsToLlmtw(t *testing.T) {
 
 func TestRedisKeyPrefixEnvironmentOverrideIsEffectiveBeforeValidation(t *testing.T) {
 	t.Setenv("LLMTW_REDIS_KEY_PREFIX", "tenant-a.v1")
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if got, want := loaded.State.Redis.KeyPrefix, "tenant-a.v1"; got != want {
 		t.Fatalf("environment Redis key prefix = %q, want %q", got, want)
 	}

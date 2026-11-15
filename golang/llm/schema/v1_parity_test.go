@@ -145,6 +145,16 @@ func parityGenerateRequests() map[string]llm.GenerateRequestV1 {
 	return requests
 }
 
+// addVariants adds to records one copy of base per variant, named prefix plus
+// the variant name, with set applying the variant to the copy.
+func addVariants[R, V any](records map[string]R, base R, prefix string, variants map[string]V, set func(*R, V)) {
+	for name, value := range variants {
+		record := base
+		set(&record, value)
+		records[prefix+name] = record
+	}
+}
+
 func parityGenerateResponses() map[string]llm.GenerateResponseV1 {
 	parent := llm.CheckpointHandle("ckp_v1.parent")
 	amount := "0.5"
@@ -176,11 +186,7 @@ func parityGenerateResponses() map[string]llm.GenerateResponseV1 {
 		response.Checkpoint = checkpoint
 		responses["checkpoint-"+name] = response
 	}
-	for name, cache := range parityCaches() {
-		response := base
-		response.Cache = cache
-		responses["cache-"+name] = response
-	}
+	addVariants(responses, base, "cache-", parityCaches(), func(response *llm.GenerateResponseV1, value llm.CacheDispositionV1) { response.Cache = value })
 	for name, route := range map[string]*llm.RouteFacts{
 		"empty":   {},
 		"partial": {RouteID: "route", ResolvedModel: "model-1"},
@@ -190,21 +196,9 @@ func parityGenerateResponses() map[string]llm.GenerateResponseV1 {
 		response.Route = route
 		responses["route-"+name] = response
 	}
-	for name, usage := range parityUsages() {
-		response := base
-		response.Usage = usage
-		responses["usage-"+name] = response
-	}
-	for name, cost := range parityCosts() {
-		response := base
-		response.Cost = cost
-		responses["cost-"+name] = response
-	}
-	for name, diagnostics := range parityDiagnostics() {
-		response := base
-		response.Diagnostics = diagnostics
-		responses["diagnostics-"+name] = response
-	}
+	addVariants(responses, base, "usage-", parityUsages(), func(response *llm.GenerateResponseV1, value *llm.Usage) { response.Usage = value })
+	addVariants(responses, base, "cost-", parityCosts(), func(response *llm.GenerateResponseV1, value llm.CostV1) { response.Cost = value })
+	addVariants(responses, base, "diagnostics-", parityDiagnostics(), func(response *llm.GenerateResponseV1, value []llm.Diagnostic) { response.Diagnostics = value })
 	return responses
 }
 
@@ -227,26 +221,10 @@ func parityCompactResponses() map[string]llm.CompactResponseV1 {
 		response.Provenance = json.RawMessage(provenance)
 		responses["provenance-"+name] = response
 	}
-	for name, cache := range parityCaches() {
-		response := base
-		response.Cache = cache
-		responses["cache-"+name] = response
-	}
-	for name, usage := range parityUsages() {
-		response := base
-		response.Usage = usage
-		responses["usage-"+name] = response
-	}
-	for name, cost := range parityCosts() {
-		response := base
-		response.Cost = cost
-		responses["cost-"+name] = response
-	}
-	for name, diagnostics := range parityDiagnostics() {
-		response := base
-		response.Diagnostics = diagnostics
-		responses["diagnostics-"+name] = response
-	}
+	addVariants(responses, base, "cache-", parityCaches(), func(response *llm.CompactResponseV1, value llm.CacheDispositionV1) { response.Cache = value })
+	addVariants(responses, base, "usage-", parityUsages(), func(response *llm.CompactResponseV1, value *llm.Usage) { response.Usage = value })
+	addVariants(responses, base, "cost-", parityCosts(), func(response *llm.CompactResponseV1, value llm.CostV1) { response.Cost = value })
+	addVariants(responses, base, "diagnostics-", parityDiagnostics(), func(response *llm.CompactResponseV1, value []llm.Diagnostic) { response.Diagnostics = value })
 	return responses
 }
 

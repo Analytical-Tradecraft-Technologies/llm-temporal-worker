@@ -20,6 +20,21 @@ func (handler queryHandlerFunc) ExecuteQuery(ctx context.Context, request llm.Qu
 	return handler(ctx, request)
 }
 
+// echoQueryHandler answers every request with queryResponse.
+func echoQueryHandler(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return queryResponse(request), nil
+}
+
+// failingQueryHandler fails every request with err.
+func failingQueryHandler(err error) queryHandlerFunc {
+	return func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+		return llm.QueryResponseV1{}, err
+	}
+}
+
+// allowQuery authorizes every query.
+func allowQuery(context.Context, Authorization) error { return nil }
+
 type typedQueryHandlerFunc func(context.Context, QueryRequest, *BoundCursorClaims) (QueryResponse, error)
 
 func (handler typedQueryHandlerFunc) ExecuteTypedQuery(ctx context.Context, request QueryRequest, claims *BoundCursorClaims) (QueryResponse, error) {
@@ -67,28 +82,26 @@ func queryResponseForKind(request llm.QueryRequestV1) llm.QueryResponseV1 {
 
 func stringPointer(value string) *string { return &value }
 
-func providerRouteRows(count int) []json.RawMessage {
+// numberedRows formats count JSON rows from format, whose one %d verb is the
+// row index.
+func numberedRows(count int, format string) []json.RawMessage {
 	rows := make([]json.RawMessage, count)
 	for index := range rows {
-		rows[index] = json.RawMessage(fmt.Sprintf(`{"route_id":"route-%d","provider":"provider","endpoint":"endpoint","availability":"available","observed_at":"2026-07-20T00:00:00Z","stale_after":"2026-07-21T00:00:00Z"}`, index))
+		rows[index] = json.RawMessage(fmt.Sprintf(format, index))
 	}
 	return rows
+}
+
+func providerRouteRows(count int) []json.RawMessage {
+	return numberedRows(count, `{"route_id":"route-%d","provider":"provider","endpoint":"endpoint","availability":"available","observed_at":"2026-07-20T00:00:00Z","stale_after":"2026-07-21T00:00:00Z"}`)
 }
 
 func modelInventoryRows(count int) []json.RawMessage {
-	rows := make([]json.RawMessage, count)
-	for index := range rows {
-		rows[index] = json.RawMessage(fmt.Sprintf(`{"provider":"provider","endpoint":"endpoint","provider_model_id":"model-%d","lifecycle":"available","capabilities":[],"complete_snapshot":true}`, index))
-	}
-	return rows
+	return numberedRows(count, `{"provider":"provider","endpoint":"endpoint","provider_model_id":"model-%d","lifecycle":"available","capabilities":[],"complete_snapshot":true}`)
 }
 
 func creditStatusRows(count int) []json.RawMessage {
-	rows := make([]json.RawMessage, count)
-	for index := range rows {
-		rows[index] = json.RawMessage(fmt.Sprintf(`{"provider":"provider","endpoint":"endpoint-%d","credit_state":"ok","billing_state":"ok","evidence_source":"unknown"}`, index))
-	}
-	return rows
+	return numberedRows(count, `{"provider":"provider","endpoint":"endpoint-%d","credit_state":"ok","billing_state":"ok","evidence_source":"unknown"}`)
 }
 
 func typedProviderRequest() QueryRequest {
@@ -203,7 +216,7 @@ func TestQueryServiceRejectsInconsistentPaginationCompletion(t *testing.T) {
 				response := queryResponse(got)
 				test.mutate(&response)
 				return response, nil
-			}), func(context.Context, Authorization) error { return nil })
+			}), allowQuery)
 			if _, err := service.Execute(context.Background(), request); err == nil {
 				t.Fatal("inconsistent pagination response was accepted")
 			}
@@ -223,7 +236,7 @@ func TestQueryServiceRejectsInconsistentPaginationCompletion(t *testing.T) {
 				response := queryResponseForKind(got)
 				response.Complete = false
 				return response, nil
-			}), func(context.Context, Authorization) error { return nil })
+			}), allowQuery)
 			if _, err := service.Execute(context.Background(), request); err == nil {
 				t.Fatal("incomplete snapshot response was accepted")
 			}
@@ -236,7 +249,7 @@ func TestQueryServiceAuditsValidatedResponseBeforeReturning(t *testing.T) {
 	var audit QueryAuditRecord
 	service := testQueryService(queryHandlerFunc(func(_ context.Context, got llm.QueryRequestV1) (llm.QueryResponseV1, error) {
 		return queryResponse(got), nil
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 	service.Audit = func(_ context.Context, got QueryAuditRecord) error {
 		audit = got
 		return nil
@@ -273,9 +286,7 @@ func TestQueryServiceAuditsValidatedResponseBeforeReturning(t *testing.T) {
 
 func TestQueryServiceAuditFailureDoesNotFailSuccessfulRead(t *testing.T) {
 	for _, auditErr := range []error{errors.New("audit unavailable"), context.DeadlineExceeded} {
-		service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-			return queryResponse(request), nil
-		}), func(context.Context, Authorization) error { return nil })
+		service := testQueryService(queryHandlerFunc(echoQueryHandler), allowQuery)
 		calls := 0
 		service.Audit = func(context.Context, QueryAuditRecord) error { calls++; return auditErr }
 
@@ -291,7 +302,7 @@ func TestQueryServiceDoesNotAuditInvalidResponse(t *testing.T) {
 		response := queryResponse(request)
 		response.OperationKey = "different-operation"
 		return response, nil
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 	called := false
 	service.Audit = func(context.Context, QueryAuditRecord) error {
 		called = true
@@ -325,7 +336,7 @@ func TestQueryServiceRejectsResponseRowsAboveRequestedPageSize(t *testing.T) {
 				response := queryResponseForKind(request)
 				response.Result = test.result
 				return response, nil
-			}), func(context.Context, Authorization) error { return nil })
+			}), allowQuery)
 
 			if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page contains 2 rows; limit is 1") {
 				t.Fatalf("Execute() error = %v, want response page-size bound", err)
@@ -341,7 +352,7 @@ func TestQueryServiceAppliesDefaultResponsePageSize(t *testing.T) {
 		response := queryResponse(request)
 		response.Result = llm.ProviderStatusPage{Routes: providerRouteRows(101)}
 		return response, nil
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 
 	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page contains 101 rows; limit is 100") {
 		t.Fatalf("Execute() error = %v, want default response page-size bound", err)
@@ -351,7 +362,7 @@ func TestQueryServiceAppliesDefaultResponsePageSize(t *testing.T) {
 func TestQueryServiceRawHandlerAdmitsAllQueryKinds(t *testing.T) {
 	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
 		return queryResponseForKind(request), nil
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 
 	for _, typedRequest := range allTypedQueryRequests() {
 		t.Run(string(typedRequest.Kind), func(t *testing.T) {
@@ -387,7 +398,7 @@ func TestQueryServiceTypedHandlerAdmitsAllQueryKinds(t *testing.T) {
 			}
 			return response, nil
 		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Authorize:   allowQuery,
 		CursorCodec: &CursorCodec{Key: []byte("all-five-query-key")},
 		Clock:       func() time.Time { return base },
 	}
@@ -414,7 +425,7 @@ func TestQueryServiceRejectsUnsupportedKindAndAuthorization(t *testing.T) {
 	request.Kind = llm.QueryKind("future_query")
 	service := testQueryService(queryHandlerFunc(func(_ context.Context, got llm.QueryRequestV1) (llm.QueryResponseV1, error) {
 		return queryResponse(got), nil
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 	if _, err := service.Execute(context.Background(), request); !errors.Is(err, ErrQueryUnsupported) {
 		t.Fatalf("unsupported kind error = %v", err)
 	}
@@ -425,16 +436,14 @@ func TestQueryServiceRejectsUnsupportedKindAndAuthorization(t *testing.T) {
 	}
 	request = queryRequest()
 	request.Query = json.RawMessage(`{"page_size":1001}`)
-	service.Authorize = func(context.Context, Authorization) error { return nil }
+	service.Authorize = allowQuery
 	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page_size") {
 		t.Fatalf("page-size bound error = %v", err)
 	}
 }
 
 func TestQueryServiceCursorsAreBoundToScopeAndFilter(t *testing.T) {
-	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return queryResponse(request), nil
-	}), func(context.Context, Authorization) error { return nil })
+	service := testQueryService(queryHandlerFunc(echoQueryHandler), allowQuery)
 	request := queryRequest()
 	issued := service.now()
 	token, err := service.SignCursor(request, "route-2", issued)
@@ -459,9 +468,7 @@ func TestQueryServiceCursorsAreBoundToScopeAndFilter(t *testing.T) {
 }
 
 func TestQueryServiceDecodeCursorReturnsAuthenticatedPosition(t *testing.T) {
-	service := testQueryService(queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return queryResponse(request), nil
-	}), func(context.Context, Authorization) error { return nil })
+	service := testQueryService(queryHandlerFunc(echoQueryHandler), allowQuery)
 	request := queryRequest()
 	issued := service.now()
 	token, err := service.SignCursor(request, `{"after":"provider\u0000endpoint","horizon":"2026-07-20T00:00:00Z"}`, issued)
@@ -483,7 +490,7 @@ func TestQueryServiceValidatesOutgoingCursorAgainstFreshTime(t *testing.T) {
 	clockCalls := 0
 	var service *QueryService
 	service = &QueryService{
-		Authorize: func(context.Context, Authorization) error { return nil },
+		Authorize: allowQuery,
 		CursorKey: []byte("query-test-key"),
 		Clock: func() time.Time {
 			clockCalls++
@@ -517,7 +524,7 @@ func TestQueryServiceRejectsResponseMismatchAndUnsafeScope(t *testing.T) {
 		response := queryResponse(request)
 		response.OperationKey = "other"
 		return response, nil
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("response mismatch error = %v", err)
 	}
@@ -531,9 +538,7 @@ func TestQueryServiceRejectsResponseMismatchAndUnsafeScope(t *testing.T) {
 func TestQueryServiceClassifiesRawHandlerFailureAsRetryableStateUnavailable(t *testing.T) {
 	request := queryRequest()
 	backendErr := errors.New("postgres unavailable: dsn=postgres://secret")
-	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return llm.QueryResponseV1{}, backendErr
-	}), func(context.Context, Authorization) error { return nil })
+	service := testQueryService(failingQueryHandler(backendErr), allowQuery)
 
 	_, err := service.Execute(context.Background(), request)
 	var providerErr *provider.Error
@@ -552,9 +557,7 @@ func TestQueryServiceClassifiesRawHandlerFailureAsRetryableStateUnavailable(t *t
 }
 
 func TestQueryServiceMapsExpiredProviderViewToPermanentCursorError(t *testing.T) {
-	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return llm.QueryResponseV1{}, ErrProviderViewExpired
-	}), func(context.Context, Authorization) error { return nil })
+	service := testQueryService(failingQueryHandler(ErrProviderViewExpired), allowQuery)
 	_, err := service.Execute(context.Background(), queryRequest())
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) {
@@ -574,9 +577,7 @@ func TestQueryServiceMapsExpiredProviderViewToPermanentCursorError(t *testing.T)
 func TestQueryServicePreservesPreclassifiedProviderFailure(t *testing.T) {
 	request := queryRequest()
 	providerErr := provider.NewError(provider.CodePermissionDenied, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever, "query access denied")
-	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return llm.QueryResponseV1{}, providerErr
-	}), func(context.Context, Authorization) error { return nil })
+	service := testQueryService(failingQueryHandler(providerErr), allowQuery)
 
 	_, err := service.Execute(context.Background(), request)
 	if err != providerErr {
@@ -589,7 +590,7 @@ func TestQueryServicePreservesCallerCancellation(t *testing.T) {
 	service := testQueryService(queryHandlerFunc(func(handlerCtx context.Context, _ llm.QueryRequestV1) (llm.QueryResponseV1, error) {
 		cancel()
 		return llm.QueryResponseV1{}, handlerCtx.Err()
-	}), func(context.Context, Authorization) error { return nil })
+	}), allowQuery)
 	_, err := service.Execute(ctx, queryRequest())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want caller cancellation", err)
@@ -601,9 +602,7 @@ func TestQueryServicePreservesCallerCancellation(t *testing.T) {
 }
 
 func TestQueryServiceMapsChildDeadlineToRetryableStateUnavailable(t *testing.T) {
-	service := testQueryService(queryHandlerFunc(func(context.Context, llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-		return llm.QueryResponseV1{}, context.DeadlineExceeded
-	}), func(context.Context, Authorization) error { return nil })
+	service := testQueryService(failingQueryHandler(context.DeadlineExceeded), allowQuery)
 	_, err := service.Execute(context.Background(), queryRequest())
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) {
@@ -631,7 +630,7 @@ func TestQueryServiceTypedHandlerBindsCursorClaimsAndValidatesOutgoingCursor(t *
 				return &next
 			}()), nil
 		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Authorize:   allowQuery,
 		CursorCodec: codec,
 		Clock:       func() time.Time { return base },
 	}
@@ -674,7 +673,7 @@ func TestQueryServiceTypedHandlerRejectsChangedContinuationHorizon(t *testing.T)
 			}
 			return typedProviderResponse(got, &next), nil
 		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Authorize:   allowQuery,
 		CursorCodec: codec,
 		Clock:       func() time.Time { return base },
 	}
@@ -699,10 +698,8 @@ func TestQueryServiceRawHandlerAcceptsTypedCursorCodec(t *testing.T) {
 	typed.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: &token}}
 	request := typedRequestWire(t, typed)
 	service := &QueryService{
-		Handler: queryHandlerFunc(func(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
-			return queryResponse(request), nil
-		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Handler:     queryHandlerFunc(echoQueryHandler),
+		Authorize:   allowQuery,
 		CursorCodec: codec,
 		Clock:       func() time.Time { return base },
 	}
@@ -718,7 +715,7 @@ func TestQueryServiceTypedCursorBridgeRejectsInvalidClaims(t *testing.T) {
 		TypedHandler: typedQueryHandlerFunc(func(_ context.Context, request QueryRequest, _ *BoundCursorClaims) (QueryResponse, error) {
 			return typedProviderResponse(request, nil), nil
 		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Authorize:   allowQuery,
 		CursorCodec: codec,
 		Clock:       func() time.Time { return base },
 	}
@@ -810,7 +807,7 @@ func TestQueryServiceTypedCursorBridgeRejectsInvalidOutgoingCursor(t *testing.T)
 			invalid := QueryCursor("not-a-signed-cursor")
 			return typedProviderResponse(request, &invalid), nil
 		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Authorize:   allowQuery,
 		CursorCodec: &CursorCodec{Key: []byte("typed-query-key")},
 		Clock:       func() time.Time { return base },
 	}
@@ -827,7 +824,7 @@ func TestQueryServiceTypedHandlerResponseContractErrorIsNotMappedToStateUnavaila
 			response.OperationKey = ""
 			return response, nil
 		}),
-		Authorize:   func(context.Context, Authorization) error { return nil },
+		Authorize:   allowQuery,
 		CursorCodec: &CursorCodec{Key: []byte("typed-query-key")},
 		Clock:       func() time.Time { return base },
 	}

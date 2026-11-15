@@ -15,20 +15,9 @@ func TestGenerateActivityKeepsHeartbeatAliveDuringBlockedGenerate(t *testing.T) 
 	ticker := newManualHeartbeatTicker()
 	heartbeater := newRecordingHeartbeater()
 	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := Activities{
-		Engine:                     value,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(value, heartbeater, ticker)
 
-	done := make(chan generateActivityResult, 1)
-	go func() {
-		response, err := activities.Generate(context.Background(), testKeepalivePayload())
-		done <- generateActivityResult{response: response, err: err}
-	}()
+	done := startKeepaliveGenerate(context.Background(), activities)
 	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
 
 	// Keepalive facts bypass lifecycle de-duplication, so two identical
@@ -65,20 +54,9 @@ func TestGenerateActivityMapsKeepaliveFailureToAmbiguousAndJoins(t *testing.T) {
 	heartbeater.failurePhase = heartbeatProviderWaitPhase
 	heartbeater.failure = keepaliveErr
 	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := Activities{
-		Engine:                     value,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(value, heartbeater, ticker)
 
-	done := make(chan generateActivityResult, 1)
-	go func() {
-		response, err := activities.Generate(context.Background(), testKeepalivePayload())
-		done <- generateActivityResult{response: response, err: err}
-	}()
+	done := startKeepaliveGenerate(context.Background(), activities)
 	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
 	ticker.Tick()
 	heartbeater.WaitForPhase(t, heartbeatProviderWaitPhase, 1)
@@ -99,20 +77,9 @@ func TestGenerateActivityDoesNotReturnSuccessWhenInFlightKeepaliveFails(t *testi
 	keepaliveErr := errors.New("heartbeat transport failed after Generate completed")
 	heartbeater := newGatedFailureHeartbeater(keepaliveErr)
 	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := Activities{
-		Engine:                     value,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(value, heartbeater, ticker)
 
-	done := make(chan generateActivityResult, 1)
-	go func() {
-		response, err := activities.Generate(context.Background(), testKeepalivePayload())
-		done <- generateActivityResult{response: response, err: err}
-	}()
+	done := startKeepaliveGenerate(context.Background(), activities)
 	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
 	ticker.Tick()
 	waitForKeepaliveEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
@@ -135,20 +102,9 @@ func TestGenerateActivityIgnoresSelfStopCancellationFromInFlightKeepalive(t *tes
 	ticker := newManualHeartbeatTicker()
 	heartbeater := newGatedCancellationHeartbeater()
 	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := Activities{
-		Engine:                     value,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(value, heartbeater, ticker)
 
-	done := make(chan generateActivityResult, 1)
-	go func() {
-		response, err := activities.Generate(context.Background(), testKeepalivePayload())
-		done <- generateActivityResult{response: response, err: err}
-	}()
+	done := startKeepaliveGenerate(context.Background(), activities)
 	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
 	ticker.Tick()
 	waitForKeepaliveEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
@@ -171,21 +127,10 @@ func TestGenerateActivityCancellationStopsKeepalive(t *testing.T) {
 	ticker := newManualHeartbeatTicker()
 	heartbeater := newRecordingHeartbeater()
 	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := Activities{
-		Engine:                     value,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(value, heartbeater, ticker)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan generateActivityResult, 1)
-	go func() {
-		response, err := activities.Generate(ctx, testKeepalivePayload())
-		done <- generateActivityResult{response: response, err: err}
-	}()
+	done := startKeepaliveGenerate(ctx, activities)
 	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
 	cancel()
 
@@ -201,14 +146,7 @@ func TestGenerateActivityStopsKeepaliveWhenGeneratePanics(t *testing.T) {
 	heartbeater := newRecordingHeartbeater()
 	panicValue := errors.New("provider fixture panic")
 	value := newPanickingGenerateEngine(panicValue)
-	activities := Activities{
-		Engine:                     value,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(value, heartbeater, ticker)
 
 	panicked := make(chan any, 1)
 	go func() {
@@ -234,6 +172,30 @@ func TestGenerateActivityStopsKeepaliveWhenGeneratePanics(t *testing.T) {
 type generateActivityResult struct {
 	response GenerateResponse
 	err      error
+}
+
+// keepaliveActivities wires engine and heartbeater to Activities whose
+// one-second keepalive is driven by ticker.
+func keepaliveActivities(engine llm.Engine, heartbeater Heartbeater, ticker heartbeatTicker) *Activities {
+	return &Activities{
+		Engine:                     engine,
+		Heartbeater:                heartbeater,
+		HeartbeatKeepaliveInterval: time.Second,
+		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
+			return ticker
+		},
+	}
+}
+
+// startKeepaliveGenerate runs Generate with the keepalive payload in the
+// background and returns the channel its result arrives on.
+func startKeepaliveGenerate(ctx context.Context, activities *Activities) <-chan generateActivityResult {
+	done := make(chan generateActivityResult, 1)
+	go func() {
+		response, err := activities.Generate(ctx, testKeepalivePayload())
+		done <- generateActivityResult{response: response, err: err}
+	}()
+	return done
 }
 
 type blockingGenerateEngine struct {

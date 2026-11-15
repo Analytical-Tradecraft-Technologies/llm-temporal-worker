@@ -11,10 +11,7 @@ func TestRouteCircuitDefiniteFailuresReplayAndRecovery(t *testing.T) {
 	at := time.Now().UTC()
 	apply := func(offset int, availability Availability, code string) StatusEvent {
 		o := StatusObservation{ConfigDigest: sha256.Sum256([]byte("config")), EndpointAccountHMAC: sha256.Sum256([]byte("account")), EvidenceDigest: sha256.Sum256([]byte(code)), RouteID: "route", EndpointID: "endpoint", Provider: "provider", EndpointFamily: "family", ConfigEpoch: "epoch", ObservedAt: at.Add(time.Duration(offset) * time.Second), ExpiresAt: at.Add(time.Minute), Source: SourceInference, Availability: availability, Credit: CreditOK, Billing: BillingOK, SafeErrorCode: code}
-		e, err := NewStatusEvent(o)
-		if err != nil {
-			t.Fatal(err)
-		}
+		e := mustStatusEvent(t, o)
 		if !status.Apply(e) {
 			t.Fatal("observation not applied")
 		}

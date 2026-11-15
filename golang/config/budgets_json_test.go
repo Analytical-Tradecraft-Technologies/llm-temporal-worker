@@ -2,7 +2,6 @@ package config_test
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,10 +16,7 @@ func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(yamlSnapshot.Config().Budgets)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshalJSON(t, yamlSnapshot.Config().Budgets)
 	start := strings.Index(string(original), "\nbudgets:\n")
 	end := strings.Index(string(original), "\ncontinuation:\n")
 	if start < 0 || end < start {
@@ -49,10 +45,7 @@ func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 		t.Fatal("accepted two budget sources")
 	}
 	withoutLease := strings.Replace(string(original), "  reservation_lease: 15m\n", "", 1)
-	loaded, err := config.Load([]byte(withoutLease))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, []byte(withoutLease))
 	if time.Duration(loaded.State.ReservationLease) != 15*time.Minute {
 		t.Fatalf("lease default = %v", loaded.State.ReservationLease)
 	}

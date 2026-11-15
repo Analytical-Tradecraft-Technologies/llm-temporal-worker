@@ -20,6 +20,15 @@ func observation(at time.Time) StatusObservation {
 	}
 }
 
+func mustStatusEvent(t *testing.T, value StatusObservation) StatusEvent {
+	t.Helper()
+	event, err := NewStatusEvent(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return event
+}
+
 func TestStatusEventRejectsUnsafeProviderText(t *testing.T) {
 	value := observation(time.Unix(100, 0))
 	value.ProviderCode = "429 quota\n"
@@ -55,10 +64,7 @@ func TestRouteStatusCreditIncidentIsStickyUntilAuthoritativeClear(t *testing.T) 
 	value := observation(base)
 	value.Credit, value.Billing = CreditExhausted, BillingIssue
 	value.Source, value.ProviderCode = SourceManagementAPI, "insufficient_quota"
-	event, err := NewStatusEvent(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	event := mustStatusEvent(t, value)
 	if !status.Apply(event) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
 		t.Fatalf("incident projection = %#v", status)
 	}
@@ -67,10 +73,7 @@ func TestRouteStatusCreditIncidentIsStickyUntilAuthoritativeClear(t *testing.T) 
 	}
 	value = observation(base.Add(time.Second))
 	value.Source, value.Credit, value.Billing = SourceInference, CreditOK, BillingOK
-	event, err = NewStatusEvent(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	event = mustStatusEvent(t, value)
 	if !status.Apply(event) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
 		t.Fatalf("inference observation cleared incident: %#v", status)
 	}
@@ -79,19 +82,13 @@ func TestRouteStatusCreditIncidentIsStickyUntilAuthoritativeClear(t *testing.T) 
 	}
 	value = observation(base.Add(1250 * time.Millisecond))
 	value.Source, value.Credit, value.Billing, value.ProviderCode = SourceInference, CreditOK, BillingOK, "quota_restored"
-	event, err = NewStatusEvent(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	event = mustStatusEvent(t, value)
 	if !status.Apply(event) || !status.CreditConfirmedAt.Equal(base) {
 		t.Fatalf("inference restore changed credit confirmation = %v, want %v", status.CreditConfirmedAt, base)
 	}
 	value = observation(base.Add(1500 * time.Millisecond))
 	value.Source, value.Credit, value.Billing = SourceStartupProbe, CreditUnknown, BillingUnknown
-	event, err = NewStatusEvent(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	event = mustStatusEvent(t, value)
 	if !status.Apply(event) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
 		t.Fatalf("unknown health observation cleared incident: %#v", status)
 	}
@@ -100,10 +97,7 @@ func TestRouteStatusCreditIncidentIsStickyUntilAuthoritativeClear(t *testing.T) 
 	}
 	value = observation(base.Add(2 * time.Second))
 	value.Source, value.Credit, value.Billing, value.ProviderCode = SourceManagementAPI, CreditOK, BillingOK, "quota_restored"
-	event, err = NewStatusEvent(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	event = mustStatusEvent(t, value)
 	if !status.Apply(event) || status.Credit != CreditOK || status.Billing != BillingOK {
 		t.Fatalf("authoritative clear not applied: %#v", status)
 	}
@@ -118,10 +112,7 @@ func TestRouteStatusInferenceProviderCodeRefreshesConfirmation(t *testing.T) {
 	incident := observation(base)
 	incident.Credit, incident.Billing = CreditExhausted, BillingIssue
 	incident.Source, incident.ProviderCode = SourceManagementAPI, "insufficient_quota"
-	first, err := NewStatusEvent(incident)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustStatusEvent(t, incident)
 	if !status.Apply(first) {
 		t.Fatal("initial incident was not applied")
 	}
@@ -129,10 +120,7 @@ func TestRouteStatusInferenceProviderCodeRefreshesConfirmation(t *testing.T) {
 	withEvidence.Source = SourceInference
 	withEvidence.Credit, withEvidence.Billing = CreditExhausted, BillingIssue
 	withEvidence.ProviderCode = "billing_hard_limit"
-	second, err := NewStatusEvent(withEvidence)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := mustStatusEvent(t, withEvidence)
 	if !status.Apply(second) {
 		t.Fatal("provider-evidence inference was not applied")
 	}
@@ -157,10 +145,7 @@ func TestRouteStatusRejectsStaleEvent(t *testing.T) {
 func TestRouteStatusRejectsForeignConfigAfterEpochChange(t *testing.T) {
 	base := time.Unix(300, 0)
 	status := RouteStatus{}
-	first, err := NewStatusEvent(observation(base))
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustStatusEvent(t, observation(base))
 	if !status.Apply(first) {
 		t.Fatal("first event rejected")
 	}
@@ -170,10 +155,7 @@ func TestRouteStatusRejectsForeignConfigAfterEpochChange(t *testing.T) {
 	foreign.ConfigEpoch = "epoch-2"
 	foreign.RouteID = first.RouteID
 	foreign.EndpointID = first.EndpointID
-	foreignEvent, err := NewStatusEvent(foreign)
-	if err != nil {
-		t.Fatal(err)
-	}
+	foreignEvent := mustStatusEvent(t, foreign)
 	if status.Apply(foreignEvent) {
 		t.Fatal("event from a different configuration digest was applied")
 	}
@@ -188,10 +170,7 @@ func TestRouteStatusPermissionDeniedCountsTowardThreshold(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		denied := observation(base.Add(time.Duration(i) * time.Second))
 		denied.Availability, denied.SafeErrorCode = AvailabilityUnavailable, "permission_denied"
-		event, err := NewStatusEvent(denied)
-		if err != nil {
-			t.Fatal(err)
-		}
+		event := mustStatusEvent(t, denied)
 		if !status.Apply(event) {
 			t.Fatal("permission denial rejected")
 		}
@@ -206,27 +185,18 @@ func TestRouteStatusLaterFailureDoesNotShortenOpenHold(t *testing.T) {
 	status := RouteStatus{}
 	auth := observation(base)
 	auth.Availability, auth.SafeErrorCode, auth.ExpiresAt = AvailabilityUnavailable, "authentication", base.Add(24*time.Hour)
-	authEvent, err := NewStatusEvent(auth)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authEvent := mustStatusEvent(t, auth)
 	if !status.Apply(authEvent) || status.Circuit != CircuitOpen {
 		t.Fatalf("authentication failure did not open the circuit: %#v", status)
 	}
 	transient := observation(base.Add(time.Second))
 	transient.Availability, transient.SafeErrorCode = AvailabilityUnavailable, "provider_unavailable"
-	transientEvent, err := NewStatusEvent(transient)
-	if err != nil {
-		t.Fatal(err)
-	}
+	transientEvent := mustStatusEvent(t, transient)
 	if !status.Apply(transientEvent) || status.Circuit != CircuitOpen || !status.StaleAfter.Equal(auth.ExpiresAt) {
 		t.Fatalf("later failure shortened the open hold: %#v", status)
 	}
 	success := observation(base.Add(2 * time.Second))
-	successEvent, err := NewStatusEvent(success)
-	if err != nil {
-		t.Fatal(err)
-	}
+	successEvent := mustStatusEvent(t, success)
 	if !status.Apply(successEvent) || status.Circuit != CircuitClosed || !status.StaleAfter.Equal(success.ExpiresAt) {
 		t.Fatalf("success did not close the circuit: %#v", status)
 	}

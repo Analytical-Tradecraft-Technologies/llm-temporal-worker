@@ -2,6 +2,17 @@ package compaction
 
 import "testing"
 
+// mustEvaluateTrigger runs policy.EvaluateTrigger and fails the test on an
+// error.
+func mustEvaluateTrigger(t *testing.T, policy Policy, input TriggerInput) TriggerDecision {
+	t.Helper()
+	decision, err := policy.EvaluateTrigger(input)
+	if err != nil {
+		t.Fatalf("EvaluateTrigger(%+v): %v", input, err)
+	}
+	return decision
+}
+
 func TestPolicyEvaluateTriggerUsesProviderAndPolicyLimits(t *testing.T) {
 	policy := DefaultPolicy()
 	decision, err := policy.EvaluateTrigger(TriggerInput{
@@ -47,10 +58,7 @@ func TestPolicyEvaluateTriggerPreservesHysteresisAndReasonPrecedence(t *testing.
 		t.Fatalf("reason = %q, want token precedence", decision.Reason)
 	}
 
-	decision, err = policy.EvaluateTrigger(TriggerInput{ProjectedTokens: policy.TargetTokens})
-	if err != nil {
-		t.Fatalf("evaluate below trigger: %v", err)
-	}
+	decision = mustEvaluateTrigger(t, policy, TriggerInput{ProjectedTokens: policy.TargetTokens})
 	if decision.ShouldCompact {
 		t.Fatal("target threshold alone must not retrigger compaction")
 	}
@@ -62,24 +70,15 @@ func TestPolicyEvaluateTriggerPreservesHysteresisAndReasonPrecedence(t *testing.
 // apply to such a request.
 func TestPolicyEvaluateTriggerSkipsTokensCompactionCannotRemove(t *testing.T) {
 	policy := DefaultPolicy()
-	decision, err := policy.EvaluateTrigger(TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: policy.TriggerTokens})
-	if err != nil {
-		t.Fatalf("evaluate trigger: %v", err)
-	}
+	decision := mustEvaluateTrigger(t, policy, TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: policy.TriggerTokens})
 	if decision.ShouldCompact {
 		t.Fatalf("compaction requested although the retained request reaches the trigger: %+v", decision)
 	}
-	decision, err = policy.EvaluateTrigger(TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: policy.TriggerTokens - 1})
-	if err != nil {
-		t.Fatalf("evaluate trigger: %v", err)
-	}
+	decision = mustEvaluateTrigger(t, policy, TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: policy.TriggerTokens - 1})
 	if !decision.ShouldCompact || decision.Reason != TriggerReasonTokens {
 		t.Fatalf("removable tokens above the trigger did not compact: %+v", decision)
 	}
-	decision, err = policy.EvaluateTrigger(TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: 2 * policy.TriggerTokens, ContinuationExpired: true})
-	if err != nil {
-		t.Fatalf("evaluate trigger: %v", err)
-	}
+	decision = mustEvaluateTrigger(t, policy, TriggerInput{ProjectedTokens: 2 * policy.TriggerTokens, RetainedTokens: 2 * policy.TriggerTokens, ContinuationExpired: true})
 	if !decision.ShouldCompact || decision.Reason != TriggerReasonContinuation {
 		t.Fatalf("skipped token trigger hid a later limit: %+v", decision)
 	}

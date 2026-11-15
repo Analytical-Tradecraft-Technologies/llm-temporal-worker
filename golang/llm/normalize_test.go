@@ -11,14 +11,8 @@ import (
 
 func TestNormalizeRequestIsIdempotent(t *testing.T) {
 	request := readRequestFixture(t, "minimal.json")
-	first, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := llm.NormalizeRequest(first)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustNormalizeRequest(t, request)
+	second := mustNormalizeRequest(t, first)
 	firstJSON := mustMarshal(t, first)
 	secondJSON := mustMarshal(t, second)
 	if !bytes.Equal(firstJSON, secondJSON) {
@@ -31,10 +25,7 @@ func TestNormalizeRequestIsIdempotent(t *testing.T) {
 
 func TestNormalizeRequestRetainsFallbackOrder(t *testing.T) {
 	request := readRequestFixture(t, "full.json")
-	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	normalized := mustNormalizeRequest(t, request)
 	want := []llm.ServiceClass{llm.ServiceClassStandard}
 	if len(normalized.ServiceClassFallbacks) != len(want) || normalized.ServiceClassFallbacks[0] != want[0] {
 		t.Fatalf("fallbacks = %#v, want %#v", normalized.ServiceClassFallbacks, want)
@@ -45,14 +36,8 @@ func TestRequestDigestIgnoresOperationKey(t *testing.T) {
 	first := readRequestFixture(t, "full.json")
 	second := first
 	second.OperationKey = "another-operation"
-	one, err := llm.RequestDigest(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	two, err := llm.RequestDigest(second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	one := requestDigest(t, first)
+	two := requestDigest(t, second)
 	if one != two {
 		t.Fatalf("operation_key changed request digest: %x != %x", one, two)
 	}
@@ -67,14 +52,8 @@ func TestRequestDigestCanonicalizesObjectKeyOrder(t *testing.T) {
 	second.Extensions = map[string]json.RawMessage{
 		"payload": json.RawMessage(`{"a":{"x":true,"y":false},"b":2}`),
 	}
-	one, err := llm.RequestDigest(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	two, err := llm.RequestDigest(second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	one := requestDigest(t, first)
+	two := requestDigest(t, second)
 	if one != two {
 		t.Fatalf("object key order changed request digest: %x != %x", one, two)
 	}
@@ -85,14 +64,8 @@ func TestRequestDigestUsesDecodedBytes(t *testing.T) {
 	secondData := bytes.Replace(firstData, []byte(`"AQI="`), []byte(`"A\u0051I="`), 1)
 	first := unmarshalRequest(t, firstData)
 	second := unmarshalRequest(t, secondData)
-	one, err := llm.RequestDigest(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	two, err := llm.RequestDigest(second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	one := requestDigest(t, first)
+	two := requestDigest(t, second)
 	if one != two {
 		t.Fatalf("equivalent decoded bytes changed request digest: %x != %x", one, two)
 	}
@@ -128,10 +101,7 @@ func TestRequestDigestChangesForSemanticContextAndRouteAuthorization(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			request := base
 			test.mutate(&request)
-			got, err := llm.RequestDigest(request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := requestDigest(t, request)
 			if got == baseDigest {
 				t.Fatalf("%s mutation did not change digest %x", test.name, got)
 			}
@@ -160,4 +130,13 @@ func requestDigest(t *testing.T, request llm.Request) [32]byte {
 		t.Fatal(err)
 	}
 	return digest
+}
+
+func mustNormalizeRequest(t *testing.T, request llm.Request) llm.Request {
+	t.Helper()
+	normalized, err := llm.NormalizeRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return normalized
 }
