@@ -64,12 +64,28 @@ An attempt is stuck when nothing will run its next step. Check, in order:
    request's `llm.request.execute.v1` workflow and its budget child. If an
    administrator terminated it, or it timed out, nothing will settle the
    attempt: its pending row and its claimed reservation remain until a
-   recovery tool runs them. A tool that lists and recovers such attempts is
-   tracked in
-   [#1544](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1544)
-   and is not in this release. Until it lands, record the workflow and run
-   IDs, leave the records in place, and escalate to the service owner. Do not
-   start a second workflow with a new operation key for the same work.
+   recovery tool runs them. List such requests with the read-only
+   [`pending-list`](../reference/cli.md#pending-list); a `recovery_due` line
+   is an ambiguous attempt past its 15-minute window, and `settled_unknown`
+   means it is already charged in full:
+
+   ```sh
+   llm-temporal-worker pending-list --config /etc/llmtw/config.yaml --stale-after 1h
+   ```
+
+   Dry-run, then apply,
+   [`pending-recover`](../reference/cli.md#pending-recover) for the stale
+   orphans. It tries idempotency recovery once and otherwise charges the
+   attempt at its full reservation; it never submits, refunds or deletes:
+
+   ```sh
+   llm-temporal-worker pending-recover --config /etc/llmtw/config.yaml --stale --stale-after 1h
+   llm-temporal-worker pending-recover --config /etc/llmtw/config.yaml --stale --stale-after 1h --apply
+   ```
+
+   Follow [terminated workflows and pending-request recovery](terminated-workflow-pending-recovery.md)
+   for the full procedure, dispositions and error codes. Do not start a
+   second workflow with a new operation key for the same work.
 2. **Is settlement failing?** The settling step returns `state_unavailable`
    (Temporal type `llm_provider_transient`, counted in
    `llmtw_activity_failure_total{origin="worker"}`) while Redis cannot accept
@@ -112,6 +128,10 @@ Use these instead:
 - Temporal history of the request workflow and its Activity results, which
   show each execution state (`outcome_unknown`, `budget_wait`, `acquired`,
   `failed`).
+- `pending-list`, which reads each pending request's durable record and
+  reports its `execution_stage`, `paid`, `settled`, `disposition`, `action`
+  and `not_before`, without request content. It reads cloud records, not the
+  Redis reservation.
 - The `provider attempt failed` warning for the attempt's route, endpoint and
   cause.
 - `llmtw_cost_status_total{status="unknown"}` and
@@ -137,8 +157,6 @@ the incident, outside the worker, and keep the charge.
 
 ## Remaining implementation
 
-- Listing and recovering pending attempts of terminated workflows:
-  [#1544](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1544).
 - Exact-cost reconciliation:
   [#819](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/819).
 - A budget status reader over the durable ledger:

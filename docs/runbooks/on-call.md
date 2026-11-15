@@ -70,7 +70,8 @@ These hold in every runbook. A runbook may add more.
   [configuration rollback](configuration-and-credentials.md#configuration-rollback-for-process-lifetime-fields).
 - **Never terminate or reset request workflows** to clear an alert. A
   terminated workflow leaves its pending attempt and charge with nothing
-  watching them ([#1544](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1544)).
+  watching them until an operator runs
+  [pending-request recovery](terminated-workflow-pending-recovery.md).
 - **Keep content out of the incident.** Do not copy prompts, outputs,
   credentials, provider request bodies or raw provider identifiers into
   tickets or chat. Logs and metrics already carry only bounded fields.
@@ -130,6 +131,7 @@ as any follow-up that alters its procedure.
 | Uncertain provider outcomes | [Stuck ambiguous attempt](stuck-ambiguous-attempt.md) |
 | Budgets, cost and Redis growth | [Budget and cost](budget-and-cost.md) |
 | Redis budget data loss and failover | [Redis budget authority and recovery](redis-budget-generation-recovery.md) |
+| Terminated or timed-out request workflows | [Terminated workflows and pending-request recovery](terminated-workflow-pending-recovery.md) |
 | Providers, routes and catalogs | [Providers and routing](provider-and-routing.md) |
 | Redis readiness, DynamoDB, S3 and corrupt state | [State stores](state-stores.md) |
 | Temporal, stuck Activities and backlog | [Temporal](temporal.md) |

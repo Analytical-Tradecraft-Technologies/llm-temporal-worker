@@ -108,6 +108,7 @@ runbook:
 - [Configuration reload, rollback and credential rotation](runbooks/configuration-and-credentials.md)
 - [Access: scope denials and unusual access](runbooks/access.md)
 - [Redis budget authority and recovery](runbooks/redis-budget-generation-recovery.md)
+- [Terminated workflows and pending-request recovery](runbooks/terminated-workflow-pending-recovery.md)
 
 ## v1 completion gate
 
