@@ -4,7 +4,9 @@ Redis is the authoritative budget store for admission. Cloud request records
 durably hold every paid attempt's reservation, claim evidence and settlement,
 and are the source for rebuilding lost Redis accounting. The Redis Stream is a
 coordination feed and cannot be replayed as permission to spend. Losing
-accounting data must not turn paid work into fresh capacity.
+accounting data must not turn paid work into fresh capacity. For severity,
+escalation and the rules that apply to every incident, start from
+[on-call escalation and severity](on-call.md).
 
 ## Supported initialization and checks
 

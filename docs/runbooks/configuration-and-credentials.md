@@ -1,0 +1,181 @@
+# Configuration and credentials
+
+Runbooks for failed configuration reloads, provider credential rotation and
+rolling back a change to a process-lifetime setting. How reload works, and
+which settings it may change, is in
+[configuration reload](../reference/cli.md#configuration-reload). Start from
+[on-call escalation and severity](on-call.md) for the rules that apply to
+every incident.
+
+The worker reloads its `--config` file on `SIGHUP` and when its file watcher
+sees a complete replacement. The watcher watches only the configuration file:
+a changed secret file, or a changed environment variable, is not noticed on
+its own. Environment variables are not re-read during reload.
+
+## Failed configuration reload
+
+- **Signal:** `llmtw_config_reload_total{outcome="failure"}` increases and the
+  `configuration reload failed` error log names a bounded `cause` (`read`,
+  `yaml`, `validation`, `secret`, `process_lifetime`, `catalog`, `dependency`,
+  `canceled` or `internal`) and, for `validation` and `process_lifetime`, the
+  `config_field` schema path, such as `state.redis.key_prefix`.
+- **Readiness reason:** none. A failed reload leaves the active snapshot and
+  readiness unchanged; the worker keeps serving the previous configuration.
+- **Default severity:** SEV3 when nothing urgent depended on the change; SEV2
+  when the change was needed to fix an incident; SEV1 when the cause is
+  `process_lifetime` on a durable identity field (see
+  [configuration rollback](#configuration-rollback-for-process-lifetime-fields)).
+- **Safe action:**
+  1. Read `cause` and `config_field` from the log.
+  2. `yaml` or `validation`: run
+     `llm-temporal-worker validate-config --config <file>` on the same file for
+     the full message, fix it, and replace the file again.
+  3. `secret`: a referenced environment variable or secret file could not be
+     read. Check the mounted Secret and its path.
+  4. `catalog`: a catalog file could not be read, does not match its configured
+     `sha256`, or does not decode. Recompute the digest of the reviewed file.
+  5. `dependency`: replacement Redis, cloud request or blob clients failed
+     their checks. Fix the dependency, then send `SIGHUP`.
+  6. `process_lifetime`: the change needs a rollout, not a reload. Either
+     revert the file, or plan a rollout that is allowed for that field (see
+     the next sections).
+  7. Confirm success with `llmtw_config_reload_total{outcome="success"}` and a
+     `configuration reloaded` log carrying the new `config_version`; compare
+     it with `validate-config`'s `config version` for the intended file.
+- **Forbidden:** working around a `process_lifetime` rejection by restarting
+  pods one at a time with the new value. That runs replicas with different
+  durable identities against the same traffic.
+
+## Provider credential rotation
+
+Rotate a provider credential so the old and new values overlap: the provider
+must accept both until every replica uses the new one.
+
+- **Signal:** a planned rotation, or `provider attempt failed` warnings with
+  `error_code=authentication` (Temporal type `llm_authentication`) for one
+  `endpoint`, often with `llmtw_route_held_total{endpoint,reason="circuit_open"}`
+  as route health holds the route.
+- **Readiness reason:** none. Provider endpoints are not readiness
+  dependencies.
+- **Default severity:** SEV2 when a credential is already rejected; planned
+  rotations are not incidents.
+- **Safe action:** follow the procedure for the endpoint's `auth.kind`.
+  1. `bearer_env` or `header_env` (the endpoint reads an environment
+     variable): environment variables are fixed for the life of the process
+     and a reload does not re-read them, so `SIGHUP` does not rotate these.
+     Issue the new key at the provider, update the Kubernetes Secret behind
+     the variable, and do a rolling restart of the Deployment. Revoke the old
+     key only after every replica has restarted.
+  2. `aws_default_chain` or `azure_default_credential`: the worker builds the
+     SDK default chain (`LoadDefaultConfig` for AWS,
+     `NewDefaultAzureCredential` for Azure), and what to do depends on which
+     source the chain picked in the pod.
+     - Refreshable workload or managed identity (for AWS: a web-identity
+       token file such as IRSA, EKS Pod Identity, or the container or instance
+       role; for Azure: workload identity or managed identity). The SDK
+       fetches fresh temporary credentials itself. Rotate the role or identity
+       in the cloud provider; no worker action is needed.
+     - Environment-backed static credentials (for AWS:
+       `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`; for Azure:
+       `AZURE_CLIENT_SECRET` with its client and tenant IDs). The chain reads
+       them from the process environment when it is built, and they do not
+       change when the Kubernetes Secret behind them changes. Treat them like
+       `bearer_env`: issue the new key, update the Secret, do a rolling
+       restart of the Deployment, and revoke the old key only after every
+       replica has restarted.
+     If you cannot tell which source a pod uses, assume it is
+     environment-backed and restart before revoking.
+  3. File secrets (`kind: file`) that are reloadable, such as
+     `state.redis.username` and `state.redis.password`: update the mounted
+     Secret, wait until the kubelet has projected the new file into every pod
+     (a Secret mounted with `subPath` is never updated in place and needs a
+     restart instead), then send `SIGHUP` to each worker process. The reload reads the file
+     again, checks Redis with the new credential, and only then publishes the
+     snapshot; a failure keeps the old snapshot and logs `cause=secret` or
+     `cause=dependency`. Remove the old Redis credential only after every
+     replica logged `configuration reloaded`.
+  4. Verify: `configuration reloaded` (for `SIGHUP`) or a clean start (for a
+     restart) on every replica, no new `error_code=authentication` warnings for
+     the endpoint, and `llmtw_provider_attempt_total{endpoint,outcome="success"}`
+     rising.
+  5. If the provider already rejected the old credential, the route is held,
+     and replacing the secret does not release it. Shared route health is
+     keyed by the configuration digest, which covers only the non-secret
+     configuration: secret references count, secret values do not. A restart
+     with the same YAML, or a `SIGHUP` reload of an unchanged file, publishes
+     a snapshot with the same digest, so planning keeps skipping the route
+     until 24 hours after the last rejection. Only then does one request probe
+     it, and a success closes the circuit. There is no command that clears a
+     route health record. To resume sooner:
+     - if other routes serve the model, wait out the hold;
+     - otherwise escalate to the service owner. The only supported way to
+       release the hold early is a configuration change that changes the
+       digest, for example rotating by reference: put the new key in a new
+       environment variable, point the endpoint's `auth.name` at it, and roll
+       out. Every digest change resets every route's shared health, and
+       unfinished requests prepared under the old configuration that have
+       nothing paid wait 15 minutes and then fail with `configuration`, so
+       callers must resubmit them under a new operation key. Changing an
+       endpoint's auth reference also makes that endpoint's in-flight paid
+       attempts wait for a worker with the old reference, so do it only when
+       the endpoint has no pending provider jobs (see
+       [reload behaviour for unfinished work](../reference/mvp-v1-status.md#storage-and-callers)).
+- **Forbidden:** rotating key material that names state, not access:
+  `state.redis.key_secret`, `state.requests.secret` and
+  `continuation.handle_keys` entries still in use. Changing them selects a
+  different namespace or invalidates every handle; they need a migration, not
+  a rotation. Temporal payload codec keys and the Temporal mTLS certificate
+  or API key file are read at startup and rotate only through their own
+  procedures with a rolling restart (see
+  [Temporal payload encryption](../reference/configuration.md#temporal-payload-encryption)).
+  Never paste a credential into a ticket, a log query or the configuration
+  file itself.
+
+## Configuration rollback for process-lifetime fields
+
+Process-lifetime settings are read at startup. A reload that changes one is
+rejected (`cause=process_lifetime`, with `config_field`), so running replicas
+keep the old value while any replica that restarts picks up the new one.
+The full list is in
+[configuration reload](../reference/cli.md#configuration-reload). They fall
+into two groups:
+
+- **Process wiring:** the `server` listeners, shutdown and
+  monitor settings, the inline Activity payload limit, Temporal connection and
+  worker settings, telemetry wiring, the endpoint set and `outbound_hosts`.
+  Rolling these forward or back is an ordinary rollout.
+- **Durable identity:** `environment`, `temporal.namespace`, `state.kind`,
+  `state.redis.key_prefix`, `state.redis.admission_hash_tag`,
+  `state.redis.key_secret`, the `state.requests` provider, `request_table`,
+  `payload_store`, `namespace` and `secret`, and the result blob store's kind,
+  root, bucket, region and prefix. Requests, reservations, results and
+  checkpoints exist only under the identity they were written with.
+
+- **Signal:** `configuration reload failed` with `cause=process_lifetime` and
+  a `config_field`, or replicas reporting different `config_version` values
+  after some of them restarted.
+- **Readiness reason:** none; replicas on either value can be ready.
+- **Default severity:** SEV3 for process wiring; SEV1 for durable identity
+  once any replica has served traffic with the new value.
+- **Safe action:**
+  1. Stop further restarts: pause the rollout and any autoscaling or node
+     drains that would start new pods.
+  2. Find which replicas run which value from their `config_version`.
+  3. Process wiring: either complete the rollout with the new value or revert
+     the file and roll the replicas that already restarted. A revert reloads
+     cleanly on replicas that never took the change.
+  4. Durable identity, no replica has served traffic on the new value yet:
+     revert the file to the previous content and roll back the restarted
+     replicas so every replica uses the original identity.
+  5. Durable identity, some replicas served traffic on the new value:
+     escalate to the service owner before rolling anything. Work started
+     under the new identity exists only there; flipping back strands it, and
+     flipping forward strands the old work. Keep both sets of state, record
+     the time window and the affected replicas, and decide with the owner.
+     Never delete either side.
+  6. Lowering `server.inline_payload_bytes` is safe only after draining open
+     Generate and Compact workflows; raising it is safe at any time.
+- **Forbidden:** toggling a durable identity field back and forth, copying or
+  renaming Redis keys, tables or buckets to "merge" two identities, or
+  deleting the state written under either identity. A deployment that needs
+  to move durable state needs its own migration and rollback design.
