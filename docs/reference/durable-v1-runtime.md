@@ -102,6 +102,42 @@ uncertain charge remains accounted for. See
 [Redis budget leases](redis-budget-leases.md) and
 [cloud provider execution](cloud-provider-execution.md).
 
+## Access audit events
+
+Each durable Generate and Compact request emits content-free access events
+through the worker's structured logs (#1541), at info:
+
+- `request scope access decision` with `outcome=allowed`, each time a step
+  prepares the request after the scope policy allows its tenant and project
+  (Prepare, the cached-result check before it, and the Generate or Compact
+  submission step). A denied scope logs the same message at warn with
+  `outcome=denied` and only the tenant and project hashes and Activity type
+  (#1535), so allowed and denied decisions share one message as the
+  `control query access decision` entries do.
+- `request access completed` with `outcome=allowed`, when a step returns a
+  terminal result: a completed response, or a failure that will not be
+  retried. Replays of a stored result log it again. Acquire, Poll and
+  non-terminal results log nothing.
+
+Both carry `request_kind` (`generate` or `compact`), `activity_type`, and
+truncated SHA-256 hashes: `tenant_hash`, `project_hash`, `actor_hash` (the
+actor of the calling step), `operation_key_hash`, `operation_id_hash` (the
+worker request ID, which can locate a response, #1362) and
+`parent_checkpoint_hash` when the request continues or compacts a checkpoint.
+A completed event adds `checkpoint_hash` for the published checkpoint,
+`status` (`completed` or `failed`), a failure's `error_code`, and the
+`route_id` of the provider execution when that step finished one; a replayed
+result or cache hit omits `route_id`. Empty optional identifiers are omitted.
+Request and response bodies, transcripts, tags, capabilities and raw
+identifiers are never passed to the log handler.
+
+The events are ordinary best-effort logs, not a durable audit store: log levels
+apply, and a sink or log failure never fails or retries a request.
+`CloudExecutionOptions.AccessAudit` (and `CloudV1RuntimeOptions.AccessAudit`)
+accepts an `observability.RequestAccessFunc`, the same best-effort callback
+shape as `control.AuditFunc`, so a durable sink can replace the default log
+without changing request semantics.
+
 ## Snapshot ownership and Query
 
 The runtime's snapshot proxy holds the configuration lease for the whole

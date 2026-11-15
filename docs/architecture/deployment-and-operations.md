@@ -444,6 +444,16 @@ workflow/run and Activity IDs, operation ID, route IDs, configured tenant hash,
 status, and safe error code. Prompt/output/tool content, continuation handles,
 authorization, provider-state bytes, and raw provider bodies are denied fields.
 
+Durable Generate and Compact requests log content-free access events at info:
+`request scope access decision` (`outcome=allowed`) when a step prepares an
+authorized request and `request access completed` when it returns a terminal
+result. Scope denials log the same decision message at warn with
+`outcome=denied`. Tenant, project, actor, operation key, operation ID and
+checkpoint handles appear only as truncated hashes (`*_hash` fields); see
+[access audit events](../reference/durable-v1-runtime.md#access-audit-events).
+A deployment whose log level is `warn` or above keeps the denials but drops
+the allowed events.
+
 Tracing spans cover normalization, state load, planning, admission, each
 provider attempt, finalization, and continuation write in the legacy engine
 Activity that memory mode runs. On the durable v1 path each execution step is
@@ -471,6 +481,8 @@ worker or by Temporal:
 | Redis persistence, eviction, memory or Function digest failures | `/health/ready` returning `503` and `llmtw_worker_polling` at 0 |
 | No eligible routes | `llmtw_activity_failure_total{origin="caller"}` (planning) or `{origin="worker"}` (pricing), and the `requested model is not in the route catalog` warning (`cause=model_not_in_catalog`) |
 | Failed configuration reload | `llmtw_config_reload_total{outcome="failure"}` and its `config_field` log |
+| Request scope denials (a caller outside `authorization.allowed_scopes`, or a misused execution reference) | `request scope access decision` warnings with `outcome=denied`, grouped by `tenant_hash`, `project_hash` and `activity_type`; they also count in `llmtw_activity_failure_total{origin="caller"}` |
+| Unusual access to a tenant or checkpoint | `request scope access decision` (`outcome=allowed`) and `request access completed` info events, by `tenant_hash`, `actor_hash` or `parent_checkpoint_hash`, for example many actors continuing one checkpoint |
 | Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` |
 | Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` |
 | Route circuit opened, even on a route with no traffic | `llmtw_route_health_transition_total{endpoint,to="circuit_open"}` and the `route circuit opened; planning holds the route` warning (`endpoint`, `route_id`, `model`) |

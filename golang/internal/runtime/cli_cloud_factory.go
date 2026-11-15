@@ -20,7 +20,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
-	temporalactivity "go.temporal.io/sdk/activity"
 )
 
 // Gate both initial compilation and reload before resolving any secret. The
@@ -202,11 +201,7 @@ func trustedTemporalCloudOptions(value config.Config) (CloudV1RuntimeOptions, er
 			}
 			scope, ok := allowed[config.AuthorizedScope{Tenant: caller.Tenant, Project: caller.Project}]
 			if !ok {
-				activityName := ""
-				if temporalactivity.IsActivity(ctx) {
-					activityName = temporalactivity.GetInfo(ctx).ActivityType.Name
-				}
-				observability.LoggerFromContext(ctx).ScopeAccessDenied(ctx, caller.Tenant, caller.Project, activityName)
+				observability.LoggerFromContext(ctx).ScopeAccessDenied(ctx, caller.Tenant, caller.Project, activityTypeName(ctx))
 				return "", scopeDeniedError()
 			}
 			return scope, nil

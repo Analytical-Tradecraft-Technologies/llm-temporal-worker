@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -53,6 +54,10 @@ type CloudExecutionOptions struct {
 	// configuration waits for a compatible worker after this runtime starts.
 	// Zero means 15 minutes.
 	ReloadGrace time.Duration
+	// AccessAudit observes the content-free access event of each prepared
+	// request and each terminal result (#1541). Nil logs them through the
+	// Activity's logger. Its error is ignored.
+	AccessAudit observability.RequestAccessFunc
 }
 
 // defaultCloudReloadGrace covers a rolling deployment: until it elapses a
@@ -211,27 +216,31 @@ func (r *CloudExecutionRuntime) preparedStep(ctx context.Context, input llm.Prep
 			return llm.ExecutionResultV1{}, err
 		}
 	}
-	ctx = cloudstate.WithRecordReuse(ctx)
+	ctx = withAccessRoute(cloudstate.WithRecordReuse(ctx))
 	prepared, err := r.preparation.Prepare(ctx, input)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
 	r.captureLangfuseOperation(ctx, prepared)
+	caller := prepareCaller(input)
+	r.auditPrepared(ctx, caller, prepared)
 	result, err := advance(ctx, prepared)
 	r.indexResponseResult(ctx, prepared, result, err)
+	r.auditCompleted(ctx, caller, prepared, result, err)
 	return r.preparation.withCapability(result, err, prepared.Record)
 }
 func (r *CloudExecutionRuntime) referenceStep(ctx context.Context, ref llm.ExecutionReferenceV1, step cloudStep) (llm.ExecutionResultV1, error) {
 	if r == nil {
 		return llm.ExecutionResultV1{}, executionError(provider.CodeConfiguration)
 	}
-	ctx = cloudstate.WithRecordReuse(ctx)
+	ctx = withAccessRoute(cloudstate.WithRecordReuse(ctx))
 	prepared, err := r.preparation.Load(ctx, ref)
 	if err != nil {
 		return llm.ExecutionResultV1{}, err
 	}
 	result, err := r.advance(ctx, prepared, step)
 	r.indexResponseResult(ctx, prepared, result, err)
+	r.auditCompleted(ctx, ref.Context, prepared, result, err)
 	return r.preparation.withCapability(result, err, prepared.Record)
 }
 
@@ -672,6 +681,7 @@ func (r *CloudExecutionRuntime) resumeAdmissionWinner(ctx context.Context, p Pre
 }
 
 func (r *CloudExecutionRuntime) resumeAttempt(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution, step cloudStep) (llm.ExecutionResultV1, error) {
+	noteAccessRoute(ctx, saved.Plan.Route.RouteID)
 	result := r.execution.result(saved)
 	if step == cloudPoll || step == cloudSubmit || saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed {
 		var err error
