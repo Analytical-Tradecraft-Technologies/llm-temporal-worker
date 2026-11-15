@@ -2,9 +2,10 @@ package bedrockmessages
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -22,10 +23,7 @@ func TestCompileRejectsHostedToolFlags(t *testing.T) {
 			request := llm.Request{Input: []llm.Item{llm.HumanText("hi")}}
 			mutate(&request)
 			_, err := adapter.Compile(context.Background(), bedrockCompileInput(request, strict))
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("%s strict=%v: compile = %#v, want unsupported_capability", name, strict, err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Dispatch: provider.DispatchNotDispatched}, fmt.Sprintf("%s strict=%v: compile", name, strict))
 		}
 	}
 	if wire != nil {

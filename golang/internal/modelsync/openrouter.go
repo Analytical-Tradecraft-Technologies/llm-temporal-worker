@@ -20,8 +20,11 @@ import (
 const (
 	// DefaultOpenRouterBaseURL is OpenRouter's public API root.
 	DefaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
-	maxResponseBytes         = 16 << 20
-	defaultFetchConcurrency  = 8
+	// MaxResponseBytes bounds one OpenRouter catalog response. A catalog is
+	// not a paid provider response and is never saved in a request record,
+	// so limits.provider_response_bytes does not bound it.
+	MaxResponseBytes        = 16 << 20
+	defaultFetchConcurrency = 8
 	// maxEndpointFailureRatio bounds how many per-model endpoint lookups may
 	// fail before the whole fetch is rejected. A rejected fetch keeps the
 	// previously published Document; in an accepted fetch, a model whose
@@ -757,7 +760,7 @@ func (fetcher Fetcher) get(ctx context.Context, path string, target any) error {
 		return err
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	data, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
 	if err != nil {
 		return err
 	}
@@ -766,8 +769,8 @@ func (fetcher Fetcher) get(ctx context.Context, path string, target any) error {
 		data = cached.body
 	case response.StatusCode != http.StatusOK:
 		return statusError{code: response.StatusCode}
-	case len(data) > maxResponseBytes:
-		return fmt.Errorf("OpenRouter response exceeds %d bytes", maxResponseBytes)
+	case len(data) > MaxResponseBytes:
+		return fmt.Errorf("OpenRouter response exceeds %d bytes", MaxResponseBytes)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {

@@ -20,7 +20,7 @@ func TestRegionalConfigValidation(t *testing.T) {
 	}
 	value := makeConfig()
 	testassert.NoError(t, value.Validate())
-	data := mustMarshalJSON(t, value)
+	data := testassert.MarshalJSON(t, value)
 	compiled := configSchema(t)
 	testassert.NoError(t, compiled.Validate(data))
 	for _, tc := range []struct {

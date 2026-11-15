@@ -15,8 +15,10 @@ current-layout reference.
 ```text
 .
 ├── golang/                         Go Temporal worker module
-│   ├── api/schema/v1/              Versioned request, response, and config schemas
+│   ├── api/schema/v1/              Versioned request, response, and config schemas (embedded)
 │   ├── cmd/llm-temporal-worker/    Process entry point only
+│   ├── contractkit/                v1 consumer contract kit: embedded schemas, fixtures, runner
+│   │   └── cmd/contractkit/        Consumer runner and release kit packaging command
 │   ├── llm/                        Provider-neutral public domain API
 │   │   ├── schema/                 JSON Schema normalization and local validation
 │   │   ├── provider/               Adapter interfaces and provider-neutral calls
@@ -46,7 +48,7 @@ current-layout reference.
 │   │   │   ├── bedrockmessages/    Bedrock Runtime InvokeModel Messages profile
 │   │   │   ├── bedrockconverse/    Bedrock Runtime Converse lowering/lifting
 │   │   │   └── */testdata/contracts/ Redacted provider wire fixtures by adapter
-│   │   └── testdata/               Shared normalized request and response fixtures
+│   │   └── testdata/               Shared normalized request and response fixtures (v1/ is embedded)
 │   ├── workflows/                  Public and internal Temporal workflows over the Activities
 │   ├── activity/                   Temporal payloads and Activity implementation
 │   ├── engine/                     Legacy in-process inference lifecycle composition
@@ -95,7 +97,8 @@ current-layout reference.
 │   │   ├── responsesapi/           Optional OpenAI Responses API over Generate
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
 │   │   ├── secrets/                Environment/file secret resolution
-│   │   ├── testassert/             Assertions shared by tests across the module
+│   │   ├── testassert/             Assertions and JSON/file helpers shared by tests across the module
+│   │   ├── testkit/                Provider-error, metric and HTTP-fake helpers for tests across areas
 │   │   └── typednil/               Typed-nil dependency check shared by constructors
 │   ├── tools/                      Repository verification and generation commands
 │   │   ├── deploymentpolicy/       Offline Kubernetes workload policy checks
@@ -163,6 +166,11 @@ The compatibility promise covers exported types in:
 - `state`
 - `activity`
 - `engine`
+
+`contractkit` is the consumer-facing test kit for the v1 wire contract. It
+embeds `api/schema/v1` and `llm/testdata/v1`, so its content follows the
+contract rather than a separate compatibility promise; see the
+[contract kit guide](../testing/contract-kit.md).
 
 Concrete storage and provider packages may add fields compatibly but callers
 should construct them through documented constructors. `internal/` has no

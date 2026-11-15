@@ -329,9 +329,7 @@ generated_field_exemptions: []
 			mustWriteFile(t, filepath.Join(profileDir, "events.stream"), "event: completed\n")
 
 			_, err := ValidateRepository(root)
-			if err == nil || !strings.Contains(err.Error(), `missing required case "`+missingCase+`"`) {
-				t.Fatalf("decoder fixture error = %v, want missing %q", err, missingCase)
-			}
+			testassert.ErrorContains(t, err, `missing required case "`+missingCase+`"`, "decoder fixture")
 		})
 	}
 }
@@ -633,8 +631,6 @@ cases:
 func requireRepositoryError(t *testing.T, root, want, what string) error {
 	t.Helper()
 	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("%s error = %v, want %q", what, err, want)
-	}
+	testassert.ErrorContains(t, err, want, what)
 	return err
 }

@@ -8,8 +8,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // statusCredentialError is a credential-chain failure that carries the STS or
@@ -31,7 +31,7 @@ func TestBedrockCredentialFailureIsPreDispatch(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls := 0
-			client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: adaptertest.RoundTripFunc(func(*http.Request) (*http.Response, error) {
+			client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 				calls++
 				return nil, errors.New("transport must not be reached")
 			})}, aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
@@ -50,9 +50,7 @@ func TestBedrockCredentialFailureIsPreDispatch(t *testing.T) {
 				}
 				return
 			}
-			if mapped.Code != provider.CodeAuthentication || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-				t.Fatalf("Invoke() error = %#v, want a not-dispatched next-route authentication failure", err)
-			}
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeAuthentication, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute}, "Invoke() error")
 			if !errors.Is(err, provider.ErrProviderPreDispatch) || !errors.Is(err, provider.ErrProviderCredentials) {
 				t.Fatalf("Invoke() error = %v, want the pre-dispatch and credential markers", err)
 			}

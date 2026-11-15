@@ -1,12 +1,12 @@
 package bedrockconverse
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -48,8 +48,5 @@ func TestLowerRequestRejectsMixedInstructionHierarchyInStrictMode(t *testing.T) 
 	profile, err := NewDefaultProfile("nova")
 	testassert.NoError(t, err)
 	_, err = lowerRequest(request, profile, string(types.ServiceTierTypeDefault), true)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {
-		t.Fatalf("strict mixed hierarchy = %v, want an unsupported_capability rejection", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "strict mixed hierarchy")
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -30,7 +31,7 @@ func TestProviderPlanningRoutesV1ReasoningEffortOnAnthropicMessages(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			capabilities, source, _, request, _, _ := planningFixture()
 			profile := anthropicmessages.DefaultProfile("anthropic")
-			client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://api.anthropic.com", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+			client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://api.anthropic.com", APIKey: "test-key", HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 				return nil, errors.New("unexpected HTTP request")
 			})}})
 			testassert.NoError(t, err)
@@ -61,8 +62,8 @@ func TestProviderPlanningRoutesV1ReasoningEffortOnAnthropicMessages(t *testing.T
 			planning := mustProviderPlanning(t, capabilities)
 			planned, err := planning.Generate(context.Background(), prepared)
 			testassert.NoError(t, err, "v1 reasoning effort is not routable on Anthropic Messages")
-			data := encodeJSON(t, planned.Call.SDKParams)
-			wire := decodeJSON[map[string]any](t, data)
+			data := testassert.MarshalJSON(t, planned.Call.SDKParams)
+			wire := testassert.UnmarshalJSON[map[string]any](t, data)
 			config, _ := wire["output_config"].(map[string]any)
 			if planned.Call.Family != provider.FamilyAnthropicMessages || config["effort"] != "high" {
 				t.Fatalf("effort was not lowered to output_config: %s", data)

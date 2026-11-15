@@ -24,6 +24,13 @@ import (
 func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Record, BudgetPlan) {
 	t.Helper()
 	r, table, blobs, op := operationFixture(t)
+	record, plan := budgetPlanForOperation(t, r, op)
+	return r, table, blobs, record, plan
+}
+
+// budgetPlanForOperation begins op and returns its record with a valid plan.
+func budgetPlanForOperation(t *testing.T, r *Repository, op Operation) (Record, BudgetPlan) {
+	t.Helper()
 	record := mustBeginOperation(t, r, op)
 	entry := pricing.Entry{Provider: "private-provider", Family: "private-family", EndpointID: "private-endpoint", Model: "private-model",
 		Region: "private-region", ProviderTier: "private-tier", Version: "price/v1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.00000000015")},
@@ -46,7 +53,7 @@ func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, R
 			AmountUSD: plan.Estimate.CostUSD, Amount: plan.Estimate.MicroUSD, LimitUSD: pricing.MustUSD("0.01"), Limit: 10000})
 	}
 	testassert.NoError(t, plan.Validate())
-	return r, table, blobs, record, plan
+	return record, plan
 }
 
 func copyTestBudgetPlan(t *testing.T, plan BudgetPlan) BudgetPlan {

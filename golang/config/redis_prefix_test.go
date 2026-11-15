@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -46,9 +47,7 @@ func TestRedisKeyPrefixRejectsAmbiguousValues(t *testing.T) {
 	for _, value := range []string{"", ":bad", "{bad}", "bad prefix", "bad\tvalue", "bad\nvalue", "-leading", "é", strings.Repeat("a", 65)} {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("LLMTW_REDIS_KEY_PREFIX", value)
-			if _, err := config.Load(exampleYAML(t)); err == nil || !strings.Contains(err.Error(), "state.redis.key_prefix") {
-				t.Fatalf("prefix %q accepted or wrong error: %v", value, err)
-			}
+			testassert.ErrorContains(t, testassert.Err(config.Load(exampleYAML(t))), "state.redis.key_prefix", fmt.Sprintf("prefix %q accepted or wrong", value))
 		})
 	}
 }

@@ -232,7 +232,7 @@ func TestCloudFinalizationRejectsInvalidSavedPayloadBeforeEffects(t *testing.T) 
 		t.Run(mutation, func(t *testing.T) {
 			_, repository, store, run, save, effects := finalizationFixture(t, "generate", "provider")
 			testassert.NoError(t, save(effects))
-			payload := decodeJSON[cloudFinalizationPayload](t, repository.handoff.Payload)
+			payload := testassert.UnmarshalJSON[cloudFinalizationPayload](t, repository.handoff.Payload)
 			switch mutation {
 			case "version":
 				payload.Version = 2
@@ -322,7 +322,7 @@ func TestCloudFinalizationFirstAttemptAndReplayUseSameBoundary(t *testing.T) {
 	calls := 0
 	inner.generate = func(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
 		calls++
-		response := decodeJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
+		response := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
 		err := r.finalizer.CompleteGenerate(ctx, request, "trusted-scope", "consumer-checkpoint", response, effects)
 		return response, err
 	}
@@ -343,7 +343,7 @@ func TestCloudFinalizationFirstAttemptAndReplayUseSameBoundary(t *testing.T) {
 func TestCloudFinalizationToolCallsArePublishable(t *testing.T) {
 	r, repository, store, run, _, effects := finalizationFixture(t, "generate", "provider")
 	request := llm.GenerateRequestV1{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}}
-	response := decodeJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
+	response := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
 	response.Status = llm.ResponseStatusToolCalls
 	effects.Provider.Entry.Response, _ = json.Marshal(response)
 	testassert.NoError(t, r.finalizer.CompleteGenerate(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects))
@@ -356,7 +356,7 @@ func TestCloudFinalizationToolCallsArePublishable(t *testing.T) {
 func TestCloudFinalizationIncompleteResponseIsReturnedWithoutCaching(t *testing.T) {
 	r, _, store, run, _, effects := finalizationFixture(t, "generate", "provider")
 	request := llm.GenerateRequestV1{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}}
-	response := decodeJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
+	response := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
 	response.Status = llm.ResponseStatusLength
 	response.Cache.Disposition = "miss_not_populated"
 	effects.Provider.Entry = nil

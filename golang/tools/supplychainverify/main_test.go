@@ -61,12 +61,7 @@ func TestVerifyRejectsUnreviewedAndExpiredVulnerabilityFindings(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := verify(test.baseline, testRequirements(), strings.NewReader(`{"finding":{"osv":"GO-2099-0001"}}`), julyNow)
-			if err == nil {
-				t.Fatal("verify accepted an unreviewed or expired finding")
-			}
-			if !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("verify error %q does not contain %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want, "verify")
 		})
 	}
 }
@@ -173,12 +168,7 @@ func TestReadGoModRejectsReplacements(t *testing.T) {
 			"New":{"Path":"./unreviewed-local-fork"}
 		}]
 	}`))
-	if err == nil {
-		t.Fatal("readGoMod accepted a replacement")
-	}
-	if !strings.Contains(err.Error(), "replacement") {
-		t.Fatalf("readGoMod error %q does not identify the replacement", err)
-	}
+	testassert.ErrorContains(t, err, "replacement", "readGoMod")
 }
 
 func TestVerifyRejectsReachableTraceOutsideModuleOnlyException(t *testing.T) {
@@ -189,12 +179,7 @@ func TestVerifyRejectsReachableTraceOutsideModuleOnlyException(t *testing.T) {
 		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}
 {"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"},{"package":"example.test/module/vulnerable","function":"Parse"}]}}`,
 	)
-	if err == nil {
-		t.Fatal("verify accepted a reachable trace outside the module-only exception scope")
-	}
-	if !strings.Contains(err.Error(), "reachable trace") {
-		t.Fatalf("verify error %q does not identify the reachable trace", err)
-	}
+	testassert.ErrorContains(t, err, "reachable trace", "verify")
 }
 
 func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.T) {
@@ -746,9 +731,7 @@ func assertFailedReport(t *testing.T, label string, report verificationReport, e
 // readTestFile returns the contents of path.
 func readTestFile(t *testing.T, path string) string {
 	t.Helper()
-	contents, err := os.ReadFile(path)
-	testassert.NoError(t, err)
-	return string(contents)
+	return string(testassert.ReadFile(t, path))
 }
 
 // readReport decodes the verification report at path and returns it with its

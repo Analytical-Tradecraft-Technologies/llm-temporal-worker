@@ -21,6 +21,13 @@ import (
 func executionFixture(t *testing.T, modes ...BudgetMode) (*Repository, *memoryTable, *memoryBlobs, Record, BudgetPlan, durable.ReserveResult) {
 	t.Helper()
 	r, table, blobs, record, plan := budgetPlanFixture(t)
+	plan, reservation := reserveExecutionPlan(t, r, record, plan, modes...)
+	return r, table, blobs, record, plan, reservation
+}
+
+// reserveExecutionPlan saves plan on record and accepts its reservation.
+func reserveExecutionPlan(t *testing.T, r *Repository, record Record, plan BudgetPlan, modes ...BudgetMode) (BudgetPlan, durable.ReserveResult) {
+	t.Helper()
 	ctx := context.Background()
 	if len(modes) > 0 {
 		plan.Mode = modes[0]
@@ -28,13 +35,13 @@ func executionFixture(t *testing.T, modes ...BudgetMode) (*Repository, *memoryTa
 	}
 	mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 	if !plan.RequiresReservation() {
-		return r, table, blobs, record, plan, durable.ReserveResult{}
+		return plan, durable.ReserveResult{}
 	}
 	leaser, err := durable.NewReferenceBudgetMaterializer(plan.Route.GenerationID, "incarnation", func() time.Time { return plan.QuotedAt })
 	testassert.NoError(t, err)
 	reservation, err := leaser.Accept(ctx, plan.Reservation)
 	testassert.NoError(t, err)
-	return r, table, blobs, record, plan, reservation
+	return plan, reservation
 }
 
 func startExecution(t *testing.T, r *Repository, record Record, plan BudgetPlan, reservation durable.ReserveResult) SavedProviderExecution {

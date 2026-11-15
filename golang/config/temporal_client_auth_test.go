@@ -1,10 +1,12 @@
 package config_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // Production needs an encrypted, client-authenticated Temporal connection
@@ -43,9 +45,7 @@ func TestLoadRequiresAuthenticatedTemporalTransportInProduction(t *testing.T) {
 			}
 			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("%s: Load() = %v, want %q", name, err, test.want)
-		}
+		testassert.ErrorContains(t, err, test.want, fmt.Sprintf("%s: Load()", name))
 	}
 }
 
@@ -74,7 +74,7 @@ func TestConfigSchemaMirrorsTemporalCredentialRules(t *testing.T) {
 	} {
 		loaded := mustLoadConfig(t, exampleYAML(t))
 		test.mutate(&loaded)
-		encoded := mustMarshalJSON(t, loaded)
+		encoded := testassert.MarshalJSON(t, loaded)
 		if err := compiled.Validate(encoded); (err == nil) != test.valid {
 			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}

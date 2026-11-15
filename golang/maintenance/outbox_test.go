@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"sync"
@@ -76,9 +77,7 @@ func TestDeleteBlobPayloadIsTypedAndBoundToAggregate(t *testing.T) {
 			candidate := event
 			candidate.SafePayload = json.RawMessage(test.payload)
 			err := candidate.Validate()
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("Validate(%s) error=%v, want substring %q", test.payload, err, test.wantErr)
-			}
+			testassert.ErrorContains(t, err, test.wantErr, fmt.Sprintf("Validate(%s)", test.payload))
 		})
 	}
 

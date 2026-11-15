@@ -9,6 +9,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -33,7 +34,7 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("strict=%t is_error=%t: %v", strict, isError, err)
 			}
-			encoded := contract.MarshalJSON(t, call.SDKParams)
+			encoded := testassert.MarshalJSON(t, call.SDKParams)
 			want := `{"output":"upstream timed out","call_id":"call-1","type":"function_call_output"}`
 			if isError {
 				want = `{"output":"[is_error=true] The tool call failed; its output follows.\nupstream timed out","call_id":"call-1","type":"function_call_output"}`
@@ -133,8 +134,8 @@ func TestLoweringMapsOnlyPublicServiceClasses(t *testing.T) {
 		if wire["service_tier"] != test.want {
 			t.Errorf("class %s -> %#v, want %s", test.class, wire["service_tier"], test.want)
 		}
-		if strings.Contains(string(contract.MarshalJSON(t, params)), "provider_default") {
-			t.Errorf("public service class leaked provider_default: %s", contract.MarshalJSON(t, params))
+		if strings.Contains(string(testassert.MarshalJSON(t, params)), "provider_default") {
+			t.Errorf("public service class leaked provider_default: %s", testassert.MarshalJSON(t, params))
 		}
 	}
 }
@@ -164,8 +165,8 @@ func TestUntitledInlineDocumentGetsDeterministicFilename(t *testing.T) {
 		llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "contract.pdf"},
 		llm.DocumentPart{URL: "https://example.test/report.pdf", MediaType: "application/pdf"},
 	}}}}
-	first := contract.MarshalJSON(t, mustLower(t, request))
-	if again := contract.MarshalJSON(t, mustLower(t, request)); string(again) != string(first) {
+	first := testassert.MarshalJSON(t, mustLower(t, request))
+	if again := testassert.MarshalJSON(t, mustLower(t, request)); string(again) != string(first) {
 		t.Fatalf("lowering is not deterministic:\n%s\n%s", first, again)
 	}
 	wire := contract.JSONObject(t, mustLower(t, request))
@@ -314,12 +315,12 @@ func TestCompileStrictRejectsSuccessfulToolResultWithReservedPrefix(t *testing.T
 			Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 			Strict: strict,
 		})
-		if strict && (err == nil || !strings.Contains(err.Error(), "reserved tool-error prefix") || !isUnsupportedCapability(err)) {
-			t.Fatalf("strict error = %v", err)
+		if !strict {
+			testassert.NoError(t, err, "best-effort error")
+			continue
 		}
-		if !strict && err != nil {
-			t.Fatalf("best-effort error = %v", err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "strict error")
+		testassert.ErrorContains(t, err, "reserved tool-error prefix", "strict error")
 	}
 }
 

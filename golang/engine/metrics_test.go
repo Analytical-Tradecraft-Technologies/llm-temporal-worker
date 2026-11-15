@@ -8,6 +8,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
@@ -19,14 +20,14 @@ func TestGenerateRecordsMetricsForSuccessfulProviderDispatch(t *testing.T) {
 	metrics, err := generateWithMetrics(t, adapter, "metrics-success")
 	testassert.NoError(t, err)
 
-	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "success"), 1)
-	assertMetricHistogramCount(t, metrics, "llmtw_provider_duration_seconds", standardProviderLabels(), 1)
+	testkit.MetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "success"), 1)
+	testkit.MetricHistogramCount(t, metrics, "llmtw_provider_duration_seconds", standardProviderLabels(), 1)
 	for _, state := range []string{"reserved", "dispatching", "completed"} {
-		assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
+		testkit.MetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
 	}
-	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", standardProviderLabels("method", "catalog_usage"), 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_status_total", standardProviderLabels("status", "exact", "method", "catalog_usage"), 1)
+	testkit.MetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_cost_usd_total", standardProviderLabels("method", "catalog_usage"), 1)
+	testkit.MetricCounter(t, metrics, "llmtw_cost_status_total", standardProviderLabels("status", "exact", "method", "catalog_usage"), 1)
 }
 
 func TestGenerateRecordsMetricsForAmbiguousProviderDispatch(t *testing.T) {
@@ -36,12 +37,12 @@ func TestGenerateRecordsMetricsForAmbiguousProviderDispatch(t *testing.T) {
 		t.Fatal("Generate unexpectedly succeeded")
 	}
 
-	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "failure"), 1)
+	testkit.MetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "failure"), 1)
 	for _, state := range []string{"reserved", "dispatching", "ambiguous"} {
-		assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
+		testkit.MetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
 	}
-	assertMetricCounter(t, metrics, "llmtw_ambiguous_total", map[string]string{"endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", standardProviderLabels("method", "catalog_usage"), 0)
+	testkit.MetricCounter(t, metrics, "llmtw_ambiguous_total", map[string]string{"endpoint": "endpoint-1"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_cost_usd_total", standardProviderLabels("method", "catalog_usage"), 0)
 }
 
 func TestOperationMetricsMapRawFailedStatesToBoundedFailedLabel(t *testing.T) {
@@ -50,8 +51,8 @@ func TestOperationMetricsMapRawFailedStatesToBoundedFailedLabel(t *testing.T) {
 	recordOperationState(ctx, admission.StateDefiniteFailed)
 	recordOperationState(ctx, admission.StateCanceled)
 
-	assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "failed"}, 2)
-	assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "other"}, 0)
+	testkit.MetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "failed"}, 2)
+	testkit.MetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "other"}, 0)
 }
 
 func TestHandleCancellationRecordsDurablePreDispatchTransitions(t *testing.T) {
@@ -64,8 +65,8 @@ func TestHandleCancellationRecordsDurablePreDispatchTransitions(t *testing.T) {
 	if err := harness.engine.handleCancellation(ctx, operation.Operation, routing.Candidate{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1"}, context.Canceled); err == nil {
 		t.Fatal("handleCancellation unexpectedly succeeded")
 	}
-	assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "dispatching"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "failed"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "dispatching"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "failed"}, 1)
 }
 
 // generateWithMetrics runs one Generate for key and returns the metrics it recorded.
@@ -103,8 +104,8 @@ func TestGenerateRecordsUnreportedActualServiceClassAsUnknown(t *testing.T) {
 	adapter.response.Service.Actual = nil
 	metrics, err := generateWithMetrics(t, adapter, "metrics-unknown-actual")
 	testassert.NoError(t, err)
-	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "unknown", "endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 0)
+	testkit.MetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "unknown", "endpoint": "endpoint-1"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 0)
 }
 
 // A response that reports no actual class did not report a mappable tier, so

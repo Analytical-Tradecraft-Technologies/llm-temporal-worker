@@ -232,7 +232,7 @@ func TestCloudRouteHealthIgnoresMismatchedIdentity(t *testing.T) {
 // the cloud recorder, and then asks route health about the second model.
 func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 	read := func(name string) string {
-		data := mustReadFile(t, filepath.Join("../../deploy/local", name))
+		data := testassert.ReadFile(t, filepath.Join("../../deploy/local", name))
 		return string(data)
 	}
 	data, prices := read("config.yaml"), read("prices.yaml")

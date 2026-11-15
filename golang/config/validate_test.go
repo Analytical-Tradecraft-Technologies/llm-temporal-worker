@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			aws["allow_mrsc"] = tc.value
-			if err := compiled.Validate(mustMarshalJSON(t, document)); (err == nil) != tc.valid {
+			if err := compiled.Validate(testassert.MarshalJSON(t, document)); (err == nil) != tc.valid {
 				t.Fatalf("allow_mrsc = %v: validation error = %v, want valid = %v", tc.value, err, tc.valid)
 			}
 		})
@@ -113,7 +114,7 @@ func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 			test.input(&loaded)
-			if err := compiled.Validate(mustMarshalJSON(t, loaded)); err == nil {
+			if err := compiled.Validate(testassert.MarshalJSON(t, loaded)); err == nil {
 				t.Fatal("schema accepted populated s3 fields beside a file blob store")
 			}
 		})
@@ -173,7 +174,7 @@ func TestConfigSchemaRejectsUnsafeFileBlobRoots(t *testing.T) {
 		t.Run(root, func(t *testing.T) {
 			loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 			loaded.BlobStore.File.Root = root
-			if err := compiled.Validate(mustMarshalJSON(t, loaded)); err == nil {
+			if err := compiled.Validate(testassert.MarshalJSON(t, loaded)); err == nil {
 				t.Fatalf("schema accepted unsafe file blob root %q", root)
 			}
 		})
@@ -196,7 +197,7 @@ func TestConfigSchemaRejectsFourthServiceClass(t *testing.T) {
 	compiled := configSchema(t)
 	loaded := mustLoadConfig(t, exampleYAML(t))
 	loaded.Endpoints["openai-prod"].ServiceClasses["turbo"] = loaded.Endpoints["openai-prod"].ServiceClasses["standard"]
-	if err := compiled.Validate(mustMarshalJSON(t, loaded)); err == nil {
+	if err := compiled.Validate(testassert.MarshalJSON(t, loaded)); err == nil {
 		t.Fatal("schema accepted a fourth public service class")
 	}
 }
@@ -205,7 +206,7 @@ func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 	compiled := configSchema(t)
 	loaded := mustLoadConfig(t, exampleYAML(t))
 	editEndpoint(&loaded, "anthropic-aws-us-east-1", func(endpoint *config.EndpointConfig) { endpoint.AWSWorkspaceID = "" })
-	if err := compiled.Validate(mustMarshalJSON(t, loaded)); err == nil {
+	if err := compiled.Validate(testassert.MarshalJSON(t, loaded)); err == nil {
 		t.Fatal("schema accepted an Anthropic AWS gateway endpoint without a workspace ID")
 	}
 
@@ -213,7 +214,7 @@ func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 		endpoint.AWSWorkspaceID = "ws-example-123"
 		endpoint.Auth.Kind = "bearer_env"
 	})
-	if err := compiled.Validate(mustMarshalJSON(t, loaded)); err == nil {
+	if err := compiled.Validate(testassert.MarshalJSON(t, loaded)); err == nil {
 		t.Fatal("schema accepted secret auth for an Anthropic AWS gateway endpoint")
 	}
 
@@ -234,7 +235,7 @@ func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
 
 func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 	loaded := mustLoadConfig(t, exampleYAML(t))
-	encoded := mustMarshalJSON(t, loaded)
+	encoded := testassert.MarshalJSON(t, loaded)
 	compiled := configSchema(t)
 	for _, variant := range []string{"missing-cloud", "obsolete-sql"} {
 		t.Run(variant, func(t *testing.T) {
@@ -246,7 +247,7 @@ func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 			} else {
 				state["postgres"] = map[string]any{"database": "old_worker"}
 			}
-			invalid := mustMarshalJSON(t, document)
+			invalid := testassert.MarshalJSON(t, document)
 			if err := compiled.Validate(invalid); err == nil {
 				t.Fatal("schema accepted invalid durable storage")
 			}
@@ -269,9 +270,7 @@ func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T
 			"redis tls":       {rename(string(redisTLSDisabledYAML(t))), "state.redis.tls.enabled must be true in production"},
 			"content logging": {strings.Replace(rename(string(exampleYAML(t))), "content_logging: disabled", "content_logging: redacted", 1), "telemetry.content_logging must be disabled in production"},
 		} {
-			if _, err := config.Load([]byte(test.data)); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("environment %q %s error = %v, want %q", environment, name, err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(config.Load([]byte(test.data))), test.want, fmt.Sprintf("environment %q %s", environment, name))
 		}
 		loaded := mustLoadConfig(t, exampleYAML(t))
 		loaded.Environment, loaded.State.Redis.TLS.Enabled = environment, false
@@ -280,7 +279,7 @@ func TestProductionHardeningAppliesToEveryNonDevelopmentEnvironment(t *testing.T
 				loaded.Budgets.Policies[index].Match.Environment = environment
 			}
 		}
-		if err := compiled.Validate(mustMarshalJSON(t, loaded)); err == nil {
+		if err := compiled.Validate(testassert.MarshalJSON(t, loaded)); err == nil {
 			t.Fatalf("schema accepted environment %q with Redis TLS disabled", environment)
 		}
 	}
@@ -312,7 +311,7 @@ func TestRedisServiceMeshSecurityContract(t *testing.T) {
 			if err := value.Validate(); (err == nil) != test.valid {
 				t.Fatalf("validation = %v, valid = %v", err, test.valid)
 			}
-			data := mustMarshalJSON(t, value)
+			data := testassert.MarshalJSON(t, value)
 			compiled := configSchema(t)
 			if err := compiled.Validate(data); (err == nil) != test.valid {
 				t.Fatalf("schema validation = %v, valid = %v", err, test.valid)
@@ -347,7 +346,7 @@ func TestContinuationHandleKeyIDMatchesKeyring(t *testing.T) {
 		}
 		value := loaded.Clone()
 		value.Continuation.HandleKeys[0].ID = id
-		encoded := mustMarshalJSON(t, value)
+		encoded := testassert.MarshalJSON(t, value)
 		if schemaErr := compiled.Validate(encoded); (schemaErr == nil) != (keyringErr == nil) {
 			t.Errorf("id %q: schema validation = %v, NewKeyring() = %v", id, schemaErr, keyringErr)
 		}
@@ -372,7 +371,7 @@ func TestConfigValidationRejectsS3BlobAuthTheWorkerCannotBuild(t *testing.T) {
 			}
 			loaded := mustLoadConfig(t, exampleYAML(t))
 			loaded.BlobStore.S3.Auth = auth
-			schemaErr := compiled.Validate(mustMarshalJSON(t, loaded))
+			schemaErr := compiled.Validate(testassert.MarshalJSON(t, loaded))
 			err := loaded.Validate()
 			if kind == "aws_default_chain" {
 				if err != nil || schemaErr != nil {

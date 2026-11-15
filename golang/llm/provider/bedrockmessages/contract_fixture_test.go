@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -43,13 +44,13 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 	adapter := fixtureBedrockAdapter(t)
 	call := compileBedrockFixture(t, adapter, request)
 
-	encodedWire := contract.MarshalJSON(t, call.SDKParams)
+	encodedWire := testassert.MarshalJSON(t, call.SDKParams)
 	assertBedrockFixtureJSON(t, encodedWire, "request.wire.json")
 
 	response := loadBedrockContractResponse(t, "response.completed.json")
 	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
 	testassert.NoError(t, err)
-	gotSemantic := contract.MarshalJSON(t, lifted)
+	gotSemantic := testassert.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, gotSemantic, "response.semantic.json")
 	assertBedrockOpaqueStateFixture(t, lifted)
 
@@ -116,7 +117,7 @@ func assertBedrockPriorityDowngrade(t *testing.T, adapter *Adapter) {
 	response := loadBedrockContractResponse(t, "priority-downgrade.response.json")
 	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
 	testassert.NoError(t, err)
-	got := contract.MarshalJSON(t, lifted)
+	got := testassert.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, got, "priority-downgrade.semantic.json")
 	if lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard {
 		t.Fatalf("priority downgrade actual class = %#v, want standard", lifted.Service.Actual)
@@ -189,12 +190,12 @@ func compileBedrockFixture(t *testing.T, adapter *Adapter, request llm.Request) 
 
 func loadBedrockContractRequest(t *testing.T, name string) llm.Request {
 	t.Helper()
-	return contract.DecodeJSON[llm.Request](t, mustReadBedrockFixture(t, name))
+	return testassert.UnmarshalJSON[llm.Request](t, mustReadBedrockFixture(t, name))
 }
 
 func loadBedrockContractResponse(t *testing.T, name string) anthropic.Message {
 	t.Helper()
-	return contract.DecodeJSON[anthropic.Message](t, mustReadBedrockFixture(t, name))
+	return testassert.UnmarshalJSON[anthropic.Message](t, mustReadBedrockFixture(t, name))
 }
 
 func loadBedrockFixtureMetadata(t *testing.T) contracttest.Metadata {
@@ -253,7 +254,7 @@ func assertBedrockUsageAndCost(t *testing.T, adapter *Adapter) {
 	call := compileBedrockFixture(t, adapter, llm.Request{OperationKey: "fixture-bedrock-usage", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard})
 	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
 	testassert.NoError(t, err)
-	got := contract.MarshalJSON(t, lifted)
+	got := testassert.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, got, "usage-cost.semantic.json")
 	if lifted.Cost != (llm.Cost{}) {
 		t.Fatalf("Bedrock cost should remain unreported: %#v", lifted.Cost)
@@ -263,7 +264,7 @@ func assertBedrockUsageAndCost(t *testing.T, adapter *Adapter) {
 func assertBedrockStrictLoss(t *testing.T, adapter *Adapter) {
 	t.Helper()
 	request := loadBedrockContractRequest(t, "strict-loss.semantic.json")
-	expected := contract.DecodeJSON[fixtureProviderError](t, mustReadBedrockFixture(t, "strict-loss.wire.json"))
+	expected := testassert.UnmarshalJSON[fixtureProviderError](t, mustReadBedrockFixture(t, "strict-loss.wire.json"))
 	for _, portability := range []llm.PortabilityMode{llm.PortabilityStrict, llm.PortabilityBestEffort} {
 		request.Portability = portability
 		_, err := adaptertest.Compile(adapter, bedrockFixtureEndpoint, provider.FamilyBedrockMessages, request, true)
@@ -284,7 +285,7 @@ func assertBedrockClassifiedError(t *testing.T) {
 		Expected  fixtureProviderError `json:"expected"`
 	}
 	testassert.NoError(t, json.Unmarshal(mustReadBedrockFixture(t, "classified-error.wire.json"), &fixture))
-	apiErr := contract.DecodeJSON[anthropic.Error](t, fixture.Body)
+	apiErr := testassert.UnmarshalJSON[anthropic.Error](t, fixture.Body)
 	apiErr.StatusCode = fixture.Status
 	apiErr.RequestID = fixture.RequestID
 	apiErr.Response = &http.Response{Header: http.Header{"X-Amzn-Requestid": []string{fixture.RequestID}}}
@@ -293,7 +294,7 @@ func assertBedrockClassifiedError(t *testing.T) {
 	if mapped.Provider.RequestID != fixture.RequestID {
 		t.Fatalf("classified request ID = %q, want %q", mapped.Provider.RequestID, fixture.RequestID)
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	if bytes.Contains(encoded, []byte("fixture body [REDACTED]")) {
 		t.Fatal("classified error leaked provider response body")
 	}
@@ -322,7 +323,7 @@ func assertBedrockContinuationCompatibility(t *testing.T, adapter *Adapter) {
 		t.Fatal("Bedrock continuation call did not retain opaque-state requirement")
 	}
 	params := contract.JSONObject(t, replay.SDKParams)
-	replayMessages := contract.MarshalJSON(t, params["messages"])
+	replayMessages := testassert.MarshalJSON(t, params["messages"])
 	contract.AssertCanonicalJSON(t, replayMessages, wire.ReplayMessages, "continuation replay messages")
 
 	expectedByName := make(map[string]fixtureProviderError, len(wire.Rejections))
@@ -353,12 +354,7 @@ type fixtureProviderError struct {
 
 func assertBedrockProviderError(t *testing.T, got *provider.Error, want fixtureProviderError) {
 	t.Helper()
-	if got == nil {
-		t.Fatal("provider error is nil")
-	}
-	if got.Code != want.Code || got.Phase != want.Phase || got.Dispatch != want.Dispatch || got.Retry != want.Retry {
-		t.Fatalf("provider error = %#v, want %#v", got, want)
-	}
+	testkit.ProviderError(t, got, testkit.ProviderClass{Code: want.Code, Phase: want.Phase, Dispatch: want.Dispatch, Retry: want.Retry})
 	if want.MessageContains != "" && !strings.Contains(got.SafeMessage, want.MessageContains) {
 		t.Fatalf("provider error message = %q, want substring %q", got.SafeMessage, want.MessageContains)
 	}

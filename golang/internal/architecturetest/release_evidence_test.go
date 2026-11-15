@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/contractkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -23,6 +24,7 @@ var requiredReleaseEvidenceArtifacts = []string{
 	"fuzz_summary",
 	"benchmark_summary",
 	"fixture_manifest",
+	"contract_kit",
 	"redis_summary",
 	"temporal_summary",
 	"compose_summary",
@@ -44,6 +46,7 @@ var releaseEvidenceArtifactPaths = map[string]string{
 	"fuzz_summary":       "fuzz-summary.json",
 	"benchmark_summary":  "benchmark-summary.json",
 	"fixture_manifest":   "fixture-manifest.json",
+	"contract_kit":       "contract-kit.json",
 	"redis_summary":      "redis-summary.json",
 	"temporal_summary":   "temporal-summary.json",
 	"compose_summary":    "compose-summary.json",
@@ -747,7 +750,7 @@ func TestReleaseEvidenceVerifierRejectsUnsafeArtifactProvenanceURLs(t *testing.T
 			artifactPath := filepath.Join(bundle.directory, releaseEvidenceArtifactPaths[test.artifact])
 			document := readJSONObject(t, artifactPath)
 			test.apply(t, document, "https://operator:"+sentinel+"@example.invalid/provenance")
-			data := marshalJSON(t, document)
+			data := testassert.MarshalJSON(t, document)
 			replaceReleaseEvidenceArtifact(t, bundle, evidence, test.artifact, data)
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
@@ -781,7 +784,7 @@ func TestReleaseEvidenceVerifierEnforcesCanonicalProvenanceURLPolicy(t *testing.
 					} else {
 						document["direct_modules"].([]any)[0].(map[string]any)["source"] = test.url
 					}
-					data := marshalJSON(t, document)
+					data := testassert.MarshalJSON(t, document)
 					replaceReleaseEvidenceArtifact(t, bundle, evidence, artifact, data)
 				default:
 					t.Fatalf("unknown provenance target %q", target)
@@ -1553,6 +1556,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		"fuzz_summary":          releaseEvidenceGateSummary("fuzz_summary"),
 		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkV1ActivitiesAdmissionMemory","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"target_status":"pass","objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
 		"fixture_manifest":      `{"schema_version":1,"kind":"fixture_manifest","status":"pass","version":1,"fixtures":[{"profile":"openai-responses","upstream_url":"https://platform.openai.com/docs/api-reference/responses","upstream_date":"2026-07-14","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"redacted":true}`,
+		"contract_kit":          releaseEvidenceContractKit(t),
 		"redis_summary":         `{"schema_version":1,"kind":"redis_summary","status":"pass","service":"redis","state":"running","health":"healthy","redacted":true}`,
 		"temporal_summary":      `{"schema_version":1,"kind":"temporal_summary","status":"pass","service":"temporal","state":"running","health":"healthy","redacted":true}`,
 		"compose_summary":       `{"schema_version":1,"kind":"compose_summary","status":"pass","services":["redis","temporal"],"redacted":true}`,
@@ -1610,6 +1614,17 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		indexReference: indexReference,
 		indexDigest:    indexDigest,
 	}
+}
+
+// releaseEvidenceContractKit is the embedded contract kit's manifest, the
+// contract_kit artifact collection records (#1575).
+func releaseEvidenceContractKit(t *testing.T) string {
+	t.Helper()
+	kit, err := contractkit.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(kit.ManifestJSON())
 }
 
 // releaseEvidenceImageIndex is a Buildx-shaped OCI image index: one manifest
@@ -1881,18 +1896,10 @@ func writeReleaseArtifact(t *testing.T, path string, data []byte) {
 	writeFile(t, path, data, 0o600)
 }
 
-// marshalJSON encodes value as JSON, failing the test on error.
-func marshalJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
-}
-
 // writeJSONArtifact writes value as JSON to path with writeReleaseArtifact.
 func writeJSONArtifact(t *testing.T, path string, value any) {
 	t.Helper()
-	writeReleaseArtifact(t, path, marshalJSON(t, value))
+	writeReleaseArtifact(t, path, testassert.MarshalJSON(t, value))
 }
 
 func readReleaseEvidence(t *testing.T, directory string) map[string]any {
@@ -1908,7 +1915,7 @@ func readReleaseEvidenceJSONArtifact(t *testing.T, directory, name string) map[s
 func cloneReleaseEvidenceJSON(t *testing.T, document map[string]any) map[string]any {
 	t.Helper()
 	var clone map[string]any
-	decodeJSON(t, marshalJSON(t, document), "release evidence clone", &clone)
+	decodeJSON(t, testassert.MarshalJSON(t, document), "release evidence clone", &clone)
 	return clone
 }
 

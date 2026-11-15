@@ -22,9 +22,10 @@ let assert_fixture name decode encode =
   let value = ok (decode (Bytes.of_string input)) in
   let output = ok (encode value) |> Bytes.to_string in
   if canonical input <> canonical output then failf "fixture %s changed on canonical round trip" name
-(* fixtures/v1 holds byte-for-byte copies of golang/llm/testdata/v1 fixtures
-   (pinned by the Go schema parity test).  They are not written in this
-   codec's field order, so the round trip is compared with sorted fields. *)
+(* fixtures/v1 is a byte-for-byte copy of the v1 contract kit's fixtures
+   (golang/contractkit, pinned by its TestOCamlFixturesMirrorTheKit).  They
+   are not written in this codec's field order, so the round trip is compared
+   with sorted fields. *)
 let sorted json = Yojson.Safe.to_string (Yojson.Safe.sort (Yojson.Safe.from_string json))
 let assert_shared_fixture name decode encode =
   let input = fixture_in "v1" name in
@@ -272,14 +273,15 @@ let () =
   error (V1_codec.decode_compaction_response (with_usage_field "provider_raw" `Null compact_plain));
   error (V1_codec.decode_compaction_response (with_diagnostic_details `Null compact_plain))
 
-(* Every fixture in golang/llm/testdata/v1 has a copy here (the Go schema
-   parity test fails otherwise), so this reads the whole shared corpus: each
-   positive fixture round-trips through the codec its name selects, and each
-   negative fixture is rejected by the decoder for the record it corrupts.
-   This codec writes defaults, decimals and offsets differently from Go, so
-   its encoding of each positive fixture is pinned in fixtures/v1-encoded,
-   which the Go parity test validates against the published schemas and the
-   Go codec (#1517).  Set LLMTW_WRITE_ENCODED_FIXTURES to a directory to
+(* Every fixture of the v1 contract kit has a copy here (the kit's mirror
+   test fails otherwise; opam installs this package from its subdirectory
+   alone, so it cannot read the kit from golang/), so this reads the whole
+   shared corpus: each positive fixture round-trips through the codec its
+   name selects, and each negative fixture is rejected by the decoder for the
+   record it corrupts.  This codec writes defaults, decimals and offsets
+   differently from Go, so its encoding of each positive fixture is pinned in
+   fixtures/v1-encoded, which golang/contractkit checks with the consumer
+   runner's own CheckEncoding (#1517, #1575).  Set LLMTW_WRITE_ENCODED_FIXTURES to a directory to
    regenerate those files there. *)
 let starts_with prefix name = String.starts_with ~prefix name
 let ends_with suffix name = String.ends_with ~suffix name

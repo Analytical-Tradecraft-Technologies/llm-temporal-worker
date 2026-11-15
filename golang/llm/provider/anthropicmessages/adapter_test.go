@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -32,7 +33,7 @@ func TestInvokeMakesExactlyOneSDKCallAndLiftsResponse(t *testing.T) {
 	client, err := NewClient(ClientConfig{
 		BaseURL: "http://127.0.0.1/contract",
 		APIKey:  "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			if request.URL.Path != "/contract/v1/messages" {
 				t.Errorf("request path = %q", request.URL.Path)
@@ -70,7 +71,7 @@ func TestInvokeMapsRateLimitAndAuthenticationErrorsWithoutRetry(t *testing.T) {
 			client, err := NewClient(ClientConfig{
 				BaseURL: "http://127.0.0.1/contract",
 				APIKey:  "test-key",
-				HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 					calls++
 					return adaptertest.JSONResponse(request, test.status, body, "Request-Id", test.requestID, "Retry-After", "2"), nil
 				})},
@@ -144,5 +145,3 @@ func compileProdCall(t *testing.T, client *Client, baseURL, operationKey string)
 	testassert.NoError(t, err)
 	return adapter, adaptertest.CompileStrict(t, adapter, "anthropic-prod", provider.FamilyAnthropicMessages, llm.Request{OperationKey: operationKey, Model: "claude-contract"})
 }
-
-type roundTripFunc = adaptertest.RoundTripFunc

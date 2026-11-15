@@ -14,8 +14,8 @@ func TestNormalizeRequestIsIdempotent(t *testing.T) {
 	request := readRequestFixture(t, "minimal.json")
 	first := mustNormalizeRequest(t, request)
 	second := mustNormalizeRequest(t, first)
-	firstJSON := mustMarshal(t, first)
-	secondJSON := mustMarshal(t, second)
+	firstJSON := testassert.MarshalJSON(t, first)
+	secondJSON := testassert.MarshalJSON(t, second)
 	if !bytes.Equal(firstJSON, secondJSON) {
 		t.Fatalf("normalization is not idempotent:\nfirst:  %s\nsecond: %s", firstJSON, secondJSON)
 	}
@@ -103,7 +103,7 @@ func readRequestFixture(t *testing.T, name string) llm.Request {
 
 func unmarshalRequest(t *testing.T, data []byte) llm.Request {
 	t.Helper()
-	return mustUnmarshal[llm.Request](t, data, "decode request")
+	return testassert.UnmarshalJSON[llm.Request](t, data, "decode request")
 }
 
 // assertSameRequestDigest fails when first and second have different request

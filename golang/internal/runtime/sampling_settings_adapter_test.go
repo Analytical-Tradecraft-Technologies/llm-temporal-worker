@@ -6,10 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -20,7 +20,7 @@ import (
 func samplingSettingsRoutes() []hierarchyRoute {
 	routes := hierarchyRoutes()
 	return append(routes, hierarchyRoute{name: "openai_responses", family: provider.FamilyOpenAIResponses, tier: "default", adapter: func(t *testing.T) provider.Adapter {
-		adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+		adapter := responsesAdapter(t, &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("unexpected network call")
 		})})
 		return adapter
@@ -48,8 +48,8 @@ func compileSettingsPatch(t *testing.T, adapter provider.Adapter, family provide
 	if err != nil {
 		return nil, err
 	}
-	data := encodeJSON(t, call.SDKParams)
-	wire := decodeJSON[map[string]any](t, data)
+	data := testassert.MarshalJSON(t, call.SDKParams)
+	wire := testassert.UnmarshalJSON[map[string]any](t, data)
 	return wire, nil
 }
 
@@ -137,9 +137,7 @@ func TestSettingsPatchSamplingAndReasoningReachEveryAdapter(t *testing.T) {
 			for _, check := range checks {
 				wire, err := compileSettingsPatch(t, adapter, route.family, check.patch, check.strict)
 				if check.reject != "" {
-					if err == nil || !strings.Contains(err.Error(), check.reject) {
-						t.Fatalf("%s: error = %v; want a rejection mentioning %q", check.patch, err, check.reject)
-					}
+					testassert.ErrorContains(t, err, check.reject, check.patch)
 					continue
 				}
 				if err != nil {

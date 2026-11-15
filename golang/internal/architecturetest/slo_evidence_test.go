@@ -257,7 +257,7 @@ func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *test
 
 	record := readJSONObject(t, evidencePath)
 	record["endpoint"] = "https://redis.internal.example"
-	tampered := marshalJSON(t, record)
+	tampered := testassert.MarshalJSON(t, record)
 	writeReleaseArtifact(t, evidencePath, tampered)
 	assertSLOEvidenceRejected(t, root, "verify tampered evidence", "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest)
 

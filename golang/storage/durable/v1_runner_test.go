@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -363,7 +365,7 @@ func TestGenerateV1CancellationAfterCompactStopsBeforeGenerateAdmission(t *testi
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GenerateV1 error = %v, want context cancellation", err)
 	}
-	if contains(events, "route") || contains(events, "reserve") {
+	if slices.Contains(events, "route") || slices.Contains(events, "reserve") {
 		t.Fatalf("canceled Compact entered Generate admission: %v", events)
 	}
 }
@@ -387,7 +389,7 @@ func TestGenerateV1CancellationAfterCacheFinalizationDoesNotReturnSuccess(t *tes
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GenerateV1 error = %v, want context cancellation", err)
 	}
-	if contains(events, "dispatch") || contains(events, "reconcile") {
+	if slices.Contains(events, "dispatch") || slices.Contains(events, "reconcile") {
 		t.Fatalf("cache finalization cancellation reached later side effect: %v", events)
 	}
 }
@@ -505,7 +507,7 @@ func TestGenerateV1RejectsMismatchedCompletedAndPendingReplay(t *testing.T) {
 	}
 	_, err := GenerateV1(context.Background(), request, ports)
 	assertStageFailure(t, err, "replay validation failure")
-	if contains(events, "reconcile") || contains(events, "dispatch") {
+	if slices.Contains(events, "reconcile") || slices.Contains(events, "dispatch") {
 		t.Fatalf("ambiguous replay reached side effects: %v", events)
 	}
 }
@@ -571,7 +573,7 @@ func TestGenerateV1RejectsInvalidCacheHitFinalization(t *testing.T) {
 
 			_, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
 			assertStageFailure(t, err, "cache finalization stage failure")
-			if contains(events, "dispatch") {
+			if slices.Contains(events, "dispatch") {
 				t.Fatalf("invalid cache hit reached provider dispatch: %v", events)
 			}
 		})
@@ -613,9 +615,7 @@ func TestGenerateV1PreservesTypedStageErrors(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrV1Stage) || !errors.As(err, &got) {
 		t.Fatalf("error = %v, want typed stage error", err)
 	}
-	if got.Code != provider.CodeStateUnavailable {
-		t.Fatalf("provider code = %q", got.Code)
-	}
+	testkit.ProviderError(t, got, testkit.ProviderClass{Code: provider.CodeStateUnavailable}, "provider code")
 }
 
 func TestGenerateV1RejectsFinalizationFromAnotherOperation(t *testing.T) {
@@ -708,7 +708,7 @@ func TestGenerateV1RejectsFinalizationFromWrongEffectiveParent(t *testing.T) {
 
 	_, err := GenerateV1(context.Background(), request, ports)
 	assertStageFailure(t, err, "finalization checkpoint parent failure")
-	if contains(events, "reconcile") {
+	if slices.Contains(events, "reconcile") {
 		t.Fatalf("wrong-parent finalization reached reconciliation: %v", events)
 	}
 }
@@ -721,7 +721,7 @@ func testClaimIdentityRejected(t *testing.T, run func(mutate func(*ClaimReceipt)
 		t.Run(name, func(t *testing.T) {
 			events, err := run(mutate)
 			assertStageFailure(t, err, "claim identity failure")
-			if contains(events, "dispatch") {
+			if slices.Contains(events, "dispatch") {
 				t.Fatalf("mismatched claim reached dispatch: %v", events)
 			}
 		})
@@ -743,7 +743,7 @@ func testFailsClosedBeforeDispatch(t *testing.T, stages []string, run func(failS
 		t.Run(failStage, func(t *testing.T) {
 			events, err := run(failStage)
 			assertStageFailure(t, err, "stage failure")
-			if contains(events, "dispatch") {
+			if slices.Contains(events, "dispatch") {
 				t.Fatalf("phase failure %q reached provider dispatch: %v", failStage, events)
 			}
 		})
@@ -767,7 +767,7 @@ func testCancellationStopsBeforeNextPhase(t *testing.T, phases []cancellationPha
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("runner error = %v, want context cancellation", err)
 			}
-			if contains(events, test.forbid) {
+			if slices.Contains(events, test.forbid) {
 				t.Fatalf("cancellation after %s reached %s: %v", test.phase, test.forbid, events)
 			}
 		})
@@ -823,16 +823,5 @@ func assertReservationDeniedAfterOneSecond(t *testing.T, err error) {
 func assertReconcilePending(t *testing.T, err error) {
 	t.Helper()
 	providerErr := requireProviderError(t, err, ErrReconcilePending, "reconciliation-pending")
-	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Retry != provider.RetrySameOperation {
-		t.Fatalf("provider error = %#v", providerErr)
-	}
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeStateUnavailable, Retry: provider.RetrySameOperation})
 }

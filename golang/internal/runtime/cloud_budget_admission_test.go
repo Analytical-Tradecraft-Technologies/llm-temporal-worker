@@ -105,7 +105,7 @@ func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budg
 	if kind == "compact" {
 		input = f.compact
 	}
-	data := encodeJSON(t, input)
+	data := testassert.MarshalJSON(t, input)
 	id, _ := cloudstate.NewRequestID()
 	f.store = &admissionPlanStore{record: cloudstate.Record{Request: cloudstate.CreateRequest{
 		ID: id, Scope: testRequestScope, Kind: kind, Manifest: data, CreatedAt: f.attempt.QuotedAt}, Status: cloudstate.StatusRunning}}

@@ -3,7 +3,7 @@ package anthropicmessages
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
@@ -27,9 +27,7 @@ func TestNewProfileRejectsRequestOwnedExtensionFields(t *testing.T) {
 		for _, mapped := range []string{wire, ""} {
 			profile := testProfile()
 			profile.AllowedExtensions["anthropic.owned"] = ExtensionSpec{Fields: map[string]string{wire: mapped}}
-			if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "cannot override") {
-				t.Fatalf("NewProfile(%q -> %q) = %v, want request-owned rejection", wire, mapped, err)
-			}
+			testassert.ErrorContains(t, testassert.Err(NewProfile(profile)), "cannot override", fmt.Sprintf("NewProfile(%q -> %q)", wire, mapped))
 		}
 	}
 }

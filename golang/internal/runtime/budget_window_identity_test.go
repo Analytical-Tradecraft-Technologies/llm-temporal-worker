@@ -23,10 +23,10 @@ import (
 func localConfigWithBudgetWindows(t *testing.T, windows string) []byte {
 	t.Helper()
 	directory := t.TempDir()
-	data := mustReadFile(t, "../../deploy/local/config.yaml")
+	data := testassert.ReadFile(t, "../../deploy/local/config.yaml")
 	text := string(data)
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
-		catalogData := mustReadFile(t, filepath.Join("../../deploy/local", name))
+		catalogData := testassert.ReadFile(t, filepath.Join("../../deploy/local", name))
 		path := filepath.Join(directory, name)
 		testassert.NoError(t, os.WriteFile(path, catalogData, 0o600))
 		text = strings.ReplaceAll(text, "/etc/llmtw/"+name, path)

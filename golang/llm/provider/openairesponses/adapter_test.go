@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -68,9 +69,7 @@ func TestCompileRejectsUnusableCapabilitiesBeforeDispatch(t *testing.T) {
 			if !errors.As(err, &providerErr) {
 				t.Fatalf("Compile() error = %T %v, want *provider.Error", err, err)
 			}
-			if providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Phase != provider.PhaseCompile || providerErr.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("Compile() error = %#v, want unsupported compile rejection", providerErr)
-			}
+			testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Phase: provider.PhaseCompile, Dispatch: provider.DispatchNotDispatched}, "Compile() error")
 			if !strings.Contains(providerErr.SafeMessage, "text") || !strings.Contains(providerErr.SafeMessage, string(test.state)) {
 				t.Fatalf("Compile() safe message = %q, want feature and state", providerErr.SafeMessage)
 			}
@@ -116,9 +115,7 @@ func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
 	if !errors.As(err, &mapped) {
 		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
 	}
-	if mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("nil response error = %#v, want accepted lift invalid response", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Phase: provider.PhaseLift, Dispatch: provider.DispatchAccepted}, "nil response error")
 	if calls != 1 {
 		t.Fatalf("HTTP calls = %d, want one", calls)
 	}
@@ -179,7 +176,7 @@ func TestCapabilitiesRejectMismatchedFamily(t *testing.T) {
 
 func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {
 	cause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
-	adapter, call := compileOpenAIProdCall(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	adapter, call := compileOpenAIProdCall(t, &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, cause
 	})}, "op-transport")
 	_, err := adapter.Invoke(context.Background(), call, nil)
@@ -273,7 +270,7 @@ func newFixtureAdapter(t *testing.T, body []byte) *Adapter {
 
 func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *Adapter {
 	t.Helper()
-	return newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	return newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if onCall != nil {
 			onCall()
 		}
@@ -284,8 +281,6 @@ func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *A
 // allowSupportedExtensions allows every supported openai.responses extension
 // field, as an endpoint that lists all of them would.
 var allowSupportedExtensions = WithAllowedExtensionFields("include", "store", "truncation")
-
-type roundTripFunc = adaptertest.RoundTripFunc
 
 // A continuation pinned to another endpoint, or whose first Responses state
 // is not a stored-response ID, fails at compile instead of after admission

@@ -251,7 +251,7 @@ func parseJSONNode(t testing.TB, data []byte) *jsonNode {
 		testassert.NoError(t, err)
 		delimiter, ok := token.(json.Delim)
 		if !ok {
-			encoded := mustMarshalJSON(t, token)
+			encoded := testassert.MarshalJSON(t, token)
 			return &jsonNode{scalar: string(encoded)}
 		}
 		node := &jsonNode{kind: byte(delimiter)}
@@ -532,7 +532,7 @@ func richGenerateRequest(t testing.TB) string {
 
 func richTranscriptItems(t testing.TB) string {
 	t.Helper()
-	return string(mustUnmarshalJSON[map[string]json.RawMessage](t, []byte(richTranscriptRequest), "decode rich transcript request")["input"])
+	return string(testassert.UnmarshalJSON[map[string]json.RawMessage](t, []byte(richTranscriptRequest), "decode rich transcript request")["input"])
 }
 
 // JSON carried inside a string is text, not structure: it was never scanned
@@ -576,24 +576,6 @@ func FuzzFastJSONDecodingMatchesReference(f *testing.F) {
 			requireSameOutcome(t, name, differentialDecoders[name], data)
 		}
 	})
-}
-
-// mustMarshalJSON encodes value as JSON, failing the test on an error.
-func mustMarshalJSON(t testing.TB, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
-}
-
-// mustUnmarshalJSON decodes data into a new T, failing with what as context.
-func mustUnmarshalJSON[T any](t testing.TB, data []byte, what string) T {
-	t.Helper()
-	var value T
-	if err := json.Unmarshal(data, &value); err != nil {
-		t.Fatalf("%s: %v", what, err)
-	}
-	return value
 }
 
 // readFixtureContaining reads the file at path and fails unless it contains

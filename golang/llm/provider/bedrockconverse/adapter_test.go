@@ -3,7 +3,7 @@ package bedrockconverse
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -110,10 +111,7 @@ func TestCompileRejectsNonFunctionToolKinds(t *testing.T) {
 				Input: []llm.Item{llm.HumanText("Hello")},
 				Tools: []llm.Tool{{Kind: kind, Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Parallel: true}}
 			_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{Family: provider.FamilyBedrockConverse, EndpointID: "bedrock-prod", Model: request.Model}, Strict: strict})
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("kind %s strict %v: Compile = %v, want invalid_argument before dispatch", kind, strict, err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeInvalidArgument, Dispatch: provider.DispatchNotDispatched}, fmt.Sprintf("kind %s strict %v: Compile", kind, strict))
 		}
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -738,7 +739,7 @@ func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
 	}
 
 	probe.healthy.Store(false)
-	waitForRuntimeEvent(t, first.stopEntered, "first worker pause drain")
+	testkit.WaitForEvent(t, first.stopEntered, "first worker pause drain")
 	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && first.stops.Load() == 1 })
 
 	healthyChecks := probe.healthyChecks.Load()
@@ -749,7 +750,7 @@ func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
 	}
 
 	release()
-	waitForRuntimeEvent(t, first.stopExited, "first worker pause drain completion")
+	testkit.WaitForEvent(t, first.stopExited, "first worker pause drain completion")
 	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() == 1 && built.Load() == 2 })
 }
 
@@ -844,15 +845,6 @@ func (worker *drainingMonitoringWorker) Stop() {
 	select {
 	case worker.stopExited <- struct{}{}:
 	default:
-	}
-}
-
-func waitForRuntimeEvent(t *testing.T, event <-chan struct{}, description string) {
-	t.Helper()
-	select {
-	case <-event:
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", description)
 	}
 }
 
@@ -1065,7 +1057,7 @@ func TestRuntimeDependencyPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(
 	startTestRuntime(t, runtime)
 
 	probe.healthy.Store(false)
-	waitForRuntimeEvent(t, first.stopEntered, "dependency pause drain")
+	testkit.WaitForEvent(t, first.stopEntered, "dependency pause drain")
 	probe.healthy.Store(true)
 	// The in-flight provider call needs several graceful stop windows.
 	time.Sleep(5 * graceful)
@@ -1125,7 +1117,7 @@ func TestDependencyReadinessDiscardsAProbeOfASupersededSnapshot(t *testing.T) {
 
 	synced := make(chan error, 1)
 	go func() { synced <- runtime.syncDependencyReadiness(context.Background()) }()
-	waitForRuntimeEvent(t, stale.entered, "stale probe start")
+	testkit.WaitForEvent(t, stale.entered, "stale probe start")
 	reloaded := make(chan error, 1)
 	go func() { reloaded <- runtime.App.Reload(context.Background(), configuration) }()
 	waitForRuntime(t, func() bool { return runtime.App.Current() != initial })
@@ -1169,7 +1161,7 @@ func TestDependencyReadinessReleasesItsSnapshotLeaseBeforeResume(t *testing.T) {
 	runtime := mustNewRuntime(t, configuration, options)
 	synced := make(chan error, 1)
 	go func() { synced <- runtime.syncDependencyReadiness(context.Background()) }()
-	waitForRuntimeEvent(t, controller.entered, "worker start during dependency recovery")
+	testkit.WaitForEvent(t, controller.entered, "worker start during dependency recovery")
 	reloaded := make(chan error, 1)
 	go func() { reloaded <- runtime.App.Reload(context.Background(), configuration) }()
 	select {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -171,7 +172,7 @@ func TestUnconfiguredV1RuntimeFailsClosedForEveryOperation(t *testing.T) {
 			if err == nil {
 				t.Fatal("unconfigured v1 runtime unexpectedly succeeded")
 			}
-			assertProviderError(t, err, provider.CodeConfiguration, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever)
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeConfiguration, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever})
 			if got, want := err.Error(), "durable v1 runtime is not configured"; got != want {
 				t.Fatalf("error text = %q, want stable redacted message %q", got, want)
 			}
@@ -204,7 +205,7 @@ func TestV1GeneratePreservesHeartbeatLifecycleDuringRuntimeDispatch(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for v1 Activity completion")
 	}
-	waitForKeepaliveEvent(t, ticker.stopped, "v1 keepalive ticker to stop")
+	testkit.WaitForEvent(t, ticker.stopped, "v1 keepalive ticker to stop")
 }
 
 func TestRegisteredV1GenerateExecutesThroughTemporalEnvironment(t *testing.T) {

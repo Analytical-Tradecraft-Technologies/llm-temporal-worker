@@ -21,24 +21,8 @@ type listedPackage struct {
 }
 
 func TestDomainImportBoundary(t *testing.T) {
-	command := exec.Command("go", "list", "-deps", "-json", "./...")
-	command.Dir = moduleRoot(t)
-	output, err := command.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			t.Fatalf("go list failed: %v\n%s", err, exitErr.Stderr)
-		}
-		t.Fatal(err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(output))
 	var violations []string
-	for {
-		var packageInfo listedPackage
-		err := decoder.Decode(&packageInfo)
-		if err == io.EOF {
-			break
-		}
-		testassert.NoError(t, err)
+	for _, packageInfo := range listPackages(t) {
 		if !protectedDomain(packageInfo.ImportPath) {
 			continue
 		}
@@ -50,6 +34,61 @@ func TestDomainImportBoundary(t *testing.T) {
 	}
 	if len(violations) > 0 {
 		t.Fatalf("forbidden domain dependency edges:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+// testSupportPackages hold helpers for tests. Only tests and other
+// test-support packages may import them, so none reaches the binary.
+var testSupportPackages = map[string]bool{
+	modulePath + "/internal/repotest":                  true,
+	modulePath + "/internal/testassert":                true,
+	modulePath + "/internal/testkit":                   true,
+	modulePath + "/llm/provider/internal/adaptertest":  true,
+	modulePath + "/llm/provider/internal/contract":     true,
+	modulePath + "/llm/provider/internal/messagestest": true,
+	modulePath + "/llm/provider/internal/streamtest":   true,
+}
+
+func TestTestSupportPackagesStayOutOfProductionCode(t *testing.T) {
+	var violations []string
+	for _, packageInfo := range listPackages(t) {
+		if testSupportPackages[packageInfo.ImportPath] {
+			continue
+		}
+		for _, imported := range packageInfo.Imports {
+			if testSupportPackages[imported] {
+				violations = append(violations, fmt.Sprintf("%s imports %s", packageInfo.ImportPath, imported))
+			}
+		}
+	}
+	if len(violations) > 0 {
+		t.Fatalf("production packages import test-support packages:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+// listPackages lists every package the module builds, with the imports of
+// its non-test files.
+func listPackages(t *testing.T) []listedPackage {
+	t.Helper()
+	command := exec.Command("go", "list", "-deps", "-json", "./...")
+	command.Dir = moduleRoot(t)
+	output, err := command.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("go list failed: %v\n%s", err, exitErr.Stderr)
+		}
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	var packages []listedPackage
+	for {
+		var packageInfo listedPackage
+		err := decoder.Decode(&packageInfo)
+		if err == io.EOF {
+			return packages
+		}
+		testassert.NoError(t, err)
+		packages = append(packages, packageInfo)
 	}
 }
 

@@ -5,9 +5,9 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // Lift lifts a Messages response with the profile and call of the family
@@ -20,7 +20,7 @@ type Lift func(response *anthropic.Message, requestID string) (llm.Response, err
 func LiftPreservesThinkingToolOrderUsageAndActualTier(t *testing.T, family provider.Family, continuationHandle string, lift Lift) {
 	const thinkingRaw = `{"type":"thinking","thinking":"private","signature":"sig-1"}`
 	const redactedRaw = `{"type":"redacted_thinking","data":"redacted-1"}`
-	response := contract.DecodeJSON[anthropic.Message](t, []byte(`{
+	response := testassert.UnmarshalJSON[anthropic.Message](t, []byte(`{
       "id":"msg_1",
       "type":"message",
       "role":"assistant",
@@ -108,7 +108,7 @@ func LiftEmitsContinuationOnlyForReplayableProviderState(t *testing.T, serviceTi
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			response := contract.DecodeJSON[anthropic.Message](t, []byte(test.response))
+			response := testassert.UnmarshalJSON[anthropic.Message](t, []byte(test.response))
 			lifted, err := lift(&response, "req")
 			if err != nil {
 				t.Fatal(err)

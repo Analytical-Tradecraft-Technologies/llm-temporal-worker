@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -33,9 +34,7 @@ func TestStreamRejectsAdapterWithoutRealStreamBeforeDispatch(t *testing.T) {
 	if !errors.As(err, &providerErr) {
 		t.Fatalf("Stream error = %v, want provider error", err)
 	}
-	if providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Dispatch != provider.DispatchNotDispatched {
-		t.Fatalf("Stream error = %#v, want pre-admission streaming rejection", providerErr)
-	}
+	testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Dispatch: provider.DispatchNotDispatched}, "Stream error")
 	requireNoOperation(t, harness, request)
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
@@ -264,10 +263,10 @@ func assertCancellationClosesProviderSource(t *testing.T, adapterName, operation
 
 	stream := harness.mustStream(t, ctx, baseRequest(operationKey))
 	defer stream.Close()
-	waitChannel(t, signals.entered, "provider source read")
+	testkit.WaitForEvent(t, signals.entered, "provider source read")
 	cancel()
 	requireStreamErrored(t, readTerminalStream(t, stream), "terminal event")
-	waitChannel(t, signals.closed, closeDescription)
+	testkit.WaitForEvent(t, signals.closed, closeDescription)
 }
 
 func TestStreamCloseClosesProviderSourceThatIgnoresContext(t *testing.T) {
@@ -279,10 +278,10 @@ func TestStreamCloseClosesProviderSourceThatIgnoresContext(t *testing.T) {
 	if !ok {
 		t.Fatalf("stream type = %T, want *streamEmitter", stream)
 	}
-	waitChannel(t, source.entered, "provider source read")
+	testkit.WaitForEvent(t, source.entered, "provider source read")
 	testassert.NoError(t, stream.Close(), "close stream")
-	waitChannel(t, source.closed, "provider source close after explicit stream close")
-	waitChannel(t, emitter.closed, "producer completion after explicit stream close")
+	testkit.WaitForEvent(t, source.closed, "provider source close after explicit stream close")
+	testkit.WaitForEvent(t, emitter.closed, "producer completion after explicit stream close")
 }
 
 func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t *testing.T) {
@@ -295,7 +294,7 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 
 	stream := harness.mustStream(t, ctx, baseRequest("pre-dispatch-cancel"))
 	defer stream.Close()
-	waitChannel(t, heartbeat.entered, "admission heartbeat")
+	testkit.WaitForEvent(t, heartbeat.entered, "admission heartbeat")
 	cancel()
 	failure := requireStreamErrored(t, readTerminalStream(t, stream), "terminal event")
 	var providerErr *provider.Error
@@ -314,14 +313,14 @@ func TestStreamAppliesBackpressureBeforePullingMoreProviderEvents(t *testing.T) 
 	harness := newHarness(t, sourceStreamingAdapter("backpressure-stream", source))
 	stream := harness.mustStream(t, context.Background(), baseRequest("stream-backpressure"))
 	defer stream.Close()
-	waitChannel(t, source.bufferFilled, "stream buffer fill")
+	testkit.WaitForEvent(t, source.bufferFilled, "stream buffer fill")
 	select {
 	case <-source.gateRequested:
 		t.Fatal("engine pulled a provider event beyond the full public stream buffer")
 	default:
 	}
 	testassert.NoError(t, testassert.Err(stream.Next(context.Background())), "drain one public event")
-	waitChannel(t, source.gateRequested, "provider read after drain")
+	testkit.WaitForEvent(t, source.gateRequested, "provider read after drain")
 }
 
 func TestStreamParentCancellationWithFullBufferReleasesProducerAndKeepsTerminal(t *testing.T) {
@@ -335,9 +334,9 @@ func TestStreamParentCancellationWithFullBufferReleasesProducerAndKeepsTerminal(
 	if !ok {
 		t.Fatalf("stream type = %T, want *streamEmitter", stream)
 	}
-	waitChannel(t, source.bufferFilled, "full public stream buffer")
+	testkit.WaitForEvent(t, source.bufferFilled, "full public stream buffer")
 	cancel()
-	waitChannel(t, emitter.closed, "producer completion after parent cancellation")
+	testkit.WaitForEvent(t, emitter.closed, "producer completion after parent cancellation")
 	emitter.terminalMu.Lock()
 	pending := emitter.pending
 	emitter.terminalMu.Unlock()
@@ -614,16 +613,5 @@ func readTerminalStream(t *testing.T, stream llm.EventStream) []llm.Event {
 			}
 			return events
 		}
-	}
-}
-
-func waitChannel(t *testing.T, channel <-chan struct{}, description string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	select {
-	case <-channel:
-	case <-ctx.Done():
-		t.Fatalf("timed out waiting for %s", description)
 	}
 }

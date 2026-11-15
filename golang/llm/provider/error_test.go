@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestCommonErrorKeepsCauseLocalAndSerializesSafeFacts(t *testing.T) {
@@ -94,7 +94,7 @@ func TestWithEndpointIDCopiesSafeDetailsWithoutExposingCause(t *testing.T) {
 	if _, found := original.SafeDetails["endpoint"]; found {
 		t.Fatal("WithEndpointID mutated the original error")
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	for _, raw := range []string{"secret", "private-provider-content"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe endpoint error leaked %q: %s", raw, encoded)
@@ -106,13 +106,11 @@ func TestWithEndpointIDCopiesSafeDetailsWithoutExposingCause(t *testing.T) {
 func TestNewEgressDeniedErrorKeepsDiagnosticCauseLocal(t *testing.T) {
 	cause := fmt.Errorf("Authorization: Bearer provider-secret; prompt=private-content: %w", provider.ErrProviderEgressDenied)
 	mapped := provider.NewEgressDeniedError(cause)
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("mapped egress error = %#v", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute}, "mapped egress error")
 	if !errors.Is(mapped, provider.ErrProviderEgressDenied) || !errors.Is(mapped, cause) {
 		t.Fatal("egress marker or diagnostic cause was not preserved")
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	for _, raw := range []string{"provider-secret", "private-content"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe egress error leaked %q: %s", raw, encoded)
@@ -133,9 +131,7 @@ func TestRedirectResponseErrorIsAmbiguousForEveryRedirectStatus(t *testing.T) {
 			t.Fatalf("status %d was not recognized as a redirect", status)
 		}
 		mapped := provider.NewRedirectResponseError(status)
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-			t.Fatalf("status %d mapped = %#v, want ambiguous non-retriable dispatch error", status, mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetryNever}, fmt.Sprintf("status %d mapped", status))
 		if got, want := mapped.SafeDetails["status"], fmt.Sprintf("%d", status); got != want {
 			t.Fatalf("status detail = %q, want %q", got, want)
 		}

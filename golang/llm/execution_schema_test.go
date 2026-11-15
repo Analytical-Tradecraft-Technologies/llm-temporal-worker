@@ -17,7 +17,7 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 	for _, name := range []string{"generate-request", "compact-request", "generate-response", "compact-response", "execution-reference", "prepare-execution", "execution-result"} {
 		data, err := os.ReadFile(filepath.Join("..", "api", "schema", "v1", name+".schema.json"))
 		testassert.NoError(t, err)
-		document := mustUnmarshal[map[string]any](t, data, "decode "+name+" schema")
+		document := testassert.UnmarshalJSON[map[string]any](t, data, "decode "+name+" schema")
 		id := document["$id"].(string)
 		documents[name] = id
 		testassert.NoError(t, compiler.AddResource(id, document))
@@ -57,7 +57,7 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 		testassert.NoError(t, err)
 		for _, value := range test.values {
 			t.Run(test.name+"/"+value, func(t *testing.T) {
-				schemaErr := compiled.Validate(mustUnmarshal[any](t, []byte(value), "decode instance"))
+				schemaErr := compiled.Validate(testassert.UnmarshalJSON[any](t, []byte(value), "decode instance"))
 				codecErr := json.Unmarshal([]byte(value), test.target())
 				if (schemaErr == nil) != (codecErr == nil) {
 					t.Fatalf("schema=%v codec=%v", schemaErr, codecErr)

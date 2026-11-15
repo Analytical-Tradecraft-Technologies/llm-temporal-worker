@@ -88,12 +88,12 @@ func (f anthropicContractFixture) testLoweringAndLifting(t *testing.T) {
 	testassert.NoError(t, err)
 	params, err := lowerRequest(normalized, profile, tier)
 	testassert.NoError(t, err)
-	gotWire := contract.MarshalJSON(t, params)
+	gotWire := testassert.MarshalJSON(t, params)
 	f.assertCanonical(t, gotWire, "request.wire.json")
 
 	response := f.loadResponse(t, "response.completed.json")
 	lifted := mustLift(t, profile, f.call(normalized, serviceClass), &response, f.requestID)
-	gotSemantic := contract.MarshalJSON(t, lifted)
+	gotSemantic := testassert.MarshalJSON(t, lifted)
 	f.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
 
@@ -153,17 +153,17 @@ func (f anthropicContractFixture) testSemanticRoundTrip(t *testing.T) {
 
 func (f anthropicContractFixture) read(t *testing.T, name string) []byte {
 	t.Helper()
-	return contract.ReadFixture(t, filepath.Join("testdata", "contracts", f.id, name))
+	return testassert.ReadFile(t, filepath.Join("testdata", "contracts", f.id, name))
 }
 
 func (f anthropicContractFixture) loadRequest(t *testing.T, name string) llm.Request {
 	t.Helper()
-	return contract.DecodeJSON[llm.Request](t, f.read(t, name))
+	return testassert.UnmarshalJSON[llm.Request](t, f.read(t, name))
 }
 
 func (f anthropicContractFixture) loadResponse(t *testing.T, name string) anthropic.Message {
 	t.Helper()
-	return contract.DecodeJSON[anthropic.Message](t, f.read(t, name))
+	return testassert.UnmarshalJSON[anthropic.Message](t, f.read(t, name))
 }
 
 func (f anthropicContractFixture) loadMetadata(t *testing.T) contracttest.Metadata {
@@ -252,7 +252,7 @@ func (f anthropicContractFixture) assertContinuation(t *testing.T, profile Profi
 	adapter, err := New(f.newClient(t, nil), f.endpoint, profile)
 	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, f.endpoint, provider.FamilyAnthropicMessages, request)
-	wire := contract.MarshalJSON(t, call.SDKParams)
+	wire := testassert.MarshalJSON(t, call.SDKParams)
 	f.assertCanonical(t, wire, "continuation-compatibility.wire.json")
 
 	incompatible := request
@@ -288,7 +288,7 @@ func (f anthropicContractFixture) assertUsageClassesLossAndContinuation(t *testi
 		ServiceClass: llm.ServiceClassStandard,
 	}, &response, f.usageRequestID)
 	testassert.NoError(t, err)
-	gotUsage := contract.MarshalJSON(t, lifted)
+	gotUsage := testassert.MarshalJSON(t, lifted)
 	f.assertCanonical(t, gotUsage, "usage-cost.semantic.json")
 
 	f.assertCompileError(t, profile, f.loadRequest(t, "strict-loss.semantic.json"), "strict-loss.wire.json")

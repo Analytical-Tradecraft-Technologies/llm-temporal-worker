@@ -7,14 +7,14 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestDuplicateKeyToolArgumentsAreAnAcceptedInvalidResponse(t *testing.T) {
 	body := `{"id":"duplicate","object":"chat.completion","created":1,"model":"chat-model","service_tier":"default","usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18},"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"a\",\"q\":\"b\"}"}}]}}]}`
-	response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
+	response := testassert.UnmarshalJSON[openai.ChatCompletion](t, []byte(body))
 	_, err := liftStandard(&response)
 	adaptertest.RequireLiftInvalidResponse(t, err, "duplicate-key tool arguments error")
 
@@ -37,7 +37,7 @@ func TestToolArgumentsDeeperThanTheToolArgumentDepthAreAnAcceptedInvalidResponse
 		arguments := strings.Repeat(`{"a":`, depth-1) + `{}` + strings.Repeat(`}`, depth-1)
 		encoded, _ := json.Marshal(arguments)
 		body := `{"id":"deep","object":"chat.completion","created":1,"model":"chat-model","service_tier":"default","usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18},"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":` + string(encoded) + `}}]}}]}`
-		response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
+		response := testassert.UnmarshalJSON[openai.ChatCompletion](t, []byte(body))
 		return &response
 	}
 	lifted, err := liftStandard(response(llm.MaxToolArgumentsDepth))

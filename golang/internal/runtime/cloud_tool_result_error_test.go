@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -48,7 +49,7 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 
 	var requests atomic.Int32
 	var body atomic.Value
-	adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(r *http.Request) (*http.Response, error) {
+	adapter := responsesAdapter(t, &http.Client{Transport: testkit.RoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requests.Add(1)
 		data, err := io.ReadAll(r.Body)
 		if err != nil {

@@ -3,11 +3,12 @@ package adaptertest
 import (
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 )
 
 // LoopbackJSONServer serves body as JSON on a loopback listener, reporting
@@ -17,10 +18,7 @@ import (
 func LoopbackJSONServer(t *testing.T, path, header, want, body string) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	requests := &atomic.Int32{}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("test environment does not allow a loopback listener: %v", err)
-	}
+	listener := testkit.LoopbackListener(t)
 	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if r.URL.Path != path {
@@ -40,7 +38,7 @@ func LoopbackJSONServer(t *testing.T, path, header, want, body string) (*httptes
 // RejectingHTTPClient fails every request, for a client that must send
 // loopback HTTP through the SDK's own transport instead.
 func RejectingHTTPClient() *http.Client {
-	return &http.Client{Transport: RoundTripFunc(func(*http.Request) (*http.Response, error) {
+	return &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("configured HTTP client must not carry loopback HTTP requests")
 	})}
 }
@@ -56,7 +54,7 @@ func SendsLoopbackThroughGuardedClient(t *testing.T, path, body string, send fun
 	t.Setenv("OPENAI_API_KEY", "environment-key")
 	server, requests := LoopbackJSONServer(t, path, "Authorization", "Bearer loopback-key", body)
 	var guarded atomic.Int32
-	configured := &http.Client{Transport: RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+	configured := &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		guarded.Add(1)
 		return http.DefaultTransport.RoundTrip(request)
 	})}

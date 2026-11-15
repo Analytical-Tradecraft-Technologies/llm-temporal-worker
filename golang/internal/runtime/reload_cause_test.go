@@ -183,7 +183,7 @@ func TestRuntimeReloadFailureLogNamesCatalogDigestMismatch(t *testing.T) {
 func localCatalogConfig(t *testing.T, directory string) string {
 	t.Helper()
 	read := func(name string) []byte {
-		data := mustReadFile(t, filepath.Join("../../deploy/local", name))
+		data := testassert.ReadFile(t, filepath.Join("../../deploy/local", name))
 		return data
 	}
 	data := string(read("config.yaml"))

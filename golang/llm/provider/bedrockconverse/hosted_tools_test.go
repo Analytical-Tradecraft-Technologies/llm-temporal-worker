@@ -1,9 +1,10 @@
 package bedrockconverse
 
 import (
-	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -21,10 +22,7 @@ func TestCompileRejectsHostedToolFlags(t *testing.T) {
 			request := llm.Request{OperationKey: "op-hosted", Model: bedrockFixtureModel, Input: []llm.Item{llm.HumanText("hi")}}
 			mutate(&request)
 			_, err := adaptertest.Compile(adapter, bedrockFixtureEndpoint, provider.FamilyBedrockConverse, request, strict)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("%s strict=%v: compile = %#v, want unsupported_capability", name, strict, err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Dispatch: provider.DispatchNotDispatched}, fmt.Sprintf("%s strict=%v: compile", name, strict))
 		}
 	}
 }

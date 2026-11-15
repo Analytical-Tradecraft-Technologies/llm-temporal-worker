@@ -26,7 +26,7 @@ func (s *langfuseRuntimeStub) ExportLangfuseV1(context.Context, llm.ExecutionRef
 }
 
 func TestExportLangfuseRetriesOnlyDeliveryFailures(t *testing.T) {
-	payload := mustJSON(t, executionTestReference())
+	payload := testassert.MarshalJSON(t, executionTestReference())
 	for _, tc := range []struct {
 		err          error
 		kind         string
@@ -50,7 +50,7 @@ func TestExportLangfuseRetriesOnlyDeliveryFailures(t *testing.T) {
 }
 
 func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
-	payload := mustJSON(t, executionTestReference())
+	payload := testassert.MarshalJSON(t, executionTestReference())
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
 	testassert.NoError(t, err)
 	scrape := func() string {

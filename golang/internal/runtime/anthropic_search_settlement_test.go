@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -30,7 +31,7 @@ func TestAnthropicSearchCostFromSDKResponseThroughPublication(t *testing.T) {
 			calls := 0
 			client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{
 				BaseURL: "http://127.0.0.1/contract", APIKey: "synthetic-test-key",
-				HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+				HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 					calls++
 					body := `{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":` + tc.content + `,"usage":{"input_tokens":10,"output_tokens":5,"service_tier":"standard"` + tc.server + `}}`
 					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
@@ -60,7 +61,7 @@ func TestAnthropicSearchCostFromSDKResponseThroughPublication(t *testing.T) {
 			if published.Status != "exact" || published.ActualCostUSD == nil || result.Response.Cost.ActualCostUSD.Cmp(pricing.MustUSD(tc.total)) != 0 {
 				t.Fatalf("published cost = %#v, want %s", published, tc.total)
 			}
-			receipt := encodeJSON(t, llm.GenerateResponseV1{
+			receipt := testassert.MarshalJSON(t, llm.GenerateResponseV1{
 				OperationKey: "search-cost", OperationID: "origin-search-cost", Status: result.Response.Status,
 				Output: result.Response.Output, Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-synthetic", Kind: "generation"},
 				Cache: llm.CacheDispositionV1{Disposition: "miss_populated"}, Cost: published,

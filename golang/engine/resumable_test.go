@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -203,9 +205,9 @@ func TestGenerateResumesDurableProviderOperationWithoutSubmit(t *testing.T) {
 	}
 	generateCompleted(t, ctx, harness, request, "resume")
 	adapter.requireSubmitsAndPolls(t, 1, 2)
-	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "started"}, 2)
-	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "retry"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "completed"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "started"}, 2)
+	testkit.MetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "retry"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_provider_poll_total", map[string]string{"outcome": "completed"}, 1)
 }
 
 func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T) {
@@ -386,9 +388,7 @@ func TestGenerateKeepsOperationPendingWhenPollIsRateLimited(t *testing.T) {
 		if !errors.As(err, &mapped) {
 			t.Fatalf("attempt %d error = %v, want provider error", attempt+1, err)
 		}
-		if mapped.Retry != provider.RetrySameOperation || mapped.Code != provider.CodeProviderRateLimited {
-			t.Fatalf("attempt %d error = %s/%s, want rate-limited same-operation retry", attempt+1, mapped.Code, mapped.Retry)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderRateLimited, Retry: provider.RetrySameOperation}, fmt.Sprintf("attempt %d error", attempt+1))
 		if mapped.RetryAfter != wantDelay {
 			t.Fatalf("attempt %d RetryAfter = %v, want %v", attempt+1, mapped.RetryAfter, wantDelay)
 		}

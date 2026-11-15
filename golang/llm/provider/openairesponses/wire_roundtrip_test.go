@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -46,7 +47,7 @@ func wireAuditProfiles() []wireAuditProfile {
 func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request, options ...AdapterOption) map[string]any {
 	t.Helper()
 	var captured []byte
-	adapter, err := profile.newAdapter(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	adapter, err := profile.newAdapter(&http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		body, readErr := io.ReadAll(request.Body)
 		if readErr != nil {
 			return nil, readErr
@@ -79,8 +80,8 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	requestMap, _, err := adapter.lowerRequestMap(normalized, serviceClass, "")
 	testassert.NoError(t, err)
-	encoded := contract.MarshalJSON(t, requestMap)
-	intended := contract.DecodeJSON[map[string]any](t, encoded)
+	encoded := testassert.MarshalJSON(t, requestMap)
+	intended := testassert.UnmarshalJSON[map[string]any](t, encoded)
 	return intended
 }
 

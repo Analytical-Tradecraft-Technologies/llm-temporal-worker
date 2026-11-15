@@ -11,6 +11,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -19,7 +20,7 @@ import (
 
 func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 	var got *http.Request
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
 		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"exa-generation-1","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"costDollars":{"total":"0.00000123"},"results":[{"url":"https://example.com/source","title":"Source"}]}`, "X-Request-Id", "exa-req-1"), nil
 	})
@@ -29,7 +30,7 @@ func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 	}
 	body, err := io.ReadAll(got.Body)
 	testassert.NoError(t, err)
-	wire := contract.DecodeJSON[map[string]any](t, body)
+	wire := testassert.UnmarshalJSON[map[string]any](t, body)
 	if wire["text"] != true {
 		t.Fatalf("exa text = %#v", wire["text"])
 	}
@@ -74,18 +75,12 @@ func assertExaCitationLifted(t *testing.T, body string) {
 		t.Fatalf("exa output = %#v", result.Response.Output)
 	}
 	reference, ok := result.Response.Output[1].(llm.Reference)
-	if !ok || !strings.Contains(mustMarshal(t, reference), "message-source") {
+	if !ok || !strings.Contains(string(testassert.MarshalJSON(t, reference)), "message-source") {
 		t.Fatalf("exa message citation = %#v", result.Response.Output[1])
 	}
 	if _, ok := result.Response.Provider.Raw["exa_citations"]; !ok {
 		t.Fatalf("exa raw citations missing: %#v", result.Response.Provider.Raw)
 	}
-}
-
-func mustMarshal(t *testing.T, value any) string {
-	t.Helper()
-	data := contract.MarshalJSON(t, value)
-	return string(data)
 }
 
 // A checkpoint stores the lifted output, citations included, and the next
@@ -125,7 +120,7 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 			if got, want := strings.Join(roles, ","), "user,assistant,user"; got != want {
 				t.Fatalf("message roles = %s, want %s", got, want)
 			}
-			if encoded := mustMarshal(t, wire); strings.Contains(encoded, "example.com") {
+			if encoded := string(testassert.MarshalJSON(t, wire)); strings.Contains(encoded, "example.com") {
 				t.Fatalf("citation reached the wire: %s", encoded)
 			}
 		})
@@ -157,7 +152,7 @@ func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 	if tool := messages[2].(map[string]any); tool["role"] != "tool" || tool["tool_call_id"] != "call-1" {
 		t.Fatalf("tool message = %#v", tool)
 	}
-	if encoded := mustMarshal(t, wire); strings.Contains(encoded, "example.com") {
+	if encoded := string(testassert.MarshalJSON(t, wire)); strings.Contains(encoded, "example.com") {
 		t.Fatalf("reference reached the wire: %s", encoded)
 	}
 }
@@ -165,7 +160,7 @@ func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 func TestExaCitationLoneSurrogateIsSanitizedInOutput(t *testing.T) {
 	items, err := exaReferences(json.RawMessage(`[{"url":"https://example.com/a","id":"r1","title":"Emoji cut \ud83d","score":0.5}]`), "citations")
 	testassert.NoError(t, err)
-	encoded := mustMarshal(t, llm.SanitizeOutputSurrogates(items)[0])
+	encoded := string(testassert.MarshalJSON(t, llm.SanitizeOutputSurrogates(items)[0]))
 	if strings.Contains(encoded, `\ud83d`) || !strings.Contains(encoded, `"title":"Emoji cut \ufffd"`) {
 		t.Fatalf("sanitized citation = %s", encoded)
 	}
@@ -184,7 +179,7 @@ func exaTestConfig() ExaProfileConfig {
 
 // exaBody answers every request with the JSON body.
 func exaBody(body string) http.RoundTripper {
-	return roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	return testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return adaptertest.JSONResponse(request, http.StatusOK, body), nil
 	})
 }

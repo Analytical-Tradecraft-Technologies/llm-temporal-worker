@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -77,16 +78,15 @@ func recordSleeps(slept *[]time.Duration) func(context.Context, time.Duration) e
 }
 
 // pollOnceError polls provider-op once for call, requires an error, and
-// returns the *provider.Error it is (nil when it is another type) and the raw
-// error.
-func pollOnceError(t *testing.T, ctx context.Context, adapter *resumableTestAdapter, call provider.Call, unexpectedSuccess string) (*provider.Error, error) {
+// returns the *provider.Error it is (nil when it is another type).
+func pollOnceError(t *testing.T, ctx context.Context, adapter *resumableTestAdapter, call provider.Call, unexpectedSuccess string) *provider.Error {
 	t.Helper()
 	_, err := PollProviderOperation(ctx, adapter, call, "provider-op", nil, ProviderPollOptions{MaxPolls: 1})
 	if err == nil {
 		t.Fatal(unexpectedSuccess)
 	}
 	mapped, _ := err.(*provider.Error)
-	return mapped, err
+	return mapped
 }
 
 type pollProgressObserver struct {
@@ -179,9 +179,7 @@ func TestPollProviderOperationCapsGuidanceAndLeavesPendingRetryable(t *testing.T
 	if !ok {
 		t.Fatalf("error type = %T, want provider error", err)
 	}
-	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Retry != provider.RetrySameOperation || mapped.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("error = %#v, want retryable accepted deadline", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeDeadlineExceeded, Dispatch: provider.DispatchAccepted, Retry: provider.RetrySameOperation})
 	if len(slept) != 1 || slept[0] != time.Second {
 		t.Fatalf("sleep durations = %v, want one capped interval", slept)
 	}
@@ -189,10 +187,8 @@ func TestPollProviderOperationCapsGuidanceAndLeavesPendingRetryable(t *testing.T
 
 func TestPollProviderOperationRejectsChangedProviderIdentity(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{State: provider.ResumablePending, ProviderOperationID: "other-op", Dispatch: provider.DispatchAccepted}}}
-	mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{}, "changed provider operation identity was accepted")
-	if mapped == nil || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
-		t.Fatalf("error = %#v, want ambiguous state corruption", err)
-	}
+	mapped := pollOnceError(t, context.Background(), adapter, provider.Call{}, "changed provider operation identity was accepted")
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeStateCorrupt, Dispatch: provider.DispatchAmbiguous})
 }
 
 func TestPollProviderOperationRejectsMalformedPendingResult(t *testing.T) {
@@ -200,10 +196,8 @@ func TestPollProviderOperationRejectsMalformedPendingResult(t *testing.T) {
 		State:    provider.ResumablePending,
 		Dispatch: provider.DispatchAccepted,
 	}}}
-	mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{}, "pending result without a provider operation id was accepted")
-	if mapped == nil || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("error = %#v, want ambiguous non-retryable invalid response", err)
-	}
+	mapped := pollOnceError(t, context.Background(), adapter, provider.Call{}, "pending result without a provider operation id was accepted")
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetryNever})
 	if adapter.submits != 0 || adapter.polls != 1 {
 		t.Fatalf("provider calls = submits:%d polls:%d, want no submit and one poll", adapter.submits, adapter.polls)
 	}
@@ -220,10 +214,8 @@ func TestPollProviderOperationRejectsChangedTerminalIdentity(t *testing.T) {
 				response.Failure = provider.NewError(provider.CodeProviderUnavailable, provider.PhasePoll, provider.DispatchAccepted, provider.RetryNever, "provider operation failed")
 			}
 			adapter := &resumableTestAdapter{responses: []provider.ResumableResult{response}}
-			mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{}, "changed terminal provider operation identity was accepted")
-			if mapped == nil || mapped.Code != provider.CodeStateCorrupt || mapped.Dispatch != provider.DispatchAmbiguous {
-				t.Fatalf("error = %#v, want ambiguous state corruption", err)
-			}
+			mapped := pollOnceError(t, context.Background(), adapter, provider.Call{}, "changed terminal provider operation identity was accepted")
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeStateCorrupt, Dispatch: provider.DispatchAmbiguous})
 		})
 	}
 }
@@ -238,20 +230,16 @@ func TestPollProviderOperationRejectsCompletedResponseForAnotherOperation(t *tes
 			Status:       llm.ResponseStatusCompleted,
 		}},
 	}}}
-	mapped, err := pollOnceError(t, context.Background(), adapter, provider.Call{OperationKey: "requested-operation"}, "completed response for another operation was accepted")
-	if mapped == nil || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAmbiguous {
-		t.Fatalf("error = %#v, want ambiguous invalid provider response", err)
-	}
+	mapped := pollOnceError(t, context.Background(), adapter, provider.Call{OperationKey: "requested-operation"}, "completed response for another operation was accepted")
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAmbiguous})
 }
 
 func TestPollProviderOperationPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{pendingProviderOp(0)}}
-	mapped, err := pollOnceError(t, ctx, adapter, provider.Call{}, "canceled polling unexpectedly completed")
-	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Retry != provider.RetryNever {
-		t.Fatalf("error = %#v, want non-retryable canceled result", err)
-	}
+	mapped := pollOnceError(t, ctx, adapter, provider.Call{}, "canceled polling unexpectedly completed")
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeCanceled, Retry: provider.RetryNever})
 	if adapter.polls != 0 {
 		t.Fatalf("poll calls = %d, want zero after cancellation", adapter.polls)
 	}

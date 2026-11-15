@@ -14,6 +14,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -40,13 +41,13 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			normalized, serviceClass := contract.NormalizeRequest(t, request)
 			params, err := fixtureAdapterForProfile(t, profile).lowerRequest(normalized, serviceClass, "")
 			testassert.NoError(t, err)
-			gotWire := contract.MarshalJSON(t, params)
+			gotWire := testassert.MarshalJSON(t, params)
 			assertCanonicalFixtureJSON(t, gotWire, profile.id, "request.wire.json")
 
 			response := loadContractResponseFixture(t, profile.id, "response.completed.json")
 			call := profile.call(response, normalized.OperationKey, serviceClass, params)
 			lifted := mustLift(t, call, &response, profile.requestID)
-			gotSemantic := contract.MarshalJSON(t, lifted)
+			gotSemantic := testassert.MarshalJSON(t, lifted)
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 
 			want := loadContractSemanticResponseFixture(t, profile.id, "response.semantic.json")
@@ -118,7 +119,7 @@ func TestResponsesContractFixturesCoverUsageClassAndStrictLoss(t *testing.T) {
 			response := loadContractResponseFixture(t, profile.id, "usage-cost.response.json")
 			call := profile.call(response, "fixture-usage-cost", llm.ServiceClassStandard, nil)
 			lifted := mustLift(t, call, &response, profile.requestID)
-			got := contract.MarshalJSON(t, lifted)
+			got := testassert.MarshalJSON(t, lifted)
 			assertCanonicalFixtureJSON(t, got, profile.id, "usage-cost.semantic.json")
 			if lifted.Cost != (llm.Cost{}) {
 				t.Fatalf("provider cost should remain unreported for fixture response: %#v", lifted.Cost)
@@ -144,7 +145,7 @@ func TestResponsesContractFixturesCoverContinuationCompatibility(t *testing.T) {
 			if !call.Metadata.OpaqueStateRequired {
 				t.Fatal("continuation call did not retain opaque-state requirement")
 			}
-			gotWire := contract.MarshalJSON(t, call.SDKParams)
+			gotWire := testassert.MarshalJSON(t, call.SDKParams)
 			assertCanonicalFixtureJSON(t, gotWire, profile.id, "continuation-compatibility.wire.json")
 		})
 	}
@@ -198,7 +199,7 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 			want := streamtest.FragmentationInvariant(t, wire, 17, 11, DecodeStream)
 			assembled, err := streamtest.Assemble("fixture-stream", want)
 			testassert.NoError(t, err)
-			gotSemantic := contract.MarshalJSON(t, assembled)
+			gotSemantic := testassert.MarshalJSON(t, assembled)
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "stream.decoder.semantic.json")
 			testassert.NoError(t, contracttest.VerifyStreamAssemblyEquivalent(wire, readContractFixture(t, profile.id, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
 				return streamtest.AssembleJSON(events, "fixture-stream", DecodeStream)
@@ -216,7 +217,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	client, err := NewClient(ClientConfig{
 		BaseURL: "https://127.0.0.1/v1",
 		APIKey:  "fixture-openai-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			got = request
 			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
@@ -239,7 +240,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	body, err := io.ReadAll(got.Body)
 	testassert.NoError(t, err)
 	assertCanonicalFixtureJSON(t, body, profile.id, "request.wire.json")
-	gotSemantic := contract.MarshalJSON(t, result.Response)
+	gotSemantic := testassert.MarshalJSON(t, result.Response)
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 }
 
@@ -252,7 +253,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 		Endpoint:   "https://127.0.0.1",
 		APIVersion: "v1",
 		APIKey:     "test-azure-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			got = request
 			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 		})},
@@ -271,7 +272,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	body, err := io.ReadAll(got.Body)
 	testassert.NoError(t, err)
 	assertCanonicalFixtureJSON(t, body, profile.id, "request.wire.json")
-	gotSemantic := contract.MarshalJSON(t, result.Response)
+	gotSemantic := testassert.MarshalJSON(t, result.Response)
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 }
 
@@ -331,7 +332,7 @@ func assertLossyRequestIsRejectedBeforeDispatch(t *testing.T, adapter *Adapter, 
 
 func assertClassifiedErrorFixture(t *testing.T, profile responsesFixtureProfile) {
 	t.Helper()
-	fixture := contract.DecodeJSON[contract.ClassifiedErrorFixture](t, readContractFixture(t, profile.id, "classified-error.wire.json"))
+	fixture := testassert.UnmarshalJSON[contract.ClassifiedErrorFixture](t, readContractFixture(t, profile.id, "classified-error.wire.json"))
 	mapped := mapError(&openai.Error{
 		Code:       fixture.Code,
 		Message:    fixture.Message,
@@ -341,7 +342,7 @@ func assertClassifiedErrorFixture(t *testing.T, profile responsesFixtureProfile)
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Provider.RequestID != fixture.RequestID {
 		t.Fatalf("%s mapped error = %#v", profile.id, mapped)
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), fixture.Message) {
 		t.Fatalf("%s classified error leaked fixture body", profile.id)
 	}
@@ -388,12 +389,12 @@ func fixtureAdapterForProfile(t *testing.T, profile responsesFixtureProfile) *Ad
 
 func loadContractRequestFixture(t *testing.T, profile, name string) llm.Request {
 	t.Helper()
-	return contract.DecodeJSON[llm.Request](t, readContractFixture(t, profile, name))
+	return testassert.UnmarshalJSON[llm.Request](t, readContractFixture(t, profile, name))
 }
 
 func loadContractResponseFixture(t *testing.T, profile, name string) responses.Response {
 	t.Helper()
-	return contract.DecodeJSON[responses.Response](t, readContractFixture(t, profile, name))
+	return testassert.UnmarshalJSON[responses.Response](t, readContractFixture(t, profile, name))
 }
 
 func loadContractFixtureMetadata(t *testing.T, profile string) contracttest.Metadata {
@@ -403,12 +404,12 @@ func loadContractFixtureMetadata(t *testing.T, profile string) contracttest.Meta
 
 func loadContractSemanticResponseFixture(t *testing.T, profile, name string) llm.Response {
 	t.Helper()
-	return contract.DecodeJSON[llm.Response](t, readContractFixture(t, profile, name))
+	return testassert.UnmarshalJSON[llm.Response](t, readContractFixture(t, profile, name))
 }
 
 func readContractFixture(t *testing.T, profile, name string) []byte {
 	t.Helper()
-	return contract.ReadFixture(t, filepath.Join("testdata", "contracts", profile, name))
+	return testassert.ReadFile(t, filepath.Join("testdata", "contracts", profile, name))
 }
 
 func assertCanonicalFixtureJSON(t *testing.T, got []byte, profile, name string) {

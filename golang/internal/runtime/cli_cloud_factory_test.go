@@ -21,6 +21,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
@@ -30,7 +31,7 @@ import (
 
 func trustedTemporalSnapshot(t *testing.T, value config.Config) *config.Snapshot {
 	t.Helper()
-	data := encodeJSON(t, value)
+	data := testassert.MarshalJSON(t, value)
 	snapshot := mustCompileConfig(t, data)
 	return snapshot
 }
@@ -164,7 +165,7 @@ func TestProductionRuntimeRejectsMissingPolicyBeforeSecretResolution(t *testing.
 	value := trustedTemporalTestConfig(t)
 	value.Authorization = nil
 	value.State.Redis.Username = config.SecretRef{Kind: "file", Path: t.TempDir() + "/missing-secret"}
-	data := encodeJSON(t, value)
+	data := testassert.MarshalJSON(t, value)
 	if runtime, err := newProductionRuntime(context.Background(), data); !errors.Is(err, ErrDurableV1Composition) || runtime != nil {
 		t.Fatalf("CLI did not reject missing policy before reading the missing secret: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
 	value := trustedTemporalTestConfig(t)
 	encode := func(value config.Config) []byte {
 		t.Helper()
-		return encodeJSON(t, value)
+		return testassert.MarshalJSON(t, value)
 	}
 	invalid := []config.Config{value.Clone(), value.Clone()}
 	invalid[0].Authorization = nil
@@ -215,7 +216,7 @@ func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
 func TestCLIExamplePolicies(t *testing.T) {
 	for _, path := range []string{"../../deploy/kubernetes/base/config.yaml", "../../deploy/local/config.yaml"} {
 		t.Run(path, func(t *testing.T) {
-			data := mustReadFile(t, path)
+			data := testassert.ReadFile(t, path)
 			var resolved int
 			snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 				resolved++
@@ -398,7 +399,7 @@ func TestProductionRuntimeReportsUnresolvedSecretAsOperatorDiagnostic(t *testing
 func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
 	base, err := filepath.Abs("../../deploy/kubernetes/base")
 	testassert.NoError(t, err)
-	data := mustReadFile(t, filepath.Join(base, "config.yaml"))
+	data := testassert.ReadFile(t, filepath.Join(base, "config.yaml"))
 	data = []byte(strings.ReplaceAll(string(data), "/etc/llmtw/", base+"/"))
 	snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 		return []byte("test-secret"), nil
@@ -423,10 +424,7 @@ func TestTrustedTemporalScopeDenialIsLoggedAndNotDispatched(t *testing.T) {
 	if _, err := options.ResolveScope(ctx, llm.RequestContext{Tenant: "intruder-tenant", Project: "intruder-project", Actor: "intruder-actor"}); err == nil {
 		t.Fatal("unlisted scope allowed")
 	} else {
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-			t.Fatalf("denial = %#v, want a not-dispatched permission denial", err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever}, "denial")
 	}
 	line := output.String()
 	for _, want := range []string{`"msg":"request scope access decision"`, `"level":"WARN"`, `"outcome":"denied"`, `"tenant_hash":"`, `"project_hash":"`} {
