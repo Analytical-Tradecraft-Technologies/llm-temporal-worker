@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -64,9 +65,7 @@ func TestOpenRouterSearchReportedTotalIncludesTools(t *testing.T) {
 		body += `}}`
 		raw := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 		got := llm.Response{}
-		if err := augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got))
 		if len(got.Output) != 1 {
 			t.Fatalf("citation lost: %#v", got.Output)
 		}
@@ -109,9 +108,7 @@ func TestOpenRouterSearchCountReadsBothServerToolUseShapes(t *testing.T) {
 				body += `}}`
 				raw := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 				got := llm.Response{}
-				if err := augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got))
 				if calls := string(got.Usage.ProviderRaw["web_search_calls"]); calls != test.calls {
 					t.Fatalf("web_search_calls = %s, want %s", calls, test.calls)
 				}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -14,17 +15,13 @@ import (
 func mustPrepareRequest(t *testing.T, source llm.Request, operationKey string, input []llm.Item, policy Policy) llm.Request {
 	t.Helper()
 	request, err := PrepareRequest(source, operationKey, input, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return request
 }
 
 func TestPolicyDefaultsAndValidation(t *testing.T) {
 	policy := DefaultPolicy()
-	if err := policy.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, policy.Validate())
 	policy.TargetTokens = policy.TriggerTokens
 	if err := policy.Validate(); err == nil {
 		t.Fatal("target at trigger threshold unexpectedly accepted")
@@ -103,14 +100,10 @@ func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.
 		Extensions:   map[string]json.RawMessage{"client": json.RawMessage(`{"version":1}`)},
 	}
 	originalJSON, err := json.Marshal(source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	compact := mustPrepareRequest(t, source, "generate-settings/compact", source.Input, DefaultPolicy())
 	unchangedJSON, err := json.Marshal(source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !reflect.DeepEqual(originalJSON, unchangedJSON) {
 		t.Fatal("PrepareRequest mutated the source Generate settings")
 	}

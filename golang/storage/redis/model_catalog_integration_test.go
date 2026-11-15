@@ -4,6 +4,7 @@ package redis
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -14,9 +15,7 @@ func TestLiveRedisModelCatalogPublishesOnlyNewerAndLeasesOneRefresher(t *testing
 	keys := liveKeyOptions("model-catalog")
 	cleanupLivePrefix(t, client, keys.Prefix)
 	store, err := NewModelCatalogStore(client, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx := context.Background()
 	if digest, err := store.LatestDigest(ctx); err != nil || digest != "" {
 		t.Fatalf("empty store digest = %q, %v", digest, err)
@@ -51,19 +50,17 @@ func TestLiveRedisModelCatalogPublishesOnlyNewerAndLeasesOneRefresher(t *testing
 	if acquired, err := store.AcquireRefresh(ctx, "worker-b", time.Minute); err != nil || acquired {
 		t.Fatalf("second lease = %v, %v", acquired, err)
 	}
-	mustNoError(t, store.ReleaseRefresh(ctx, "worker-b"))
+	testassert.NoError(t, store.ReleaseRefresh(ctx, "worker-b"))
 	if acquired, _ := store.AcquireRefresh(ctx, "worker-c", time.Minute); acquired {
 		t.Fatal("a non-owner released the refresh lease")
 	}
-	mustNoError(t, store.ReleaseRefresh(ctx, "worker-a"))
+	testassert.NoError(t, store.ReleaseRefresh(ctx, "worker-a"))
 	if acquired, err := store.AcquireRefresh(ctx, "worker-c", time.Minute); err != nil || !acquired {
 		t.Fatalf("lease after release = %v, %v", acquired, err)
 	}
 
 	keysFound, err := client.Keys(ctx, keys.Prefix+":*").Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, key := range keysFound {
 		if !strings.HasPrefix(key, keys.Prefix+":{"+keys.HashTag+"}:") || strings.Contains(key, "openrouter") {
 			t.Fatalf("model catalog key %q is outside the hashed namespace", key)

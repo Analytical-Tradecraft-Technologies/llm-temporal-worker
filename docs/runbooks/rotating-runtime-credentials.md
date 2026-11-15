@@ -6,6 +6,10 @@ proposals not yet implemented are in
 [key compromise and credential rotation](../architecture/key-compromise-and-credential-rotation.md).
 The cloud request storage keyring is a separate design:
 [durable-storage key management](../architecture/durable-storage-key-management.md).
+The [threat model](../architecture/threat-model.md) describes who could obtain
+each key. A rolling restart or drain here is the same operation as in the
+[fleet upgrade and rollback runbook](fleet-upgrade-and-rollback.md); rotate
+credentials separately from an upgrade so a failure has one cause.
 
 ## Summary
 
@@ -182,9 +186,11 @@ histories unreadable in the UI.
 
 ## Redis `key_secret`
 
-`state.redis.key_secret` names Redis keys; it is not a credential. If only it
-leaked, rotating the Redis ACL password is usually the right response. To
-replace it anyway, move to a new namespace:
+`state.redis.key_secret` names Redis keys and, where the Responses API
+listener runs, seals the hour-long Redis result copies; it does not
+authenticate to Redis. If only it leaked, rotate the Redis ACL password first.
+Replace the key too when the listener is in use and Redis read access cannot
+be ruled out. Replacing it means a new namespace:
 
 1. Generate at least 32 random bytes as the new secret, and choose a new
    `state.redis.key_prefix` (or `state.redis.admission_hash_tag`).
@@ -192,7 +198,8 @@ replace it anyway, move to a new namespace:
    first initialization, the admission Function or script must already be
    provisioned. No worker uses the new namespace yet.
 3. Stop callers from starting workflows on the task queue, and wait until no
-   workflow is open.
+   workflow is open
+   ([drain](fleet-upgrade-and-rollback.md#4-drain-when-the-change-requires-it)).
 4. Stop every worker. Start workers with the new configuration.
 5. Lower budget limits for one window length if a reset window is not
    acceptable: the new namespace starts with no recorded spend.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -47,9 +48,7 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 
 	response := loadBedrockContractResponse(t, "response.completed.json")
 	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotSemantic := contract.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, gotSemantic, "response.semantic.json")
 	assertBedrockOpaqueStateFixture(t, lifted)
@@ -59,11 +58,9 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 		Request  json.RawMessage `json:"request"`
 		Response json.RawMessage `json:"response"`
 	}{Request: requestFixture, Response: semanticResponse})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	metadata := loadBedrockFixtureMetadata(t)
-	if err := contracttest.VerifySemanticRoundTrip(roundTripSemantic, func(semantic []byte) ([]byte, error) {
+	testassert.NoError(t, contracttest.VerifySemanticRoundTrip(roundTripSemantic, func(semantic []byte) ([]byte, error) {
 		var fixture struct {
 			Request  json.RawMessage `json:"request"`
 			Response json.RawMessage `json:"response"`
@@ -96,9 +93,7 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			return nil, err
 		}
 		return json.Marshal(fixture)
-	}, metadata.GeneratedFieldExemptions); err != nil {
-		t.Fatal(err)
-	}
+	}, metadata.GeneratedFieldExemptions))
 }
 
 func TestBedrockContractFixturesCoverUsageClassesStrictLossErrorsAndContinuation(t *testing.T) {
@@ -120,9 +115,7 @@ func assertBedrockPriorityDowngrade(t *testing.T, adapter *Adapter) {
 	})
 	response := loadBedrockContractResponse(t, "priority-downgrade.response.json")
 	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, got, "priority-downgrade.semantic.json")
 	if lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard {
@@ -153,11 +146,9 @@ func TestBedrockContractStreamFixturesRemainFragmentationInvariant(t *testing.T)
 			if toolFragments != fixture.wantToolFragments {
 				t.Fatalf("tool argument fragments = %d, want %d", toolFragments, fixture.wantToolFragments)
 			}
-			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, mustReadBedrockFixture(t, fixture.semantic), func(events []byte) ([]byte, error) {
+			testassert.NoError(t, contracttest.VerifyStreamAssemblyEquivalent(wire, mustReadBedrockFixture(t, fixture.semantic), func(events []byte) ([]byte, error) {
 				return streamtest.AssembleJSON(events, fixture.operationKey, DecodeStream)
-			}, metadata.GeneratedFieldExemptions); err != nil {
-				t.Fatal(err)
-			}
+			}, metadata.GeneratedFieldExemptions))
 		})
 	}
 }
@@ -261,9 +252,7 @@ func assertBedrockUsageAndCost(t *testing.T, adapter *Adapter) {
 	response := loadBedrockContractResponse(t, "usage-cost.response.json")
 	call := compileBedrockFixture(t, adapter, llm.Request{OperationKey: "fixture-bedrock-usage", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard})
 	lifted, err := adapter.profile.liftResponse(call, &response, bedrockFixtureRequestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, got, "usage-cost.semantic.json")
 	if lifted.Cost != (llm.Cost{}) {
@@ -294,9 +283,7 @@ func assertBedrockClassifiedError(t *testing.T) {
 		Body      json.RawMessage      `json:"body"`
 		Expected  fixtureProviderError `json:"expected"`
 	}
-	if err := json.Unmarshal(mustReadBedrockFixture(t, "classified-error.wire.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(mustReadBedrockFixture(t, "classified-error.wire.json"), &fixture))
 	apiErr := contract.DecodeJSON[anthropic.Error](t, fixture.Body)
 	apiErr.StatusCode = fixture.Status
 	apiErr.RequestID = fixture.RequestID
@@ -321,9 +308,7 @@ func assertBedrockContinuationCompatibility(t *testing.T, adapter *Adapter) {
 			Request llm.Request `json:"request"`
 		} `json:"incompatible"`
 	}
-	if err := json.Unmarshal(mustReadBedrockFixture(t, "continuation-compatibility.semantic.json"), &semantic); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(mustReadBedrockFixture(t, "continuation-compatibility.semantic.json"), &semantic))
 	var wire struct {
 		ReplayMessages json.RawMessage `json:"replay_messages"`
 		Rejections     []struct {
@@ -331,9 +316,7 @@ func assertBedrockContinuationCompatibility(t *testing.T, adapter *Adapter) {
 			Expected fixtureProviderError `json:"expected"`
 		} `json:"rejections"`
 	}
-	if err := json.Unmarshal(mustReadBedrockFixture(t, "continuation-compatibility.wire.json"), &wire); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(mustReadBedrockFixture(t, "continuation-compatibility.wire.json"), &wire))
 	replay := compileBedrockFixture(t, adapter, semantic.Replay)
 	if !replay.Metadata.OpaqueStateRequired {
 		t.Fatal("Bedrock continuation call did not retain opaque-state requirement")

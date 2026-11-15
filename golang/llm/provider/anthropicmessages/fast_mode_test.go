@@ -9,6 +9,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -40,26 +41,18 @@ func TestPriorityInvokesFastMode(t *testing.T) {
 				}
 				return adaptertest.JSONResponse(request, 200, `{"id":"msg-fast","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-contract","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1,`+tc.usage+`}}`), nil
 			})}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			profile := testProfile()
 			profile.ExpectedBaseURL = ""
 			adapter, err := New(client, "anthropic-prod", profile)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{OperationKey: "fast-" + string(tc.class), Model: "claude-contract", ServiceClass: tc.class, Input: []llm.Item{llm.HumanText("hi")}},
 				Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			result, err := adapter.Invoke(context.Background(), call, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if (beta == fastModeBeta) != tc.wantBeta || body["speed"] != tc.wantSpeed || body["service_tier"] != "standard_only" {
 				t.Fatalf("beta = %q, body speed = %v, service_tier = %v", beta, body["speed"], body["service_tier"])
 			}
@@ -82,9 +75,7 @@ func TestFastUsageOutsideFastTierStaysUnknown(t *testing.T) {
 		got, err := mustProfile(t, testProfile()).liftResponse(provider.Call{
 			OperationKey: "fast-usage", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard, Metadata: provider.CallMetadata{ProviderTier: tier},
 		}, &message, "req-synthetic")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		// US-only inference is a multiplier on every tier.
 		if got.Cost.Status != llm.CostStatusUnknown {
 			t.Fatalf("tier %s: cost = %#v, want unknown", tier, got.Cost)

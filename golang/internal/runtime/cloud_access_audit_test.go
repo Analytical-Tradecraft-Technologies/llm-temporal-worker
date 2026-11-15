@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -37,9 +38,7 @@ func TestCloudExecutionRuntimeAuditsRequestAccess(t *testing.T) {
 	keepNoRecentTurns(&f.request)
 	var output bytes.Buffer
 	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var records []observability.RequestAccessRecord
 	f.options.AccessAudit = func(ctx context.Context, record observability.RequestAccessRecord) error {
 		records = append(records, record)
@@ -125,9 +124,7 @@ func TestCloudExecutionRuntimeAccessAuditDefaultsToContextLogger(t *testing.T) {
 	f := boundedCloud(t, false)
 	var output bytes.Buffer
 	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx := observability.WithLogger(context.Background(), logger)
 
 	denied := f.request

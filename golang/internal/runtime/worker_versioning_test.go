@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -24,9 +25,7 @@ func TestRuntimePassesVersionIdentityToSDKWorker(t *testing.T) {
 	}
 	data := strings.Replace(string(runtimeConfig(t)), "  worker:\n", "  worker:\n    versioning: {enabled: true, deployment_name: worker, build_id: build-1}\n", 1)
 	value, err := New(context.Background(), []byte(data), options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer func() { _ = value.Shutdown(context.Background()) }()
 	if actual != (worker.DeploymentOptions{UseVersioning: true, Version: worker.WorkerDeploymentVersion{DeploymentName: "worker", BuildID: "build-1"}, DefaultVersioningBehavior: workflow.VersioningBehaviorPinned}) {
 		t.Fatalf("SDK versioning options: %+v", actual)

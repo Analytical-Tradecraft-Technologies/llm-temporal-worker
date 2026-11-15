@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -40,18 +41,14 @@ func tinyTranscript(tb testing.TB, items int) []llm.Item {
 func tinyTranscriptJSON(tb testing.TB, items int) []byte {
 	tb.Helper()
 	data, err := json.Marshal(tinyTranscript(tb, items))
-	if err != nil {
-		tb.Fatal(err)
-	}
+	testassert.NoError(tb, err)
 	return data
 }
 
 func tinyTranscriptRequestJSON(tb testing.TB, items int) []byte {
 	tb.Helper()
 	data, err := json.Marshal(llm.Request{OperationKey: "transcript-decode-cost", Model: "logical", Input: tinyTranscript(tb, items)})
-	if err != nil {
-		tb.Fatal(err)
-	}
+	testassert.NoError(tb, err)
 	return data
 }
 
@@ -83,9 +80,7 @@ func TestTranscriptDecodeAllocationsAreBoundedPerItem(t *testing.T) {
 					failure = err
 				}
 			})
-			if failure != nil {
-				t.Fatal(failure)
-			}
+			testassert.NoError(t, failure)
 			if limit := float64(items * transcriptDecodeAllocsPerItem); allocations > limit {
 				t.Fatalf("decoding %d items made %.0f allocations (%.0f per item), limit %d per item", items, allocations, allocations/items, transcriptDecodeAllocsPerItem)
 			}
@@ -100,9 +95,7 @@ func BenchmarkDecodeItemsTinyTranscript(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(data)))
 			for b.Loop() {
-				if _, err := llm.DecodeItems(data); err != nil {
-					b.Fatal(err)
-				}
+				testassert.NoError(b, testassert.Err(llm.DecodeItems(data)))
 			}
 		})
 	}
@@ -116,9 +109,7 @@ func BenchmarkRequestUnmarshalTinyTranscript(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for b.Loop() {
 				var request llm.Request
-				if err := json.Unmarshal(data, &request); err != nil {
-					b.Fatal(err)
-				}
+				testassert.NoError(b, json.Unmarshal(data, &request))
 			}
 		})
 	}

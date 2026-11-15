@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -35,7 +36,7 @@ func (f *lostBudgetReply) Run(ctx context.Context, name string, keys []string, a
 func TestLiveRedisBudgetLease(t *testing.T) {
 	client := openLiveRedis(t)
 	ctx := context.Background()
-	mustNoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
+	testassert.NoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
 	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
 		t.Run(string(mode), func(t *testing.T) {
 			newMaterializer := func(t *testing.T) *RedisBudgetMaterializer {
@@ -46,16 +47,14 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 					Client: client, Mode: mode, Keys: keys, GenerationID: "lease-gen", IncarnationID: "lease-inc",
 					CoordinationStreamEnabled: true,
 				})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				return m
 			}
 			request := func(id, amount string) durable.ReserveRequest { return liveMinuteRequest("lease-gen", id, amount) }
 			acquireClaimed := func(t *testing.T, m *RedisBudgetMaterializer, req durable.ReserveRequest) durable.ReserveResult {
 				t.Helper()
 				result := acquireLive(t, m, req)
-				mustNoError(t, errOf(m.Claim(ctx, claimOf(result))))
+				testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(result))))
 				return result
 			}
 			// deny requires req to be refused without an error.
@@ -80,15 +79,15 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				if _, err := m.Claim(ctx, claimOf(r)); err == nil {
 					t.Fatal("expected lost claim reply")
 				}
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(r))), durable.ErrAlreadyClaimed, "claim replay =")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(r))), durable.ErrAlreadyClaimed, "claim replay =")
 				m.invoke = &lostBudgetReply{delegate: m.invoke, action: "durable_reconcile"}
 				completed := settle(r, "0.3")
 				if err := m.Reconcile(ctx, completed); err == nil {
 					t.Fatal("expected lost settlement reply")
 				}
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 				acquireLive(t, m, request("remaining", "0.7"))
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 				deny(t, m, request("no-double-refund", "0.01"), "double refund")
 				key := m.space.durableBudgetOperationKey("lease-gen", "lost")
 				if ttl := client.TTL(ctx, key).Val(); ttl != -1 {
@@ -110,11 +109,9 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 					after := time.Now()
 					key := m.space.durableBudgetOperationKey("lease-gen", "deadline")
 					raw, err := client.Get(ctx, key).Result()
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 					var record durableOperation
-					mustNoError(t, json.Unmarshal([]byte(raw), &record))
+					testassert.NoError(t, json.Unmarshal([]byte(raw), &record))
 					deadline := time.UnixMilli(record.StartByMillis)
 					if deadline.Before(before.Add(durable.BudgetStartLease-time.Second)) || deadline.After(after.Add(durable.BudgetStartLease+time.Second)) {
 						t.Fatalf("deadline = %v", deadline)
@@ -122,9 +119,7 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 					m.clock = func() time.Time { return time.Now().Add(2 * time.Hour) }
 					acquireLive(t, m, req)
 					replay, err := client.Get(ctx, key).Result()
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 					if replay != raw {
 						t.Fatal("replay changed or extended the lease")
 					}
@@ -138,12 +133,12 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				deny(t, m, waiting, "waiting request")
 				released := settle(r, "0")
 				released.Events[0].Kind = budget.JournalRelease
-				mustNoError(t, m.Reconcile(ctx, released))
-				mustNoError(t, m.Reconcile(ctx, released))
+				testassert.NoError(t, m.Reconcile(ctx, released))
+				testassert.NoError(t, m.Reconcile(ctx, released))
 				acquireLive(t, m, waiting)
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(r))), ErrRedisBudgetReservationFinalized, "released claim")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(r))), ErrRedisBudgetReservationFinalized, "released claim")
 				acquireLive(t, m, original)
-				mustNoError(t, m.Reconcile(ctx, released))
+				testassert.NoError(t, m.Reconcile(ctx, released))
 				deny(t, m, request("no-extra-refund", "0.1"), "release replay refunded another lease")
 			})
 			t.Run("concurrent settlements and conflicting retries cannot double refund", func(t *testing.T) {
@@ -162,7 +157,7 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				}
 				wg.Wait()
 				changed := settle(r, "0.1")
-				requireErrorIs(t, m.Reconcile(ctx, changed), ErrRedisBudgetConflict, "changed event accepted")
+				testassert.ErrorIs(t, m.Reconcile(ctx, changed), ErrRedisBudgetConflict, "changed event accepted")
 				acquireLive(t, m, request("remaining-after-race", "0.4"))
 				deny(t, m, request("no-double-settlement", "0.01"), "double settlement")
 			})
@@ -173,8 +168,8 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				second.WindowID = "z-second"
 				req.Reservations = append(req.Reservations, second)
 				corruptKey := m.space.durableBudgetExpiryKey("tenant", "z-second")
-				mustNoError(t, client.Set(ctx, corruptKey, "unexpected string", 0).Err())
-				requireErrorIs(t, errOf(m.Accept(ctx, req)), ErrUnavailable, "wrong Redis key type")
+				testassert.NoError(t, client.Set(ctx, corruptKey, "unexpected string", 0).Err())
+				testassert.ErrorIs(t, testassert.Err(m.Accept(ctx, req)), ErrUnavailable, "wrong Redis key type")
 				acquireLive(t, m, request("unaffected-first-window", "1"))
 			})
 			t.Run("only one worker may claim", func(t *testing.T) {
@@ -208,19 +203,19 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				unused := acquireLive(t, m, unusedReq)
 				used := acquireClaimed(t, m, usedReq)
 				time.Sleep(time.Until(unusedReq.ExpiresAt) + 20*time.Millisecond)
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(unused))), durable.ErrLeaseExpired, "expired claim")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(unused))), durable.ErrLeaseExpired, "expired claim")
 				// Reusing the same waiting operation succeeds once capacity is reclaimed.
 				acquireLive(t, m, request("replacement", "0.4"))
 				release := settle(unused, "0")
 				release.Events[0].Kind = budget.JournalRelease
-				requireErrorIs(t, m.Reconcile(ctx, release), ErrRedisBudgetReservationNotFound, "expired release")
+				testassert.ErrorIs(t, m.Reconcile(ctx, release), ErrRedisBudgetReservationNotFound, "expired release")
 				deny(t, m, request("cannot-refund-paid", "0.01"), "paid work expired")
 				completed := settle(used, "0.6")
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 				deny(t, m, request("cost-still-counts", "0.01"), "paid cost expired with start lease")
 				// Retrying expired acquisition returns the old lease, never a new authorization.
 				acquireLive(t, m, unusedReq)
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(unused))), durable.ErrLeaseExpired, "resurrected lease")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(unused))), durable.ErrLeaseExpired, "resurrected lease")
 			})
 			t.Run("replay decides a claim's outcome after its deadline", func(t *testing.T) {
 				// A worker resolves an uncertain claim by replaying it (#1312).
@@ -250,9 +245,9 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				}
 				m.invoke = invoke
 				time.Sleep(time.Until(unclaimedReq.ExpiresAt) + 250*time.Millisecond)
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(lost))), durable.ErrAlreadyClaimed, "replayed applied claim")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(lost))), durable.ErrAlreadyClaimed, "replayed applied claim")
 				for range 2 {
-					requireErrorIs(t, errOf(m.Claim(ctx, claimOf(unclaimed))), durable.ErrLeaseExpired, "replayed unclaimed lease")
+					testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(unclaimed))), durable.ErrLeaseExpired, "replayed unclaimed lease")
 				}
 				// The applied claim holds its reservation until it is settled;
 				// the expired, unclaimed lease does not.
@@ -261,7 +256,7 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				unknown := settle(lost, "0.6")
 				event := &unknown.Events[0]
 				event.Kind, event.CostStatus, event.ActualCostUSD, event.UnknownReasonCode = budget.JournalFinalizeUnknown, budget.CostUnknown, nil, "provider_cost_unknown"
-				mustNoError(t, m.Reconcile(ctx, unknown))
+				testassert.NoError(t, m.Reconcile(ctx, unknown))
 				time.Sleep(time.Until(time.Unix(lostReq.Reservations[0].Bucket+3, 0)) + 20*time.Millisecond)
 				acquireLive(t, m, request("after-rollover", "1"))
 			})
@@ -276,16 +271,16 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				time.Sleep(time.Until(windowEnd) + 20*time.Millisecond)
 				deny(t, m, request("still-paid", "0.3"), "window rollover abandoned paid work")
 				completed := settle(r, "0.8")
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 				// A known cost belongs to the original window, which has now expired.
 				acquireLive(t, m, request("after-cost-expiry", "1"))
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 				deny(t, m, request("no-expired-refund", "0.01"), "late settlement refunded another request")
 			})
 			t.Run("wait can retry and policy reload preserves spend", func(t *testing.T) {
 				m := newMaterializer(t)
 				r := acquireClaimed(t, m, request("existing", "0.8"))
-				mustNoError(t, m.Reconcile(ctx, settle(r, "0.8")))
+				testassert.NoError(t, m.Reconcile(ctx, settle(r, "0.8")))
 				// New process-local materializer, unchanged Redis identity/keyspace.
 				reloaded := *m
 				retry := request("waiting", "0.3")
@@ -312,14 +307,14 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				e.ActualCostUSD = nil
 				e.CostStatus = budget.CostUnknown
 				e.UnknownReasonCode = "provider_reply_lost"
-				mustNoError(t, m.Reconcile(ctx, retained))
-				mustNoError(t, m.Reconcile(ctx, retained))
+				testassert.NoError(t, m.Reconcile(ctx, retained))
+				testassert.NoError(t, m.Reconcile(ctx, retained))
 				deny(t, m, request("paid-retry", "0.8"), "retry reused ambiguous reservation")
 				corrected := settle(r, "0.1")
 				corrected.Events[0].EventID = "unknown-exact-correction"
 				corrected.Events[0].Kind = budget.JournalResolveUnknownExact
 				corrected.Events[0].ReservationRevision = 3
-				mustNoError(t, m.Reconcile(ctx, corrected))
+				testassert.NoError(t, m.Reconcile(ctx, corrected))
 				acquireLive(t, m, request("paid-retry", "0.8"))
 			})
 			t.Run("conflicting multiwindow settlement changes no window", func(t *testing.T) {
@@ -330,8 +325,8 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				second.DurationNanos = int64(24 * time.Hour)
 				req.Reservations = append(req.Reservations, second)
 				r := acquireLive(t, m, req)
-				requireErrorIs(t, m.Reconcile(ctx, settle(r, "0.2")), durable.ErrClaimRequired, "unclaimed settlement")
-				mustNoError(t, errOf(m.Claim(ctx, claimOf(r))))
+				testassert.ErrorIs(t, m.Reconcile(ctx, settle(r, "0.2")), durable.ErrClaimRequired, "unclaimed settlement")
+				testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(r))))
 				completed := settle(r, "0.2")
 				bad := completed
 				bad.Events = append([]budget.CompletionEvent(nil), completed.Events...)
@@ -342,7 +337,7 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 				partial := completed
 				partial.Events = append([]budget.CompletionEvent(nil), completed.Events...)
 				partial.Events[1].ReservedDecreaseUSD = pricing.MustUSD("0.1")
-				requireErrorIs(t, m.Reconcile(ctx, partial), ErrRedisBudgetConflict, "partial reservation removal accepted")
+				testassert.ErrorIs(t, m.Reconcile(ctx, partial), ErrRedisBudgetConflict, "partial reservation removal accepted")
 				duplicate := completed
 				duplicate.Events = []budget.CompletionEvent{completed.Events[0], completed.Events[0]}
 				if err := m.Reconcile(ctx, duplicate); err == nil {
@@ -353,8 +348,8 @@ func TestLiveRedisBudgetLease(t *testing.T) {
 					test.Reservations[0].WindowID = reservation.WindowID
 					deny(t, m, test, "partial settlement")
 				}
-				mustNoError(t, m.Reconcile(ctx, completed))
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 			})
 		})
 	}

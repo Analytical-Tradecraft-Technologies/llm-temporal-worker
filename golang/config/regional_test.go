@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestRegionalConfigValidation(t *testing.T) {
@@ -18,14 +19,10 @@ func TestRegionalConfigValidation(t *testing.T) {
 		return value
 	}
 	value := makeConfig()
-	if err := value.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, value.Validate())
 	data := mustMarshalJSON(t, value)
 	compiled := configSchema(t)
-	if err := compiled.Validate(data); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, compiled.Validate(data))
 	for _, tc := range []struct {
 		name   string
 		change func(*config.Config)

@@ -4,6 +4,7 @@ import (
 	"context"
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -12,9 +13,9 @@ import (
 func TestRequestExhaustionRequiresSettledFailureAndLimit(t *testing.T) {
 	r, table, blobs, root, a, failure, now := failedRequestFixture(t, true)
 	ctx, scope := context.Background(), root.Request.Scope
-	requireErrorIs(t, errOf(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)), contracts.ErrConflict, "unfinalized child exhausted")
+	testassert.ErrorIs(t, testassert.Err(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)), contracts.ErrConflict, "unfinalized child exhausted")
 	mustFinishRequestFailure(t, r, scope, root.Request.ID, a.ID, failure, now)
-	requireErrorIs(t, errOf(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 2, now)), contracts.ErrConflict, "unused attempt capacity discarded")
+	testassert.ErrorIs(t, testassert.Err(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 2, now)), contracts.ErrConflict, "unused attempt capacity discarded")
 	result, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)
 	if err != nil || result.Retryable || result.Validate() != nil {
 		t.Fatal("invalid terminal failure", result, err)
@@ -23,7 +24,7 @@ func TestRequestExhaustionRequiresSettledFailureAndLimit(t *testing.T) {
 	if err != nil || !equalExecutionJSON(replay, result) {
 		t.Fatal("exhaustion not durable", err)
 	}
-	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now.Add(time.Second))), contracts.ErrConflict, "terminal root renewed")
+	testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now.Add(time.Second))), contracts.ErrConflict, "terminal root renewed")
 }
 
 func TestRequestExhaustionCannotCloseNewerAttempt(t *testing.T) {
@@ -31,7 +32,7 @@ func TestRequestExhaustionCannotCloseNewerAttempt(t *testing.T) {
 	ctx, scope := context.Background(), root.Request.Scope
 	mustFinishRequestFailure(t, r, scope, root.Request.ID, a.ID, failure, now)
 	next := mustBeginRequestAttempt(t, r, scope, root.Request.ID, a.ID, now)
-	requireErrorIs(t, errOf(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)), contracts.ErrConflict, "old attempt closed newer root")
+	testassert.ErrorIs(t, testassert.Err(r.FinishRequestExhausted(ctx, scope, root.Request.ID, a.ID, 1, now)), contracts.ErrConflict, "old attempt closed newer root")
 	if _, err := r.FinishRequestExhausted(ctx, scope, root.Request.ID, next.ID, 1, now); err == nil {
 		t.Fatal("unused child exhausted")
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
@@ -47,9 +48,7 @@ func TestTrustedTemporalScopeBinding(t *testing.T) {
 		config.AuthorizedScope{Tenant: "a:b", Project: "c"}, config.AuthorizedScope{Tenant: "a", Project: "b:c"},
 		config.AuthorizedScope{Tenant: "tenant", Project: "second"})
 	options, err := trustedTemporalCloudOptions(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx := context.Background()
 	caller := llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "first"}
 	scope, err := options.ResolveScope(ctx, caller)
@@ -83,9 +82,7 @@ func TestTrustedTemporalScopeBinding(t *testing.T) {
 		t.Fatal("resolver retained mutable policy")
 	}
 	next, err := trustedTemporalCloudOptions(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, err := next.ResolveScope(ctx, caller); err == nil {
 		t.Fatal("new policy retained revoked pair")
 	}
@@ -93,9 +90,7 @@ func TestTrustedTemporalScopeBinding(t *testing.T) {
 	value.Authorization.AllowedScopes[0], value.Authorization.AllowedScopes[1] = value.Authorization.AllowedScopes[1], value.Authorization.AllowedScopes[0]
 	value.Telemetry.Logs.Level = "debug"
 	next, err = trustedTemporalCloudOptions(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got, err := next.ResolveScope(ctx, caller); err != nil || got != scope {
 		t.Fatal("unrelated reload invalidated scope")
 	}
@@ -103,18 +98,14 @@ func TestTrustedTemporalScopeBinding(t *testing.T) {
 		copy := value.Clone()
 		mutate(&copy)
 		next, err := trustedTemporalCloudOptions(copy)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if got, err := next.ResolveScope(ctx, caller); err != nil || got == scope {
 			t.Fatal("deployment scope collision")
 		}
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := options.ResolveScope(canceled, caller); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(options.ResolveScope(canceled, caller)), context.Canceled)
 	if _, err := options.ResolveScope(nil, caller); err == nil {
 		t.Fatal("nil context accepted")
 	}
@@ -134,9 +125,7 @@ func TestTrustedTemporalInvalidPolicy(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			value := trustedTemporalTestConfig(t)
 			change(&value)
-			if _, err := trustedTemporalCloudOptions(value); !errors.Is(err, ErrDurableV1Composition) {
-				t.Fatal(err)
-			}
+			testassert.ErrorIs(t, testassert.Err(trustedTemporalCloudOptions(value)), ErrDurableV1Composition)
 		})
 	}
 }
@@ -152,9 +141,7 @@ func TestCLICloudPolicyPrecedesDependencies(t *testing.T) {
 			return engine.Snapshot{}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// An empty snapshot also fails the policy gate, without client construction.
 	value := trustedTemporalTestConfig(t)
 	value.Authorization = nil
@@ -219,9 +206,7 @@ func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
 		}
 	}
 	value.Authorization.AllowedScopes[0].Project = "updated-project"
-	if err := runtime.App.Reload(context.Background(), encode(value)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.App.Reload(context.Background(), encode(value)))
 	if resolved.Load() <= before || runtime.App.Current() == previous {
 		t.Fatal("valid policy reload did not resolve and publish a new snapshot")
 	}
@@ -242,9 +227,7 @@ func TestCLIExamplePolicies(t *testing.T) {
 			value := snapshot.Config()
 			if strings.Contains(path, "kubernetes") {
 				policy, err := trustedTemporalCloudOptions(value)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if _, err := policy.ResolveScope(context.Background(), llm.RequestContext{Tenant: "replace-with-tenant", Project: "replace-with-project"}); err != nil {
 					t.Fatal("Kubernetes example has no replaceable allowed scope", err)
 				}
@@ -259,18 +242,12 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 	f := boundedCloud(t, false)
 	value := trustedTemporalTestConfig(t)
 	preparation, err := f.repository.PrepareBudgetInitialization(context.Background(), testBudgetIdentity(t, value), time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.repository.CompleteBudgetInitialization(context.Background(), preparation.Receipt); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, f.repository.CompleteBudgetInitialization(context.Background(), preparation.Receipt))
 	value.Endpoints = map[string]config.EndpointConfig{"endpoint": value.Endpoints["openai-prod"]}
 	value.Models = map[string]config.ModelConfig{"alias": {AllowedTenants: []string{"tenant"}, Routes: []config.RouteConfig{{ID: "route", Endpoint: "endpoint", Model: "provider-model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}}}
 	source, err := f.cap.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	redis := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
 	t.Cleanup(func() { _ = redis.Close() })
 	builds, closed := 0, 0
@@ -290,15 +267,11 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 			return f.repository, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	build := func() *cloudV1Runtime {
 		t.Helper()
 		_, set, err := factory.Build(context.Background(), trustedTemporalSnapshot(t, value))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		t.Cleanup(func() {
 			if err := set.Close(context.Background()); err != nil {
 				t.Error(err)
@@ -344,9 +317,7 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 	}
 	first := build()
 	scope, err := first.options.ResolveScope(context.Background(), f.request.Context)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	value.Authorization.AllowedScopes[0].Project = "other"
 	value.State.ContinuationRetention = config.Duration(15 * 24 * time.Hour)
 	second := build()
@@ -373,17 +344,13 @@ func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
 	f := boundedCloud(t, false)
 	value := trustedTemporalTestConfig(t)
 	options, err := trustedTemporalCloudOptions(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.options.ResolveScope = options.ResolveScope
 	f.restart(t)
 	completed := f.finish(t)
 	value.Authorization.AllowedScopes[0].Project = "other"
 	next, err := trustedTemporalCloudOptions(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.options.ResolveScope = next.ResolveScope
 	f.restart(t)
 	// Every bounded activity must deny before even reading storage, including
@@ -430,21 +397,15 @@ func TestProductionRuntimeReportsUnresolvedSecretAsOperatorDiagnostic(t *testing
 
 func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
 	base, err := filepath.Abs("../../deploy/kubernetes/base")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	data := mustReadFile(t, filepath.Join(base, "config.yaml"))
 	data = []byte(strings.ReplaceAll(string(data), "/etc/llmtw/", base+"/"))
 	snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 		return []byte("test-secret"), nil
 	})))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	loaded, err := (CatalogSnapshotLoader{}).Load(context.Background(), snapshot)
-	if err != nil {
-		t.Fatalf("Kubernetes base catalogs do not load: %v", err)
-	}
+	testassert.NoError(t, err, "Kubernetes base catalogs do not load")
 	model, ok := loaded.Routes.Models["default"]
 	if !ok || len(model.Routes) != 1 || model.Routes[0].Model != "replace-with-model" || model.Routes[0].Provider != "openai" || !model.Routes[0].PriceAvailable {
 		t.Fatalf("Kubernetes base routes = %#v", loaded.Routes)
@@ -455,9 +416,7 @@ func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
 // not-dispatched, never-retried caller error (#1535).
 func TestTrustedTemporalScopeDenialIsLoggedAndNotDispatched(t *testing.T) {
 	options, err := trustedTemporalCloudOptions(trustedTemporalTestConfig(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var output bytes.Buffer
 	logger := testLogger(t, observability.LogOptions{Format: "json", Output: &output})
 	ctx := observability.WithLogger(context.Background(), logger)

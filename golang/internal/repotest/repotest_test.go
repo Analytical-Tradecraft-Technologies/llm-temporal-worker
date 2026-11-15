@@ -2,6 +2,7 @@ package repotest
 
 import (
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,13 +10,9 @@ import (
 
 func TestFindRepositoryRootReturnsNearestAncestorWithGit(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o700))
 	nested := filepath.Join(root, "golang", "internal", "repotest")
-	if err := os.MkdirAll(nested, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(nested, 0o700))
 	for _, start := range []string{root, nested} {
 		got, ok := findRepositoryRoot(start)
 		if !ok || got != root {
@@ -45,12 +42,8 @@ func TestWriteFileAndReadTextRoundTrip(t *testing.T) {
 }
 
 func TestModuleRootContainsThisModule(t *testing.T) {
-	if _, err := os.Stat(filepath.Join(ModuleRoot(t), "go.mod")); err != nil {
-		t.Fatalf("module root has no go.mod: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(RepositoryRoot(t), ".git")); err != nil {
-		t.Fatalf("repository root has no .git: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(os.Stat(filepath.Join(ModuleRoot(t), "go.mod"))), "module root has no go.mod")
+	testassert.NoError(t, testassert.Err(os.Stat(filepath.Join(RepositoryRoot(t), ".git"))), "repository root has no .git")
 }
 
 // recordingTB records fatal failures instead of stopping the test.

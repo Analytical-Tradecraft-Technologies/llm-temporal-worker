@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -54,9 +55,7 @@ func testCompactCacheReplay(request llm.CompactRequestV1) CompactFinalization {
 func mustCompactV1(t *testing.T, request llm.CompactRequestV1, ports CompactPorts) llm.CompactResponseV1 {
 	t.Helper()
 	response, err := CompactV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("CompactV1 error = %v", err)
-	}
+	testassert.NoError(t, err, "CompactV1 error")
 	return response
 }
 
@@ -178,9 +177,7 @@ func TestCompactV1CacheHitCreatesZeroCostWorkerCacheChild(t *testing.T) {
 		return testCompactCacheReplay(request), nil
 	}
 	response, err := CompactV1(context.Background(), testCompactRequest(), ports)
-	if err != nil {
-		t.Fatalf("CompactV1 cache hit error = %v", err)
-	}
+	testassert.NoError(t, err, "CompactV1 cache hit error")
 	if response.OperationKey != "compact-operation-1" || response.Cache.Disposition != "hit" {
 		t.Fatalf("response = %#v", response)
 	}
@@ -335,9 +332,7 @@ func TestCompactV1RetriesPendingReconciliationWithoutDispatch(t *testing.T) {
 		return nil
 	}
 	response, err := CompactV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("CompactV1 pending reconciliation error = %v", err)
-	}
+	testassert.NoError(t, err, "CompactV1 pending reconciliation error")
 	if response.OperationID != string(route.OperationID) {
 		t.Fatalf("response operation id = %q", response.OperationID)
 	}

@@ -10,6 +10,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -58,9 +59,7 @@ func finalizationFixture(t *testing.T, kind, mode string) (*cloudRequestRuntime,
 	r.clock = func() time.Time { return now }
 	effectsStore := &replayEffectsStore{}
 	finalizer, err := newCloudFinalizer(repository, effectsStore, effectsStore, effectsStore, r.clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	r.finalizer = finalizer
 	inner.generate = func(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
 		t.Fatal("inner Generate invoked during finalization replay")
@@ -174,13 +173,9 @@ func TestCloudFinalizationReplayAfterEveryUncertainWrite(t *testing.T) {
 				repository.completeErr = nil
 				// Rebuild the adapter to lose all process-local state and advance the clock.
 				f, err := newCloudFinalizer(repository, store, store, store, func() time.Time { return r.clock().Add(48 * time.Hour) })
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				r.finalizer = f
-				if _, err := run(); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(run()))
 				if !reflect.DeepEqual(store.events, []string{"publish", "budget", "fill"}) {
 					t.Fatal("incorrect replay order", store.events)
 				}
@@ -202,9 +197,7 @@ func TestCloudFinalizationReplayAfterEveryUncertainWrite(t *testing.T) {
 					}
 				}
 				before := len(store.events)
-				if _, err := run(); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(run()))
 				if len(store.events) != before {
 					t.Fatal("completed replay performed effects")
 				}
@@ -217,17 +210,13 @@ func TestCloudFinalizationCacheUseRetriesWithoutBudget(t *testing.T) {
 	for _, kind := range []string{"generate", "compact"} {
 		t.Run(kind, func(t *testing.T) {
 			_, repository, store, run, save, effects := finalizationFixture(t, kind, "cache")
-			if err := save(effects); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, save(effects))
 			store.fail = "use"
 			if _, err := run(); err == nil {
 				t.Fatal("lost use acknowledgement hidden")
 			}
 			store.fail = ""
-			if _, err := run(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(run()))
 			if !reflect.DeepEqual(store.events, []string{"use", "use"}) || len(store.settlements) != 0 {
 				t.Fatal("cache hit touched provider/budget", store.events)
 			}
@@ -242,9 +231,7 @@ func TestCloudFinalizationRejectsInvalidSavedPayloadBeforeEffects(t *testing.T) 
 	for _, mutation := range []string{"version", "mode", "response", "generation", "scope", "checkpoint", "both", "unknown_field", "missing_checkpoint", "cost", "index", "operation", "incomplete", "event", "stale_missing_checkpoint"} {
 		t.Run(mutation, func(t *testing.T) {
 			_, repository, store, run, save, effects := finalizationFixture(t, "generate", "provider")
-			if err := save(effects); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, save(effects))
 			payload := decodeJSON[cloudFinalizationPayload](t, repository.handoff.Payload)
 			switch mutation {
 			case "version":
@@ -305,12 +292,8 @@ func TestCloudFinalizationUncacheableResponseSettlesWithoutPublication(t *testin
 	effects.Provider.Entry = nil
 	effects.Provider.Completion.Outcome = cache.FillNotCacheable
 	effects.Provider.Completion.EntryID = ""
-	if err := save(effects); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := run(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, save(effects))
+	testassert.NoError(t, testassert.Err(run()))
 	if !reflect.DeepEqual(store.events, []string{"budget", "fill"}) {
 		t.Fatal(store.events)
 	}
@@ -326,9 +309,7 @@ func TestCloudFinalizationDependenciesFailClosed(t *testing.T) {
 		t.Fatal("typed nil store accepted")
 	}
 	f, err := newCloudFinalizer(repository, store, store, nil, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := llm.GenerateRequestV1{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}}
 	if err := f.SaveGenerate(context.Background(), request, "trusted-scope", "consumer-checkpoint", builderFinalization(request, "internal-operation-id").Response, effects); err == nil || repository.handoff != nil {
 		t.Fatal("provider saved without budget authority")
@@ -353,9 +334,7 @@ func TestCloudFinalizationFirstAttemptAndReplayUseSameBoundary(t *testing.T) {
 		t.Fatal("handoff not saved before effects")
 	}
 	store.fail = ""
-	if _, err := run(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(run()))
 	if calls != 1 {
 		t.Fatal("replay repeated provider phases")
 	}
@@ -367,15 +346,11 @@ func TestCloudFinalizationToolCallsArePublishable(t *testing.T) {
 	response := decodeJSON[llm.GenerateResponseV1](t, effects.Provider.Entry.Response)
 	response.Status = llm.ResponseStatusToolCalls
 	effects.Provider.Entry.Response, _ = json.Marshal(response)
-	if err := r.finalizer.CompleteGenerate(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, r.finalizer.CompleteGenerate(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects))
 	if repository.handoff == nil || !reflect.DeepEqual(store.events, []string{"publish", "budget", "fill"}) {
 		t.Fatal("tool calls were not published")
 	}
-	if _, err := run(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(run()))
 }
 
 func TestCloudFinalizationIncompleteResponseIsReturnedWithoutCaching(t *testing.T) {
@@ -387,13 +362,9 @@ func TestCloudFinalizationIncompleteResponseIsReturnedWithoutCaching(t *testing.
 	effects.Provider.Entry = nil
 	effects.Provider.Completion.Outcome = cache.FillNotCacheable
 	effects.Provider.Completion.EntryID = ""
-	if err := r.finalizer.SaveGenerate(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, r.finalizer.SaveGenerate(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects))
 	data, err := run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var got llm.GenerateResponseV1
 	if json.Unmarshal(data, &got) != nil || got.Status != llm.ResponseStatusLength || !reflect.DeepEqual(store.events, []string{"budget", "fill"}) {
 		t.Fatal("incomplete response treated as normal cache success")
@@ -406,9 +377,7 @@ func TestCloudFinalizationCompletesCompactCacheUseWithoutRedis(t *testing.T) {
 	request := llm.CompactRequestV1{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}, Parent: "parent-checkpoint"}
 	zero := "0"
 	response := llm.CompactResponseV1{APIVersion: llm.CompactAPIVersion, OperationKey: request.OperationKey, OperationID: "internal-operation-id", Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-1", Kind: "compaction", Parent: &request.Parent}, Cache: llm.CacheDispositionV1{Disposition: "hit"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: &zero, Method: "provider_reported"}}
-	if err := r.finalizer.CompleteCompact(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, r.finalizer.CompleteCompact(context.Background(), request, "trusted-scope", "consumer-checkpoint", response, effects))
 	if !reflect.DeepEqual(store.events, []string{"use"}) {
 		t.Fatal("cache use touched budget", store.events)
 	}

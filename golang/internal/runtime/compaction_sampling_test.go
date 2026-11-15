@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -22,9 +23,7 @@ func compactCacheDigest(t *testing.T, mutate func(*state.ModelState)) (llm.Reque
 		t.Fatal("fixture parent has nothing to compact")
 	}
 	_, digest, err := cacheSemanticDigest(*prepared.Request, nil, nil, prepared.Policy.Version, prepared.Policy.PromptVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return *prepared.Request, hex.EncodeToString(digest[:])
 }
 

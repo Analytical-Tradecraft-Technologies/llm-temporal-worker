@@ -1,6 +1,7 @@
 package documentationtest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,9 +40,7 @@ func TestPackageLayoutTreeMatchesTheModule(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Fatalf("docs/architecture/package-layout.md omits Go packages: %s", strings.Join(missing, ", "))

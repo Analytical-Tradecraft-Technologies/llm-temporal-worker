@@ -1,6 +1,7 @@
 package streamtest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"testing"
 )
@@ -14,9 +15,7 @@ func TestChunkReaderReturnsEachChunkThenEOF(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		reads = append(reads, string(buffer[:n]))
 	}
 	if got := len(reads); got != 4 || reads[0] != "a" || reads[1] != "b" || reads[2] != "" || reads[3] != "c" {

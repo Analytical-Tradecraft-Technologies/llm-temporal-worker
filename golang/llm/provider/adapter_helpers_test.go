@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -22,9 +23,7 @@ func TestStartCompileChecksContextThenQuery(t *testing.T) {
 	if !errors.As(err, &mapped) || mapped.Code != CodeInvalidArgument || !strings.HasPrefix(mapped.SafeMessage, "openai chat: capability endpoint") {
 		t.Fatalf("StartCompile(other endpoint) = %v, want a labelled compile error", err)
 	}
-	if err := StartCompile(context.Background(), CapabilityQuery{Family: FamilyOpenAIChat, EndpointID: "ep"}, "openai chat", FamilyOpenAIChat, "ep"); err != nil {
-		t.Fatalf("StartCompile(matching query) = %v", err)
-	}
+	testassert.NoError(t, StartCompile(context.Background(), CapabilityQuery{Family: FamilyOpenAIChat, EndpointID: "ep"}, "openai chat", FamilyOpenAIChat, "ep"), "StartCompile(matching query)")
 }
 
 func TestRequirePinnedContinuation(t *testing.T) {
@@ -111,9 +110,7 @@ func TestRequireAdapterArgsAndExpectedBaseURL(t *testing.T) {
 			t.Errorf("RequireAdapterArgs(%t, %q) = %v, want %q", test.hasClient, test.endpointID, err, test.want)
 		}
 	}
-	if err := RequireExpectedBaseURL("openai chat", "p", "", "https://a"); err != nil {
-		t.Fatalf("RequireExpectedBaseURL(unpinned) = %v", err)
-	}
+	testassert.NoError(t, RequireExpectedBaseURL("openai chat", "p", "", "https://a"), "RequireExpectedBaseURL(unpinned)")
 	if err := RequireExpectedBaseURL("openai chat", "p", "https://a", "https://b"); err == nil || err.Error() != `openai chat profile "p" requires base URL "https://a", got "https://b"` {
 		t.Fatalf("RequireExpectedBaseURL(mismatch) = %v", err)
 	}

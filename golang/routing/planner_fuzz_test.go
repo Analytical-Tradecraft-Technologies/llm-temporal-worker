@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -50,9 +51,7 @@ func FuzzPlannerNeverSelectsUnauthorizedClasses(f *testing.F) {
 			configured[route.ID] = route
 		}
 		catalog, err := CompileCatalog("catalog-v1", map[string]Model{"logical": {Routes: routes}})
-		if err != nil {
-			t.Fatalf("CompileCatalog() = %v", err)
-		}
+		testassert.NoError(t, err, "CompileCatalog()")
 		request := llm.Request{
 			OperationKey: "fuzz-operation", Model: "logical", ServiceClass: requested,
 			ServiceClassFallbacks: fallbacks,

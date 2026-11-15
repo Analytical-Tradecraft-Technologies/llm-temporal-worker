@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 var fuzzTargetName = regexp.MustCompile(`^Fuzz[[:alnum:]_]+$`)
@@ -50,9 +51,7 @@ func TestRepositoryFuzzTargetsIncludesOrdinaryTestFiles(t *testing.T) {
 func TestRepositoryFuzzTargetsIncludesOutsideLegacyAllowlist(t *testing.T) {
 	root := t.TempDir()
 	for _, directory := range []string{"llm", "pricing", "budget", "state", "storage/redis", "routing", "admission"} {
-		if err := os.MkdirAll(filepath.Join(root, directory), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.MkdirAll(filepath.Join(root, directory), 0o755))
 	}
 	writeFile(t, filepath.Join(root, "admission", "engine_fuzz_test.go"), []byte(`package admission
 
@@ -130,10 +129,51 @@ func TestQualityGatesAreWiredIntoMakeCIAndTestingStrategy(t *testing.T) {
 	assertContainsEach(t, pullRequest, "pull-request workflow does not run %q", "make fuzz-smoke", "make mutation-verify")
 
 	master := readText(t, root, ".github", "workflows", "master.yml")
-	assertContainsEach(t, master, "master workflow does not configure %q", "fuzz-shard", "matrix:", "shard: [0, 1, 2]", "scripts/run-fuzz.sh shard")
+	// The fuzz and race shard scripts take their shard count from the matrix
+	// (strategy.job-total), and release evidence must merge exactly that many
+	// shard summaries (#1570).
+	fuzzShards := masterJobShardCount(t, master, "fuzz-shard")
+	raceShards := masterJobShardCount(t, master, "verify-race")
+	assertContainsEach(t, master, "master workflow does not configure %q",
+		`bash scripts/run-fuzz.sh shard "${{ matrix.shard }}" "${{ strategy.job-total }}"`,
+		`bash scripts/run-race-shard.sh "$RACE_SHARD" "${{ strategy.job-total }}"`,
+		"merge-shards.py fuzz_summary fuzz "+strconv.Itoa(fuzzShards)+" fuzz-inputs ",
+		"merge-shards.py race_summary race "+strconv.Itoa(raceShards)+" race-inputs ",
+		"merge-shards.py test_summary test "+strconv.Itoa(raceShards)+" race-inputs ",
+	)
 
 	strategy := readText(t, root, "docs", "testing", "strategy.md")
 	assertContainsEach(t, strategy, "testing strategy does not document %q", "make fuzz-smoke", "make mutation-verify")
+}
+
+var shardMatrix = regexp.MustCompile(`(?m)^        shard: \[([0-9, ]+)\]$`)
+
+// masterJobShardCount returns how many shards a master.yml matrix job lists,
+// requiring the list to be exactly 0..n-1 with at least two shards.
+func masterJobShardCount(t *testing.T, master, job string) int {
+	t.Helper()
+	start := strings.Index(master, "\n  "+job+":\n")
+	if start < 0 {
+		t.Fatalf("master workflow has no %s job", job)
+	}
+	block := master[start+1:]
+	if end := regexp.MustCompile(`\n  [a-z][a-z0-9-]*:\n`).FindStringIndex(block[1:]); end != nil {
+		block = block[:end[0]+1]
+	}
+	match := shardMatrix.FindStringSubmatch(block)
+	if match == nil {
+		t.Fatalf("master workflow %s job does not list its shards", job)
+	}
+	shards := strings.Split(match[1], ", ")
+	for index, shard := range shards {
+		if shard != strconv.Itoa(index) {
+			t.Fatalf("master workflow %s shards = [%s], want 0..%d", job, match[1], len(shards)-1)
+		}
+	}
+	if len(shards) < 2 {
+		t.Fatalf("master workflow %s lists %d shard, want at least two", job, len(shards))
+	}
+	return len(shards)
 }
 
 func TestMasterFuzzShardsUseFixedExecutionBudget(t *testing.T) {
@@ -202,9 +242,7 @@ func repositoryFuzzTargets(t *testing.T, root string) []fuzzEntry {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	sort.Slice(targets, func(i, j int) bool {
 		if targets[i].packagePath != targets[j].packagePath {
 			return targets[i].packagePath < targets[j].packagePath

@@ -7,6 +7,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
@@ -16,9 +17,7 @@ import (
 // items, coded refusals, usage.provider_raw) must satisfy the published schema.
 func TestLiftedResponseSatisfiesPublishedGenerateResponseSchema(t *testing.T) {
 	schemaData, err := os.ReadFile("../../../api/schema/v1/generate-response.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := liftCall("op-lift", llm.ServiceClassEconomy)
 	completed := loadResponseFixture(t, "response.completed.json")
 	refused := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
@@ -33,9 +32,7 @@ func TestLiftedResponseSatisfiesPublishedGenerateResponseSchema(t *testing.T) {
 			encoded, err := json.Marshal(llm.GenerateResponseV1{OperationKey: lifted.OperationKey, OperationID: "op-id", Status: lifted.Status, Output: lifted.Output,
 				Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.child", Kind: "generation"}, Cache: llm.CacheDispositionV1{Disposition: "disabled"},
 				Route: &lifted.Route, Usage: &lifted.Usage, Cost: llm.CostV1{Status: "exact", ActualCostUSD: &amount, Method: "provider_reported"}, Diagnostics: lifted.Diagnostics})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if err := llmschema.Validate(schemaData, encoded); err != nil {
 				t.Fatalf("published schema rejects the lifted response: %v\n%s", err, encoded)
 			}

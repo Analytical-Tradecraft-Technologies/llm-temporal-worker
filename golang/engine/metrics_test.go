@@ -7,6 +7,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
@@ -16,9 +17,7 @@ func TestGenerateRecordsMetricsForSuccessfulProviderDispatch(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	adapter.response.Service.Actual = &actual
 	metrics, err := generateWithMetrics(t, adapter, "metrics-success")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "success"), 1)
 	assertMetricHistogramCount(t, metrics, "llmtw_provider_duration_seconds", standardProviderLabels(), 1)
@@ -58,9 +57,7 @@ func TestOperationMetricsMapRawFailedStatesToBoundedFailedLabel(t *testing.T) {
 func TestHandleCancellationRecordsDurablePreDispatchTransitions(t *testing.T) {
 	harness := newHarness(t, &fakeAdapter{name: "fake", response: successfulResponse()})
 	operation, err := harness.admission.Begin(context.Background(), admission.BeginRequest{ID: "metrics-canceled", ScopeKey: "tenant-1\x00metrics-canceled", LeaseUntil: harness.clock.Add(time.Minute), ExpiresAt: harness.clock.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	metrics := newEngineTestMetrics(t)
 	ctx, cancel := context.WithCancel(observability.WithMetrics(context.Background(), metrics))
 	cancel()
@@ -97,9 +94,7 @@ func newEngineTestMetrics(t *testing.T) *observability.Metrics {
 		Methods:         []string{"provider_reported", "catalog_usage", "reconstructed_usage", "retained_reservation"},
 		OperationStates: []string{"reserved", "dispatching", "completed", "failed", "ambiguous"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return metrics
 }
 
@@ -107,9 +102,7 @@ func TestGenerateRecordsUnreportedActualServiceClassAsUnknown(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	adapter.response.Service.Actual = nil
 	metrics, err := generateWithMetrics(t, adapter, "metrics-unknown-actual")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "unknown", "endpoint": "endpoint-1"}, 1)
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 0)
 }
@@ -119,9 +112,7 @@ func TestGenerateRecordsUnreportedActualServiceClassAsUnknown(t *testing.T) {
 func TestGenerateKeepsProviderValueEmptyWhenNoTierWasReported(t *testing.T) {
 	unreported := &fakeAdapter{name: "fake", response: successfulResponse()}
 	response, err := newHarness(t, unreported).engine.Generate(context.Background(), baseRequest("provider-value-unreported"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.Service.Actual != nil || response.Service.ProviderValue != "" {
 		t.Fatalf("service facts = %+v, want no actual class and no provider value", response.Service)
 	}
@@ -130,9 +121,7 @@ func TestGenerateKeepsProviderValueEmptyWhenNoTierWasReported(t *testing.T) {
 	classified := &fakeAdapter{name: "fake", response: successfulResponse()}
 	classified.response.Service.Actual = &standard
 	response, err = newHarness(t, classified).engine.Generate(context.Background(), baseRequest("provider-value-classified"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.Service.Actual == nil || response.Service.ProviderValue == "" {
 		t.Fatalf("service facts = %+v, want the request tier as the classified response's label", response.Service)
 	}

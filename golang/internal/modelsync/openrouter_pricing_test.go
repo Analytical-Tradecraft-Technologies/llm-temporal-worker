@@ -3,6 +3,7 @@ package modelsync
 import (
 	"context"
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,7 +38,7 @@ func TestHighPrecisionPerTokenPrices(t *testing.T) {
 
 func TestScheduledPricesReserveAllWindowsConservatively(t *testing.T) {
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(`{
+	testassert.NoError(t, json.Unmarshal([]byte(`{
 		"prompt":"0.000001", "completion":"0.000004", "input_cache_read":"0.0000001", "request":"0.001",
 		"overrides":[
 			{"utc_days":["saturday","sunday"], "prompt":"0.0000005", "completion":"0.000002"},
@@ -45,13 +46,9 @@ func TestScheduledPricesReserveAllWindowsConservatively(t *testing.T) {
 			{"utc_start":100, "utc_end":400, "completion":"0.000008"},
 			{"min_prompt_tokens":100000, "prompt":"0.000002", "completion":"0.000006"}
 		]
-	}`), &raw); err != nil {
-		t.Fatal(err)
-	}
+	}`), &raw))
 	prices, err := decodePricing(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if prices.Prompt != "0.000003" || prices.Completion != "0.000008" || prices.InputCacheRead != "0.0000003" || prices.Request != "0.002" {
 		t.Fatalf("schedule envelope = %+v; want componentwise maximum of base and all windows", prices)
 	}
@@ -112,24 +109,18 @@ func TestPricingRejectsMalformedOrUnrepresentableOverrides(t *testing.T) {
 	} {
 		t.Run(override, func(t *testing.T) {
 			var raw map[string]json.RawMessage
-			if err := json.Unmarshal([]byte(`{"prompt":"0.000001","completion":"0.000002","overrides":[`+override+`]}`), &raw); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, json.Unmarshal([]byte(`{"prompt":"0.000001","completion":"0.000002","overrides":[`+override+`]}`), &raw))
 			if _, err := decodePricing(raw); err == nil {
 				t.Fatal("accepted malformed or unsupported override")
 			}
 		})
 	}
 	var request map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(`{"prompt":"0.000001","completion":"0.000002","request":"0.0000000416666666666667"}`), &request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(`{"prompt":"0.000001","completion":"0.000002","request":"0.0000000416666666666667"}`), &request))
 	if _, err := decodePricing(request); err == nil {
 		t.Fatal("accepted an unrepresentable absolute request price")
 	}
-	if err := json.Unmarshal([]byte(`{"completion":"0.000002","overrides":[{"utc_days":["monday"],"prompt":"0.000001"}]}`), &request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(`{"completion":"0.000002","overrides":[{"utc_days":["monday"],"prompt":"0.000001"}]}`), &request))
 	delete(request, "prompt")
 	delete(request, "request")
 	if _, err := decodePricing(request); err == nil {

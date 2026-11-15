@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"io"
 	"net/http"
@@ -36,9 +37,7 @@ func TestExportCarriesCallerIdentityAndProvider(t *testing.T) {
 	})
 	now := time.Now()
 	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), Kind: "generate", StartedAt: now, EndedAt: now.Add(time.Second), Context: llm.RequestContext{Tenant: "tenant-a", Project: "project-a", Actor: "client-a", Tags: map[string]string{"application": "forecaster"}}, Generations: []Generation{{ID: strings.Repeat("3", 16), StartedAt: now, EndedAt: now.Add(time.Second), Model: "gpt-test", Provider: "openrouter", Endpoint: "router", Input: map[string]any{"prompt": "hello"}, Output: map[string]any{"answer": "world"}}}}
-	if err := c.Export(context.Background(), op); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, c.Export(context.Background(), op))
 	for _, s := range []string{"langfuse.user.id", "client-a", "langfuse.observation.metadata.tenant", "tenant-a", "project-a", "forecaster", "openrouter", "hello", "world"} {
 		if !strings.Contains(body, s) {
 			t.Errorf("payload missing %s", s)
@@ -94,9 +93,7 @@ func TestExportBreakerFailsFastThenProbes(t *testing.T) {
 	if err := c.Export(context.Background(), op); errors.Is(err, ErrUnavailable) || !errors.Is(err, ErrExport) {
 		t.Fatalf("probe must reach Langfuse: %v", err)
 	}
-	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("failed probe must re-open the breaker: %v", err)
-	}
+	testassert.ErrorIs(t, c.Export(context.Background(), op), ErrUnavailable, "failed probe must re-open the breaker")
 	// A successful probe closes it.
 	healthy.Store(true)
 	now = now.Add(breakerCooldown)
@@ -123,9 +120,7 @@ func TestExportLocalRejectionDoesNotResetBreaker(t *testing.T) {
 		t.Fatalf("oversized payload must be rejected locally: %v", err)
 	}
 	c.Export(context.Background(), op)
-	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("local rejection reset the breaker: %v", err)
-	}
+	testassert.ErrorIs(t, c.Export(context.Background(), op), ErrUnavailable, "local rejection reset the breaker")
 	if calls.Load() != breakerThreshold {
 		t.Fatalf("Langfuse received %d calls, want %d", calls.Load(), breakerThreshold)
 	}
@@ -157,9 +152,7 @@ func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
 			}
 			close(release)
 			for i := 0; i < tc.want; i++ {
-				if err := <-results; err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, <-results)
 			}
 		})
 	}
@@ -197,9 +190,7 @@ func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
 		}()
 	}
 	for i := 0; i < burst; i++ {
-		if err := <-results; err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, <-results)
 	}
 	if delivered.Load() != burst || peak.Load() > limit || saturated.Load() == 0 {
 		t.Fatalf("delivered %d, peak in flight %d (limit %d), saturated refusals %d", delivered.Load(), peak.Load(), limit, saturated.Load())
@@ -259,9 +250,7 @@ func TestExportBreakerCountsOnlyOutages(t *testing.T) {
 	c.Export(context.Background(), op)
 	status.Store(503)
 	c.Export(context.Background(), op)
-	if err := c.Export(context.Background(), op); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("throttling hid earlier failures from the breaker: %v", err)
-	}
+	testassert.ErrorIs(t, c.Export(context.Background(), op), ErrUnavailable, "throttling hid earlier failures from the breaker")
 }
 
 func TestExportClassifiesRedirectsAndPartialSuccess(t *testing.T) {
@@ -303,9 +292,7 @@ func newTestClient(t *testing.T, maxInFlight int, handler http.HandlerFunc) *Cli
 	server := httptest.NewTLSServer(handler)
 	t.Cleanup(server.Close)
 	c, err := NewClient(server.URL, "public", "secret", server.Client(), maxInFlight)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return c
 }
 

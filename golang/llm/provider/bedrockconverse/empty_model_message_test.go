@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -32,9 +33,7 @@ func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 	for name, strict := range map[string]bool{"strict": true, "best effort": false} {
 		t.Run(name, func(t *testing.T) {
 			call, err := adaptertest.Compile(adapter, "bedrock-prod", provider.FamilyBedrockConverse, request, strict)
-			if err != nil {
-				t.Fatalf("compile replayed empty model message: %v", err)
-			}
+			testassert.NoError(t, err, "compile replayed empty model message")
 			params := call.SDKParams.(bedrockruntime.ConverseInput)
 			roles := make([]string, 0, len(params.Messages))
 			blocks := make([]int, 0, len(params.Messages))

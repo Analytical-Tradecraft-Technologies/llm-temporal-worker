@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +16,7 @@ func TestEncodeProgressRejectsOversizedPayload(t *testing.T) {
 		t.Fatalf("encode = %s, %v", data, err)
 	}
 	large := json.RawMessage(`"` + strings.Repeat("x", maxPayloadBytes) + `"`)
-	if _, err := encodeProgress(map[string]json.RawMessage{"large": large}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("oversized encode error = %v, want ErrInvalid", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(encodeProgress(map[string]json.RawMessage{"large": large})), ErrInvalid, "oversized encode")
 }
 
 func TestTryProgressUpdateClampsTimeAndReportsRaces(t *testing.T) {

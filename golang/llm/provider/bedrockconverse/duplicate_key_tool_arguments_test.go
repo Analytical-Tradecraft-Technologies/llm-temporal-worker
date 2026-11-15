@@ -3,6 +3,7 @@ package bedrockconverse
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,9 +23,7 @@ func (d rawDocument) MarshalSmithyDocument() ([]byte, error) { return []byte(d.r
 
 func TestDuplicateKeyToolInputIsAnAcceptedInvalidResponse(t *testing.T) {
 	adapter, err := New(&Client{converse: &fakeConverse{}}, "endpoint", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for raw, valid := range map[string]bool{`{"q":"a","q":"b"}`: false, `{"query":"x","limit":5}`: true} {
 		output := &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{
 			&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{ToolUseId: aws.String("call"), Name: aws.String("lookup"), Input: rawDocument{raw: raw}}},

@@ -10,6 +10,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -70,9 +71,7 @@ func TestMapErrorRedactsTransportCause(t *testing.T) {
 			t.Fatalf("safe provider error leaked %q: %s", raw, encoded)
 		}
 	}
-	if !errors.Is(mapped, transportCause) {
-		t.Fatal("mapped error did not preserve the local diagnostic cause")
-	}
+	testassert.ErrorIs(t, mapped, transportCause, "mapped error did not preserve the local diagnostic cause")
 }
 
 // OpenAI reports billing, spend and quota exhaustion as 429. Retrying cannot

@@ -2,6 +2,7 @@ package anthropicwire
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 )
@@ -9,16 +10,12 @@ import (
 func TestFamilyParamsKeepsTheWireBodyAndNamesTheFamily(t *testing.T) {
 	body := map[string]any{"model": "claude-test", "max_tokens": 64, "messages": []any{}, "unlisted_field": "kept"}
 	params, err := Bedrock.Params(body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if params.Model != "claude-test" || params.MaxTokens != 64 {
 		t.Fatalf("typed params = %q, %d", params.Model, params.MaxTokens)
 	}
 	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !strings.Contains(string(encoded), `"unlisted_field":"kept"`) {
 		t.Fatalf("params override lost the wire body: %s", encoded)
 	}

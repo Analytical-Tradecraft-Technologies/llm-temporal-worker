@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -98,7 +99,5 @@ func TestMaterializingV1RuntimeAcceptsEmptyMaterializedTranscript(t *testing.T) 
 	value := validMaterializedStateForValidation("parent")
 	value.Items = nil
 	value.PendingToolCalls = nil
-	if err := generateWithMaterializedState(&materializingRuntimeProbe{events: new([]string)}, value); err != nil {
-		t.Fatalf("GenerateV1 rejected an empty materialized transcript: %v", err)
-	}
+	testassert.NoError(t, generateWithMaterializedState(&materializingRuntimeProbe{events: new([]string)}, value), "GenerateV1 rejected an empty materialized transcript")
 }

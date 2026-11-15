@@ -37,9 +37,7 @@ func TestListModelsUnsupportedWithoutDirectCapability(t *testing.T) {
 
 func TestListModelsRejectsEndpointMismatch(t *testing.T) {
 	adapter, err := NewOpenAIAdapter(&Client{directOpenAI: true}, "openai-responses", "responses-contract/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "other", Limit: 1})
 	testassert.ErrorContains(t, err, "endpoint does not match")
 }
@@ -49,13 +47,9 @@ func TestListModelsRejectsEndpointMismatch(t *testing.T) {
 func newInventoryAdapter(t *testing.T, server *httptest.Server) *ModelListerAdapter {
 	t.Helper()
 	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: "test-key", HTTPClient: server.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewOpenAIAdapter(client, "openai-responses", "responses-contract/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 

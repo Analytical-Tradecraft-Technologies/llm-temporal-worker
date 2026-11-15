@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -33,12 +34,8 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 			Input:  []llm.Item{llm.HumanText("extract")},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)}},
 		}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := adapter.Invoke(context.Background(), call, nil); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
+		testassert.NoError(t, testassert.Err(adapter.Invoke(context.Background(), call, nil)))
 		var body struct {
 			Text struct {
 				Format struct {

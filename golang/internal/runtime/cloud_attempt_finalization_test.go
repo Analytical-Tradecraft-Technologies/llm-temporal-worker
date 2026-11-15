@@ -8,6 +8,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -171,9 +172,7 @@ func TestCloudAttemptFinalizationKeepsPaidIdentityAcrossReplay(t *testing.T) {
 					f.store.fail = fault
 					var err error
 					f.finalizer, err = newCloudFinalizer(f.repository, f.store, f.store, f.store, func() time.Time { return f.provider.now.Add(365 * 24 * time.Hour) })
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 					err = f.replay()
 					if (err != nil) != (fault != "") {
 						t.Fatal("replay", kind, unreserved, uncached, fault, err)
@@ -252,9 +251,7 @@ func TestCloudAttemptResultProjectionDoesNotChangePaidRecord(t *testing.T) {
 	scope, id := f.repository.record.Request.Scope, f.repository.record.Request.ID
 	before, _ := json.Marshal(f.repository.saved)
 	got, err := f.finalizer.LoadAttemptResult(context.Background(), scope, id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.Response.OperationID != string(id) || got.Response.OperationKey != f.provider.gen.OperationKey || got.Saved.Execution.Response.OperationID != string(got.Attempt.ID) {
 		t.Fatal("incorrect identity projection")
 	}
@@ -274,9 +271,7 @@ func TestCloudAttemptFinalizationRevalidatesSavedProofBeforeEffects(t *testing.T
 	for _, kind := range []string{"generate", "compact"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newAttemptFinalizationFixture(t, kind, false, false)
-			if err := f.save(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, f.save())
 			f.repository.saved.Execution.Settled = false
 			if err := f.replay(); err == nil {
 				t.Fatal("replay accepted an unsettled child")
@@ -303,12 +298,8 @@ func TestCloudAttemptFinalizationIncompleteResponseNeverPublishes(t *testing.T) 
 	f.effects.Provider.Completion.Outcome = cache.FillNotCacheable
 	f.effects.Provider.Completion.EntryID = ""
 	f.generate.Cache.Disposition = "miss_not_populated"
-	if err := f.save(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.replay(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.save())
+	testassert.NoError(t, f.replay())
 	for _, event := range f.store.events {
 		if event == "publish" {
 			t.Fatal("incomplete result published")

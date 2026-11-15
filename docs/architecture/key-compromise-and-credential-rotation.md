@@ -18,6 +18,10 @@ both documents touch the same secret (`state.requests.secret`), #861 decides.
 
 The step-by-step procedures are in the
 [rotating runtime credentials runbook](../runbooks/rotating-runtime-credentials.md).
+The [threat model](threat-model.md) names the actors that could obtain each
+key and lists this design's remaining gaps among its
+[residual risks](threat-model.md#residual-risks). Rolling restarts and drains
+follow the [fleet upgrade and rollback runbook](../runbooks/fleet-upgrade-and-rollback.md).
 
 ## How secrets reach the worker today
 
@@ -90,19 +94,30 @@ whatever their kind), and the two identity secrets (never rotated in place).
 
 ### What it protects
 
-`state.redis.key_secret` is HMAC key material for Redis key names
-(`storage/redis/key.go`, `keySpace.digest`). Budget accounting, throttles,
-provider state and operation keys are addressed by HMACs of tenant scopes,
-operation IDs and policy identifiers, so a key scan does not reveal tenant
-names. It is not a Redis credential and does not encrypt values.
+`state.redis.key_secret` is the root of two keyed functions in
+`storage/redis`:
+
+- **Key names.** `keySpace.digest` (`storage/redis/key.go`) HMACs tenant
+  scopes, operation IDs and policy identifiers into Redis key names, so a key
+  scan does not reveal tenant names.
+- **Responses API result copies.** When `server.responses_api_listen_address`
+  is set, terminal Generate results are copied to Redis sealed with
+  AES-256-GCM under a key derived from it (`ResponseResultStore`,
+  `storage/redis/response_result.go`). Copies expire after an hour and results
+  over 1 MiB are not copied.
+
+It is not a Redis credential: it does not authenticate to Redis.
 
 **Compromise exposure.** Someone with the key *and* read access to Redis can
-test guesses (a tenant name, an operation key) against key names, and so link
-keys to tenants. Without Redis access the key reveals nothing. It cannot
-authenticate to Redis, decrypt anything or forge budget authority. The
-response to a suspected compromise is therefore first to rotate the Redis ACL
+test guesses (a tenant name, an operation key) against key names, linking keys
+to tenants. Where the Responses API listener runs, they can also decrypt the
+result copies present while they have access: model outputs from roughly the
+last hour. Without Redis access the key reveals nothing, and it cannot forge
+budget authority (the [Redis writer](threat-model.md#redis-writer) actor
+covers what Redis write access alone allows). First rotate the Redis ACL
 password (which is what grants access) and audit Redis access. Replace the
-identity only if linkability of existing key names matters.
+identity as well when the listener is in use and Redis read access cannot be
+ruled out, or when linkability of existing key names matters.
 
 ### Why it cannot be rotated in place
 
@@ -131,7 +146,8 @@ in the runbook; in outline:
 2. With the new configuration, run `budget-initialize --apply` to create the
    new namespace's receipt and marker. The old namespace is untouched.
 3. Drain: stop starting new workflows on the task queue and wait until no
-   workflow is open, so no reservation, claim or settlement spans the cutover.
+   workflow is open, so no reservation, claim or settlement spans the cutover
+   ([drain procedure](../runbooks/fleet-upgrade-and-rollback.md#4-drain-when-the-change-requires-it)).
 4. Stop every old worker, then start workers with the new configuration.
 5. Keep the old namespace read-only until its longest budget window has
    passed, then delete its keys by prefix.
@@ -167,7 +183,9 @@ the primary key and verifies them under any listed key:
   history and are never public output.
 
 **Compromise exposure.** A party that can already start workflows or
-Activities on the worker's task queue could mint handles and capabilities for
+Activities on the worker's task queue (the
+[Temporal namespace caller](threat-model.md#temporal-namespace-caller)) could
+mint handles and capabilities for
 any checkpoint UUID or request ID it learns, within the scopes
 `authorization.allowed_scopes` lets it select, and so read stored transcripts
 it was never given. The key decrypts nothing and gives nothing to a party
@@ -244,7 +262,9 @@ decrypt every payload written under that key: prompts and outputs below
 `server.inline_payload_bytes`. With write access they could also forge
 payloads that decode. Temporal history is immutable, so data already written
 under a compromised key stays readable with that key for its retention period.
-No rotation re-encrypts it.
+No rotation re-encrypts it. Without the codec, the same history is plaintext
+to every namespace reader (a residual risk in the
+[threat model](threat-model.md#residual-risks)).
 
 ### Current behaviour
 
@@ -283,7 +303,8 @@ every identifier (`storage/cloudstate`). It is resolved on every snapshot
 build, and its reference is process-lifetime. The keyring that separates
 encryption from identity is #861's design and is not implemented yet.
 
-**Compromise exposure.** With read access to the payload bucket, the secret
+**Compromise exposure.** With read access to the payload bucket (the
+[DynamoDB or S3 writer](threat-model.md#dynamodb-or-s3-writer) actor), the secret
 decrypts every stored blob: prompts, outputs and checkpoints. It also lets an
 attacker compute identifiers and forge checkpoint blob references. Response:
 restrict and audit bucket access first. Replacing the secret is a namespace

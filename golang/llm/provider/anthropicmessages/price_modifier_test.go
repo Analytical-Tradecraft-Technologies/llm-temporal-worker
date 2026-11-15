@@ -6,6 +6,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -37,9 +38,7 @@ func TestLiftKeepsPriceModifiedUsageUnknown(t *testing.T) {
 			got, err := mustProfile(t, testProfile()).liftResponse(provider.Call{
 				OperationKey: "price-modifier", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard,
 			}, &message, "req-synthetic")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if got.Usage.InputTokens != 1000000 || got.Usage.OutputTokens != 1000000 {
 				t.Fatalf("token usage lost: %#v", got.Usage)
 			}

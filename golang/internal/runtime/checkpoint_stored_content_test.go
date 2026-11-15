@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -22,38 +23,22 @@ func publishStoredRoot(t *testing.T, f *boundedCloudFixture, delta []llm.Item) l
 	t.Helper()
 	ctx := context.Background()
 	publication, err := f.cap.NewCheckpointPublication(f.options.Keyring, f.options.Limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	identity := CheckpointPublicationIdentity{Scope: "trusted-scope", OperationID: state.OperationID(uuid.NewString()), CheckpointID: state.CheckpointID(uuid.NewString()), CreatedAt: f.now, ExpiresAt: f.now.Add(time.Hour)}
 	checkpoint, metadata, err := publication.metadata(ctx, identity, nil, state.MaterializedState{}, state.CheckpointGeneration, nil)
-	if err != nil {
-		t.Fatalf("stored root metadata: %v", err)
-	}
+	testassert.NoError(t, err, "stored root metadata")
 	settings, err := state.ApplySettingsPatchV1(state.RootModelState(""), f.request.SettingsPatch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	patch, err := publication.codec.EncodeSettingsPatchV1(f.request.SettingsPatch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	output := []llm.Item{llm.ModelText("answer")}
 	items := append(append([]llm.Item(nil), delta...), output...)
 	checkpoint, err = publication.blobs(ctx, checkpoint, state.MaterializedState{}, settings, delta, output, patch, items, false, nil, nil)
-	if err != nil {
-		t.Fatalf("stored root blobs: %v", err)
-	}
+	testassert.NoError(t, err, "stored root blobs")
 	unit, err := f.repository.Checkpoints().BeginCheckpoint(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := unit.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: checkpoint}); err != nil {
-		t.Fatalf("stored root put: %v", err)
-	}
-	if err := unit.Commit(ctx); err != nil {
-		t.Fatalf("stored root commit: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, unit.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: checkpoint}), "stored root put")
+	testassert.NoError(t, unit.Commit(ctx), "stored root commit")
 	return metadata.Handle
 }
 
@@ -62,9 +47,7 @@ func pendingCloudRequests(t *testing.T, f *boundedCloudFixture) int {
 	pending := 0
 	for shard := range cloudstate.PendingShards {
 		page, err := f.repository.ListPending(context.Background(), shard, 100, "")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		pending += len(page.Requests)
 	}
 	return pending
@@ -84,9 +67,7 @@ func TestCloudExecutionRuntimeFailsStoredBlockedMediaURLAsInvalidArgument(t *tes
 			parent := publishStoredRoot(t, f, []llm.Item{stored})
 
 			materialized, err := f.cap.Checkpoints.Materializer.MaterializeHandle(ctx, "trusted-scope", string(parent), f.options.Limits)
-			if err != nil {
-				t.Fatalf("stored checkpoint no longer materializes: %v", err)
-			}
+			testassert.NoError(t, err, "stored checkpoint no longer materializes")
 			if got, _ := json.Marshal(materialized.Items); !strings.Contains(string(got), raw) {
 				t.Fatalf("materialized parent lost the stored media URL: %s", got)
 			}
@@ -147,9 +128,7 @@ func TestCloudExecutionRuntimeAggregateLineageByteLimitIsNotRetried(t *testing.T
 	f.restart(t)
 
 	_, err := f.cap.Checkpoints.Materializer.MaterializeHandle(ctx, "trusted-scope", string(parent), f.options.Limits)
-	if !errors.Is(err, state.ErrLimitExceeded) {
-		t.Fatalf("materialize error = %v, want ErrLimitExceeded", err)
-	}
+	testassert.ErrorIs(t, err, state.ErrLimitExceeded, "materialize")
 
 	f.continueTurn(parent, "over-lineage-limit")
 	_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})

@@ -7,6 +7,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -33,9 +34,7 @@ func TestLiftCompletedToolResponsePreservesUsageAndIDs(t *testing.T) {
       }],
       "usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":1},"completion_tokens_details":{"reasoning_tokens":2}}
     }`), &response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := testProfile()
 	lifted := mustLift(t, profile, liftCall("op-lift", llm.ServiceClassPriority), &response, "req-1")
 	if lifted.Status != llm.ResponseStatusToolCalls || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassPriority {
@@ -114,18 +113,14 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 			Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema,
 		}},
 	}, testProfile(), "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := liftCall("op-json", llm.ServiceClassStandard)
 	call.SDKParams = params
 	valid := openai.ChatCompletion{
 		ID: "valid", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault,
 		Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Content: `{"answer":"ok"}`}}},
 	}
-	if _, err := testProfile().liftResponse(call, &valid, "req"); err != nil {
-		t.Fatalf("valid JSON response = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(testProfile().liftResponse(call, &valid, "req")), "valid JSON response")
 	invalid := valid
 	invalid.ID = "invalid"
 	invalid.Choices[0].Message.Content = `{"answer":3}`
@@ -143,9 +138,7 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 		}
 
 		params, err := lowerRequest(llm.Request{Model: "chat-model", Input: contract.WireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: format}}, testProfile(), "default")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		call := provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIChat, Model: "chat-model", OperationKey: "partial", ServiceClass: llm.ServiceClassStandard, SDKParams: params}
 		for _, reason := range []string{"length", "content_filter", "stop"} {
 			response := openai.ChatCompletion{ID: "partial", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault, Usage: openai.CompletionUsage{PromptTokens: 12, CompletionTokens: 4, TotalTokens: 16}, Choices: []openai.ChatCompletionChoice{{FinishReason: reason, Message: openai.ChatCompletionMessage{Content: `{"answer":`}}}}
@@ -243,8 +236,6 @@ func liftStandard(response *openai.ChatCompletion) (llm.Response, error) {
 func mustLift(t *testing.T, profile Profile, call provider.Call, response *openai.ChatCompletion, requestID string) llm.Response {
 	t.Helper()
 	lifted, err := profile.liftResponse(call, response, requestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return lifted
 }

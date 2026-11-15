@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -46,9 +47,7 @@ func TestCompileAndInvokeConverse(t *testing.T) {
 		ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypePriority},
 	}}
 	adapter, err := New(&Client{converse: fake}, "bedrock-prod", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Nova Lite is Standard-only in Bedrock.  Use Nova Pro for the priority
 	// contract so this fixture exercises a tier the documented model supports.
 	request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0", ServiceClass: llm.ServiceClassPriority,
@@ -82,14 +81,10 @@ func TestCompileAndInvokeConverse(t *testing.T) {
 
 func TestLowerToolCallUsesSmithyJSONDocument(t *testing.T) {
 	profile, err := NewDefaultProfile("nova")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := llm.Request{Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"city":"Sydney"}`)}}}
 	input, err := lowerRequest(request, profile, string(types.ServiceTierTypeDefault), true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(input.Messages) != 1 || len(input.Messages[0].Content) != 1 {
 		t.Fatalf("lowered messages = %#v", input.Messages)
 	}
@@ -108,9 +103,7 @@ func TestLowerToolCallUsesSmithyJSONDocument(t *testing.T) {
 // rather than offered to the model as a callable function (#1665).
 func TestCompileRejectsNonFunctionToolKinds(t *testing.T) {
 	adapter, err := New(&Client{converse: &fakeConverse{}}, "bedrock-prod", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, kind := range []llm.ToolKind{llm.ToolKindProvider, llm.ToolKindRemoteMCP} {
 		for _, strict := range []bool{true, false} {
 			request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0",

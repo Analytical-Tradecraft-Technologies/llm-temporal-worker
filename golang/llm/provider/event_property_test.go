@@ -3,6 +3,7 @@ package provider_test
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -21,9 +22,7 @@ func TestAssemblerEventSequenceInvariants(t *testing.T) {
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.OperationKey != "event-invariant" || response.Status != llm.ResponseStatusCompleted || len(response.Output) != 1 {
 		t.Fatalf("assembled response = %#v", response)
 	}

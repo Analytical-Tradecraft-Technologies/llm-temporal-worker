@@ -46,18 +46,14 @@ func (clients *fakeClients) Count() int {
 func mustNewApp(t *testing.T, options Options) *App {
 	t.Helper()
 	application, err := New(context.Background(), options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return application
 }
 
 // mustCloseApp closes application, failing the test on an error.
 func mustCloseApp(t *testing.T, application *App) {
 	t.Helper()
-	if err := application.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, application.Close(context.Background()))
 }
 
 func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
@@ -78,9 +74,7 @@ func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
 	}
 	old := application.Current()
 	lease, err := application.Acquire()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reloaded := make(chan error, 1)
 	go func() { reloaded <- application.Reload(context.Background(), initial) }()
 	newClients := <-created
@@ -88,12 +82,8 @@ func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
 		t.Fatal("old clients closed while an Activity lease was active")
 	}
 	lease.Release()
-	if err := <-reloaded; err != nil {
-		t.Fatal(err)
-	}
-	if err := old.WaitClosed(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, <-reloaded)
+	testassert.NoError(t, old.WaitClosed(context.Background()))
 	mustCloseApp(t, application)
 	if oldClients.Count() != 1 || newClients.Count() != 1 {
 		t.Fatalf("closed counts = %d, %d; want one each", oldClients.Count(), newClients.Count())
@@ -114,9 +104,7 @@ func TestReloadClientConstructionFailureKeepsOldSnapshot(t *testing.T) {
 		},
 	})
 	before := application.Current().Config.ConfigVersion()
-	if err := application.Reload(context.Background(), exampleConfig(t)); !errors.Is(err, failure) {
-		t.Fatalf("reload error = %v", err)
-	}
+	testassert.ErrorIs(t, application.Reload(context.Background(), exampleConfig(t)), failure, "reload")
 	if application.Current().Config.ConfigVersion() != before {
 		t.Fatal("client construction failure replaced active snapshot")
 	}
@@ -251,9 +239,7 @@ func TestReloadFileRejectsOversizedReplacementWithoutPublishingIt(t *testing.T) 
 	application := mustNewApp(t, Options{InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{}})
 	before := application.Current().Config.ConfigVersion()
 	path := filepath.Join(t.TempDir(), "oversized.yaml")
-	if err := os.WriteFile(path, make([]byte, maxReloadFileBytes+1), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, make([]byte, maxReloadFileBytes+1), 0600))
 	err := application.ReloadFile(context.Background(), path)
 	testassert.ErrorContains(t, err, "exceeds safe size")
 	if current := application.Current(); current == nil || current.Config.ConfigVersion() != before {

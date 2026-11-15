@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -27,9 +28,7 @@ import (
 func ageLiveCloudAttempt(t *testing.T, h *liveCloudWorkflow) {
 	t.Helper()
 	now, err := h.redis.Time(h.ctx).Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	created := now.Add(-cache.MaxFillLease + 5*time.Second)
 	h.fixture.cap.Clock = func() time.Time { return created }
 	h.fixture.restart(t)
@@ -52,9 +51,7 @@ func TestCloudWorkflowLiveExpiredAdmission(t *testing.T) {
 	// dispatch before allowing a restarted worker to recover the request.
 	waitLiveRedisDeadline(t, h, time.UnixMilli(old.StartByMillis))
 	leaser := f.cap.Budgets.(durable.BudgetLeaser)
-	if _, err := leaser.Claim(h.ctx, durable.ClaimRequest{OperationID: durable.OperationID(first.ID), GenerationID: f.options.BudgetGeneration, IncarnationID: durable.IncarnationID(old.IncarnationID)}); !errors.Is(err, durable.ErrLeaseExpired) {
-		t.Fatalf("expired start permission: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(leaser.Claim(h.ctx, durable.ClaimRequest{OperationID: durable.OperationID(first.ID), GenerationID: f.options.BudgetGeneration, IncarnationID: durable.IncarnationID(old.IncarnationID)})), durable.ErrLeaseExpired, "expired start permission")
 	f.cap.Clock = time.Now
 	h.startWorker(t)
 	h.generate(t, f.request)
@@ -149,9 +146,7 @@ func TestCloudWorkflowLiveLostSettlement(t *testing.T) {
 	f.cap.Budgets = budgets
 	var err error
 	f.cap.Finalizer, err = newCloudFinalizer(f.repository, f.cap.Responses, f.cap.ResponseFills, budgets, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	h.startWorker(t)
 	h.generate(t, f.request)
 	if budgets.calls.Load() < 2 || f.submits.Load() != 1 {
@@ -189,18 +184,14 @@ func liveCloudLeases(t *testing.T, h *liveCloudWorkflow) map[string]liveCloudLea
 			continue
 		}
 		raw, err := h.redis.Get(h.ctx, it.Val()).Result()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		var record liveCloudLease
 		if json.Unmarshal([]byte(raw), &record) != nil || record.OperationID == "" || record.Status != "accepted" {
 			t.Fatal("invalid Redis authorization tombstone")
 		}
 		leases[record.OperationID] = record
 	}
-	if err := it.Err(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, it.Err())
 	return leases
 }
 
@@ -282,9 +273,7 @@ func assertLiveBudgetTotals(t *testing.T, h *liveCloudWorkflow, windows map[stri
 			continue
 		}
 		fields, err := h.redis.HGetAll(h.ctx, it.Val()).Result()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		var total int64
 		for field, value := range fields {
 			if strings.HasPrefix(field, "sum:") {
@@ -297,9 +286,7 @@ func assertLiveBudgetTotals(t *testing.T, h *liveCloudWorkflow, windows map[stri
 		}
 		got = append(got, total)
 	}
-	if err := it.Err(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, it.Err())
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
@@ -311,9 +298,7 @@ func waitLiveRedisDeadline(t *testing.T, h *liveCloudWorkflow, deadline time.Tim
 	t.Helper()
 	for {
 		now, err := h.redis.Time(h.ctx).Result()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !now.Before(deadline) {
 			return
 		}

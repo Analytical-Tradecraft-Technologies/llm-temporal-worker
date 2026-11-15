@@ -8,6 +8,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -18,9 +19,7 @@ import (
 func checkpointFinalizerFixture(t *testing.T, kind, mode string) (*cloudRequestRuntime, *recordingCloudRequests, *replayEffectsStore, func() ([]byte, error), func() error) {
 	t.Helper()
 	r, repository, store, run, save, effects := finalizationFixture(t, kind, mode)
-	if err := save(effects); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, save(effects))
 	payload := decodeJSON[cloudFinalizationPayload](t, repository.handoff.Payload)
 	checkpoint := state.DurableCheckpoint{ID: repository.handoff.CheckpointID, ScopeID: repository.handoff.CheckpointScope}
 	manifest := append(json.RawMessage(nil), repository.operation.Manifest...)
@@ -74,13 +73,9 @@ func TestCloudCheckpointFinalizationResumesBeforeInnerExecution(t *testing.T) {
 					repository.planSteps = nil
 					// Lose the finalizer's process-local state and change the current clock.
 					restarted, err := newCloudFinalizer(repository, store, store, store, func() time.Time { return r.clock().Add(24 * time.Hour) })
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 					r.finalizer = restarted
-					if _, err := run(); err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, testassert.Err(run()))
 					wantSteps := []string{"commit"}
 					if failure == "handoff" || failure == "effects" {
 						wantSteps = nil
@@ -156,18 +151,14 @@ func TestCloudCheckpointFinalizationCommitOrdersEffects(t *testing.T) {
 	for _, kind := range []string{"generate", "compact"} {
 		t.Run(kind, func(t *testing.T) {
 			_, repository, store, run, commit := checkpointFinalizerFixture(t, kind, "provider")
-			if err := commit(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, commit())
 			if !reflect.DeepEqual(repository.planSteps, []string{"save", "commit"}) || repository.handoff == nil {
 				t.Fatal("missing durable publication gate")
 			}
 			if !reflect.DeepEqual(store.events, []string{"publish", "budget", "fill"}) {
 				t.Fatal("wrong effect order", store.events)
 			}
-			if _, err := run(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(run()))
 		})
 	}
 }
@@ -188,9 +179,7 @@ func TestCloudCheckpointFinalizationNoWorkRecoversWithoutEffects(t *testing.T) {
 			}
 			err := commit()
 			if failure == "terminal" {
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				_, err = run()
 			}
 			if err == nil {
@@ -200,12 +189,8 @@ func TestCloudCheckpointFinalizationNoWorkRecoversWithoutEffects(t *testing.T) {
 			// A restarted snapshot must finish the saved publication without running
 			// the inner compaction phase or inventing budget/cache effects.
 			r.finalizer, err = newCloudFinalizer(repository, store, store, nil, r.clock)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := run(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
+			testassert.NoError(t, testassert.Err(run()))
 			if repository.record.Status != cloudstate.StatusCompleted || len(store.events) != 0 {
 				t.Fatal("no-work path did not complete without effects", store.events)
 			}

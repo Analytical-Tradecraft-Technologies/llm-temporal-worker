@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
@@ -21,7 +22,7 @@ import (
 func TestLiveRedisBudgetEvents(t *testing.T) {
 	client := openLiveRedis(t)
 	ctx := context.Background()
-	mustNoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
+	testassert.NoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
 	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
 		t.Run(string(mode), func(t *testing.T) {
 			fixture := func(t *testing.T) (*RedisBudgetMaterializer, BudgetKeySpace, durable.ReserveRequest) {
@@ -34,18 +35,14 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 					GenerationID: "generation-1", IncarnationID: "incarnation-1",
 					CoordinationStreamEnabled: true,
 				})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				return m, space, durableTestRequest(time.Now().UTC())
 			}
 			read := func(t *testing.T, space BudgetKeySpace, cursor string) []BudgetStreamRecord {
 				t.Helper()
 				port := mustBudgetEventPort(t, client, space)
 				rows, err := port.Read(ctx, cursor, 100)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				return rows
 			}
 			// settle finalizes only r's first event, as "completion".
@@ -61,7 +58,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				for range 12000 {
 					pipe.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), Values: map[string]any{"event": "old-hint"}})
 				}
-				mustNoError(t, errOf(pipe.Exec(ctx)))
+				testassert.NoError(t, testassert.Err(pipe.Exec(ctx)))
 				oldID := client.XInfoStream(ctx, space.EventsKey()).Val().FirstEntry.ID
 				r := acquireLive(t, m, req)
 				if n := client.XLen(ctx, space.EventsKey()).Val(); n > 10100 {
@@ -71,8 +68,8 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 					t.Fatalf("hint TTL = %v", ttl)
 				}
 				port := mustBudgetEventPort(t, client, space)
-				requireErrorIs(t, errOf(port.Read(ctx, oldID, 10)), ErrBudgetStreamGap, "trim recovery")
-				mustNoError(t, client.PExpire(ctx, space.EventsKey(), time.Millisecond).Err())
+				testassert.ErrorIs(t, testassert.Err(port.Read(ctx, oldID, 10)), ErrBudgetStreamGap, "trim recovery")
+				testassert.NoError(t, client.PExpire(ctx, space.EventsKey(), time.Millisecond).Err())
 				deadline := time.Now().Add(time.Second)
 				for client.Exists(ctx, space.EventsKey()).Val() != 0 {
 					if time.Now().After(deadline) {
@@ -84,10 +81,8 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if err != nil || cursor != "0-0" {
 					t.Fatalf("expired stream cursor: %q, %v", cursor, err)
 				}
-				if _, err := m.Claim(ctx, claimOf(r)); err != nil {
-					t.Fatalf("claim after hint expiry: %v", err)
-				}
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(r))), durable.ErrAlreadyClaimed, "hint expiry reopened dispatch")
+				testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(r))), "claim after hint expiry")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(r))), durable.ErrAlreadyClaimed, "hint expiry reopened dispatch")
 				rows, err := port.Read(ctx, cursor, 10)
 				if err != nil || len(rows) != 1 || rows[0].Event.Kind != BudgetEventClaim {
 					t.Fatalf("recreated hints: %#v, %v", rows, err)
@@ -107,13 +102,13 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if _, err := m.Claim(ctx, claimOf(r)); err == nil {
 					t.Fatal("expected lost claim reply")
 				}
-				requireErrorIs(t, errOf(m.Claim(ctx, claimOf(r))), durable.ErrAlreadyClaimed, "claim replay =")
+				testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(r))), durable.ErrAlreadyClaimed, "claim replay =")
 				m.invoke = &lostBudgetReply{delegate: m.invoke, action: "durable_reconcile"}
 				completed := settle(r, "0.004")
 				if err := m.Reconcile(ctx, completed); err == nil {
 					t.Fatal("expected lost settlement reply")
 				}
-				mustNoError(t, m.Reconcile(ctx, completed))
+				testassert.NoError(t, m.Reconcile(ctx, completed))
 				rows := read(t, space, "")
 				if len(rows) != 3 {
 					t.Fatalf("expected one event per transition, got %#v", rows)
@@ -130,9 +125,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 						t.Fatalf("event %d = %#v", i, row.Event)
 					}
 					wire, err := row.Event.Marshal()
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 					for _, secret := range []string{string(req.OperationID), req.Reservations[0].PolicyID, req.Reservations[0].WindowID} {
 						if strings.Contains(string(wire), "\""+secret+"\"") {
 							t.Fatalf("raw application identifier in event: %s", wire)
@@ -169,8 +162,8 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if result, err := m.Accept(ctx, blocked); err != nil || result.Accepted {
 					t.Fatalf("denial = %#v, %v", result, err)
 				}
-				mustNoError(t, errOf(m.Claim(ctx, claimOf(r))))
-				mustNoError(t, m.Reconcile(ctx, settle(r, "0")))
+				testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(r))))
+				testassert.NoError(t, m.Reconcile(ctx, settle(r, "0")))
 				rows := read(t, space, "")
 				want := []BudgetStreamEventKind{BudgetEventReserve, BudgetEventDenial, BudgetEventClaim, BudgetEventRelease}
 				if len(rows) != len(want) {
@@ -190,7 +183,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if err != nil || len(members) != 1 {
 					t.Fatalf("expiry index = %#v, %v", members, err)
 				}
-				mustNoError(t, client.ZAdd(ctx, expiry, redisclient.Z{Score: 1, Member: members[0]}).Err())
+				testassert.NoError(t, client.ZAdd(ctx, expiry, redisclient.Z{Score: 1, Member: members[0]}).Err())
 				req.OperationID = "after-expiry"
 				acquireLive(t, m, req)
 				rows := read(t, space, "")
@@ -204,12 +197,12 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				m, space, req := fixture(t)
 				future := time.Now().Add(time.Hour).UnixMilli()
 				seed := strconv.FormatInt(future, 10) + "-18446744073709551615"
-				mustNoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), ID: seed, Values: map[string]any{"event": "{}"}}).Err())
+				testassert.NoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), ID: seed, Values: map[string]any{"event": "{}"}}).Err())
 				// XADD * can advance the millisecond component. It differs from
 				// XADD <milliseconds>-*, which must fail when its sequence fills.
 				r := acquireLive(t, m, req)
-				mustNoError(t, errOf(m.Claim(ctx, claimOf(r))))
-				mustNoError(t, m.Reconcile(ctx, settle(r, "0.004")))
+				testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(r))))
+				testassert.NoError(t, m.Reconcile(ctx, settle(r, "0.004")))
 				rows, err := client.XRange(ctx, space.EventsKey(), "("+seed, "+").Result()
 				if err != nil || len(rows) != 3 {
 					t.Fatalf("accounting events after sequence rollover: %#v, %v", rows, err)
@@ -229,9 +222,9 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 						m, space, req := fixture(t)
 						switch failure {
 						case "wrong-type":
-							mustNoError(t, client.Set(ctx, space.EventsKey(), "not-a-stream", 0).Err())
+							testassert.NoError(t, client.Set(ctx, space.EventsKey(), "not-a-stream", 0).Err())
 						case "full-id":
-							mustNoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), ID: "18446744073709551615-18446744073709551615", Values: map[string]any{"event": "{}"}}).Err())
+							testassert.NoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), ID: "18446744073709551615-18446744073709551615", Values: map[string]any{"event": "{}"}}).Err())
 						case "acl", "expire-acl":
 							username := m.space.prefix
 							password := m.space.prefix
@@ -239,7 +232,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 							if failure == "expire-acl" {
 								denied = "-expire"
 							}
-							mustNoError(t, client.Do(ctx, "ACL", "SETUSER", username, "on", ">"+password, "~"+m.space.prefix+":*", "+@all", denied).Err())
+							testassert.NoError(t, client.Do(ctx, "ACL", "SETUSER", username, "on", ">"+password, "~"+m.space.prefix+":*", "+@all", denied).Err())
 							t.Cleanup(func() { client.Do(ctx, "ACL", "DELUSER", username) })
 							options := *client.Options()
 							options.Username, options.Password = username, password
@@ -267,18 +260,16 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				m, space, req := fixture(t)
 				r := acquireLive(t, m, req)
 				completed := settle(r, "0.004")
-				requireErrorIs(t, m.Reconcile(ctx, completed), durable.ErrClaimRequired, "unclaimed settlement =")
+				testassert.ErrorIs(t, m.Reconcile(ctx, completed), durable.ErrClaimRequired, "unclaimed settlement =")
 				if rows := read(t, space, ""); len(rows) != 1 {
 					t.Fatalf("rejected settlement published: %#v", rows)
 				}
-				mustNoError(t, errOf(m.Claim(ctx, claimOf(r))))
+				testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(r))))
 				key := m.space.durableBudgetOperationKey(string(req.GenerationID), string(req.OperationID))
 				before, err := client.Get(ctx, key).Result()
-				if err != nil {
-					t.Fatal(err)
-				}
-				mustNoError(t, client.Del(ctx, space.EventsKey()).Err())
-				mustNoError(t, client.Set(ctx, space.EventsKey(), "blocked", 0).Err())
+				testassert.NoError(t, err)
+				testassert.NoError(t, client.Del(ctx, space.EventsKey()).Err())
+				testassert.NoError(t, client.Set(ctx, space.EventsKey(), "blocked", 0).Err())
 				if err := m.Reconcile(ctx, completed); err == nil {
 					t.Fatal("settlement accepted a broken Stream")
 				}
@@ -302,10 +293,10 @@ func TestLiveRedisBudgetHintPortRetention(t *testing.T) {
 	for range 12000 {
 		pipe.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), Values: map[string]any{"event": "old-hint"}})
 	}
-	mustNoError(t, errOf(pipe.Exec(ctx)))
+	testassert.NoError(t, testassert.Err(pipe.Exec(ctx)))
 	event := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh,
 		GenerationID: "generation", Revision: 1, OccurredAt: time.Now().UTC()}
-	mustNoError(t, errOf(port.Append(ctx, event)))
+	testassert.NoError(t, testassert.Err(port.Append(ctx, event)))
 	if n := client.XLen(ctx, space.EventsKey()).Val(); n > 10100 {
 		t.Fatalf("unbounded standalone hints: %d", n)
 	}
@@ -313,11 +304,9 @@ func TestLiveRedisBudgetHintPortRetention(t *testing.T) {
 		t.Fatalf("standalone hint TTL = %v", ttl)
 	}
 	oldCursor, err := port.CurrentCursor(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Simulate losing the optional hint key while durable state survives.
-	mustNoError(t, client.Del(ctx, space.EventsKey()).Err())
+	testassert.NoError(t, client.Del(ctx, space.EventsKey()).Err())
 	tailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
 		Port: port, Enabled: true, BatchSize: 10,
 		Initial: BudgetStreamCursorState{GenerationID: "generation", Cursor: oldCursor},
@@ -329,9 +318,7 @@ func TestLiveRedisBudgetHintPortRetention(t *testing.T) {
 			return BudgetStreamCursorState{GenerationID: "generation", Cursor: oldCursor}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result, err := tailer.Poll(ctx); err != nil || !result.Reloaded || result.State.Cursor != "0-0" {
 		t.Fatalf("reload after eviction = %#v, %v", result, err)
 	}
@@ -340,20 +327,18 @@ func TestLiveRedisBudgetHintPortRetention(t *testing.T) {
 	}
 	// Lose and recreate the stream again, then exceed retention between the
 	// authoritative reload and the next poll from its recovered zero cursor.
-	mustNoError(t, client.Del(ctx, space.EventsKey()).Err())
+	testassert.NoError(t, client.Del(ctx, space.EventsKey()).Err())
 	if result, err := tailer.Poll(ctx); err != nil || !result.Reloaded || result.State.Cursor != "0-0" {
 		t.Fatalf("second eviction recovery = %#v, %v", result, err)
 	}
 	payload, err := event.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	pipe = client.Pipeline()
 	for range 12000 {
 		pipe.XAdd(ctx, &redisclient.XAddArgs{Stream: space.EventsKey(), MaxLen: 10000, Approx: true,
 			Values: map[string]any{"event": string(payload)}})
 	}
-	mustNoError(t, errOf(pipe.Exec(ctx)))
+	testassert.NoError(t, testassert.Err(pipe.Exec(ctx)))
 	if result, err := tailer.Poll(ctx); err != nil || !result.Reloaded || result.Records != 0 || result.State.Cursor == "0-0" {
 		t.Fatalf("zero cursor silently skipped discarded hints = %#v, %v", result, err)
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -25,9 +26,7 @@ func TestHTTPResponseMetadataReadsFirstRequestIDHeader(t *testing.T) {
 func TestDispatchLiftRunsHooksThenLift(t *testing.T) {
 	observer := &dispatchTestObserver{}
 	dispatch, err := BeginDispatch(context.Background(), observer, DispatchTarget{EndpointID: "ep"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, err := dispatch.Lift(ResponseMetadata{ResponseID: "resp"}, 2, func() (llm.Response, error) {
 		return llm.Response{OperationKey: "op"}, nil
 	})
@@ -35,9 +34,7 @@ func TestDispatchLiftRunsHooksThenLift(t *testing.T) {
 		t.Fatalf("Lift = %+v, %v, progress %+v", result, err, observer.progress)
 	}
 	liftErr := errors.New("lift failed")
-	if _, err := dispatch.Lift(ResponseMetadata{}, 0, func() (llm.Response, error) { return llm.Response{}, liftErr }); !errors.Is(err, liftErr) {
-		t.Fatalf("Lift(failing lift) = %v, want %v", err, liftErr)
-	}
+	testassert.ErrorIs(t, testassert.Err(dispatch.Lift(ResponseMetadata{}, 0, func() (llm.Response, error) { return llm.Response{}, liftErr })), liftErr, "Lift(failing lift)")
 	observer.afterErr = errors.New("rejected")
 	lifted := false
 	_, err = dispatch.Lift(ResponseMetadata{ResponseID: "resp", RequestID: "req"}, 0, func() (llm.Response, error) { lifted = true; return llm.Response{}, nil })

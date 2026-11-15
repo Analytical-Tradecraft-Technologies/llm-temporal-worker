@@ -14,18 +14,14 @@ import (
 func testBlobEvent(t *testing.T, id string, at time.Time) Event {
 	t.Helper()
 	event, err := NewDeleteBlobEvent(id, "blob-"+id, at, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return event
 }
 
 func newTestOutbox(t *testing.T, events ...Event) *InMemoryOutbox {
 	t.Helper()
 	store, err := NewInMemoryOutbox(events)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return store
 }
 
@@ -47,18 +43,14 @@ func TestNormalizeSafePayloadBoundsAndCanonicalizes(t *testing.T) {
 func TestOutboxLeaseBoundsAreValidatedBeforeClaim(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	claim := ClaimOptions{Now: at, Limit: 1, Lease: MaxOutboxLease}
-	if err := claim.Validate(); err != nil {
-		t.Fatalf("maximum claim lease rejected: %v", err)
-	}
+	testassert.NoError(t, claim.Validate(), "maximum claim lease rejected")
 	claim.Lease = MaxOutboxLease + time.Nanosecond
 	if err := claim.Validate(); err == nil {
 		t.Fatal("claim lease beyond maximum was accepted")
 	}
 
 	dispatch := DispatchOptions{Now: at, Limit: 1, Lease: MaxOutboxLease, RetryDelay: time.Minute}
-	if err := dispatch.Validate(); err != nil {
-		t.Fatalf("maximum dispatch lease rejected: %v", err)
-	}
+	testassert.NoError(t, dispatch.Validate(), "maximum dispatch lease rejected")
 	dispatch.Lease = MaxOutboxLease + time.Nanosecond
 	if err := dispatch.Validate(); err == nil {
 		t.Fatal("dispatch lease beyond maximum was accepted")
@@ -94,9 +86,7 @@ func TestDeleteBlobPayloadIsTypedAndBoundToAggregate(t *testing.T) {
 	// contract while Publish/Claim canonicalize the representation for dedupe.
 	valid := event
 	valid.SafePayload = json.RawMessage(`{ "blob_id": "blob-typed" }`)
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("valid reordered delete-blob payload rejected: %v", err)
-	}
+	testassert.NoError(t, valid.Validate(), "valid reordered delete-blob payload rejected")
 
 	wrongAggregateType := event
 	wrongAggregateType.AggregateType = "provider_state"
@@ -111,24 +101,18 @@ func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	event := testBlobEvent(t, "event-1", at)
 	store := newTestOutbox(t, event)
-	if err := store.Publish(context.Background(), event); err != nil {
-		t.Fatalf("idempotent publish failed: %v", err)
-	}
+	testassert.NoError(t, store.Publish(context.Background(), event), "idempotent publish failed")
 	// JSON object ordering is not part of the dedupe identity. The store keeps
 	// one canonical representation so retries from independently encoded
 	// callers remain idempotent.
 	reordered := event
 	reordered.SafePayload = json.RawMessage(`{ "blob_id": "blob-event-1" }`)
-	if err := store.Publish(context.Background(), reordered); err != nil {
-		t.Fatalf("equivalent payload replay was not idempotent: %v", err)
-	}
+	testassert.NoError(t, store.Publish(context.Background(), reordered), "equivalent payload replay was not idempotent")
 	conflict := event
 	conflict.ID = "event-2"
 	conflict.AggregateID = "different"
 	conflict.SafePayload = json.RawMessage(`{"blob_id":"different"}`)
-	if err := store.Publish(context.Background(), conflict); !errors.Is(err, ErrOutboxConflict) {
-		t.Fatalf("expected dedupe conflict, got %v", err)
-	}
+	testassert.ErrorIs(t, store.Publish(context.Background(), conflict), ErrOutboxConflict, "expected dedupe conflict")
 
 	options := ClaimOptions{Now: at, Limit: 1, Lease: time.Minute}
 	var wg sync.WaitGroup
@@ -158,12 +142,8 @@ func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("claim for completion failed: items=%+v err=%v", items, err)
 	}
-	if err := store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)); err != nil {
-		t.Fatalf("duplicate completion was not idempotent: %v", err)
-	}
+	testassert.NoError(t, store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)))
+	testassert.NoError(t, store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)), "duplicate completion was not idempotent")
 }
 
 func TestDispatcherMakesMissingObjectSuccessAndRetriesFailures(t *testing.T) {
@@ -178,9 +158,7 @@ func TestDispatcherMakesMissingObjectSuccessAndRetriesFailures(t *testing.T) {
 		return errors.New("object store unavailable")
 	}}
 	result, err := dispatcher.RunOnce(context.Background(), DispatchOptions{Now: at, Limit: 10, Lease: time.Minute, RetryDelay: time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Claimed != 2 || result.Completed != 1 || result.MissingObject != 1 || result.Retried != 1 {
 		t.Fatalf("unexpected dispatch result: %+v", result)
 	}
@@ -200,12 +178,8 @@ func TestDispatcherMakesMissingObjectSuccessAndRetriesFailures(t *testing.T) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim failed-row recovery failed: items=%+v err=%v", claimed, err)
 	}
-	if err := store.Retry(context.Background(), claimed[0].ID, claimed[0].LeaseToken, at.Add(time.Minute), at.Add(2*time.Minute)); err != nil {
-		t.Fatalf("retry failed: %v", err)
-	}
-	if err := store.Retry(context.Background(), claimed[0].ID, claimed[0].LeaseToken, at.Add(time.Minute+time.Second), at.Add(3*time.Minute)); err != nil {
-		t.Fatalf("duplicate retry was not idempotent: %v", err)
-	}
+	testassert.NoError(t, store.Retry(context.Background(), claimed[0].ID, claimed[0].LeaseToken, at.Add(time.Minute), at.Add(2*time.Minute)), "retry failed")
+	testassert.NoError(t, store.Retry(context.Background(), claimed[0].ID, claimed[0].LeaseToken, at.Add(time.Minute+time.Second), at.Add(3*time.Minute)), "duplicate retry was not idempotent")
 	for _, event := range store.Snapshot() {
 		if event.ID == claimed[0].ID && !event.AvailableAt.Equal(at.Add(2*time.Minute)) {
 			t.Fatalf("duplicate retry changed the original retry schedule: %+v", event)
@@ -218,31 +192,21 @@ func TestOutboxLeaseRecovery(t *testing.T) {
 	event := testBlobEvent(t, "lease", at)
 	store := newTestOutbox(t, event)
 	first, err := store.Claim(context.Background(), ClaimOptions{Now: at, Limit: 1, Lease: time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if items, err := store.Claim(context.Background(), ClaimOptions{Now: at.Add(30 * time.Second), Limit: 1, Lease: time.Minute}); err != nil {
 		t.Fatal(err)
 	} else if len(items) != 0 {
 		t.Fatal("live lease was claimed twice")
 	}
 	items, err := store.Claim(context.Background(), ClaimOptions{Now: at.Add(2 * time.Minute), Limit: 1, Lease: time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(items) != 1 || items[0].AttemptCount != 2 {
 		t.Fatalf("expired lease was not recovered: %+v", items)
 	}
 	if first[0].LeaseToken == items[0].LeaseToken {
 		t.Fatal("reclaimed outbox item reused the old lease token")
 	}
-	if err := store.Complete(context.Background(), event.ID, first[0].LeaseToken, at.Add(2*time.Minute+time.Second)); !errors.Is(err, ErrOutboxNotClaimed) {
-		t.Fatalf("stale claimant completed reclaimed item: %v", err)
-	}
-	if err := store.Retry(context.Background(), event.ID, first[0].LeaseToken, at.Add(2*time.Minute+time.Second), at.Add(3*time.Minute)); !errors.Is(err, ErrOutboxNotClaimed) {
-		t.Fatalf("stale claimant retried reclaimed item: %v", err)
-	}
-	if err := store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)); err != nil {
-		t.Fatalf("current claimant could not complete item: %v", err)
-	}
+	testassert.ErrorIs(t, store.Complete(context.Background(), event.ID, first[0].LeaseToken, at.Add(2*time.Minute+time.Second)), ErrOutboxNotClaimed, "stale claimant completed reclaimed item")
+	testassert.ErrorIs(t, store.Retry(context.Background(), event.ID, first[0].LeaseToken, at.Add(2*time.Minute+time.Second), at.Add(3*time.Minute)), ErrOutboxNotClaimed, "stale claimant retried reclaimed item")
+	testassert.NoError(t, store.Complete(context.Background(), event.ID, items[0].LeaseToken, at.Add(2*time.Minute+time.Second)), "current claimant could not complete item")
 }

@@ -1,6 +1,7 @@
 package adaptertest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"net/http"
 	"testing"
@@ -8,14 +9,10 @@ import (
 
 func TestJSONResponseSetsContentTypeHeadersAndBody(t *testing.T) {
 	request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response := JSONResponse(request, http.StatusAccepted, `{"ok":true}`, "X-Request-Id", "req-1", "Retry-After", "2")
 	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.StatusCode != http.StatusAccepted || response.Request != request || string(body) != `{"ok":true}` {
 		t.Fatalf("response = %#v body %s", response, body)
 	}
@@ -31,13 +28,9 @@ func TestRedirectTransportCountsRequestsAndRedirects(t *testing.T) {
 	transport := RedirectTransport(&calls, `{}`)
 	for range 2 {
 		request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		response, err := transport.RoundTrip(request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if response.StatusCode != http.StatusTemporaryRedirect || response.Header.Get("Location") == "" {
 			t.Fatalf("response = %#v, want a redirect with a location", response)
 		}

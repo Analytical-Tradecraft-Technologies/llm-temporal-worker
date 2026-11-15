@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -60,9 +61,7 @@ func TestUnknownCostBoundaryRedisFailureReturnsAuthoritativeReceipt(t *testing.T
 	materializer := &unknownCostMaterializer{err: errors.New("redis unavailable")}
 	boundary.Materializer = materializer
 	result, err := boundary.Resolve(context.Background(), unknownCostResolution("0.25"))
-	if !errors.Is(err, ErrReconcilePending) {
-		t.Fatalf("Redis error = %v, want ErrReconcilePending", err)
-	}
+	testassert.ErrorIs(t, err, ErrReconcilePending, "Redis")
 	if !result.ReconcilePending || result.Reconciled {
 		t.Fatalf("pending result = %+v, want receipt and pending reconciliation", result)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -188,9 +189,7 @@ func TestProviderPlanningRejectsIncompleteSnapshot(t *testing.T) {
 			}
 			_, err := capabilities.NewProviderPlanning(ctx)
 			if name == "canceled" {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled)
 				return
 			}
 			assertPlanningError(t, err, code)
@@ -336,9 +335,7 @@ func TestProviderPlanningRejectsNoWorkNoRouteAndCanceledPreparation(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	adapter.compile = func(input provider.CompileInput) (provider.Call, error) { cancel(); return planningCall(input), nil }
 	_, err = planning.Generate(ctx, prepared)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled compile returned a usable plan: %v", err)
-	}
+	testassert.ErrorIs(t, err, context.Canceled, "canceled compile returned a usable plan")
 }
 
 func TestProviderPlanningConcurrentCallsKeepInputAndPlanIndependent(t *testing.T) {
@@ -401,9 +398,7 @@ func TestProviderPlanningSharesCacheRouteWithBothRunners(t *testing.T) {
 					lease.Key.Route = selected.CacheIdentity
 					return lease, err
 				})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			ports := validBuilderGeneratePorts(&f.events)
 			ports.Replay = func(context.Context, llm.GenerateRequestV1) (durable.GenerateReplay, error) {
 				return durable.GenerateReplay{}, nil
@@ -578,9 +573,7 @@ func TestProviderPlanningFlattensSummarizerInstructionsOnlyForSingleSystemFamili
 			replay.State.Settings.Instructions = []llm.Instruction{{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "You are a helpful assistant"}}
 			planning := mustProviderPlanning(t, capabilities)
 			summary := mustPrepareCompact(t, compact, replay)
-			if _, err := planning.Compact(context.Background(), summary); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(planning.Compact(context.Background(), summary)))
 			if len(adapter.inputs) != 1 {
 				t.Fatalf("compile inputs = %d", len(adapter.inputs))
 			}
@@ -638,8 +631,6 @@ func (p *offlinePhases) plan(t *testing.T, kind string) PlannedProviderCall {
 	} else {
 		planned, err = p.planning.Compact(context.Background(), p.summary)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return planned
 }

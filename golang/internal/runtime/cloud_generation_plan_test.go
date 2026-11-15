@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -130,9 +131,7 @@ func TestCloudGenerationPlanMaterializesOutputCap(t *testing.T) {
 		return (routing.DeterministicPlanner{}).Plan(ctx, input)
 	})
 	before := f.submits.Load()
-	if _, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(f.runtime.PlanGenerationV1(context.Background(), f.request)))
 	if !seen || f.submits.Load() != before {
 		t.Fatal("preflight skipped planning or performed paid work")
 	}
@@ -177,9 +176,7 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 
 	// A blocked route cannot take the transcript, so only the small one is left.
 	snapshot, err := f.cap.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	large := snapshot.Routes.Models["alias"].Routes[1]
 	f.request.OperationKey = "blocked-turn"
 	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: large.ID, EndpointID: large.EndpointID, EndpointAccountHMAC: large.EndpointAccountHMAC, Provider: large.Provider, EndpointFamily: large.Family, Model: large.Model, ProviderTier: large.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}

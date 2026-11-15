@@ -296,6 +296,19 @@ A rollout may raise `server.inline_payload_bytes`, but may lower it only after
 draining open Generate and Compact workflows; see
 [the configuration reference](../reference/configuration.md) for why.
 
+## Upgrade and rollback
+
+The [fleet upgrade and rollback runbook](../runbooks/fleet-upgrade-and-rollback.md)
+is the single ordered procedure for changing the binary, its configuration,
+the Redis admission Function and the durable record formats across a fleet. It
+holds the pre-rollout checklist (the inline payload limit, the provider
+response limit, endpoint recovery identity, durable identity, budget window
+identity and key sets), which configuration changes are reload-safe and which
+need a rollout, how to drain and verify the drain with the task-queue backlog
+and `llmtw_worker_polling`, and the no-rollback gates: workflow changes,
+new-format rows, `blob` parent snapshots, keyring versions and the endpoint
+recovery digest.
+
 ## Required metrics
 
 Metric labels use bounded configured IDs, never tenant-provided free text.
@@ -630,8 +643,9 @@ requests. It has read-only permissions and no provider credentials.
 day at 05:00 using the `Australia/Sydney` schedule timezone. On the canonical
 master branch, container builds use Docker Build Cloud, including Compose
 lifecycle and hardened-image/release-evidence builds. Tests still execute on
-GitHub runners. After verification, OCaml tests, and fuzz shards pass, the
-container job pushes `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
+GitHub runners. The image is built and scanned while the gates run; only after
+verification, OCaml tests, and fuzz shards pass does the container job push
+those scanned bytes as `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
 using the UTC build date and `github.run_number`. Push, schedule, and manual
 master runs publish; non-master dispatches cannot enter the Docker environment.
 This publishes a development image and does not deploy or create a signed

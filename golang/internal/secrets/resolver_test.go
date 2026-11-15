@@ -8,14 +8,13 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestDefaultResolverSourcesAndCopies(t *testing.T) {
 	temporary := t.TempDir()
 	path := filepath.Join(temporary, "token")
-	if err := os.WriteFile(path, []byte("file-secret"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, []byte("file-secret"), 0600))
 	resolver := New(Options{
 		LookupEnv: func(name string) (string, bool) {
 			if name == "TOKEN" {
@@ -39,17 +38,13 @@ func TestDefaultResolverSourcesAndCopies(t *testing.T) {
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
 			got, err := resolver.Resolve(context.Background(), check.ref)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if string(got) != check.want {
 				t.Fatalf("secret = %q, want %q", got, check.want)
 			}
 			got[0] = 'X'
 			again, err := resolver.Resolve(context.Background(), check.ref)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if string(again) != check.want {
 				t.Fatalf("resolver returned mutable shared value %q", again)
 			}
@@ -63,9 +58,7 @@ func TestDefaultResolverRejectsMissingOversizedAndCanceled(t *testing.T) {
 		t.Fatalf("missing secret error = %v", err)
 	}
 	temporary := filepath.Join(t.TempDir(), "large")
-	if err := os.WriteFile(temporary, []byte("abcd"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(temporary, []byte("abcd"), 0600))
 	if _, err := resolver.Resolve(context.Background(), config.SecretRef{Kind: config.SecretFile, Path: temporary}); err == nil {
 		t.Fatal("oversized file unexpectedly resolved")
 	}
@@ -86,9 +79,7 @@ func TestConfigResolverDiscardsResolvedValues(t *testing.T) {
 		Username: config.SecretRef{Kind: config.SecretEnv, Name: "USER"},
 		Password: config.SecretRef{Kind: config.SecretEnv, Name: "PASS"},
 	}}, Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{Secret: config.SecretRef{Kind: config.SecretEnv, Name: "HANDLE"}}}}}
-	if err := resolver.Resolve(context.Background(), value); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, resolver.Resolve(context.Background(), value))
 	if len(seen) != 3 {
 		t.Fatalf("resolved %d references, want 3", len(seen))
 	}
@@ -101,9 +92,7 @@ func TestConfigResolverServiceMeshSkipsRedisCredentials(t *testing.T) {
 		return []byte("fixture"), nil
 	})}
 	value := &config.Config{State: config.StateConfig{Kind: config.StateKindDurable, Redis: config.RedisConfig{ServiceMesh: true}}, Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{Secret: config.SecretRef{Kind: config.SecretEnv, Name: "HANDLE"}}}}}
-	if err := resolver.Resolve(context.Background(), value); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, resolver.Resolve(context.Background(), value))
 	if len(seen) != 1 || seen[0].Name != "HANDLE" {
 		t.Fatalf("resolved references = %v", seen)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -83,9 +84,7 @@ func TestCloudExecutionLogsProviderAttemptFailure(t *testing.T) {
 // provider error, and is still logged so it is diagnosable.
 func TestCloudExecutionLogsProviderJobNotFound(t *testing.T) {
 	f := newProviderExecutionFixture(t, "generate", true)
-	if _, err := f.submit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(f.submit(context.Background())))
 	f.now = f.now.Add(time.Minute)
 	f.adapter.poll = func(context.Context, provider.Call, string, provider.Observer) (provider.ResumableResult, error) {
 		return provider.ResumableResult{State: provider.ResumableNotFound, Dispatch: provider.DispatchAmbiguous}, nil

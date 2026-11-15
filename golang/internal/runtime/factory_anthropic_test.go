@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -40,16 +41,12 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 				}}
 				factory := &ProductionEngineFactory{}
 				profile, err := factory.anthropicProfile("anthropic", endpoint, anthropicmessages.DefaultProfile("capabilities").Capabilities, EndpointProfile{})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				calls := 0
 				httpClient := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 					calls++
 					var wire map[string]any
-					if err := json.NewDecoder(req.Body).Decode(&wire); err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, json.NewDecoder(req.Body).Decode(&wire))
 					if wire["service_tier"] != tc.wire {
 						t.Fatalf("request tier = %v, want %s", wire["service_tier"], tc.wire)
 					}
@@ -70,24 +67,16 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 				} else {
 					client, err = anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: endpoint.BaseURL, APIKey: "test-key", HTTPClient: httpClient})
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				adapter, err := anthropicmessages.NewAdapter(client, "anthropic", *profile)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				call, err := adapter.Compile(ctx, provider.CompileInput{Request: llm.Request{OperationKey: "tier-test", Model: "claude-contract", ServiceClass: tc.requested}, Query: provider.CapabilityQuery{EndpointID: "anthropic", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"}, Strict: true})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				result, err := adapter.Invoke(ctx, call, nil)
 				if calls != 1 {
 					t.Fatalf("calls = %d, want 1", calls)
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				response := result.Response
 				// A null or unrecognized tier is accepted with no actual class;
 				// the raw label is kept for audit.
@@ -115,9 +104,7 @@ func TestProductionAnthropicProfilePreservesExplicitResponseMapping(t *testing.T
 	supplied.ActualServiceClasses = map[string]llm.ServiceClass{"custom-tier": llm.ServiceClassStandard}
 	factory := &ProductionEngineFactory{}
 	profile, err := factory.anthropicProfile("custom", config.EndpointConfig{}, provider.CapabilitySet{}, EndpointProfile{Anthropic: &supplied})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(profile.ActualServiceClasses) != 1 || profile.ActualServiceClasses["custom-tier"] != llm.ServiceClassStandard {
 		t.Fatalf("custom mapping overwritten: %+v", profile.ActualServiceClasses)
 	}

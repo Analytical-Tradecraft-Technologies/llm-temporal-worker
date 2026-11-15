@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -60,9 +61,7 @@ func TestLoggerConfigurationAndAttributeBoundaries(t *testing.T) {
 	logger.Error(context.Background(), "", nil, slog.String("operation_id", "op-1"))
 	logger.Warn(context.Background(), strings.Repeat("x", 161))
 	logger.Warn(context.Background(), "control\tmessage")
-	if err := logger.Flush(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, logger.Flush(context.Background()))
 	if got := observability.WithTime(-time.Second).Value.Int64(); got != 0 {
 		t.Fatalf("negative duration attribute = %d, want 0", got)
 	}
@@ -80,8 +79,6 @@ func TestLoggerConfigurationAndAttributeBoundaries(t *testing.T) {
 func newLogger(t *testing.T, options observability.LogOptions) *observability.Logger {
 	t.Helper()
 	logger, err := observability.NewLogger(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return logger
 }

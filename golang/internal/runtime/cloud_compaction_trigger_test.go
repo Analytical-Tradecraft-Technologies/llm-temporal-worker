@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -68,9 +69,7 @@ func (f *boundedCloudFixture) plan(t *testing.T, key, text string) bool {
 	f.request.Append = []llm.Item{llm.HumanText(text)}
 	before := f.submits.Load()
 	decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	requireCount(t, &f.submits, before, "planning performed paid work")
 	return decision.CompactBeforeGenerate
 }
@@ -113,9 +112,7 @@ func TestCloudCompactionWindowHonoursTargetTokens(t *testing.T) {
 	}
 	handle := f.compact(t, "compaction-1")
 	replay, err := f.runtime.preparation.replay.Compact(context.Background(), llm.CompactRequestV1{OperationKey: "inspect", Context: f.request.Context, Parent: handle})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(replay.State.Items) != 4 {
 		t.Fatalf("compacted checkpoint kept %d items, want summary plus three turns", len(replay.State.Items))
 	}

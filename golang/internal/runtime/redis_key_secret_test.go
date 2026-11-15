@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 )
 
@@ -27,20 +28,14 @@ func TestRedisCredentialRotationPreservesBudgetManifestIdentity(t *testing.T) {
 	for _, password := range []string{"OLD_PASSWORD", "NEW_PASSWORD"} {
 		value.State.Redis.Password = config.SecretRef{Kind: config.SecretEnv, Name: password}
 		secret, err := factory.redisKeySecret(context.Background(), value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !bytes.Equal(secret, legacy[:]) {
 			t.Fatal("existing identity changed")
 		}
 		options, err := redisKeyOptions(value, secret)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		keys, err := redisstore.NewBudgetKeySpace(options)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		key := keys.ManifestKey("generation-1")
 		if manifest != "" && key != manifest {
 			t.Fatal("password rotation changed manifest address")
@@ -70,7 +65,5 @@ func TestRedisIdentitySecretFailsClosed(t *testing.T) {
 		t.Fatal("missing stable identity accepted")
 	}
 	factory.options.RedisKeySecret = []byte("short")
-	if _, err := factory.redisKeySecret(context.Background(), value); !errors.Is(err, ErrDependencyUnavailable) {
-		t.Fatalf("short injected key accepted: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(factory.redisKeySecret(context.Background(), value)), ErrDependencyUnavailable, "short injected key accepted")
 }

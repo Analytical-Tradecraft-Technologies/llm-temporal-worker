@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -93,9 +94,7 @@ func TestInputItemsMapToTheTranscript(t *testing.T) {
 		t.Fatal(apiErr)
 	}
 	generate := mapped.Generate
-	if _, err := generate.MarshalJSON(); err != nil {
-		t.Fatalf("mapped request is not a valid v1 request: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(generate.MarshalJSON()), "mapped request is not a valid v1 request")
 	instructions := *generate.SettingsPatch.Instructions.Set
 	if len(instructions) != 2 || instructions[0].Text != "be brief" {
 		t.Fatalf("unexpected instructions: %+v", instructions)
@@ -221,9 +220,7 @@ func TestContinuationSetsCompositeSettingsInFull(t *testing.T) {
 	mapped := mapNext(t, `{"input":"more","previous_response_id":"resp_first","max_output_tokens":50,"parallel_tool_calls":false}`)
 	parent := llm.CheckpointHandle("checkpoint")
 	mapped.Generate.Parent = &parent
-	if _, err := mapped.Generate.MarshalJSON(); err != nil {
-		t.Fatalf("continuation is not a valid v1 request: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(mapped.Generate.MarshalJSON()), "continuation is not a valid v1 request")
 	// Only max_output_tokens was sent: the format is OpenAI's default text,
 	// not a partial patch that would replace an inherited format.
 	output := *mapped.Generate.SettingsPatch.Output.Set
@@ -258,9 +255,7 @@ func TestReasoningEffortReplacesAnInheritedMode(t *testing.T) {
 		t.Helper()
 		mapped := mapNext(t, body)
 		next, err := state.ApplySettingsPatchV1(base, mapped.Generate.SettingsPatch)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return next
 	}
 	first := turn(`{"model":"gpt-contract","input":"hi","reasoning":{"effort":"none"}}`, state.RootModelState("gpt-contract"))

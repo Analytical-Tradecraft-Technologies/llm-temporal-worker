@@ -67,9 +67,7 @@ func TestCompactV1RuntimeBuilderConstructsCompactOnlyRuntime(t *testing.T) {
 		return validCompactPorts(), nil
 	})}
 	runtimeValue, err := NewCompactV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
-	if err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, err, "builder error")
 	if _, ok := runtimeValue.(*activity.CompactOnlyV1Runtime); !ok {
 		t.Fatalf("runtime type = %T, want CompactOnlyV1Runtime", runtimeValue)
 	}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 const (
@@ -183,9 +184,7 @@ func startHardenedImage(t *testing.T, image string) string {
 func inspectImage(t *testing.T, image string) imageInspection {
 	t.Helper()
 	var inspected []imageInspection
-	if err := json.Unmarshal([]byte(runImageDocker(t, "image", "inspect", image)), &inspected); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(runImageDocker(t, "image", "inspect", image)), &inspected))
 	if len(inspected) != 1 {
 		t.Fatalf("image inspection count = %d, want 1", len(inspected))
 	}
@@ -195,9 +194,7 @@ func inspectImage(t *testing.T, image string) imageInspection {
 func inspectContainer(t *testing.T, name string) containerInspection {
 	t.Helper()
 	var inspected []containerInspection
-	if err := json.Unmarshal([]byte(runImageDocker(t, "inspect", name)), &inspected); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(runImageDocker(t, "inspect", name)), &inspected))
 	if len(inspected) != 1 {
 		t.Fatalf("container inspection count = %d, want 1", len(inspected))
 	}
@@ -210,9 +207,7 @@ func waitForImageStatus(t *testing.T, address, path string, want int) {
 	var last error
 	for time.Now().Before(deadline) {
 		request, err := http.NewRequest(http.MethodGet, "http://"+address+path, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		response, err := (&http.Client{Timeout: time.Second}).Do(request)
 		if err == nil {
 			_ = response.Body.Close()

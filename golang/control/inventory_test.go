@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"sync"
 	"testing"
 	"time"
@@ -20,9 +21,7 @@ func TestInventorySnapshotRequiresSortedBoundedModels(t *testing.T) {
 	}
 	value = snapshot(time.Unix(100, 0))
 	value.Source, value.Models = InventoryUnsupported, nil
-	if err := value.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, value.Validate())
 	if got := value.ProvenanceAt(time.Unix(101, 0)); got != ProvenanceUnsupported {
 		t.Fatalf("unsupported provenance = %q", got)
 	}
@@ -57,11 +56,9 @@ func TestRefreshCoordinatorCollapsesConcurrentCalls(t *testing.T) {
 
 func TestRefreshCoordinatorReturnsStaleSnapshotOnFailure(t *testing.T) {
 	coordinator := NewRefreshCoordinator()
-	if _, err := coordinator.Refresh(context.Background(), "endpoint", func(context.Context) (InventorySnapshot, error) {
+	testassert.NoError(t, testassert.Err(coordinator.Refresh(context.Background(), "endpoint", func(context.Context) (InventorySnapshot, error) {
 		return snapshot(time.Unix(100, 0)), nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})))
 	want := snapshot(time.Unix(100, 0))
 	got, err := coordinator.Refresh(context.Background(), "endpoint", func(context.Context) (InventorySnapshot, error) {
 		return InventorySnapshot{}, context.DeadlineExceeded
@@ -123,9 +120,7 @@ func TestRefreshCoordinatorWaiterKeepsCompletedAttempt(t *testing.T) {
 	coordinator.mu.Unlock()
 
 	got := <-result
-	if !errors.Is(got.err, wantErr) {
-		t.Fatalf("waiter error = %v, want %v", got.err, wantErr)
-	}
+	testassert.ErrorIs(t, got.err, wantErr, "waiter")
 	if got.snapshot.InventoryDigest != first.snapshot.InventoryDigest {
 		t.Fatalf("waiter snapshot = %x, want first attempt %x", got.snapshot.InventoryDigest, first.snapshot.InventoryDigest)
 	}

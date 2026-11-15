@@ -20,6 +20,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
@@ -42,9 +43,7 @@ func cloudSnapshot(t *testing.T, namespace string) *config.Snapshot {
 		c.State.Requests.Namespace = namespace
 		return nil
 	}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return snapshot
 }
 
@@ -136,9 +135,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			if responses == nil {
 				t.Fatal("response cache not attached")
 			}
-			if err := responses.Publish(context.Background(), cache.ResponseEntry{}); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, responses.Publish(context.Background(), cache.ResponseEntry{}))
 			if repositories[len(repositories)-1].responseStore.(*cloudResponseTestStore).calls != 1 {
 				t.Fatal("mixed cache snapshots")
 			}
@@ -146,9 +143,7 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 			if fills == nil {
 				t.Fatal("response fills not attached")
 			}
-			if _, err := fills.Acquire(context.Background(), cache.FillLease{}, time.Time{}); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(fills.Acquire(context.Background(), cache.FillLease{}, time.Time{})))
 			if repositories[len(repositories)-1].fillStore.(*cloudFillTestStore).calls != 1 {
 				t.Fatal("mixed fill snapshots")
 			}
@@ -157,15 +152,11 @@ func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
 				t.Fatal("finalizer not bound to snapshot request stores")
 			}
 			checkpoints := clients.(V1RuntimeCapabilitiesSource).V1RuntimeCapabilities().Checkpoints
-			if err := checkpoints.RequireMaterializer(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, checkpoints.RequireMaterializer())
 			if checkpoints.BlobWriter == nil {
 				t.Fatal("cloud checkpoint writer missing")
 			}
-			if _, err := checkpoints.BlobWriter.Write(context.Background(), "scope", []byte("data"), "text/plain"); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(checkpoints.BlobWriter.Write(context.Background(), "scope", []byte("data"), "text/plain")))
 			if repositories[len(repositories)-1].checkpointStore.(*cloudCheckpointTestStore).writes != 1 {
 				t.Fatal("writer did not use snapshot cloud store")
 			}
@@ -234,9 +225,7 @@ func TestCloudCheckpointCapabilitiesRejectIncompleteStores(t *testing.T) {
 		{"no verifier", &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}}, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := cloudCheckpointCapabilities(test.repository, test.verifier, time.Now); !errors.Is(err, ErrProductionFactoryInvalid) {
-				t.Fatalf("missing capability accepted: %v", err)
-			}
+			testassert.ErrorIs(t, testassert.Err(cloudCheckpointCapabilities(test.repository, test.verifier, time.Now)), ErrProductionFactoryInvalid, "missing capability accepted")
 			if closed, built, err := attachCloudRuntime(t, test.repository, test.verifier, "incomplete", 4); err == nil || !closed || built {
 				t.Fatalf("incomplete checkpoint snapshot not rejected: closed=%t built=%t err=%v", closed, built, err)
 			}
@@ -287,9 +276,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 		}
 		return nil
 	}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, test := range []struct {
 		name     string
 		failOpen bool
@@ -357,9 +344,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 					return &cloudInnerRuntime{}, nil
 				},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			_, clients, err := factory.Build(context.Background(), snapshot)
 			if opened != 1 {
 				t.Fatalf("opened cloud repository %d times", opened)
@@ -378,9 +363,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !built || closed {
 				t.Fatal("cloud runtime not constructed")
 			}
@@ -388,12 +371,8 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 			if len(probes) != 3 {
 				t.Fatalf("probes=%d", len(probes))
 			}
-			if err := validateRequiredDependencyProbeSet(snapshot.Config().State, probes); err != nil {
-				t.Fatal(err)
-			}
-			if err := clients.Close(context.Background()); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, validateRequiredDependencyProbeSet(snapshot.Config().State, probes))
+			testassert.NoError(t, clients.Close(context.Background()))
 			if !closed {
 				t.Fatal("cloud snapshot leaked blob client")
 			}
@@ -459,9 +438,7 @@ func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *test
 				}
 				return nil
 			}))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			redis := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
 			defer redis.Close()
 			receipt := testInitialization(testBudgetIdentity(t, snapshot.Config()), time.Now())
@@ -487,9 +464,7 @@ func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *test
 					return &cloudInnerRuntime{}, nil
 				},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			_, clients, err := factory.Build(context.Background(), snapshot)
 			if !errors.Is(err, ErrBudgetInitializationRequired) || clients != nil || built || opened != 1 || len(calls) == 0 {
 				t.Fatalf("environment %q skipped the budget initialization check: err=%v built=%v opened=%d reads=%v", environment, err, built, opened, calls)
@@ -516,9 +491,7 @@ func TestCloudRepositoryFactoryForwardsMRSCOptIn(t *testing.T) {
 						}
 						// Validate the actual pinned cloud-storage factory accepts
 						// the forwarded option without opening any AWS resources.
-						if _, err := providers.FromJSON(context.Background(), c.Provider); err != nil {
-							t.Fatal(err)
-						}
+						testassert.NoError(t, testassert.Err(providers.FromJSON(context.Background(), c.Provider)))
 						return &recordingCloudRequests{}, nil
 					},
 				}}

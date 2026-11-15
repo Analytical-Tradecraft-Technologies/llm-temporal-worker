@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -12,7 +13,5 @@ func TestLowerPartRejectsAnUnknownImageDetail(t *testing.T) {
 		t.Fatal("image detail ultra was accepted")
 	}
 	image.Detail = "low"
-	if _, err := lowerPart(image); err != nil {
-		t.Fatalf("image detail low rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(lowerPart(image)), "image detail low rejected")
 }

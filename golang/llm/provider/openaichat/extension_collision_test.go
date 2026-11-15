@@ -28,16 +28,12 @@ func TestNewProfileAllowsSharedReservedExtensionWireField(t *testing.T) {
 		"alpha": {Fields: map[string]string{"first": "provider", "second": "provider"}},
 	}
 	profile.ReservedWireFields = map[string]struct{}{"provider": {}}
-	if _, err := NewProfile(profile); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(NewProfile(profile)))
 	// NewProfile reserves wire defaults too, so they need no explicit entry.
 	profile.ReservedWireFields = nil
 	profile.WireDefaults = map[string]json.RawMessage{"provider": json.RawMessage(`{"allow_fallbacks":false}`)}
 	validated, err := NewProfile(profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter := &Adapter{endpointID: "chat-prod", profile: validated}
 	request := collisionRequest(map[string]json.RawMessage{"alpha": json.RawMessage(`{"first":{}}`)})
 	testassert.ErrorContains(t, testassert.Err(adapter.Compile(context.Background(), collisionInput(request))), "reserved wire field")
@@ -64,9 +60,7 @@ func newExtensionCompiler(t *testing.T, fields adaptertest.ExtensionFields, vali
 	profile.AllowedExtensions = extensionSpecs(fields)
 	if validate {
 		validated, err := NewProfile(profile)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		profile = validated
 	}
 	adapter := &Adapter{endpointID: "chat-prod", profile: profile}

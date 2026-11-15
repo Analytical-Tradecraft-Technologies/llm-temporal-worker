@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -18,9 +19,7 @@ func FuzzSlidingWindowBoundaries(f *testing.F) {
 		window := Window{ID: "fuzz", Duration: 2 * time.Second, Bucket: time.Second, Limit: 10}
 		at := time.Unix(0, int64(2500*time.Millisecond))
 		allowed, gotActive, err := window.CanReserve(map[int64]pricing.MicroUSD{-1: expired, 0: active}, amount, at)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		wantAllowed := active <= window.Limit && amount <= window.Limit-active
 		if gotActive != active || allowed != wantAllowed {
 			t.Fatalf("CanReserve(active=%d, amount=%d, expired=%d) = allowed=%v active=%d; want allowed=%v active=%d", active, amount, expired, allowed, gotActive, wantAllowed, active)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -27,9 +28,7 @@ func temporalDialTestPolicy() temporalDialRetryPolicy {
 func temporalLazyClient(t *testing.T) client.Client {
 	t.Helper()
 	value, err := client.NewLazyClient(client.Options{HostPort: "127.0.0.1:1", Namespace: "default"})
-	if err != nil {
-		t.Fatalf("create lazy Temporal client: %v", err)
-	}
+	testassert.NoError(t, err, "create lazy Temporal client")
 	t.Cleanup(value.Close)
 	return value
 }
@@ -45,9 +44,7 @@ func TestDialTemporalWithRetryRetriesTransientFrontendUnavailable(t *testing.T) 
 	}
 
 	got, err := dialTemporalWithRetry(context.Background(), dial, client.Options{}, temporalDialTestPolicy())
-	if err != nil {
-		t.Fatalf("dial Temporal with transient frontend outage: %v", err)
-	}
+	testassert.NoError(t, err, "dial Temporal with transient frontend outage")
 	if got != value {
 		t.Fatal("retry returned a different Temporal client")
 	}
@@ -91,9 +88,7 @@ func TestDialTemporalWithRetryHonorsCancellationDuringBackoff(t *testing.T) {
 	}
 
 	_, err := dialTemporalWithRetry(ctx, dial, client.Options{}, temporalDialTestPolicy())
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled dial error = %v, want context.Canceled", err)
-	}
+	testassert.ErrorIs(t, err, context.Canceled, "canceled dial")
 	requireCount(t, &attempts, 1, "canceled dial attempts")
 }
 
@@ -125,9 +120,7 @@ func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
 		Target:    "temporal.example.test:7233",
 		Namespace: "test",
 	}, Server: config.ServerConfig{InlinePayloadBytes: 64}})
-	if err != nil {
-		t.Fatalf("factory Temporal dial: %v", err)
-	}
+	testassert.NoError(t, err, "factory Temporal dial")
 	if got != value {
 		t.Fatal("factory returned a different Temporal client")
 	}
@@ -150,9 +143,7 @@ func TestTemporalClientFactoryBindsConfiguredLogger(t *testing.T) {
 			return nil, nil
 		},
 	}
-	if _, err := factory.New(context.Background(), config.Config{}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(factory.New(context.Background(), config.Config{})))
 	if !called || strings.Contains(output.String(), "filtered") || strings.Contains(output.String(), "private-provider-error") || !strings.Contains(output.String(), `"task_queue":"queue-1"`) {
 		t.Fatalf("unexpected SDK logging: called=%v logs=%s", called, output.String())
 	}

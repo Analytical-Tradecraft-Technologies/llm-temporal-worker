@@ -3,6 +3,7 @@ package anthropicmessages
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -13,9 +14,7 @@ func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	profile := mustProfile(t, testProfile())
 	request := llm.Request{OperationKey: "hosted", Model: "claude-contract", WebSearch: true, WebFetch: true, CodeExecution: true, Input: []llm.Item{llm.HumanText("fetch and calculate")}}
 	params, err := lowerRequest(request, profile, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.JSONObject(t, params)
 	tools := wire["tools"].([]any)
 	if len(tools) != 3 {
@@ -34,18 +33,14 @@ func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	request.WebFetch = false
 	request.WebSearch = false
 	replay, err := lowerRequest(request, profile, "")
-	if err != nil {
-		t.Fatalf("cannot replay paused result: %v", err)
-	}
+	testassert.NoError(t, err, "cannot replay paused result")
 	if contract.JSONObject(t, replay)["container"] != "container-1" {
 		t.Fatal("paused continuation lost container")
 	}
 	request.Input = nil
 	request.Continuation = got.Continuation
 	replay, err = lowerRequest(request, profile, "")
-	if err != nil {
-		t.Fatalf("cannot replay continuation state: %v", err)
-	}
+	testassert.NoError(t, err, "cannot replay continuation state")
 	if contract.JSONObject(t, replay)["container"] != "container-1" {
 		t.Fatal("legacy continuation lost container")
 	}

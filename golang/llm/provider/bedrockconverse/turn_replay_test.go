@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -28,13 +29,9 @@ func TestReplayGroupsParallelToolTurnWithoutReordering(t *testing.T) {
 	items = append(items, lifted...)
 	items = append(items, llm.ToolResult{CallID: "a", Content: []llm.Part{llm.TextPart{Text: "Sydney result"}}}, llm.ToolResult{CallID: "b", Content: []llm.Part{llm.TextPart{Text: "Melbourne result"}}}, text(llm.ActorModel, "Final answer"), text(llm.ActorHuman, "Follow up"))
 	before, err := llm.NormalizeRequest(llm.Request{OperationKey: "converse-turn-replay", Model: "amazon.nova-pro-v1:0", Input: items})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	input, err := lowerRequest(before, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(input.Messages) != 5 {
 		t.Fatalf("message count=%d, want five alternating turns", len(input.Messages))
 	}

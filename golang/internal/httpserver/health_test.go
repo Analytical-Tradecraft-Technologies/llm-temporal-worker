@@ -28,9 +28,7 @@ func TestProbeStateFailsClosedAndDoesNotExposeDetails(t *testing.T) {
 			t.Fatalf("%s status = %d, want %d", path, response.Code, status)
 		}
 		data, err := io.ReadAll(response.Result().Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if string(data) != body {
 			t.Fatalf("%s body = %q, want %q", path, data, body)
 		}
@@ -90,9 +88,7 @@ func TestHandlerDefaultsAreSafeAndExposeOnlyProbeResponses(t *testing.T) {
 			t.Fatalf("%s status = %d, want %d", path, response.Code, status)
 		}
 		data, err := io.ReadAll(response.Result().Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if string(data) != body {
 			t.Fatalf("%s body = %q, want %q", path, data, body)
 		}
@@ -127,14 +123,10 @@ func TestServerNilAndDuplicateStartErrors(t *testing.T) {
 	if nilServer.Errors() != nil {
 		t.Fatal("nil server Errors returned a channel")
 	}
-	if err := nilServer.Shutdown(t.Context()); err != nil {
-		t.Fatalf("nil server Shutdown() error = %v", err)
-	}
+	testassert.NoError(t, nilServer.Shutdown(t.Context()), "nil server Shutdown() error")
 
 	preStartServer := newServer(t, httpserver.Options{Address: "127.0.0.1:0"})
-	if err := preStartServer.Shutdown(t.Context()); err != nil {
-		t.Fatalf("Shutdown before Start() error = %v", err)
-	}
+	testassert.NoError(t, preStartServer.Shutdown(t.Context()), "Shutdown before Start() error")
 
 	server := newServer(t, httpserver.Options{Address: "127.0.0.1:0"})
 	requireListening(t, server.Start())
@@ -150,15 +142,11 @@ func TestServerReportsBindFailure(t *testing.T) {
 
 	server := newServer(t, httpserver.Options{Address: listener.Addr().String()})
 	testassert.ErrorContains(t, server.Start(), "listen for health server")
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, listener.Close())
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start() after failed bind error = %v, want retry to succeed", err)
 	}
-	if err := server.Shutdown(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, server.Shutdown(t.Context()))
 }
 
 func TestServerBindsAndShutsDown(t *testing.T) {
@@ -170,31 +158,23 @@ func TestServerBindsAndShutsDown(t *testing.T) {
 	}
 	client := &http.Client{}
 	response, err := client.Get("http://" + server.Addr() + httpserver.LivePath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("live probe status = %d, want %d", response.StatusCode, http.StatusOK)
 	}
 	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if string(body) != "ok\n" {
 		t.Fatalf("live probe body = %q, want %q", body, "ok\n")
 	}
-	if err := server.Shutdown(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, server.Shutdown(t.Context()))
 }
 
 func newServer(t *testing.T, options httpserver.Options) *httpserver.Server {
 	t.Helper()
 	server, err := httpserver.New(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return server
 }
 

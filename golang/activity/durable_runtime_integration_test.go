@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -28,9 +29,7 @@ func TestDurableV1RuntimeGenerateActivityRunsEveryPhaseInOrder(t *testing.T) {
 	}
 	runtime := &DurableV1Runtime{Generate: recordingGeneratePorts(&events, request, route)}
 	response, err := (&Activities{V1Runtime: runtime}).GenerateV1(context.Background(), request)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	testassert.NoError(t, err, "GenerateV1 error")
 	if response == nil || response.OperationID != string(route.OperationID) {
 		t.Fatalf("GenerateV1 response = %#v", response)
 	}
@@ -49,9 +48,7 @@ func TestDurableV1RuntimeCompactActivityUsesDistinctCompactionPath(t *testing.T)
 	}
 	runtime := &DurableV1Runtime{Compact: recordingCompactPorts(&events, request, route)}
 	response, err := (&Activities{V1Runtime: runtime}).CompactV1(context.Background(), request)
-	if err != nil {
-		t.Fatalf("CompactV1 error = %v", err)
-	}
+	testassert.NoError(t, err, "CompactV1 error")
 	if response == nil || response.Checkpoint.Kind != "compaction" || response.OperationID != string(route.OperationID) {
 		t.Fatalf("CompactV1 response = %#v", response)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -77,9 +78,7 @@ func newBudgetPlanningFixture(t testing.TB) *budgetPlanningFixture {
 func (f *budgetPlanningFixture) prices(t testing.TB, entries []pricing.Entry) {
 	t.Helper()
 	catalog, err := pricing.CompileUSD("prices/v1", entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.source.value.Prices = pricing.NewResolver(catalog)
 }
 
@@ -87,9 +86,7 @@ func (f *budgetPlanningFixture) planning(t *testing.T) *BudgetPlanning {
 	t.Helper()
 	f.cap.BudgetEstimator, f.cap.MaxBudgetBucketsPerWindow = f.estimator, 100
 	planning, err := f.cap.NewBudgetPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return planning
 }
 
@@ -140,16 +137,12 @@ func TestBudgetPlanningCapturedPricesPoliciesAndEstimatorSurviveMutation(t *test
 	changed := f.entry
 	changed.Prices.InputPerMillion = pricing.MustDecimalUSD("9")
 	catalog, _ := pricing.CompileUSD("prices/v2", []pricing.Entry{changed})
-	if err := resolver.ReloadValidated(catalog); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, resolver.ReloadValidated(catalog))
 	f.source.value.BudgetPolicies[0].Windows[0].LimitUSD = pricing.MustUSD("8")
 	f.source.value.BudgetPolicies[0].Match.LogicalModel = "changed"
 	f.source.value.Environment = "changed"
 	p, err := providers.NewBudgetPlanning(f.estimator, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.estimator.SafetyRatio.SetInt64(9)
 	first, err := p.Generate(context.Background(), f.generate, f.attempt)
 	if err != nil || first.Estimate.CostUSD.Cmp(pricing.MustUSD("0.00006300015")) != 0 || first.Reservation.Reservations[0].LimitUSD.Cmp(pricing.MustUSD("0.01")) != 0 {
@@ -377,9 +370,7 @@ func TestBudgetPlanningValidatesStableAttemptAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := p.Generate(ctx, f.generate, f.attempt); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(p.Generate(ctx, f.generate, f.attempt)), context.Canceled)
 	if _, err := p.Compact(context.Background(), PreparedCompactInput{}, f.attempt); err == nil {
 		t.Fatal("empty compaction was quoted")
 	}
@@ -460,9 +451,7 @@ func TestBudgetPlanningEstimatesUnmodifiedPreparedContentWithoutTokenizer(t *tes
 	f.estimator.Tokenizer = nil
 	p := f.planning(t)
 	first, err := p.Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.generate.Request.Input = append(f.generate.Request.Input, llm.HumanText(strings.Repeat("more content ", 1000)))
 	second, err := p.Generate(context.Background(), f.generate, f.attempt)
 	if err != nil || second.Estimate.InputTokens <= first.Estimate.InputTokens || second.Estimate.CostUSD.Cmp(first.Estimate.CostUSD) <= 0 ||

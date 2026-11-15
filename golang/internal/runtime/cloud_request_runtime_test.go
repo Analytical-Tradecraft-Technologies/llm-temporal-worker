@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -96,9 +97,7 @@ func TestCloudRuntimeRecordsBeforeExecutionAndReplaysAfterRestart(t *testing.T) 
 		return builderFinalization(got, "operation-id").Response, nil
 	}
 	first, err := r.GenerateV1(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// A fresh runtime process has no in-memory replay cache.
 	restarted := &cloudRequestRuntime{requests: repository, inner: inner, clock: time.Now, finalizationTimeout: time.Second}
 	second, err := restarted.GenerateV1(context.Background(), request)
@@ -196,9 +195,7 @@ func TestCloudRuntimeFinalizesReturnedResponseWithBoundedDetachedContext(t *test
 			t.Fatal("unbounded finalization")
 		}
 	}
-	if _, err := r.GenerateV1(ctx, request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(r.GenerateV1(ctx, request)))
 }
 
 func TestCloudRuntimeCompactPersistsAndReplays(t *testing.T) {
@@ -210,9 +207,7 @@ func TestCloudRuntimeCompactPersistsAndReplays(t *testing.T) {
 		cost := "0"
 		return llm.CompactResponseV1{OperationKey: request.OperationKey, OperationID: "compact-id", Checkpoint: llm.CheckpointMetadata{Handle: "child", Parent: &request.Parent, Kind: "compaction"}, Cache: llm.CacheDispositionV1{Disposition: "disabled"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: &cost, Method: "provider_reported"}}, nil
 	}
-	if _, err := r.CompactV1(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(r.CompactV1(context.Background(), request)))
 	if repository.operation.Kind != "compact" || repository.operation.RequestIndex != 0 {
 		t.Fatal("wrong compact binding")
 	}

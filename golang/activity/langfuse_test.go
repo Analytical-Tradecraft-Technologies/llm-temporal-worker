@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"go.temporal.io/sdk/temporal"
@@ -51,16 +52,12 @@ func TestExportLangfuseRetriesOnlyDeliveryFailures(t *testing.T) {
 func TestExportLangfuseFailureIsVisibleOnMetrics(t *testing.T) {
 	payload := mustJSON(t, executionTestReference())
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	scrape := func() string {
 		recorder := httptest.NewRecorder()
 		metrics.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
 		body, err := io.ReadAll(recorder.Result().Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return string(body)
 	}
 	// A healthy worker already exports every reason at zero, so alerts can

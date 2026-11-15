@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,12 +12,8 @@ func writeTestBlob(t *testing.T, dir string, data []byte) descriptor {
 	t.Helper()
 	d := descriptor{Digest: digestOf(data), Size: int64(len(data))}
 	path := blobPath(dir, d.Digest)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	testassert.NoError(t, os.WriteFile(path, data, 0o644))
 	return d
 }
 

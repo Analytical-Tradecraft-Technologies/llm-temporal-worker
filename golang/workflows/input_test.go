@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
@@ -31,9 +32,7 @@ func (callerEncodeConverter) ToPayloads(values ...interface{}) (*commonpb.Payloa
 func wireFixture(t *testing.T, fixture string) json.RawMessage {
 	t.Helper()
 	data, err := os.ReadFile("../llm/testdata/v1/" + fixture + ".json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -42,14 +41,10 @@ func wireFixture(t *testing.T, fixture string) json.RawMessage {
 func wireJSON(t *testing.T, fixture string, mutate func(map[string]any)) json.RawMessage {
 	t.Helper()
 	var fields map[string]any
-	if err := json.Unmarshal(wireFixture(t, fixture), &fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(wireFixture(t, fixture), &fields))
 	mutate(fields)
 	encoded, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded
 }
 

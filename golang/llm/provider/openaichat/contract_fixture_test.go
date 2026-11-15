@@ -13,6 +13,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -58,25 +59,17 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			request := loadChatFixtureRequest(t, profile, "request.semantic.json")
 			normalized, serviceClass := contract.NormalizeRequest(t, request)
 			tier, err := profile.profile.providerTier(serviceClass)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			lowering, err := profile.profile.forRequest(normalized.Model, serviceClass, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			params, err := lowerRequest(normalized, lowering, tier)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			gotWire := contract.MarshalJSON(t, params)
 			assertCanonicalChatFixture(t, gotWire, profile, "request.wire.json")
 
 			response := loadChatFixtureResponse(t, profile, "response.completed.json")
 			lifted, err := profile.profile.liftResponse(chatFixtureCall(profile, normalized, serviceClass), &response, profile.requestID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			gotSemantic := contract.MarshalJSON(t, lifted)
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
 		})
@@ -92,12 +85,10 @@ func TestChatContractFixturesVerifySemanticRoundTrip(t *testing.T) {
 				Request  json.RawMessage `json:"request"`
 				Response json.RawMessage `json:"response"`
 			}{Request: requestSemantic, Response: responseSemantic})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			metadata := loadChatFixtureMetadata(t, profile)
 			responseWire := readChatFixture(t, profile, "response.completed.json")
-			if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+			testassert.NoError(t, contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
 				var fixture struct {
 					Request  json.RawMessage `json:"request"`
 					Response json.RawMessage `json:"response"`
@@ -137,9 +128,7 @@ func TestChatContractFixturesVerifySemanticRoundTrip(t *testing.T) {
 					return nil, err
 				}
 				return json.Marshal(fixture)
-			}, metadata.GeneratedFieldExemptions); err != nil {
-				t.Fatal(err)
-			}
+			}, metadata.GeneratedFieldExemptions))
 		})
 	}
 }
@@ -157,9 +146,7 @@ func TestChatContractFixturesCoverUsageClassesLossDiagnosticsAndContinuation(t *
 				OperationKey: "fixture-usage-cost",
 				ServiceClass: llm.ServiceClassStandard,
 			}, &response, profile.requestID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			gotUsage := contract.MarshalJSON(t, lifted)
 			assertCanonicalChatFixture(t, gotUsage, profile, "usage-cost.semantic.json")
 
@@ -181,14 +168,10 @@ func TestChatContractFixturesKeepDecoderOutputFragmentationInvariant(t *testing.
 			if len(want) == 0 {
 				t.Fatal("stream fixture decoded no events")
 			}
-			if _, err := streamtest.Assemble("fixture-stream", want); err != nil {
-				t.Fatal(err)
-			}
-			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readChatFixture(t, profile, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+			testassert.NoError(t, testassert.Err(streamtest.Assemble("fixture-stream", want)))
+			testassert.NoError(t, contracttest.VerifyStreamAssemblyEquivalent(wire, readChatFixture(t, profile, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
 				return streamtest.AssembleJSON(events, "fixture-"+profile.id+"-stream", DecodeStream)
-			}, metadata.GeneratedFieldExemptions); err != nil {
-				t.Fatal(err)
-			}
+			}, metadata.GeneratedFieldExemptions))
 		})
 	}
 }
@@ -204,18 +187,14 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 				return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 			}))
 			adapter, err := New(client, profile.endpoint, profile.profile)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIChat, request)
 			result := adaptertest.Invoke(t, adapter, call)
 			if got == nil {
 				t.Fatal("fixture transport was not called")
 			}
 			body, err := io.ReadAll(got.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			assertCanonicalChatFixture(t, body, profile, "request.wire.json")
 			gotSemantic := contract.MarshalJSON(t, result.Response)
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
@@ -228,9 +207,7 @@ func chatFixtureProfiles(t *testing.T) []chatFixtureProfile {
 	t.Helper()
 
 	openAIProfile, err := NewProfile(testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	openRouterProfile, err := NewOpenRouterProfile(OpenRouterProfileConfig{
 		ID:                "openrouter-contract",
 		CapabilityVersion: "openrouter-contract/v1",
@@ -252,9 +229,7 @@ func chatFixtureProfiles(t *testing.T) []chatFixtureProfile {
 		RequireParameters:         true,
 		Upstreams:                 allModelsUpstreams{"fixture-provider"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	exaProfile, err := NewExaProfile(ExaProfileConfig{
 		ID:                "exa-contract",
 		CapabilityVersion: "exa-contract/v1",
@@ -269,9 +244,7 @@ func chatFixtureProfiles(t *testing.T) []chatFixtureProfile {
 		ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
 		MissingActualServiceClass: llm.ServiceClassStandard,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	return []chatFixtureProfile{
 		{id: "openai-chat", path: filepath.Join("common", "chat"), endpoint: "openai-chat-fixture", requestID: "req-openai-chat-fixture", profile: openAIProfile},
@@ -312,9 +285,7 @@ func newChatFixtureClient(t *testing.T, profile chatFixtureProfile, transport ht
 	default:
 		t.Fatalf("unknown chat fixture profile %q", profile.id)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return client
 }
 
@@ -381,9 +352,7 @@ func assertChatFixtureCompileError(t *testing.T, profile chatFixtureProfile, req
 	t.Helper()
 	request := loadChatFixtureRequest(t, profile, requestName)
 	adapter, err := New(newChatFixtureClient(t, profile, nil), profile.endpoint, profile.profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{
 		Request: request,
 		Query: provider.CapabilityQuery{
@@ -403,9 +372,7 @@ func assertChatFixtureCompileError(t *testing.T, profile chatFixtureProfile, req
 		Dispatch        provider.DispatchCertainty `json:"dispatch"`
 		MessageContains string                     `json:"message_contains"`
 	}
-	if err := json.Unmarshal(readChatFixture(t, profile, expectedName), &expected); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(readChatFixture(t, profile, expectedName), &expected))
 	if mapped.Code != expected.Code || mapped.Phase != expected.Phase || mapped.Dispatch != expected.Dispatch {
 		t.Fatalf("%s %s compile error = %#v, want %#v", profile.id, requestName, mapped, expected)
 	}
@@ -421,9 +388,7 @@ func assertChatBestEffortDiagnostic(t *testing.T, profile chatFixtureProfile) {
 		t.Fatalf("%s best-effort fixture portability = %q", profile.id, request.Portability)
 	}
 	adapter, err := New(newChatFixtureClient(t, profile, nil), profile.endpoint, profile.profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{
 		Request: request,
 		Query: provider.CapabilityQuery{

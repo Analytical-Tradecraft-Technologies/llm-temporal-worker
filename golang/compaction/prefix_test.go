@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -31,9 +32,7 @@ var anthropicThinking = llm.ProviderState{Provider: "anthropic", EndpointFamily:
 func mustSelectPrefix(t *testing.T, items []llm.Item, recentTurns int) PrefixSelection {
 	t.Helper()
 	selection, err := SelectPrefix(items, recentTurns)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return selection
 }
 
@@ -42,9 +41,7 @@ func mustSelectPrefix(t *testing.T, items []llm.Item, recentTurns int) PrefixSel
 func mustSelectRequestPrefix(t *testing.T, source llm.Request, policy Policy) PrefixSelection {
 	t.Helper()
 	selection, err := SelectRequestPrefix(source, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return selection
 }
 

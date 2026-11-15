@@ -5,7 +5,10 @@
 > and indexes contain content-free references; prompt/tool/output payloads use
 > authenticated encrypted blobs. Cache
 > lookup uses tenant-scoped HMAC-SHA-256. See
-> [State and storage](state-and-storage.md).
+> [State and storage](state-and-storage.md). The
+> [threat model](threat-model.md) lists the actors these controls bound, what
+> each can still do, the issues tracking those residual risks, and the
+> configuration fields that need two-person review.
 
 ## Trust boundaries
 
@@ -268,8 +271,10 @@ Adapters preserve exact bytes and ordering, and tests prove round-trip behavior.
   trace scope. A module-only exception cannot suppress a later reachable
   package/function trace without explicit re-review, nor can any exception
   suppress an unlisted or newly reported finding.
-- Release artifacts are reproducible where practical, signed, and accompanied
-  by provenance.
+- Release artifacts are meant to be reproducible where practical, signed, and
+  accompanied by provenance. The guarded release workflow does not sign or
+  publish yet (#1325), and deployments do not verify signatures (#1582); see
+  the [threat model](threat-model.md#supply-chain-and-ci).
 - The runtime image is non-root, read-only, capability-dropped, and contains no
   compiler or package manager.
 

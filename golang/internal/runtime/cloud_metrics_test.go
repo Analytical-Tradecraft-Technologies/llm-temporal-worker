@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -17,9 +18,7 @@ import (
 func cloudMetricTotal(t *testing.T, metrics *observability.Metrics, name string, labels ...string) float64 {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	total := 0.0
 	for _, family := range families {
 		if family.GetName() != name {
@@ -80,9 +79,7 @@ func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 func TestCloudRuntimeCountsAdmissionOncePerTurn(t *testing.T) {
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"},
 		OperationStates: []string{"reserved", "dispatching", "completed", "failed", "ambiguous"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx := observability.WithMetrics(context.Background(), metrics)
 	f := boundedCloud(t, false)
 	v := f.prepareGenerate(t, ctx)
@@ -104,9 +101,7 @@ func TestCloudRuntimeCountsAdmissionOncePerTurn(t *testing.T) {
 // answer, not by whether saving it succeeded.
 func TestCloudMetricsCountTransitionsAndProviderAnswers(t *testing.T) {
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx := observability.WithMetrics(context.Background(), metrics)
 	plan := cloudstate.BudgetPlan{AttemptedClass: llm.ServiceClassStandard, Route: durable.RoutePlan{EndpointID: "endpoint", Model: "model"}}
 	recordCloudExecutionOutcome(ctx, plan, cloudstate.ExecutionSubmitting, cloudstate.ProviderExecution{Stage: cloudstate.ExecutionUnknown})
@@ -117,9 +112,7 @@ func TestCloudMetricsCountTransitionsAndProviderAnswers(t *testing.T) {
 	call := provider.Call{EndpointID: "endpoint", Model: "model", ServiceClass: llm.ServiceClassStandard}
 	recordCloudProviderAttempt(ctx, call, true, time.Millisecond)
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() != "llmtw_provider_attempt_total" {
 			continue
@@ -213,9 +206,7 @@ func TestCloudRuntimeRecordsStepAndAttemptSpans(t *testing.T) {
 func cloudTestMetrics(t *testing.T) (*observability.Metrics, context.Context) {
 	t.Helper()
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx := observability.WithMetrics(context.Background(), metrics)
 	return metrics, ctx
 }

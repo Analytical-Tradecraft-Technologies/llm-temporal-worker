@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -164,8 +165,6 @@ func workflowResult[T any](t *testing.T, env *testsuite.TestWorkflowEnvironment,
 		t.Fatalf("%s: %v", what, err)
 	}
 	var result T
-	if err := env.GetWorkflowResult(&result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, env.GetWorkflowResult(&result))
 	return result
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -28,9 +29,7 @@ func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, R
 		Region: "private-region", ProviderTier: "private-tier", Version: "price/v1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.00000000015")},
 		EffectiveUntil: op.Now.Add(time.Hour)}
 	catalog, err := pricing.CompileUSD("catalog/v1", []pricing.Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	plan := BudgetPlan{Mode: BudgetReserved, Version: 1, Kind: op.Kind, ConfigDigest: [32]byte{1}, ConfigEpoch: "epoch/v1", RequestDigest: [32]byte{2},
 		CapabilityVersion: "capability/v1", CompilerVersion: "compiler/v1", Family: entry.Family, ProviderTier: entry.ProviderTier,
 		RequestedClass: llm.ServiceClassPriority, AttemptedClass: llm.ServiceClassStandard, QuotedAt: op.Now.Add(time.Second),
@@ -46,18 +45,16 @@ func budgetPlanFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, R
 			Bucket: plan.QuotedAt.UnixNano() / int64(window.Bucket), BucketNanos: int64(window.Bucket), DurationNanos: int64(window.Duration),
 			AmountUSD: plan.Estimate.CostUSD, Amount: plan.Estimate.MicroUSD, LimitUSD: pricing.MustUSD("0.01"), Limit: 10000})
 	}
-	mustNoError(t, plan.Validate())
+	testassert.NoError(t, plan.Validate())
 	return r, table, blobs, record, plan
 }
 
 func copyTestBudgetPlan(t *testing.T, plan BudgetPlan) BudgetPlan {
 	t.Helper()
 	data, err := json.Marshal(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var result BudgetPlan
-	mustNoError(t, json.Unmarshal(data, &result))
+	testassert.NoError(t, json.Unmarshal(data, &result))
 	return result
 }
 
@@ -73,9 +70,7 @@ func TestBudgetPlanRestartReplaysExactReservationAndPreservesProgress(t *testing
 			ctx := context.Background()
 			updated, err := r.TryUpdate(ctx, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "other-progress",
 				Status: StatusRunning, Progress: json.RawMessage(`{"version":1,"other":{"integer":9007199254740993}}`), UpdatedAt: plan.QuotedAt})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 			restarted := reopen(t, table, blobs)
 			stored, err := restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)
@@ -90,7 +85,7 @@ func TestBudgetPlanRestartReplaysExactReservationAndPreservesProgress(t *testing
 			// Reads and identical saves use the original quote even after its price
 			// interval, bucket and admission expiry have passed.
 			forbidWrites(t, table, blobs, "healthy replay")
-			mustNoError(t, restarted.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(48*time.Hour)))
+			testassert.NoError(t, restarted.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(48*time.Hour)))
 			stored, err = restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil || !reflect.DeepEqual(stored.Reservation, plan.Reservation) {
 				t.Fatalf("old quote was refreshed: %v", err)
@@ -151,7 +146,7 @@ func TestBudgetPlanUncertainWritesRepairWithoutChangingQuote(t *testing.T) {
 				t.Fatalf("fault not observed: %v", err)
 			}
 			table.hook, blobs.hook = nil, nil
-			mustNoError(t, reopen(t, table, blobs).SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(time.Hour)))
+			testassert.NoError(t, reopen(t, table, blobs).SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt.Add(time.Hour)))
 			stored, err := reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil || !reflect.DeepEqual(stored.Reservation, plan.Reservation) {
 				t.Fatalf("recovery changed quote: %v", err)
@@ -169,16 +164,14 @@ func TestBudgetPlanLoadRepairsDiscoveryBeforeReturningAdmissionFacts(t *testing.
 	fault := &contracts.StorageError{Kind: contracts.ErrUnavailable}
 	table.hook = failTableWrites("replace", "/pending/", fault, nil)
 	ctx := context.Background()
-	requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), ErrIndexPending, "save index failure")
+	testassert.ErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), ErrIndexPending, "save index failure")
 	if got, err := reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrIndexPending) || got.Version != 0 {
 		t.Fatalf("lagging discovery exposed usable plan: %v", err)
 	}
 	table.hook = nil
-	mustNoError(t, errOf(reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)))
+	testassert.NoError(t, testassert.Err(reopen(t, table, blobs).LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)))
 	index, err := table.Get(ctx, r.indexKey(record.Request.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	decoded, err := r.decodeIndex(index)
 	if err != nil || decoded.Revision != record.Revision+1 {
 		t.Fatal("discovery still points to earlier state")
@@ -188,17 +181,17 @@ func TestBudgetPlanLoadRepairsDiscoveryBeforeReturningAdmissionFacts(t *testing.
 func TestBudgetPlanMissingIsDistinctFromWrongScopeCorruptionAndLaterPhases(t *testing.T) {
 	r, _, _, record, plan := budgetPlanFixture(t)
 	ctx := context.Background()
-	requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), ErrBudgetPlanMissing, "initial planning miss")
+	testassert.ErrorIs(t, testassert.Err(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), ErrBudgetPlanMissing, "initial planning miss")
 	wrong := record.Request.Scope
 	wrong.Project = "other"
-	requireErrorIsNot(t, errOf(r.LoadBudgetPlan(ctx, wrong, record.Request.ID)), contracts.ErrNotFound, ErrBudgetPlanMissing, "scope isolation")
-	requireErrorIs(t, r.SaveBudgetPlan(ctx, wrong, record.Request.ID, plan, plan.QuotedAt), contracts.ErrNotFound, "")
+	requireErrorIsNot(t, testassert.Err(r.LoadBudgetPlan(ctx, wrong, record.Request.ID)), contracts.ErrNotFound, ErrBudgetPlanMissing, "scope isolation")
+	testassert.ErrorIs(t, r.SaveBudgetPlan(ctx, wrong, record.Request.ID, plan, plan.QuotedAt), contracts.ErrNotFound)
 	for _, progress := range []string{`{"version":1,"budget_plan":null}`, `{"version":2}`, `{"version":1,"budget_plan":{"version":2}}`} {
 		_, _, _, other, _ := budgetPlanFixture(t)
 		// Use a distinct operation in the same repository for each corrupt case.
 		other = mustBeginOperation(t, r, Operation{Scope: record.Request.Scope, Kind: "generate", Key: string(other.Request.ID), Manifest: record.Request.Manifest, Now: record.UpdatedAt})
 		mustTryUpdate(t, r, other.Request.Scope, other.Request.ID, Update{ExpectedRevision: other.Revision, Token: "corrupt", Status: StatusRunning, Progress: json.RawMessage(progress), UpdatedAt: other.UpdatedAt})
-		requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, other.Request.Scope, other.Request.ID)), ErrCorrupt, "corruption became planning miss")
+		testassert.ErrorIs(t, testassert.Err(r.LoadBudgetPlan(ctx, other.Request.Scope, other.Request.ID)), ErrCorrupt, "corruption became planning miss")
 	}
 	for _, status := range []Status{StatusProviderPending, StatusCompleted, StatusFailed, StatusOutcomeUnknown} {
 		t.Run(string(status), func(t *testing.T) {
@@ -206,8 +199,8 @@ func TestBudgetPlanMissingIsDistinctFromWrongScopeCorruptionAndLaterPhases(t *te
 			mustSaveBudgetPlan(t, r, record.Request.Scope, record.Request.ID, plan)
 			current, _ := r.Read(ctx, record.Request.Scope, record.Request.ID)
 			mustTryUpdate(t, r, current.Request.Scope, current.Request.ID, Update{ExpectedRevision: current.Revision, Token: "later", Status: status, Progress: current.Progress, UpdatedAt: current.UpdatedAt})
-			requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "later phase resumed initial admission")
-			requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "later phase accepted initial plan")
+			testassert.ErrorIs(t, testassert.Err(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "later phase resumed initial admission")
+			testassert.ErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "later phase accepted initial plan")
 		})
 	}
 }
@@ -276,9 +269,9 @@ func TestBudgetPlanCannotReplaceSavedValueOrStartDuringFinalization(t *testing.T
 			} else {
 				progress, _ := json.Marshal(map[string]any{"version": 1, phase: map[string]any{"version": 1}})
 				mustTryUpdate(t, r, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "finalizing", Status: StatusRunning, Progress: progress, UpdatedAt: plan.QuotedAt})
-				requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "finalizing became planning miss")
+				testassert.ErrorIs(t, testassert.Err(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "finalizing became planning miss")
 			}
-			requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "earlier phases resumed")
+			testassert.ErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "earlier phases resumed")
 		})
 	}
 }

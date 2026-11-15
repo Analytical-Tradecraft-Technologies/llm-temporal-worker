@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -95,9 +96,7 @@ func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
 		request.OperationKey += "-" + strconv.Itoa(planningAttempt)
 		request.Append = []llm.Item{llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError}}
 		decision, err := f.runtime.PlanGenerationV1(context.Background(), request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return decision.CompactBeforeGenerate
 	}
 	// Find the smallest byte limit the successful transcript fits in.

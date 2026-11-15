@@ -25,13 +25,9 @@ func TestDigestAndTenantPrefixAreStableAndTenantBound(t *testing.T) {
 		}
 	}
 	first, err := TenantPrefix("tenant-a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	second, err := TenantPrefix("tenant-b")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if first == second {
 		t.Fatal("different tenants share a prefix")
 	}
@@ -70,9 +66,7 @@ func TestRefValidateEnforcesIntegrityMetadataAndExpiry(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			err := test.ref.Validate(now)
 			if test.want == "" {
-				if err != nil {
-					t.Fatalf("Validate() = %v", err)
-				}
+				testassert.NoError(t, err, "Validate()")
 				return
 			}
 			testassert.ErrorContains(t, err, test.want)

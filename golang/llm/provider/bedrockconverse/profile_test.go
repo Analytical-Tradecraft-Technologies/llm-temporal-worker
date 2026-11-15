@@ -6,15 +6,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 func TestDefaultProfileMapsExplicitServiceClasses(t *testing.T) {
 	profile, err := NewDefaultProfile("claude-sonnet")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	cases := []struct {
 		class llm.ServiceClass
 		want  string
@@ -47,9 +46,7 @@ func TestLowerRequestRejectsMixedInstructionHierarchyInStrictMode(t *testing.T) 
 		Input: []llm.Item{llm.HumanText("Hello")},
 	}
 	profile, err := NewDefaultProfile("nova")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = lowerRequest(request, profile, string(types.ServiceTierTypeDefault), true)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {

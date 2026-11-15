@@ -38,15 +38,11 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 		})},
 		AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := testProfile()
 	profile.ExpectedBaseURL = "http://127.0.0.1/aws-contract"
 	adapter, err := New(client, "anthropic-aws", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-once", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}})
 	result, err := adapter.Invoke(context.Background(), call, nil)
 	if err != nil {
@@ -124,15 +120,11 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 		})},
 		AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := testProfile()
 	profile.ExpectedBaseURL = "http://127.0.0.1/aws-contract"
 	adapter, err := New(client, "anthropic-aws", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-auth", Model: "claude-contract"})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var providerErr *provider.Error

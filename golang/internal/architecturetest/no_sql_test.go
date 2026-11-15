@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -60,9 +61,7 @@ func TestWorkerSourceHasNoSQLImports(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 }
 
 // Also reject unused explicit requirements and replacements; checking only
@@ -77,9 +76,7 @@ func TestWorkerModuleHasNoSQLRequirements(t *testing.T) {
 		Require []module
 		Replace []struct{ Old, New module }
 	}
-	if err := json.Unmarshal(output, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(output, &manifest))
 	modules := append([]module(nil), manifest.Require...)
 	for _, replacement := range manifest.Replace {
 		modules = append(modules, replacement.Old, replacement.New)

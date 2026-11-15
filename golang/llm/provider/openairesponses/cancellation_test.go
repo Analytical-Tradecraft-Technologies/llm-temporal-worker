@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -16,20 +17,14 @@ func TestInvokeCancellationAfterTransportConsumesRequest(t *testing.T) {
 	defer cancel()
 	consumed := false
 	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/fixture", APIKey: "test-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if _, err := io.Copy(io.Discard, request.Body); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, testassert.Err(io.Copy(io.Discard, request.Body)))
 		consumed = true
 		cancel()
 		return nil, request.Context().Err()
 	})}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "test", "test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.Invoke(ctx, provider.Call{EndpointID: "test", Family: provider.FamilyOpenAIResponses, SDKParams: responses.ResponseNewParams{Model: "test-model"}}, nil)
 	var classified *provider.Error
 	if !consumed || !errors.As(err, &classified) || classified.Dispatch != provider.DispatchAmbiguous {

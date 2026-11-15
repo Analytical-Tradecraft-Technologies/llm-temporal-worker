@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -90,16 +91,12 @@ func TestRegistryValidatesAndResolvesExplicitProfile(t *testing.T) {
 		return struct{}{}, nil
 	}
 	registry, err := provider.NewRegistry(registration)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if constructed != 1 {
 		t.Fatalf("client factory calls = %d, want exactly one", constructed)
 	}
 	adapter, err := registry.Adapter(provider.FamilyOpenAIChat, "fixture-chat")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if adapter.Name() != "fixture/adapter" {
 		t.Fatalf("resolved adapter name = %q", adapter.Name())
 	}
@@ -127,29 +124,19 @@ func TestRegistryResolvesOptionalModelListerWithoutMakingItMandatory(t *testing.
 	registration := registryFixtureRegistration()
 	registration.Adapter = &registryFixtureModelLister{registryFixtureAdapter{family: provider.FamilyOpenAIChat}}
 	registry, err := provider.NewRegistry(registration)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	lister, err := registry.ModelLister(provider.FamilyOpenAIChat, "fixture-chat")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	page, err := lister.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "fixture-endpoint", Limit: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := page.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, page.Validate())
 	oneShotRegistry, err := provider.NewRegistry(registryFixtureRegistration())
 	if err != nil {
 		// A one-shot adapter remains a valid registration even without the
 		// optional model-management capability.
 		t.Fatal(err)
 	}
-	if _, err := oneShotRegistry.ModelLister(provider.FamilyOpenAIChat, "fixture-chat"); !errors.Is(err, provider.ErrModelInventoryUnsupported) {
-		t.Fatalf("one-shot model-lister error = %v, want ErrModelInventoryUnsupported", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(oneShotRegistry.ModelLister(provider.FamilyOpenAIChat, "fixture-chat")), provider.ErrModelInventoryUnsupported, "one-shot model-lister")
 	if _, err := registry.ModelLister(provider.FamilyOpenAIChat, "missing"); err == nil {
 		t.Fatal("missing model-lister profile resolved successfully")
 	}
@@ -162,9 +149,7 @@ func TestRegistryOrdersProfilesByFamilyAndID(t *testing.T) {
 	second.Family = provider.FamilyOpenAIResponses
 	second.Adapter = &registryFixtureAdapter{family: provider.FamilyOpenAIResponses}
 	registry, err := provider.NewRegistry(first, second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	entries := registry.Registrations()
 	if got := []string{string(entries[0].Family) + "/" + entries[0].ProfileID, string(entries[1].Family) + "/" + entries[1].ProfileID}; !reflect.DeepEqual(got, []string{"openai_chat/fixture-chat", "openai_responses/fixture-responses"}) {
 		t.Fatalf("registration order = %#v", got)
@@ -240,9 +225,7 @@ func TestRegistryRejectsDuplicateFamilyAndProfile(t *testing.T) {
 		return struct{}{}, nil
 	}
 	registry, err := provider.NewRegistry(registration)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if capabilityCalls != 1 || probeCalls != 1 || factoryCalls != 1 {
 		t.Fatalf("initial registration side effects = capabilities %d, probe %d, factory %d; want one each", capabilityCalls, probeCalls, factoryCalls)
 	}

@@ -13,6 +13,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func initializationIdentity() budget.InitializationIdentity {
@@ -23,7 +24,7 @@ func TestBudgetInitializationHasOneCreatorAndNeverRegresses(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	identity := initializationIdentity()
 	ctx := context.Background()
-	requireErrorIs(t, errOf(r.ReadBudgetInitialization(ctx, identity.Namespace)), contracts.ErrNotFound, "absent receipt =")
+	testassert.ErrorIs(t, testassert.Err(r.ReadBudgetInitialization(ctx, identity.Namespace)), contracts.ErrNotFound, "absent receipt =")
 	var wg sync.WaitGroup
 	var creators atomic.Int32
 	receipts := make(chan budget.Initialization, 24)
@@ -56,16 +57,14 @@ func TestBudgetInitializationHasOneCreatorAndNeverRegresses(t *testing.T) {
 	}
 	// Reopening with another payload encryption key must not select a new row.
 	other, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: r.namespace, Secret: bytes.Repeat([]byte{9}, 32)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	replayed, err := other.PrepareBudgetInitialization(ctx, identity, request.CreatedAt.Add(time.Hour))
 	if err != nil || replayed.Created || !replayed.Receipt.Ready || replayed.Receipt.Marker() != value.Marker() {
 		t.Fatalf("replay = %#v, %v", replayed, err)
 	}
 	changed := identity
 	changed.KeyFingerprint = strings.Repeat("b", 64)
-	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(ctx, changed, request.CreatedAt)), contracts.ErrConflict, "key rotation created another budget")
+	testassert.ErrorIs(t, testassert.Err(r.PrepareBudgetInitialization(ctx, changed, request.CreatedAt)), contracts.ErrConflict, "key rotation created another budget")
 	if len(table.rows) != 1 || len(blobs.values) != 0 {
 		t.Fatal("initialization persisted balances or payloads")
 	}
@@ -89,10 +88,8 @@ func TestBudgetInitializationLostRepliesDoNotReissueCreationPermission(t *testin
 					t.Fatalf("unknown create = %#v, %v", p, err)
 				}
 			} else {
-				if err != nil {
-					t.Fatal(err)
-				}
-				requireErrorIs(t, r.CompleteBudgetInitialization(ctx, p.Receipt), contracts.ErrOutcomeUnknown, "")
+				testassert.NoError(t, err)
+				testassert.ErrorIs(t, r.CompleteBudgetInitialization(ctx, p.Receipt), contracts.ErrOutcomeUnknown)
 			}
 			table.hook = nil
 			p, err = reopen(t, table, blobs).PrepareBudgetInitialization(ctx, identity, request.CreatedAt)
@@ -109,12 +106,10 @@ func TestBudgetInitializationRejectsConflictsAndCorruptReceipts(t *testing.T) {
 			r, table, _, request := fixture(t)
 			ctx := context.Background()
 			p, err := r.PrepareBudgetInitialization(ctx, initializationIdentity(), request.CreatedAt)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			other := p.Receipt
 			other.Epoch = "00000000-0000-4000-8000-000000000001"
-			requireErrorIs(t, r.CompleteBudgetInitialization(ctx, other), contracts.ErrConflict, "wrong epoch =")
+			testassert.ErrorIs(t, r.CompleteBudgetInitialization(ctx, other), contracts.ErrConflict, "wrong epoch =")
 			key := r.budgetInitializationKey(p.Receipt.Identity.Namespace)
 			row := table.rows[key]
 			value := p.Receipt
@@ -142,8 +137,8 @@ func TestBudgetInitializationRejectsConflictsAndCorruptReceipts(t *testing.T) {
 				row.Item = r.budgetInitializationItem(value)
 			}
 			table.rows[key] = row
-			requireErrorIs(t, errOf(r.ReadBudgetInitialization(ctx, p.Receipt.Identity.Namespace)), ErrCorrupt, "read corrupt receipt =")
-			requireErrorIs(t, r.CompleteBudgetInitialization(ctx, p.Receipt), ErrCorrupt, "repaired corrupt receipt =")
+			testassert.ErrorIs(t, testassert.Err(r.ReadBudgetInitialization(ctx, p.Receipt.Identity.Namespace)), ErrCorrupt, "read corrupt receipt =")
+			testassert.ErrorIs(t, r.CompleteBudgetInitialization(ctx, p.Receipt), ErrCorrupt, "repaired corrupt receipt =")
 		})
 	}
 }
@@ -152,9 +147,9 @@ func TestBudgetInitializationRejectsCanceledOrInvalidPreparation(t *testing.T) {
 	r, table, _, request := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(ctx, initializationIdentity(), request.CreatedAt)), context.Canceled, "")
-	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(context.Background(), budget.InitializationIdentity{}, request.CreatedAt)), ErrInvalid, "")
-	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(context.Background(), initializationIdentity(), time.Time{})), ErrInvalid, "")
+	testassert.ErrorIs(t, testassert.Err(r.PrepareBudgetInitialization(ctx, initializationIdentity(), request.CreatedAt)), context.Canceled)
+	testassert.ErrorIs(t, testassert.Err(r.PrepareBudgetInitialization(context.Background(), budget.InitializationIdentity{}, request.CreatedAt)), ErrInvalid)
+	testassert.ErrorIs(t, testassert.Err(r.PrepareBudgetInitialization(context.Background(), initializationIdentity(), time.Time{})), ErrInvalid)
 	if len(table.rows) != 0 {
 		t.Fatal("invalid initialization wrote a receipt")
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	temporallog "go.temporal.io/sdk/log"
 )
@@ -19,9 +20,7 @@ func TestTemporalLoggerUsesSlogAndFiltersSDKFields(t *testing.T) {
 	bound := temporallog.With(adapter, "TaskQueue", "llm", "WorkflowID", "workflow-1", "payload", "private-content")
 	bound.Info("activity completed", "RunID", "run-1", "ActivityID", "activity-1", "Error", errors.New("private-content"), "ignored-odd-key")
 	var record map[string]any
-	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(output.Bytes(), &record))
 	for key, want := range map[string]any{"level": "INFO", "task_queue": "llm", "temporal_workflow_id": "workflow-1", "temporal_run_id": "run-1", "activity_id": "activity-1", "error_code": "internal"} {
 		if record[key] != want {
 			t.Errorf("%s=%v, want %v", key, record[key], want)

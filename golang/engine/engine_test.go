@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -181,17 +182,13 @@ func newHarnessWithAdmission(t testing.TB, adapter provider.Adapter, admissionSt
 			Capabilities: routing.CapabilitySet{Version: "route-cap-1", Features: map[routing.Feature]routing.Capability{routing.FeatureText: {State: routing.CapabilityNative}}},
 		}}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	entries := make([]pricing.Entry, 0, len(classes))
 	for _, class := range classes {
 		entries = append(entries, pricing.Entry{Provider: "provider-1", Family: string(provider.FamilyOpenAIResponses), EndpointID: "endpoint-1", Region: "us-east-1", Model: "provider-model", ProviderTier: tiers[class], Version: "prices-1", Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")}})
 	}
 	priceCatalog, err := pricing.CompileUSD("prices-1", entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	results := &fakeResultStore{values: make(map[string]llm.Response)}
 	engineValue, err := New(Dependencies{
 		Snapshots:   StaticSnapshot{Value: Snapshot{Version: "snapshot-1", Routes: routes, Prices: pricing.NewResolver(priceCatalog), ReservationLease: time.Minute, OperationRetention: time.Hour}},
@@ -203,9 +200,7 @@ func newHarnessWithAdmission(t testing.TB, adapter provider.Adapter, admissionSt
 		Estimator:   budget.Estimator{MaxOutput: 1},
 		MaxAttempts: 8,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return testHarness{engine: engineValue, admission: admissionStore, results: results, clock: clock()}
 }
 
@@ -238,13 +233,9 @@ func TestLoadContinuationRequiresRequestTenant(t *testing.T) {
 	store := harness.useMemoryContinuations(t, 7)
 	items := []llm.Item{llm.HumanText("hello")}
 	_, digest, err := state.CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant-1", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: harness.clock.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	request := baseRequest("tenantless-continuation")
 	request.Context.Tenant = ""
@@ -321,9 +312,7 @@ func TestGenerateCarriesExactReservationAlongsideRedisCompatibilityAmount(t *tes
 		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("0"), OutputPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0.000000000000000001")},
 	}}
 	catalog, err := pricing.CompileUSD("submicro", entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	harness.updateSnapshot(func(snapshot *Snapshot) { snapshot.Prices = pricing.NewResolver(catalog) })
 	response := harness.mustGenerate(t, baseRequest("exact-reservation"))
 	if got, want := recording.begin.ReservationUSD.String(), "0.000000000000000001"; got != want {
@@ -395,9 +384,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkFallsBackWithoutAmbiguity(t
 				t.Fatal("fallback response omitted exact actual cost")
 			}
 			actual, err := compatibilityActualMicroUSD(*response.Cost.ActualCostUSD)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if got, want := int64(operation.IncurredMicroUSD), int64(actual); got != want {
 				t.Fatalf("incurred cost = %d, want fallback actual cost %d", got, want)
 			}

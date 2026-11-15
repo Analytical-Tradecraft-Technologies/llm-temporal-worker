@@ -19,9 +19,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	request.ServiceClass = llm.ServiceClassPriority
 	request.Portability = llm.PortabilityBestEffort
 	call, err := adaptertest.Compile(adapter, "anthropic-prod", provider.FamilyAnthropicMessages, request, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if call.Metadata.ProviderTier != FastTier || call.OperationKey != request.OperationKey {
 		t.Fatalf("call metadata = %#v", call)
 	}
@@ -96,9 +94,7 @@ func TestCompileServiceTierPolicy(t *testing.T) {
 				testassert.ErrorContains(t, err, test.wantFailure)
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if call.Metadata.ProviderTier != test.wantTier {
 				t.Fatalf("provider tier = %q, want %q", call.Metadata.ProviderTier, test.wantTier)
 			}
@@ -141,9 +137,7 @@ func TestCompileMapsAdaptiveReasoningEffortToOutputConfig(t *testing.T) {
 func mustProfile(t *testing.T, profile Profile) Profile {
 	t.Helper()
 	validated, err := NewProfile(profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return validated
 }
 

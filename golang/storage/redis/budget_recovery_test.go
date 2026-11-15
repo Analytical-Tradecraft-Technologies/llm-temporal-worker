@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -33,9 +34,7 @@ func TestRecoveredRecordKeepsIdempotencyIdentity(t *testing.T) {
 	quotedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	space, operation := recoveryFixture(t, quotedAt)
 	record, keys, err := space.recoveredRecord(operation)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reservations, _ := canonicalDurableReservations("op", "gen", operation.Request.Reservations, operation.Request.ExpiresAt, quotedAt)
 	fingerprint, _ := durableRequestFingerprint(operation.Request, reservations)
 	if record.Fingerprint != fingerprint || keys[0] != space.space.durableBudgetOperationKey("gen", "op") || len(keys) != 3 {
@@ -80,9 +79,7 @@ func TestRecoveredRecordAppliesDurableSettlement(t *testing.T) {
 	} {
 		operation.Settlement = settle(kind)
 		record, _, err := space.recoveredRecord(operation)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		got := record.Reservations[0]
 		if got.ReservedNano != want.ReservedNano || got.AccountedNano != want.AccountedNano || got.ReservationRevision != want.ReservationRevision || got.Status != want.Status {
 			t.Fatalf("%s restored as %#v", kind, got)
@@ -105,8 +102,8 @@ func TestRecoveredRecordAppliesDurableSettlement(t *testing.T) {
 
 func TestRecoveredWindowExpiryRejectsUnrepresentableBounds(t *testing.T) {
 	value := durableReservation{BucketNanos: "3600000000000", DurationNanos: "86400000000000", WindowExpiresMillis: 1}
-	requireErrorIs(t, errOf(recoveredWindowExpiry(value, time.Time{}, time.Unix(1<<50, 0))), ErrBudgetRecoveryConflict, "overflowing start =")
+	testassert.ErrorIs(t, testassert.Err(recoveredWindowExpiry(value, time.Time{}, time.Unix(1<<50, 0))), ErrBudgetRecoveryConflict, "overflowing start =")
 	value.BucketNanos = "1"
-	requireErrorIs(t, errOf(recoveredWindowExpiry(value, time.Time{}, time.Unix(1700000000, 0))), ErrBudgetRecoveryConflict, "sub-millisecond bucket =")
-	requireErrorIs(t, errOf(recoveredWindowExpiry(durableReservation{WindowExpiresMillis: 1}, time.UnixMilli(maxRecoveryInteger+1), time.Now())), ErrBudgetRecoveryConflict, "unrepresentable recorded expiry =")
+	testassert.ErrorIs(t, testassert.Err(recoveredWindowExpiry(value, time.Time{}, time.Unix(1700000000, 0))), ErrBudgetRecoveryConflict, "sub-millisecond bucket =")
+	testassert.ErrorIs(t, testassert.Err(recoveredWindowExpiry(durableReservation{WindowExpiresMillis: 1}, time.UnixMilli(maxRecoveryInteger+1), time.Now())), ErrBudgetRecoveryConflict, "unrepresentable recorded expiry =")
 }

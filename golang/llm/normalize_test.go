@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -117,17 +118,13 @@ func assertSameRequestDigest(t *testing.T, first, second llm.Request, what strin
 func requestDigest(t *testing.T, request llm.Request) [32]byte {
 	t.Helper()
 	digest, err := llm.RequestDigest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return digest
 }
 
 func mustNormalizeRequest(t *testing.T, request llm.Request) llm.Request {
 	t.Helper()
 	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return normalized
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -32,9 +33,7 @@ func TestCheckpointSnapshotDecodeAllocationsAreBoundedPerItem(t *testing.T) {
 	snapshot.Digest = snapshot.digest()
 	codec := CheckpointBlobCodec{}
 	encoded, err := codec.EncodeSnapshot(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	var failure error
 	allocations := testing.AllocsPerRun(2, func() {
@@ -46,9 +45,7 @@ func TestCheckpointSnapshotDecodeAllocationsAreBoundedPerItem(t *testing.T) {
 			failure = err
 		}
 	})
-	if failure != nil {
-		t.Fatal(failure)
-	}
+	testassert.NoError(t, failure)
 	t.Logf("snapshot allocations: %.0f total, %.1f per item", allocations, allocations/items)
 	if limit := float64(items * snapshotDecodeAllocsPerItem); allocations > limit {
 		t.Fatalf("decoding a %d-item snapshot made %.0f allocations (%.0f per item), limit %d per item", items, allocations, allocations/items, snapshotDecodeAllocsPerItem)

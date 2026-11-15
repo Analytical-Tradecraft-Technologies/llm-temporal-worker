@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -22,9 +23,7 @@ func FuzzOperationCodecRoundTrip(f *testing.F) {
 		}},
 		DispatchToken: "token-fuzz",
 	})
-	if err != nil {
-		f.Fatal(err)
-	}
+	testassert.NoError(f, err)
 	f.Add(seed)
 	f.Add([]byte(`{"schema":"admission/v1"}`))
 
@@ -37,13 +36,9 @@ func FuzzOperationCodecRoundTrip(f *testing.F) {
 			return
 		}
 		encoded, err := encodeOperation(operation)
-		if err != nil {
-			t.Fatalf("encode accepted operation: %v", err)
-		}
+		testassert.NoError(t, err, "encode accepted operation")
 		roundTripped, err := decodeOperation(encoded)
-		if err != nil {
-			t.Fatalf("decode re-encoded operation: %v", err)
-		}
+		testassert.NoError(t, err, "decode re-encoded operation")
 		if !reflect.DeepEqual(operation, roundTripped) {
 			t.Fatalf("operation codec changed semantic value:\nfirst=%#v\nsecond=%#v", operation, roundTripped)
 		}

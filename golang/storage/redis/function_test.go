@@ -9,15 +9,14 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
 func TestAdmissionWireUsesLuaFieldNames(t *testing.T) {
 	attempt := admission.AttemptFacts{RouteID: "route", ProviderRequestID: "request", AttemptNumber: 3}
 	attemptData, err := encodeAttempt(attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	attemptJSON := string(attemptData)
 	if !strings.Contains(attemptJSON, `"route_id":"route"`) || strings.Contains(attemptJSON, `"RouteID"`) {
 		t.Fatalf("attempt wire uses Go field names: %s", attemptJSON)
@@ -28,9 +27,7 @@ func TestAdmissionWireUsesLuaFieldNames(t *testing.T) {
 	}
 
 	outcomeData, err := encodeOutcome(admission.AttemptOutcome{Certainty: admission.Rejected, Incurred: 7, Attempt: attempt})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	outcomeJSON := string(outcomeData)
 	for _, field := range []string{`"certainty":"rejected"`, `"incurred":"7"`, `"attempt":{"route_id":"route"`} {
 		if !strings.Contains(outcomeJSON, field) {
@@ -95,12 +92,8 @@ func TestEncodeAttemptEnforcesFunctionFieldBounds(t *testing.T) {
 	if _, err := encodeAttempt(admission.AttemptFacts{ProviderRequestID: strings.Repeat("x", maxAttemptRequestIDBytes+1)}); err == nil {
 		t.Fatal("oversized provider request ID accepted")
 	}
-	if _, err := encodeAttempt(admission.AttemptFacts{ProviderRequestID: strings.Repeat("x", maxAttemptRequestIDBytes)}); err != nil {
-		t.Fatalf("maximum provider request ID rejected: %v", err)
-	}
-	if _, err := encodeAttempt(admission.AttemptFacts{AttemptNumber: maxAttemptNumber}); err != nil {
-		t.Fatalf("maximum persisted attempt number rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(encodeAttempt(admission.AttemptFacts{ProviderRequestID: strings.Repeat("x", maxAttemptRequestIDBytes)})), "maximum provider request ID rejected")
+	testassert.NoError(t, testassert.Err(encodeAttempt(admission.AttemptFacts{AttemptNumber: maxAttemptNumber})), "maximum persisted attempt number rejected")
 	if _, err := encodeAttempt(admission.AttemptFacts{AttemptNumber: maxAttemptNumber + 1}); err == nil {
 		t.Fatal("oversized attempt number accepted")
 	}
@@ -139,7 +132,7 @@ func TestAdmissionInvocationModesNeverAutoLoadOrReplaceRedisCode(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := &functionInvocationClient{}
 			invoker := redisInvoker{client: client, mode: test.mode, version: AdmissionFunctionVersion}
-			mustNoError(t, errOf(invoker.Run(context.Background(), AdmissionFunctionVersion, []string{"{admission}:key"}, "begin")))
+			testassert.NoError(t, testassert.Err(invoker.Run(context.Background(), AdmissionFunctionVersion, []string{"{admission}:key"}, "begin")))
 			if client.scriptLoadCalls != 0 || client.evalCalls != 0 {
 				t.Fatalf("invocation mutated Redis code: SCRIPT LOAD=%d EVAL=%d", client.scriptLoadCalls, client.evalCalls)
 			}

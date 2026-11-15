@@ -6,6 +6,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -19,9 +20,7 @@ func TestEmptyFunctionCallArgumentsLiftAsEmptyObject(t *testing.T) {
 			body := `{"id":"resp-empty-args","object":"response","created_at":1,"model":"gpt-contract","status":"completed","service_tier":"default","output":[{"type":"function_call","id":"fc-1","call_id":"call-1","name":"ping","arguments":"` + arguments + `","status":"completed"}],"usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}`
 			response := contract.DecodeJSON[responses.Response](t, []byte(body))
 			lifted, err := liftResponse(call, &response, "req")
-			if err != nil {
-				t.Fatalf("empty function call arguments failed the response: %v", err)
-			}
+			testassert.NoError(t, err, "empty function call arguments failed the response")
 			if lifted.Status != llm.ResponseStatusToolCalls || len(lifted.Output) != 1 {
 				t.Fatalf("lifted = status %q output %#v", lifted.Status, lifted.Output)
 			}
@@ -51,9 +50,7 @@ func TestEmptyFunctionCallArgumentsLiftAsEmptyObject(t *testing.T) {
 			cutOff = strings.Replace(cutOff, `"status":"completed"}]`, `"status":"incomplete"}]`, 1)
 			truncated := contract.DecodeJSON[responses.Response](t, []byte(cutOff))
 			lifted, err = liftResponse(call, &truncated, "req")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if lifted.Status != llm.ResponseStatusLength || len(lifted.Output) != 0 {
 				t.Fatalf("cut-off lifted = status %q output %#v", lifted.Status, lifted.Output)
 			}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -28,9 +29,7 @@ func TestCloudExecutionAdmitsInlineImageOnContextLimitedRoute(t *testing.T) {
 	prepared := f.prepareGenerate(t, ctx)
 	_, scope, attempt := f.firstAttempt(t, ctx, prepared)
 	plan, err := f.repository.LoadBudgetPlan(ctx, scope, attempt.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Text estimate plus one image allowance: well inside the window.
 	if got := plan.Estimate.InputTokens; got < budget.MediaImageInputTokenFloor || got > budget.MediaImageInputTokenFloor+1000 {
 		t.Fatalf("reserved input tokens = %d, want the image allowance %d plus a small text estimate", got, budget.MediaImageInputTokenFloor)

@@ -30,9 +30,7 @@ func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 		Continuation: &llm.Continuation{Handle: lifted.Continuation.Handle, EndpointID: "anthropic-prod", Model: "claude-contract", Pinned: true, ProviderStates: lifted.Continuation.ProviderStates},
 	}
 	params, err := lowerRequest(request, profile, "standard_only")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.JSONObject(t, params)
 	messages := wire["messages"].([]any)
 	if len(messages) != 2 {
@@ -44,12 +42,8 @@ func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	}
 	replayedRaw := contract.MarshalJSON(t, replayed)
 	var want, got any
-	if err := json.Unmarshal([]byte(raw), &want); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(replayedRaw, &got); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(raw), &want))
+	testassert.NoError(t, json.Unmarshal(replayedRaw, &got))
 	if string(replayedRaw) != raw && !strings.Contains(string(replayedRaw), `"future":{"n":1}`) {
 		t.Fatalf("replayed state bytes = %s", replayedRaw)
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
 )
 
@@ -16,18 +17,14 @@ import (
 // registers (#1512).
 func TestActivityRuntimeListsEveryActivityAndWorkflow(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "activity-runtime.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	rows := regexp.MustCompile("(?m)^\\| `(llm\\.[A-Za-z0-9._]+)` \\|").FindAllStringSubmatch(string(data), -1)
 	var documented []string
 	for _, row := range rows {
 		documented = append(documented, row[1])
 	}
 	descriptors, err := activity.V1ActivityDescriptors("queue")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := []string{workflows.GenerateWorkflowName, workflows.CompactWorkflowName, workflows.QueryWorkflowName,
 		workflows.RequestWorkflowName, workflows.BudgetWorkflowName, workflows.LangfuseExportWorkflowName}
 	for _, descriptor := range descriptors {
