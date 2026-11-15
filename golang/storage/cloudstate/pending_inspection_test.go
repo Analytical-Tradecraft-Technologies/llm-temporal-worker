@@ -8,23 +8,14 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
-	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
-// forbidWrites fails the test on any table or blob mutation until the
-// returned function restores the stores.
-func forbidWrites(t *testing.T, table *memoryTable, blobs *memoryBlobs) func() {
+// forbidInspectionWrites reports any table or blob write as a test error
+// until the returned function restores the stores.
+func forbidInspectionWrites(t *testing.T, table *memoryTable, blobs *memoryBlobs) func() {
 	t.Helper()
-	table.hook = func(op string, item kv.KeyValueItem) (error, error) {
-		t.Errorf("inspection wrote %s %s", op, item.PartitionKey)
-		return contracts.ErrUnavailable, nil
-	}
-	blobs.hook = func(key blob.BlobKey) (error, error) {
-		t.Errorf("inspection created blob %s", key)
-		return contracts.ErrUnavailable, nil
-	}
+	forbidWrites(t, table, blobs, "inspection")
 	return func() { table.hook, blobs.hook = nil, nil }
 }
 
@@ -53,7 +44,7 @@ func TestInspectPendingLinksRootsAndAttemptsWithoutWriting(t *testing.T) {
 		e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
 	})
 
-	restore := forbidWrites(t, table, blobs)
+	restore := forbidInspectionWrites(t, table, blobs)
 	rootView := inspect(t, r, root.Request.ID)
 	attemptView := inspect(t, r, first.ID)
 	restore()
@@ -79,7 +70,7 @@ func TestInspectPendingLinksRootsAndAttemptsWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restore = forbidWrites(t, table, blobs)
+	restore = forbidInspectionWrites(t, table, blobs)
 	rootView = inspect(t, r, root.Request.ID)
 	attemptView = inspect(t, r, first.ID)
 	restore()
@@ -95,7 +86,7 @@ func TestInspectPendingLinksRootsAndAttemptsWithoutWriting(t *testing.T) {
 	if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), next.CreatedAt); err != nil {
 		t.Fatal(err)
 	}
-	restore = forbidWrites(t, table, blobs)
+	restore = forbidInspectionWrites(t, table, blobs)
 	rootView = inspect(t, r, root.Request.ID)
 	attemptView = inspect(t, r, first.ID)
 	restore()
@@ -127,7 +118,7 @@ func TestInspectPendingInitializingAndUnpreparedRecords(t *testing.T) {
 	if err := r.ensureIndex(ctx, normalized); err != nil {
 		t.Fatal(err)
 	}
-	restore := forbidWrites(t, table, blobs)
+	restore := forbidInspectionWrites(t, table, blobs)
 	view := inspect(t, r, request.ID)
 	restore()
 	if !view.Initializing || view.Role != "" || view.Status != StatusPending || view.Execution != nil {
@@ -136,7 +127,7 @@ func TestInspectPendingInitializingAndUnpreparedRecords(t *testing.T) {
 	if _, err := r.Create(ctx, request); err != nil {
 		t.Fatal(err)
 	}
-	restore = forbidWrites(t, table, blobs)
+	restore = forbidInspectionWrites(t, table, blobs)
 	view = inspect(t, r, request.ID)
 	restore()
 	if view.Initializing || view.Role != "" || view.Status != StatusPending || view.Revision != 1 || view.Kind != "generate" {
