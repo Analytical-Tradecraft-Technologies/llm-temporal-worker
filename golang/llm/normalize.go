@@ -173,11 +173,8 @@ func copyInstruction(instruction Instruction) (Instruction, bool) {
 			kind = InstructionKindParts
 		}
 	}
-	level := instruction.Level
-	if level == "" {
-		level = InstructionLevelApplication
-	}
-	if level != InstructionLevelApplication && level != InstructionLevelPolicy {
+	level, err := defaultEnum(instruction.Level, InstructionLevelApplication, "instruction level", instructionLevels...)
+	if err != nil {
 		return Instruction{}, false
 	}
 	switch kind {

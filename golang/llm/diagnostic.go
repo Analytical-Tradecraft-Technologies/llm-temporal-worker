@@ -2,7 +2,6 @@ package llm
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 )
 
@@ -26,12 +25,9 @@ func (diagnostic Diagnostic) MarshalJSON() ([]byte, error) {
 	if diagnostic.Code == "" {
 		return nil, fmt.Errorf("diagnostic code must not be empty")
 	}
-	severity := diagnostic.Severity
-	if severity == "" {
-		severity = DiagnosticInfo
-	}
-	if severity != DiagnosticInfo && severity != DiagnosticWarning && severity != DiagnosticError {
-		return nil, fmt.Errorf("diagnostic severity %q is invalid", severity)
+	severity, err := defaultEnum(diagnostic.Severity, DiagnosticInfo, "diagnostic severity", diagnosticSeverities...)
+	if err != nil {
+		return nil, err
 	}
 	if diagnostic.Message == "" {
 		return nil, fmt.Errorf("diagnostic message must not be empty")
@@ -41,9 +37,7 @@ func (diagnostic Diagnostic) MarshalJSON() ([]byte, error) {
 		"severity": severity,
 		"message":  diagnostic.Message,
 	}
-	if diagnostic.Path != "" {
-		fields["path"] = diagnostic.Path
-	}
+	setIfNotEmpty(fields, "path", diagnostic.Path)
 	if len(diagnostic.Details) > 0 {
 		fields["details"] = diagnostic.Details
 	}
@@ -51,60 +45,31 @@ func (diagnostic Diagnostic) MarshalJSON() ([]byte, error) {
 }
 
 func decodeDiagnostic(data []byte) (Diagnostic, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "code", "severity", "path", "message", "details")
 	if err != nil {
 		return Diagnostic{}, err
 	}
-	if err := checkUnknownFields(fields, "code", "severity", "path", "message", "details"); err != nil {
-		return Diagnostic{}, err
+	reader := fieldReader{fields: fields}
+	diagnostic := Diagnostic{
+		Code:     reader.requiredString("code"),
+		Severity: readEnum(&reader, "severity", DiagnosticInfo, "diagnostic severity", diagnosticSeverities...),
+		Path:     reader.optionalString("path"),
+		Message:  reader.requiredString("message"),
 	}
-	code, err := requiredString(fields, "code")
-	if err != nil {
-		return Diagnostic{}, err
+	if reader.err != nil {
+		return Diagnostic{}, reader.err
 	}
-	severityValue, _, err := optionalString(fields, "severity")
-	if err != nil {
-		return Diagnostic{}, err
+	if err := decodeOptionalField(fields, "details", &diagnostic.Details, decodeJSONValue[map[string]string]); err != nil {
+		return Diagnostic{}, fmt.Errorf("diagnostic %w", err)
 	}
-	severity := DiagnosticSeverity(severityValue)
-	if severity == "" {
-		severity = DiagnosticInfo
-	}
-	if severity != DiagnosticInfo && severity != DiagnosticWarning && severity != DiagnosticError {
-		return Diagnostic{}, fmt.Errorf("diagnostic severity %q is invalid", severity)
-	}
-	path, _, err := optionalString(fields, "path")
-	if err != nil {
-		return Diagnostic{}, err
-	}
-	message, err := requiredString(fields, "message")
-	if err != nil {
-		return Diagnostic{}, err
-	}
-	var details map[string]string
-	if raw, ok := fields["details"]; ok {
-		if err := decodeJSON(raw, &details); err != nil {
-			return Diagnostic{}, fmt.Errorf("diagnostic details: %w", err)
-		}
-	}
-	return Diagnostic{Code: code, Severity: severity, Path: path, Message: message, Details: details}, nil
+	return diagnostic, nil
 }
+
+var diagnosticSeverities = []DiagnosticSeverity{DiagnosticInfo, DiagnosticWarning, DiagnosticError}
 
 func decodeDiagnostics(data []byte) ([]Diagnostic, error) {
 	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return nil, fmt.Errorf("diagnostics must be an array")
 	}
-	var values []json.RawMessage
-	if err := decodeJSON(data, &values); err != nil {
-		return nil, err
-	}
-	result := make([]Diagnostic, 0, len(values))
-	for index, value := range values {
-		diagnostic, err := decodeDiagnostic(value)
-		if err != nil {
-			return nil, fmt.Errorf("diagnostic %d: %w", index, err)
-		}
-		result = append(result, diagnostic)
-	}
-	return result, nil
+	return decodeArray(data, "diagnostic", decodeDiagnostic)
 }

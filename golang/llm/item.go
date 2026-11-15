@@ -119,20 +119,18 @@ func decodeToolCall(data []byte) (ToolCall, error) {
 	if err != nil {
 		return ToolCall{}, err
 	}
-	id, err := requiredString(fields, "id")
-	if err != nil {
-		return ToolCall{}, err
-	}
-	name, err := requiredString(fields, "name")
-	if err != nil {
-		return ToolCall{}, err
+	reader := fieldReader{fields: fields}
+	id := reader.requiredString("id")
+	name := reader.requiredString("name")
+	if reader.err != nil {
+		return ToolCall{}, reader.err
 	}
 	if err := validateToolName(name); err != nil {
 		return ToolCall{}, err
 	}
-	arguments, err := requireField(fields, "arguments")
-	if err != nil {
-		return ToolCall{}, err
+	arguments := reader.requireField("arguments")
+	if reader.err != nil {
+		return ToolCall{}, reader.err
 	}
 	if !validRawJSON(arguments) {
 		return ToolCall{}, fmt.Errorf("tool call %q arguments must be valid JSON", id)
@@ -217,17 +215,12 @@ func decodeToolResult(data []byte) (ToolResult, error) {
 	if err != nil {
 		return ToolResult{}, err
 	}
-	callID, err := requiredString(fields, "call_id")
-	if err != nil {
-		return ToolResult{}, err
-	}
-	name, _, err := optionalString(fields, "name")
-	if err != nil {
-		return ToolResult{}, err
-	}
-	contentRaw, err := requireField(fields, "content")
-	if err != nil {
-		return ToolResult{}, err
+	reader := fieldReader{fields: fields}
+	callID := reader.requiredString("call_id")
+	name := reader.optionalString("name")
+	contentRaw := reader.requireField("content")
+	if reader.err != nil {
+		return ToolResult{}, reader.err
 	}
 	content, err := decodeParts(contentRaw)
 	if err != nil {
@@ -287,32 +280,22 @@ func decodeProviderState(data []byte) (ProviderState, error) {
 // decodeProviderStateFields reads the provider-state payload that the item
 // and the part share. label names the value in the opaque decode error.
 func decodeProviderStateFields(fields map[string]json.RawMessage, label string) (ProviderState, error) {
-	provider, err := requiredString(fields, "provider")
-	if err != nil {
-		return ProviderState{}, err
+	reader := fieldReader{fields: fields}
+	state := ProviderState{
+		Provider:       reader.requiredString("provider"),
+		EndpointFamily: reader.requiredString("endpoint_family"),
+		MediaType:      reader.requiredString("media_type"),
 	}
-	family, err := requiredString(fields, "endpoint_family")
-	if err != nil {
-		return ProviderState{}, err
-	}
-	mediaType, err := requiredString(fields, "media_type")
-	if err != nil {
-		return ProviderState{}, err
-	}
-	opaqueRaw, err := requireField(fields, "opaque")
-	if err != nil {
-		return ProviderState{}, err
+	opaqueRaw := reader.requireField("opaque")
+	if reader.err != nil {
+		return ProviderState{}, reader.err
 	}
 	opaque, err := decodeBytesJSON(opaqueRaw)
 	if err != nil {
 		return ProviderState{}, fmt.Errorf("%s opaque: %w", label, err)
 	}
-	return ProviderState{
-		Provider:       provider,
-		EndpointFamily: family,
-		MediaType:      mediaType,
-		Opaque:         copyBytes(opaque),
-	}, nil
+	state.Opaque = copyBytes(opaque)
+	return state, nil
 }
 
 type Reference struct {
@@ -428,14 +411,7 @@ func decodeItem(data []byte) (Item, error) {
 }
 
 func decodeItems(data []byte) ([]Item, error) {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return nil, fmt.Errorf("items must be an array")
-	}
-	values, err := decodeVerifiedArray(data)
-	if err != nil {
-		return nil, err
-	}
-	return decodeEach(values, "item", decodeItem)
+	return decodeVerifiedList(data, "item", decodeItem)
 }
 
 // DecodeItems decodes a JSON item array through the canonical kind-dispatch
@@ -554,23 +530,16 @@ func decodeBlobRef(data []byte) (*BlobRef, error) {
 	if err := checkUnknownFields(fields, "digest", "byte_length", "media_type", "locator"); err != nil {
 		return nil, err
 	}
-	digest, err := requiredString(fields, "digest")
-	if err != nil {
-		return nil, err
+	reader := fieldReader{fields: fields}
+	blob := &BlobRef{
+		Digest:     reader.requiredString("digest"),
+		ByteLength: reader.requiredInt64("byte_length"),
+		MediaType:  reader.requiredString("media_type"),
+		Locator:    reader.requiredString("locator"),
 	}
-	byteLength, err := requiredInt64(fields, "byte_length")
-	if err != nil {
-		return nil, err
+	if reader.err != nil {
+		return nil, reader.err
 	}
-	mediaType, err := requiredString(fields, "media_type")
-	if err != nil {
-		return nil, err
-	}
-	locator, err := requiredString(fields, "locator")
-	if err != nil {
-		return nil, err
-	}
-	blob := &BlobRef{Digest: digest, ByteLength: byteLength, MediaType: mediaType, Locator: locator}
 	if blob.ByteLength < 0 {
 		return nil, fmt.Errorf("blob byte_length must not be negative")
 	}
@@ -661,33 +630,24 @@ func decodeMediaPart(data []byte, kind PartKind, label, extraField string) (medi
 	if err != nil {
 		return mediaSource{}, "", err
 	}
-	urlValue, _, err := optionalString(fields, "url")
-	if err != nil {
-		return mediaSource{}, "", err
+	reader := fieldReader{fields: fields}
+	source := mediaSource{URL: reader.optionalString("url")}
+	if reader.err != nil {
+		return mediaSource{}, "", reader.err
 	}
 	var bytesValue []byte
-	if raw, ok := fields["bytes"]; ok {
-		bytesValue, err = decodeBytesJSON(raw)
-		if err != nil {
-			return mediaSource{}, "", fmt.Errorf("%s bytes: %w", label, err)
-		}
+	if err := decodeOptionalField(fields, "bytes", &bytesValue, decodeBytesJSON); err != nil {
+		return mediaSource{}, "", fmt.Errorf("%s %w", label, err)
 	}
-	var blob *BlobRef
-	if raw, ok := fields["blob"]; ok {
-		blob, err = decodeBlobRef(raw)
-		if err != nil {
-			return mediaSource{}, "", fmt.Errorf("%s blob: %w", label, err)
-		}
+	if err := decodeOptionalField(fields, "blob", &source.Blob, decodeBlobRef); err != nil {
+		return mediaSource{}, "", fmt.Errorf("%s %w", label, err)
 	}
-	mediaType, err := requiredString(fields, "media_type")
-	if err != nil {
-		return mediaSource{}, "", err
+	source.Bytes = copyBytes(bytesValue)
+	source.MediaType = reader.requiredString("media_type")
+	extraValue := reader.optionalString(extraField)
+	if reader.err != nil {
+		return mediaSource{}, "", reader.err
 	}
-	extraValue, _, err := optionalString(fields, extraField)
-	if err != nil {
-		return mediaSource{}, "", err
-	}
-	source := mediaSource{URL: urlValue, Bytes: copyBytes(bytesValue), Blob: blob, MediaType: mediaType}
 	if err := validateMediaSource(source.URL, source.Bytes, source.Blob, source.MediaType, label); err != nil {
 		return mediaSource{}, "", err
 	}
@@ -744,15 +704,12 @@ func decodeRefusalPart(data []byte) (RefusalPart, error) {
 	if err != nil {
 		return RefusalPart{}, err
 	}
-	text, err := requiredString(fields, "text")
-	if err != nil {
-		return RefusalPart{}, err
+	reader := fieldReader{fields: fields}
+	part := RefusalPart{Text: reader.requiredString("text"), ProviderCode: reader.optionalString("provider_code")}
+	if reader.err != nil {
+		return RefusalPart{}, reader.err
 	}
-	providerCode, _, err := optionalString(fields, "provider_code")
-	if err != nil {
-		return RefusalPart{}, err
-	}
-	return RefusalPart{Text: text, ProviderCode: providerCode}, nil
+	return part, nil
 }
 
 type ProviderStatePart struct {
@@ -809,14 +766,7 @@ func decodePart(data []byte) (Part, error) {
 }
 
 func decodeParts(data []byte) ([]Part, error) {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return nil, fmt.Errorf("parts must be an array")
-	}
-	values, err := decodeVerifiedArray(data)
-	if err != nil {
-		return nil, err
-	}
-	return decodeEach(values, "part", decodePart)
+	return decodeVerifiedList(data, "part", decodePart)
 }
 
 func validateToolName(name string) error {

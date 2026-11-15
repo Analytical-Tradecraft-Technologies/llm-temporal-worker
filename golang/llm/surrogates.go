@@ -107,58 +107,25 @@ func SanitizeOutputSurrogates(items []Item) []Item {
 	}
 	result := make([]Item, len(items))
 	for index, item := range items {
-		// Pointer forms satisfy Item too; sanitize a copy so the caller's
-		// value is never mutated.
-		switch value := item.(type) {
-		case ToolCall:
-			value.Arguments = SanitizeLoneSurrogates(value.Arguments)
-			result[index] = value
-		case *ToolCall:
-			if value == nil {
-				result[index] = item
-				continue
-			}
-			copy := *value
-			copy.Arguments = SanitizeLoneSurrogates(copy.Arguments)
-			result[index] = &copy
-		case Message:
-			value.Content = sanitizePartSurrogates(value.Content)
-			result[index] = value
-		case *Message:
-			if value == nil {
-				result[index] = item
-				continue
-			}
-			copy := *value
-			copy.Content = sanitizePartSurrogates(copy.Content)
-			result[index] = &copy
-		case ToolResult:
-			value.Content = sanitizePartSurrogates(value.Content)
-			result[index] = value
-		case *ToolResult:
-			if value == nil {
-				result[index] = item
-				continue
-			}
-			copy := *value
-			copy.Content = sanitizePartSurrogates(copy.Content)
-			result[index] = &copy
-		case Reference:
-			value.Metadata = SanitizeRawMapSurrogates(value.Metadata)
-			result[index] = value
-		case *Reference:
-			if value == nil {
-				result[index] = item
-				continue
-			}
-			copy := *value
-			copy.Metadata = SanitizeRawMapSurrogates(copy.Metadata)
-			result[index] = &copy
-		default:
-			result[index] = item
-		}
+		result[index] = sanitizeItemSurrogates(item)
 	}
 	return result
+}
+
+func sanitizeItemSurrogates(item Item) Item {
+	if value, ok := sanitizeCopy(item, func(call *ToolCall) { call.Arguments = SanitizeLoneSurrogates(call.Arguments) }); ok {
+		return value
+	}
+	if value, ok := sanitizeCopy(item, func(message *Message) { message.Content = sanitizePartSurrogates(message.Content) }); ok {
+		return value
+	}
+	if value, ok := sanitizeCopy(item, func(result *ToolResult) { result.Content = sanitizePartSurrogates(result.Content) }); ok {
+		return value
+	}
+	if value, ok := sanitizeCopy(item, func(reference *Reference) { reference.Metadata = SanitizeRawMapSurrogates(reference.Metadata) }); ok {
+		return value
+	}
+	return item
 }
 
 func sanitizePartSurrogates(parts []Part) []Part {
@@ -167,21 +134,28 @@ func sanitizePartSurrogates(parts []Part) []Part {
 	}
 	result := make([]Part, len(parts))
 	for index, part := range parts {
-		switch value := part.(type) {
-		case JSONPart:
-			value.Value = SanitizeLoneSurrogates(value.Value)
-			result[index] = value
-		case *JSONPart:
-			if value == nil {
-				result[index] = part
-				continue
-			}
-			copy := *value
-			copy.Value = SanitizeLoneSurrogates(copy.Value)
-			result[index] = &copy
-		default:
-			result[index] = part
-		}
+		result[index], _ = sanitizeCopy(part, func(part *JSONPart) { part.Value = SanitizeLoneSurrogates(part.Value) })
 	}
 	return result
+}
+
+// sanitizeCopy applies sanitize to value when it holds a T or a *T and
+// reports whether it did. Pointer forms satisfy the item and part interfaces
+// too; they are sanitized through a copy so the caller's value is never
+// mutated, and a nil pointer is returned as it is.
+func sanitizeCopy[I any, T any](value I, sanitize func(*T)) (I, bool) {
+	switch concrete := any(value).(type) {
+	case T:
+		sanitize(&concrete)
+		return any(concrete).(I), true
+	case *T:
+		if concrete == nil {
+			return value, true
+		}
+		clone := *concrete
+		sanitize(&clone)
+		return any(&clone).(I), true
+	default:
+		return value, false
+	}
 }

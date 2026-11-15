@@ -8,6 +8,7 @@ package llm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -29,7 +30,7 @@ func requiredBool(fields map[string]json.RawMessage, name string) (bool, error) 
 	return value, nil
 }
 
-func decodeInt32(raw json.RawMessage) (int32, error) {
+func decodeInt32(raw []byte) (int32, error) {
 	value, err := decodeInt(raw)
 	if err != nil {
 		return 0, err
@@ -161,21 +162,16 @@ func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "max_age_seconds", "variant"); err != nil {
 		return err
 	}
-	maxAge := int64(0)
+	result := CachePolicyV1{}
 	if raw, present := fields["max_age_seconds"]; present {
-		maxAge, err = decodeInt64(raw)
-		if err != nil || maxAge <= 0 {
+		result.MaxAgeSeconds, err = decodeInt64(raw)
+		if err != nil || result.MaxAgeSeconds <= 0 {
 			return fmt.Errorf("cache max_age_seconds must be a positive integer when specified")
 		}
 	}
-	variant := int32(0)
-	if raw, ok := fields["variant"]; ok {
-		variant, err = decodeInt32(raw)
-		if err != nil {
-			return err
-		}
+	if err := decodePresentField(fields, "variant", &result.Variant, decodeInt32); err != nil {
+		return err
 	}
-	result := CachePolicyV1{MaxAgeSeconds: maxAge, Variant: variant}
 	if err := result.validate(); err != nil {
 		return err
 	}
@@ -369,95 +365,40 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 			return nil, fmt.Errorf("extensions.set must be an object")
 		}
 	}
-	fields := map[string]any{}
-	add := func(name string, value any, clear bool) error {
-		if clear {
-			fields[name] = map[string]any{"clear": true}
-		} else if value != nil {
-			fields[name] = map[string]any{"set": value}
-		}
-		return nil
-	}
-	if err := addPatch("model", patch.Model, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("service_class", patch.ServiceClass, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("service_class_fallbacks", emptyNilSet(patch.ServiceClassFallbacks), fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("portability", patch.Portability, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("instructions", emptyNilSet(patch.Instructions), fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("tools", emptyNilSet(patch.Tools), fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("tool_policy", patch.ToolPolicy, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("output", patch.Output, fields, add); err != nil {
-		return nil, err
-	}
-	if patch.Temperature.Clear {
-		if err := patch.Temperature.validate(); err != nil {
-			return nil, fmt.Errorf("temperature: %w", err)
-		}
-		if err := add("temperature", nil, true); err != nil {
-			return nil, err
-		}
-	} else if patch.Temperature.Set != nil {
-		if err := patch.Temperature.validate(); err != nil {
-			return nil, fmt.Errorf("temperature: %w", err)
-		}
-		value, err := NewDecimalV1(patch.Temperature.Set.String())
+	writer := patchWriter{fields: map[string]any{}}
+	writePatch(&writer, "model", patch.Model)
+	writePatch(&writer, "service_class", patch.ServiceClass)
+	writePatch(&writer, "service_class_fallbacks", emptyNilSet(patch.ServiceClassFallbacks))
+	writePatch(&writer, "portability", patch.Portability)
+	writePatch(&writer, "instructions", emptyNilSet(patch.Instructions))
+	writePatch(&writer, "tools", emptyNilSet(patch.Tools))
+	writePatch(&writer, "tool_policy", patch.ToolPolicy)
+	writePatch(&writer, "output", patch.Output)
+	temperature := patch.Temperature
+	if writer.err == nil && temperature.Set != nil && !temperature.Clear {
+		value, err := NewDecimalV1(temperature.Set.String())
 		if err != nil {
 			return nil, fmt.Errorf("temperature: %w", err)
 		}
-		if err := add("temperature", value, false); err != nil {
-			return nil, err
-		}
+		temperature.Set = &value
 	}
-	if err := addPatch("top_p", patch.TopP, fields, add); err != nil {
-		return nil, err
+	writePatch(&writer, "temperature", temperature)
+	writePatch(&writer, "top_p", patch.TopP)
+	writePatch(&writer, "stop_sequences", patch.StopSequences)
+	writePatch(&writer, "seed", patch.Seed)
+	writePatch(&writer, "reasoning_mode", patch.ReasoningMode)
+	writePatch(&writer, "reasoning_token_budget", patch.ReasoningTokenBudget)
+	writePatch(&writer, "reasoning_effort", patch.ReasoningEffort)
+	writePatch(&writer, "reasoning_summary", patch.ReasoningSummary)
+	writePatch(&writer, "web_fetch", patch.WebFetch)
+	writePatch(&writer, "code_execution", patch.CodeExecution)
+	writePatch(&writer, "web_search", patch.WebSearch)
+	writePatch(&writer, "compaction_policy", patch.CompactionPolicy)
+	writePatch(&writer, "extensions", patch.Extensions)
+	if writer.err != nil {
+		return nil, writer.err
 	}
-	if err := addPatch("stop_sequences", patch.StopSequences, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("seed", patch.Seed, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("reasoning_mode", patch.ReasoningMode, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("reasoning_token_budget", patch.ReasoningTokenBudget, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("reasoning_effort", patch.ReasoningEffort, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("reasoning_summary", patch.ReasoningSummary, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("web_fetch", patch.WebFetch, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("code_execution", patch.CodeExecution, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("web_search", patch.WebSearch, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("compaction_policy", patch.CompactionPolicy, fields, add); err != nil {
-		return nil, err
-	}
-	if err := addPatch("extensions", patch.Extensions, fields, add); err != nil {
-		return nil, err
-	}
-	return marshalObject(fields)
+	return marshalObject(writer.fields)
 }
 
 // emptyNilSet makes a Set of a nil slice encode as [] rather than null,
@@ -471,44 +412,72 @@ func emptyNilSet[T any](patch Patch[[]T]) Patch[[]T] {
 	return patch
 }
 
-func addPatch[T any](name string, patch Patch[T], fields map[string]any, add func(string, any, bool) error) error {
+// patchWriter encodes settings patch leaves into fields and keeps the first
+// validation error, so a run of leaves needs a single error check.
+type patchWriter struct {
+	fields map[string]any
+	err    error
+}
+
+// writePatch encodes one leaf as {"clear":true} or {"set":value}; an omitted
+// leaf writes nothing.
+func writePatch[T any](writer *patchWriter, name string, patch Patch[T]) {
+	if writer.err != nil {
+		return
+	}
 	if err := patch.validate(); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
+		writer.err = fmt.Errorf("%s: %w", name, err)
+		return
 	}
 	if patch.Clear {
-		return add(name, nil, true)
+		writer.fields[name] = map[string]any{"clear": true}
+	} else if patch.Set != nil {
+		writer.fields[name] = map[string]any{"set": *patch.Set}
 	}
-	if patch.Set != nil {
-		return add(name, *patch.Set, false)
-	}
-	return nil
 }
 
 func decodePatch[T any](raw json.RawMessage, name string) (Patch[T], error) {
-	fields, err := decodeObject(raw)
+	set, clear, err := decodePatchEnvelope(raw, name)
 	if err != nil {
-		return Patch[T]{}, fmt.Errorf("%s: %w", name, err)
+		return Patch[T]{}, err
 	}
-	if err := checkUnknownFields(fields, "set", "clear"); err != nil {
-		return Patch[T]{}, fmt.Errorf("%s: %w", name, err)
-	}
-	_, hasSet := fields["set"]
-	_, hasClear := fields["clear"]
-	if hasSet == hasClear {
-		return Patch[T]{}, fmt.Errorf("%s must contain exactly one of set or clear", name)
-	}
-	if hasClear {
-		var clear bool
-		if err := json.Unmarshal(fields["clear"], &clear); err != nil || !clear {
-			return Patch[T]{}, fmt.Errorf("%s.clear must be true", name)
-		}
+	if clear {
 		return Patch[T]{Clear: true}, nil
 	}
-	value, err := decodePatchValue[T](fields["set"], name)
+	value, err := decodePatchValue[T](set, name)
 	if err != nil {
 		return Patch[T]{}, err
 	}
 	return Patch[T]{Set: &value}, nil
+}
+
+// decodePatchEnvelope splits a patch leaf into its set value or its clear
+// flag, which must be true.
+func decodePatchEnvelope(raw json.RawMessage, name string) (json.RawMessage, bool, error) {
+	fields, err := decodeClosedObject(raw, "set", "clear")
+	if err != nil {
+		return nil, false, fmt.Errorf("%s: %w", name, err)
+	}
+	set, hasSet := fields["set"]
+	clearRaw, hasClear := fields["clear"]
+	if hasSet == hasClear {
+		return nil, false, fmt.Errorf("%s must contain exactly one of set or clear", name)
+	}
+	if hasClear {
+		var clear bool
+		if err := json.Unmarshal(clearRaw, &clear); err != nil || !clear {
+			return nil, false, fmt.Errorf("%s.clear must be true", name)
+		}
+		return nil, true, nil
+	}
+	return set, false, nil
+}
+
+// readPatch decodes the optional patch leaf name into target.
+func readPatch[T any](reader *fieldReader, name string, target *Patch[T]) {
+	readPresentField(reader, name, target, func(raw []byte) (Patch[T], error) {
+		return decodePatch[T](raw, name)
+	})
 }
 
 // decodePatchValue routes polymorphic settings values through the same strict
@@ -671,82 +640,38 @@ func validReasoningSummary(value ReasoningSummary) bool {
 }
 
 func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "model", "service_class", "service_class_fallbacks", "portability", "instructions", "tools", "tool_policy", "output", "temperature", "top_p", "stop_sequences", "seed", "reasoning_mode", "reasoning_token_budget", "reasoning_effort", "reasoning_summary", "compaction_policy", "extensions", "web_search", "web_fetch", "code_execution")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "model", "service_class", "service_class_fallbacks", "portability", "instructions", "tools", "tool_policy", "output", "temperature", "top_p", "stop_sequences", "seed", "reasoning_mode", "reasoning_token_budget", "reasoning_effort", "reasoning_summary", "compaction_policy", "extensions", "web_search", "web_fetch", "code_execution"); err != nil {
 		return err
 	}
 	result := SettingsPatchV1{}
-	if raw, ok := fields["model"]; ok {
-		result.Model, err = decodePatch[string](raw, "model")
+	reader := fieldReader{fields: fields}
+	readPatch(&reader, "model", &result.Model)
+	readPatch(&reader, "service_class", &result.ServiceClass)
+	readPatch(&reader, "service_class_fallbacks", &result.ServiceClassFallbacks)
+	readPatch(&reader, "portability", &result.Portability)
+	readPatch(&reader, "instructions", &result.Instructions)
+	readPatch(&reader, "tools", &result.Tools)
+	readPatch(&reader, "tool_policy", &result.ToolPolicy)
+	readPatch(&reader, "output", &result.Output)
+	readPresentField(&reader, "temperature", &result.Temperature, decodeTemperaturePatch)
+	readPatch(&reader, "top_p", &result.TopP)
+	readPatch(&reader, "stop_sequences", &result.StopSequences)
+	readPatch(&reader, "seed", &result.Seed)
+	readPatch(&reader, "reasoning_mode", &result.ReasoningMode)
+	readPatch(&reader, "reasoning_token_budget", &result.ReasoningTokenBudget)
+	readPatch(&reader, "reasoning_effort", &result.ReasoningEffort)
+	readPatch(&reader, "reasoning_summary", &result.ReasoningSummary)
+	readPatch(&reader, "web_fetch", &result.WebFetch)
+	readPatch(&reader, "code_execution", &result.CodeExecution)
+	readPatch(&reader, "web_search", &result.WebSearch)
+	readPatch(&reader, "compaction_policy", &result.CompactionPolicy)
+	if reader.err == nil && result.CompactionPolicy.Set != nil {
+		reader.err = validateCompactionPolicyPatchV1(*result.CompactionPolicy.Set)
 	}
-	if raw, ok := fields["service_class"]; ok && err == nil {
-		result.ServiceClass, err = decodePatch[ServiceClass](raw, "service_class")
-	}
-	if raw, ok := fields["service_class_fallbacks"]; ok && err == nil {
-		result.ServiceClassFallbacks, err = decodePatch[[]ServiceClass](raw, "service_class_fallbacks")
-	}
-	if raw, ok := fields["portability"]; ok && err == nil {
-		result.Portability, err = decodePatch[PortabilityMode](raw, "portability")
-	}
-	if raw, ok := fields["instructions"]; ok && err == nil {
-		result.Instructions, err = decodePatch[[]Instruction](raw, "instructions")
-	}
-	if raw, ok := fields["tools"]; ok && err == nil {
-		result.Tools, err = decodePatch[[]Tool](raw, "tools")
-	}
-	if raw, ok := fields["tool_policy"]; ok && err == nil {
-		result.ToolPolicy, err = decodePatch[ToolPolicy](raw, "tool_policy")
-	}
-	if raw, ok := fields["output"]; ok && err == nil {
-		result.Output, err = decodePatch[OutputSpec](raw, "output")
-	}
-	if raw, ok := fields["temperature"]; ok && err == nil {
-		result.Temperature, err = decodeTemperaturePatch(raw)
-	}
-	if raw, ok := fields["top_p"]; ok && err == nil {
-		result.TopP, err = decodePatch[DecimalV1](raw, "top_p")
-	}
-	if raw, ok := fields["stop_sequences"]; ok && err == nil {
-		result.StopSequences, err = decodePatch[[]string](raw, "stop_sequences")
-	}
-	if raw, ok := fields["seed"]; ok && err == nil {
-		result.Seed, err = decodePatch[int64](raw, "seed")
-	}
-	if raw, ok := fields["reasoning_mode"]; ok && err == nil {
-		result.ReasoningMode, err = decodePatch[ReasoningMode](raw, "reasoning_mode")
-	}
-	if raw, ok := fields["reasoning_token_budget"]; ok && err == nil {
-		result.ReasoningTokenBudget, err = decodePatch[int](raw, "reasoning_token_budget")
-	}
-	if raw, ok := fields["reasoning_effort"]; ok && err == nil {
-		result.ReasoningEffort, err = decodePatch[ReasoningEffort](raw, "reasoning_effort")
-	}
-	if raw, ok := fields["reasoning_summary"]; ok && err == nil {
-		result.ReasoningSummary, err = decodePatch[ReasoningSummary](raw, "reasoning_summary")
-	}
-	if raw, ok := fields["web_fetch"]; ok && err == nil {
-		result.WebFetch, err = decodePatch[bool](raw, "web_fetch")
-	}
-	if raw, ok := fields["code_execution"]; ok && err == nil {
-		result.CodeExecution, err = decodePatch[bool](raw, "code_execution")
-	}
-	if raw, ok := fields["web_search"]; ok && err == nil {
-		result.WebSearch, err = decodePatch[bool](raw, "web_search")
-	}
-	if raw, ok := fields["compaction_policy"]; ok && err == nil {
-		result.CompactionPolicy, err = decodePatch[json.RawMessage](raw, "compaction_policy")
-		if err == nil && result.CompactionPolicy.Set != nil {
-			err = validateCompactionPolicyPatchV1(*result.CompactionPolicy.Set)
-		}
-	}
-	if raw, ok := fields["extensions"]; ok && err == nil {
-		result.Extensions, err = decodePatch[map[string]json.RawMessage](raw, "extensions")
-	}
-	if err != nil {
-		return err
+	readPatch(&reader, "extensions", &result.Extensions)
+	if reader.err != nil {
+		return reader.err
 	}
 	*patch = result
 	return nil
@@ -756,24 +681,12 @@ func (patch *SettingsPatchV1) UnmarshalJSON(data []byte) error {
 // Numeric input remains accepted for one compatibility window so older Go
 // producers can be upgraded independently; MarshalJSON always emits the
 // canonical string form.
-func decodeTemperaturePatch(raw json.RawMessage) (Patch[DecimalV1], error) {
-	fields, err := decodeObject(raw)
+func decodeTemperaturePatch(raw []byte) (Patch[DecimalV1], error) {
+	set, clear, err := decodePatchEnvelope(raw, "temperature")
 	if err != nil {
-		return Patch[DecimalV1]{}, fmt.Errorf("temperature: %w", err)
+		return Patch[DecimalV1]{}, err
 	}
-	if err := checkUnknownFields(fields, "set", "clear"); err != nil {
-		return Patch[DecimalV1]{}, fmt.Errorf("temperature: %w", err)
-	}
-	set, hasSet := fields["set"]
-	clear, hasClear := fields["clear"]
-	if hasSet == hasClear {
-		return Patch[DecimalV1]{}, fmt.Errorf("temperature must contain exactly one of set or clear")
-	}
-	if hasClear {
-		var value bool
-		if err := json.Unmarshal(clear, &value); err != nil || !value {
-			return Patch[DecimalV1]{}, fmt.Errorf("temperature.clear must be true")
-		}
+	if clear {
 		return Patch[DecimalV1]{Clear: true}, nil
 	}
 	var value string
@@ -836,26 +749,14 @@ func marshalRequestContextV1(context RequestContext) (json.RawMessage, error) {
 }
 
 func decodeRequestContextV1(data []byte) (RequestContext, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "tenant", "project", "actor")
 	if err != nil {
 		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
 	}
-	if err := checkUnknownFields(fields, "tenant", "project", "actor"); err != nil {
-		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
-	}
-	tenant, _, err := optionalString(fields, "tenant")
+	context, err := decodeContextIdentity(fields)
 	if err != nil {
 		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
 	}
-	project, _, err := optionalString(fields, "project")
-	if err != nil {
-		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
-	}
-	actor, _, err := optionalString(fields, "actor")
-	if err != nil {
-		return RequestContext{}, fmt.Errorf("v1 context: %w", err)
-	}
-	context := RequestContext{Tenant: tenant, Project: project, Actor: actor}
 	if err := validateRequestContextV1(context); err != nil {
 		return RequestContext{}, err
 	}
@@ -890,11 +791,7 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	appendItems := request.Append
-	if appendItems == nil {
-		appendItems = []Item{}
-	}
-	fields := map[string]any{"api_version": APIVersion, "operation_key": request.OperationKey, "context": context, "append": appendItems}
+	fields := map[string]any{"api_version": APIVersion, "operation_key": request.OperationKey, "context": context, "append": emptyIfNil(request.Append)}
 	if request.Parent != nil {
 		fields["parent"] = string(*request.Parent)
 	}
@@ -903,69 +800,36 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 	} else if string(patch) != "{}" {
 		fields["settings_patch"] = json.RawMessage(patch)
 	}
-	if request.Cache != nil {
-		fields["cache"] = request.Cache
-	}
+	setIfNotNil(fields, "cache", request.Cache)
 	return marshalObject(fields)
 }
 
 func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache"); err != nil {
 		return err
 	}
 	version, key, err := decodeContractHeader(fields, APIVersion)
 	if err != nil {
 		return err
 	}
-	contextRaw, err := requireField(fields, "context")
+	context, err := decodeContractContext(fields)
 	if err != nil {
 		return err
 	}
-	context, err := decodeRequestContextV1(contextRaw)
-	if err != nil {
+	result := GenerateRequestV1{APIVersion: version, OperationKey: key, Context: context}
+	reader := fieldReader{fields: fields}
+	readRequiredField(&reader, "append", &result.Append, decodeItems)
+	if reader.err != nil {
+		return reader.err
+	}
+	if result.Parent, err = decodeParentHandle(fields, "parent checkpoint is invalid"); err != nil {
 		return err
 	}
-	if context.Tenant == "" || context.Project == "" || context.Actor == "" {
-		return fmt.Errorf("context requires tenant, project, and actor")
-	}
-	appendRaw, err := requireField(fields, "append")
-	if err != nil {
-		return err
-	}
-	items, err := decodeItems(appendRaw)
-	if err != nil {
-		return fmt.Errorf("append: %w", err)
-	}
-	result := GenerateRequestV1{APIVersion: version, OperationKey: key, Context: context, Append: items}
-	if raw, ok := fields["parent"]; ok && string(raw) != "null" {
-		value, err := requiredString(map[string]json.RawMessage{"parent": raw}, "parent")
-		if err != nil {
-			return err
-		}
-		handle := CheckpointHandle(value)
-		if !handle.valid() {
-			return fmt.Errorf("parent checkpoint is invalid")
-		}
-		result.Parent = &handle
-	}
-	if raw, ok := fields["settings_patch"]; ok {
-		if err := json.Unmarshal(raw, &result.SettingsPatch); err != nil {
-			return err
-		}
-	}
-	if raw, ok := fields["cache"]; ok {
-		var policy CachePolicyV1
-		if err := json.Unmarshal(raw, &policy); err != nil {
-			return err
-		}
-		if err := policy.validate(); err != nil {
-			return err
-		}
-		result.Cache = &policy
+	readPresentField(&reader, "settings_patch", &result.SettingsPatch, unmarshalValue[SettingsPatchV1])
+	readPresentField(&reader, "cache", &result.Cache, decodeCachePolicy)
+	if reader.err != nil {
+		return reader.err
 	}
 	if err := validateGenerateRequestV1Bounds(result); err != nil {
 		return err
@@ -1015,45 +879,43 @@ type CostV1 struct {
 }
 
 func (cost CostV1) MarshalJSON() ([]byte, error) {
-	if err := cost.validate(); err != nil {
+	actualCost, err := cost.canonicalActualCost()
+	if err != nil {
 		return nil, err
 	}
-	actualCost := cost.ActualCostUSD
-	if actualCost != nil {
-		canonical, err := canonicalDecimalString(*actualCost)
-		if err != nil {
-			return nil, err
-		}
-		actualCost = &canonical
-	}
 	fields := map[string]any{"status": cost.Status, "actual_cost_usd": actualCost}
-	if cost.Method != "" {
-		fields["method"] = cost.Method
-	}
-	if cost.CatalogVersion != "" {
-		fields["catalog_version"] = cost.CatalogVersion
-	}
-	if cost.UnknownReason != "" {
-		fields["unknown_reason"] = cost.UnknownReason
-	}
+	setIfNotEmpty(fields, "method", cost.Method)
+	setIfNotEmpty(fields, "catalog_version", cost.CatalogVersion)
+	setIfNotEmpty(fields, "unknown_reason", cost.UnknownReason)
 	return marshalObject(fields)
 }
 
+// canonicalActualCost validates the cost and returns its actual cost in
+// canonical decimal form.
+func (cost CostV1) canonicalActualCost() (*string, error) {
+	if err := cost.validate(); err != nil {
+		return nil, err
+	}
+	if cost.ActualCostUSD == nil {
+		return nil, nil
+	}
+	canonical, err := canonicalDecimalString(*cost.ActualCostUSD)
+	if err != nil {
+		return nil, err
+	}
+	return &canonical, nil
+}
+
 func (metadata *CheckpointMetadata) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "handle", "parent", "kind", "depth")
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "handle", "parent", "kind", "depth"); err != nil {
-		return err
-	}
-	handle, err := requiredString(fields, "handle")
-	if err != nil {
-		return err
-	}
-	kind, err := requiredString(fields, "kind")
-	if err != nil {
-		return err
+	reader := fieldReader{fields: fields}
+	handle := reader.requiredString("handle")
+	kind := reader.requiredString("kind")
+	if reader.err != nil {
+		return reader.err
 	}
 	switch kind {
 	case "generation", "compaction", "cache_replay":
@@ -1071,36 +933,23 @@ func (metadata *CheckpointMetadata) UnmarshalJSON(data []byte) error {
 	if !result.Handle.valid() {
 		return fmt.Errorf("checkpoint metadata is invalid")
 	}
-	if raw, ok := fields["parent"]; ok && string(raw) != "null" {
-		value, err := requiredString(map[string]json.RawMessage{"parent": raw}, "parent")
-		if err != nil {
-			return err
-		}
-		parsed := CheckpointHandle(value)
-		if !parsed.valid() {
-			return fmt.Errorf("checkpoint parent is invalid")
-		}
-		result.Parent = &parsed
+	if result.Parent, err = decodeParentHandle(fields, "checkpoint parent is invalid"); err != nil {
+		return err
 	}
 	*metadata = result
 	return nil
 }
 
 func (disposition *CacheDispositionV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "disposition", "variant", "entry_age_seconds")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "disposition", "variant", "entry_age_seconds"); err != nil {
 		return err
 	}
 	value, err := requiredString(fields, "disposition")
 	if err != nil {
 		return err
 	}
-	switch value {
-	case "disabled", "miss_populated", "hit", "miss_not_populated":
-	default:
+	if !validateCacheDisposition(value) {
 		return fmt.Errorf("cache disposition %q is invalid", value)
 	}
 	variant, err := decodeInt32(fields["variant"])
@@ -1123,37 +972,18 @@ func (disposition *CacheDispositionV1) UnmarshalJSON(data []byte) error {
 }
 
 func (cost *CostV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "status", "actual_cost_usd", "method", "catalog_version", "unknown_reason")
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "status", "actual_cost_usd", "method", "catalog_version", "unknown_reason"); err != nil {
-		return err
-	}
-	status, err := requiredString(fields, "status")
-	if err != nil {
-		return err
-	}
-	result := CostV1{Status: status}
-	if raw, ok := fields["actual_cost_usd"]; ok && string(raw) != "null" {
-		value, err := requiredString(map[string]json.RawMessage{"actual_cost_usd": raw}, "actual_cost_usd")
-		if err != nil {
-			return err
-		}
-		canonical, err := canonicalDecimalString(value)
-		if err != nil {
-			return err
-		}
-		result.ActualCostUSD = &canonical
-	}
-	if result.Method, _, err = optionalString(fields, "method"); err != nil {
-		return err
-	}
-	if result.CatalogVersion, _, err = optionalString(fields, "catalog_version"); err != nil {
-		return err
-	}
-	if result.UnknownReason, _, err = optionalString(fields, "unknown_reason"); err != nil {
-		return err
+	reader := fieldReader{fields: fields}
+	result := CostV1{Status: reader.requiredString("status")}
+	readPresentField(&reader, "actual_cost_usd", &result.ActualCostUSD, decodeActualCostUSD)
+	result.Method = reader.optionalString("method")
+	result.CatalogVersion = reader.optionalString("catalog_version")
+	result.UnknownReason = reader.optionalString("unknown_reason")
+	if reader.err != nil {
+		return reader.err
 	}
 	if err := result.validate(); err != nil {
 		return err
@@ -1172,6 +1002,23 @@ func validateCacheDisposition(value string) bool {
 }
 
 var decimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,18})?$`)
+
+// decodeActualCostUSD decodes a nullable actual_cost_usd decimal string in
+// its canonical form; null decodes as nil.
+func decodeActualCostUSD(data []byte) (*string, error) {
+	if string(data) == "null" {
+		return nil, nil
+	}
+	value, err := decodeStringField("actual_cost_usd", data)
+	if err != nil {
+		return nil, err
+	}
+	canonical, err := canonicalDecimalString(value)
+	if err != nil {
+		return nil, err
+	}
+	return &canonical, nil
+}
 
 func canonicalDecimalString(value string) (string, error) {
 	if !decimalPattern.MatchString(value) {
@@ -1242,20 +1089,10 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 	if err := response.Cost.validate(); err != nil {
 		return nil, err
 	}
-	output := response.Output
-	if output == nil {
-		output = []Item{}
-	}
-	fields := map[string]any{"api_version": APIVersion, "operation_key": response.OperationKey, "operation_id": response.OperationID, "status": response.Status, "output": output, "checkpoint": response.Checkpoint, "cache": response.Cache, "cost": response.Cost}
-	if response.Route != nil {
-		fields["route"] = response.Route
-	}
-	if response.Service != nil {
-		fields["service"] = response.Service
-	}
-	if response.Usage != nil {
-		fields["usage"] = response.Usage
-	}
+	fields := map[string]any{"api_version": APIVersion, "operation_key": response.OperationKey, "operation_id": response.OperationID, "status": response.Status, "output": emptyIfNil(response.Output), "checkpoint": response.Checkpoint, "cache": response.Cache, "cost": response.Cost}
+	setIfNotNil(fields, "route", response.Route)
+	setIfNotNil(fields, "service", response.Service)
+	setIfNotNil(fields, "usage", response.Usage)
 	if response.Diagnostics != nil {
 		fields["diagnostics"] = response.Diagnostics
 	}
@@ -1263,88 +1100,64 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "service", "usage", "cost", "diagnostics")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "service", "usage", "cost", "diagnostics"); err != nil {
 		return err
 	}
 	version, key, err := decodeContractHeader(fields, APIVersion)
 	if err != nil {
 		return err
 	}
-	id, err := requiredString(fields, "operation_id")
-	if err != nil {
+	reader := fieldReader{fields: fields}
+	result := GenerateResponseV1{APIVersion: version, OperationKey: key, OperationID: reader.requiredString("operation_id"), Status: ResponseStatus(reader.requiredString("status"))}
+	if reader.err != nil {
+		return reader.err
+	}
+	if !result.Status.Valid() {
+		return fmt.Errorf("status %q is invalid", result.Status)
+	}
+	readRequiredField(&reader, "output", &result.Output, decodeItems)
+	if reader.err != nil {
+		return reader.err
+	}
+	if err := decodeRequiredJSON(fields, "checkpoint", &result.Checkpoint); err != nil {
 		return err
 	}
-	statusValue, err := requiredString(fields, "status")
-	if err != nil {
+	if kind := result.Checkpoint.Kind; kind != "generation" && kind != "cache_replay" {
+		return fmt.Errorf("invalid generation checkpoint kind %q", kind)
+	}
+	if err := decodeCacheAndCost(fields, &result.Cache, &result.Cost); err != nil {
 		return err
 	}
-	status := ResponseStatus(statusValue)
-	if !status.Valid() {
-		return fmt.Errorf("status %q is invalid", status)
-	}
-	outputRaw, err := requireField(fields, "output")
-	if err != nil {
+	if err := result.Cost.validate(); err != nil {
 		return err
 	}
-	output, err := decodeItems(outputRaw)
-	if err != nil {
-		return fmt.Errorf("output: %w", err)
-	}
-	var checkpoint CheckpointMetadata
-	if err := decodeRequiredJSON(fields, "checkpoint", &checkpoint); err != nil {
+	readPresentField(&reader, "route", &result.Route, pointerTo(decodeRouteFacts))
+	// The v1 contract requires fallback_index; only stored internal
+	// responses written before the field existed may omit it.
+	readPresentField(&reader, "service", &result.Service, pointerTo(decodeServiceFactsStrict))
+	if err := decodeUsageAndDiagnostics(&reader, &result.Usage, &result.Diagnostics); err != nil {
 		return err
-	}
-	if checkpoint.Kind != "generation" && checkpoint.Kind != "cache_replay" {
-		return fmt.Errorf("invalid generation checkpoint kind %q", checkpoint.Kind)
-	}
-	var cache CacheDispositionV1
-	if err := decodeRequiredJSON(fields, "cache", &cache); err != nil {
-		return err
-	}
-	var cost CostV1
-	if err := decodeRequiredJSON(fields, "cost", &cost); err != nil {
-		return err
-	}
-	if err := cost.validate(); err != nil {
-		return err
-	}
-	result := GenerateResponseV1{APIVersion: version, OperationKey: key, OperationID: id, Status: status, Output: output, Checkpoint: checkpoint, Cache: cache, Cost: cost}
-	if raw, ok := fields["route"]; ok {
-		route, err := decodeRouteFacts(raw)
-		if err != nil {
-			return err
-		}
-		result.Route = &route
-	}
-	if raw, ok := fields["service"]; ok {
-		// The v1 contract requires fallback_index; only stored internal
-		// responses written before the field existed may omit it.
-		service, err := decodeServiceFactsStrict(raw)
-		if err != nil {
-			return err
-		}
-		result.Service = &service
-	}
-	if raw, ok := fields["usage"]; ok {
-		usage, err := decodeUsage(raw)
-		if err != nil {
-			return err
-		}
-		result.Usage = &usage
-	}
-	if raw, ok := fields["diagnostics"]; ok {
-		var err error
-		result.Diagnostics, err = decodeDiagnostics(raw)
-		if err != nil {
-			return err
-		}
 	}
 	*response = result
 	return nil
+}
+
+// decodeCacheAndCost reads the required cache disposition and cost every v1
+// response carries.
+func decodeCacheAndCost(fields map[string]json.RawMessage, cache *CacheDispositionV1, cost *CostV1) error {
+	if err := decodeRequiredJSON(fields, "cache", cache); err != nil {
+		return err
+	}
+	return decodeRequiredJSON(fields, "cost", cost)
+}
+
+// decodeUsageAndDiagnostics reads the optional usage and diagnostics members
+// that end the v1 Generate and Compact responses.
+func decodeUsageAndDiagnostics(reader *fieldReader, usage **Usage, diagnostics *[]Diagnostic) error {
+	readPresentField(reader, "usage", usage, pointerTo(decodeUsage))
+	readPresentField(reader, "diagnostics", diagnostics, decodeDiagnostics)
+	return reader.err
 }
 
 type CompactRequestV1 struct {
@@ -1439,23 +1252,14 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 		}
 		fields["policy"] = json.RawMessage(request.Policy)
 	}
-	if request.Model != "" {
-		fields["model"] = request.Model
-	}
-	if request.ServiceClass != "" {
-		fields["service_class"] = request.ServiceClass
-	}
-	if request.Cache != nil {
-		fields["cache"] = request.Cache
-	}
+	setIfNotEmpty(fields, "model", request.Model)
+	setIfNotEmpty(fields, "service_class", request.ServiceClass)
+	setIfNotNil(fields, "cache", request.Cache)
 	return marshalObject(fields)
 }
 func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "parent", "policy", "model", "service_class", "cache")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "parent", "policy", "model", "service_class", "cache"); err != nil {
 		return err
 	}
 	version, key, err := decodeContractHeader(fields, CompactAPIVersion)
@@ -1466,11 +1270,7 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	contextRaw, err := requireField(fields, "context")
-	if err != nil {
-		return err
-	}
-	context, err := decodeRequestContextV1(contextRaw)
+	context, err := decodeContractContext(fields)
 	if err != nil {
 		return err
 	}
@@ -1503,15 +1303,8 @@ func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
 		}
 		result.ServiceClass = ServiceClass(class)
 	}
-	if raw, ok := fields["cache"]; ok {
-		var policy CachePolicyV1
-		if err := json.Unmarshal(raw, &policy); err != nil {
-			return err
-		}
-		if err := policy.validate(); err != nil {
-			return err
-		}
-		result.Cache = &policy
+	if err := decodePresentField(fields, "cache", &result.Cache, decodeCachePolicy); err != nil {
+		return err
 	}
 	*request = result
 	return nil
@@ -1540,7 +1333,7 @@ func validateCompactPolicy(raw json.RawMessage) error {
 		}
 	}
 	if value, ok := fields["summary_style"]; ok {
-		style, err := requiredString(map[string]json.RawMessage{"summary_style": value}, "summary_style")
+		style, err := decodeStringField("summary_style", value)
 		if err != nil {
 			return err
 		}
@@ -1585,9 +1378,7 @@ func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
 	if len(response.Provenance) > 0 {
 		fields["provenance"] = json.RawMessage(response.Provenance)
 	}
-	if response.Usage != nil {
-		fields["usage"] = response.Usage
-	}
+	setIfNotNil(fields, "usage", response.Usage)
 	if response.Diagnostics != nil {
 		fields["diagnostics"] = response.Diagnostics
 	}
@@ -1595,11 +1386,8 @@ func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "diagnostics")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "diagnostics"); err != nil {
 		return err
 	}
 	version, key, err := decodeContractHeader(fields, CompactAPIVersion)
@@ -1618,41 +1406,24 @@ func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	var checkpoint CheckpointMetadata
-	if err := json.Unmarshal(checkpointRaw, &checkpoint); err != nil || checkpoint.Kind != "compaction" {
+	result := CompactResponseV1{APIVersion: version, OperationKey: key, OperationID: id}
+	if err := json.Unmarshal(checkpointRaw, &result.Checkpoint); err != nil || result.Checkpoint.Kind != "compaction" {
 		return fmt.Errorf("compact checkpoint must be compaction")
 	}
-	if checkpoint.Parent == nil || !checkpoint.Parent.valid() {
+	if parent := result.Checkpoint.Parent; parent == nil || !parent.valid() {
 		return fmt.Errorf("compact checkpoint parent is invalid")
 	}
-	var cache CacheDispositionV1
-	if err := decodeRequiredJSON(fields, "cache", &cache); err != nil {
+	if err := decodeCacheAndCost(fields, &result.Cache, &result.Cost); err != nil {
 		return err
 	}
-	var cost CostV1
-	if err := decodeRequiredJSON(fields, "cost", &cost); err != nil {
-		return err
-	}
-	result := CompactResponseV1{APIVersion: version, OperationKey: key, OperationID: id, Checkpoint: checkpoint, Cache: cache, Cost: cost}
 	if raw, ok := fields["provenance"]; ok {
 		if !validObjectJSON(raw) {
 			return fmt.Errorf("provenance must be an object")
 		}
 		result.Provenance = copyRaw(raw)
 	}
-	if raw, ok := fields["usage"]; ok {
-		usage, err := decodeUsage(raw)
-		if err != nil {
-			return err
-		}
-		result.Usage = &usage
-	}
-	if raw, ok := fields["diagnostics"]; ok {
-		var err error
-		result.Diagnostics, err = decodeDiagnostics(raw)
-		if err != nil {
-			return err
-		}
+	if err := decodeUsageAndDiagnostics(&fieldReader{fields: fields}, &result.Usage, &result.Diagnostics); err != nil {
+		return err
 	}
 	*response = result
 	return nil
@@ -1670,6 +1441,19 @@ const (
 
 func (kind QueryKind) valid() bool {
 	return kind == QueryProviderStatus || kind == QueryModelInventory || kind == QueryCreditStatus || kind == QueryBudgetStatus || kind == QuerySpendSummary
+}
+
+// decodeQueryKind reads the required query kind.
+func decodeQueryKind(fields map[string]json.RawMessage) (QueryKind, error) {
+	value, err := requiredString(fields, "kind")
+	if err != nil {
+		return "", err
+	}
+	kind := QueryKind(value)
+	if !kind.valid() {
+		return "", fmt.Errorf("query kind %q is invalid", kind)
+	}
+	return kind, nil
 }
 
 type QueryRequestV1 struct {
@@ -1691,11 +1475,8 @@ func (request QueryRequestV1) MarshalJSON() ([]byte, error) {
 	return marshalObject(map[string]any{"api_version": QueryAPIVersion, "operation_key": request.OperationKey, "context": context, "kind": request.Kind, "query": json.RawMessage(request.Query)})
 }
 func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "kind", "query")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "kind", "query"); err != nil {
 		return err
 	}
 	version, key, err := decodeContractHeader(fields, QueryAPIVersion)
@@ -1705,24 +1486,13 @@ func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
 	if err := validateCodePointLength("operation_key", key, 1, generateOperationKeyMaxCodePoints); err != nil {
 		return err
 	}
-	kindValue, err := requiredString(fields, "kind")
+	kind, err := decodeQueryKind(fields)
 	if err != nil {
 		return err
 	}
-	kind := QueryKind(kindValue)
-	if !kind.valid() {
-		return fmt.Errorf("query kind %q is invalid", kind)
-	}
-	contextRaw, err := requireField(fields, "context")
+	context, err := decodeContractContext(fields)
 	if err != nil {
 		return err
-	}
-	context, err := decodeRequestContextV1(contextRaw)
-	if err != nil {
-		return err
-	}
-	if context.Tenant == "" || context.Project == "" || context.Actor == "" {
-		return fmt.Errorf("context requires tenant, project, and actor")
 	}
 	query, err := requireField(fields, "query")
 	if err != nil || !validObjectJSON(query) {
@@ -1757,7 +1527,7 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 		}
 	}
 	if raw, ok := fields["cursor"]; ok && string(raw) != "null" {
-		value, err := requiredString(map[string]json.RawMessage{"cursor": raw}, "cursor")
+		value, err := decodeStringField("cursor", raw)
 		if err != nil || len(value) > 512 {
 			return fmt.Errorf("query cursor is invalid")
 		}
@@ -1771,7 +1541,7 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 			if string(raw) == "null" {
 				return fmt.Errorf("query %s must be a string", name)
 			}
-			if _, err := requiredString(map[string]json.RawMessage{name: raw}, name); err != nil {
+			if _, err := decodeStringField(name, raw); err != nil {
 				return err
 			}
 		}
@@ -1793,22 +1563,13 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 		}
 	}
 	if kind == QuerySpendSummary {
-		var start, end time.Time
-		for _, name := range []string{"start_time", "end_time"} {
-			value, err := requiredString(fields, name)
-			if err != nil {
-				return err
-			}
-			if err := validateQueryTimestamp(name, value); err != nil {
-				return err
-			}
-			parsed, _ := time.Parse(time.RFC3339Nano, value)
-			if name == "start_time" {
-				start = parsed
-			} else {
-				end = parsed
-			}
+		if err := validateTimestampFields(fields, "start_time", "end_time"); err != nil {
+			return err
 		}
+		startValue, _ := requiredString(fields, "start_time")
+		endValue, _ := requiredString(fields, "end_time")
+		start, _ := time.Parse(time.RFC3339Nano, startValue)
+		end, _ := time.Parse(time.RFC3339Nano, endValue)
 		if !end.After(start) {
 			return fmt.Errorf("spend summary end_time must be after start_time")
 		}
@@ -1823,22 +1584,14 @@ func validateQueryObject(kind QueryKind, raw json.RawMessage) error {
 			}
 		}
 	}
-	if kind == QueryBudgetStatus {
-		if raw, ok := fields["active_at"]; ok {
-			value, err := requiredString(map[string]json.RawMessage{"active_at": raw}, "active_at")
-			if err != nil {
-				return err
-			}
-			if err := validateQueryTimestamp("active_at", value); err != nil {
-				return err
-			}
-		}
+	if _, ok := fields["active_at"]; ok && kind == QueryBudgetStatus {
+		return validateTimestampFields(fields, "active_at")
 	}
 	return nil
 }
 
 func validateQueryEnum(raw json.RawMessage, field string, allowed ...string) error {
-	value, err := requiredString(map[string]json.RawMessage{field: raw}, field)
+	value, err := decodeStringField(field, raw)
 	if err != nil {
 		return fmt.Errorf("%s must be a string: %w", field, err)
 	}
@@ -1925,6 +1678,13 @@ type SpendSummary struct {
 
 func (SpendSummary) queryResultKind() QueryKind { return QuerySpendSummary }
 
+// unmarshalQueryResult decodes raw as the result page T.
+func unmarshalQueryResult[T QueryResult](raw []byte) (QueryResult, error) {
+	var value T
+	err := json.Unmarshal(raw, &value)
+	return value, err
+}
+
 type QueryResponseV1 struct {
 	APIVersion       string
 	OperationKey     string
@@ -1946,36 +1706,22 @@ func (response QueryResponseV1) MarshalJSON() ([]byte, error) {
 	if err := response.validate(); err != nil {
 		return nil, err
 	}
-	if err := response.Cost.validate(); err != nil {
+	actualCost, err := response.Cost.canonicalActualCost()
+	if err != nil {
 		return nil, err
-	}
-	actualCost := response.Cost.ActualCostUSD
-	if actualCost != nil {
-		canonical, err := canonicalDecimalString(*actualCost)
-		if err != nil {
-			return nil, err
-		}
-		actualCost = &canonical
 	}
 	fields := map[string]any{"api_version": QueryAPIVersion, "operation_key": response.OperationKey, "query_execution_id": response.QueryExecutionID, "kind": response.Kind, "observed_at": response.ObservedAt, "source": response.Source, "freshness": response.Freshness, "complete": response.Complete, "result": response.Result, "cost_status": response.Cost.Status, "actual_cost_usd": actualCost}
 	if response.NextCursor != nil {
 		fields["next_cursor"] = *response.NextCursor
 	}
-	if response.Cost.Method != "" {
-		fields["cost_method"] = response.Cost.Method
-	}
-	if response.Cost.UnknownReason != "" {
-		fields["cost_unknown_reason_code"] = response.Cost.UnknownReason
-	}
+	setIfNotEmpty(fields, "cost_method", response.Cost.Method)
+	setIfNotEmpty(fields, "cost_unknown_reason_code", response.Cost.UnknownReason)
 	return marshalObject(fields)
 }
 
 func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "query_execution_id", "kind", "observed_at", "source", "freshness", "complete", "next_cursor", "result", "cost_status", "actual_cost_usd", "cost_method", "cost_unknown_reason_code")
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "query_execution_id", "kind", "observed_at", "source", "freshness", "complete", "next_cursor", "result", "cost_status", "actual_cost_usd", "cost_method", "cost_unknown_reason_code"); err != nil {
 		return err
 	}
 	version, key, err := decodeContractHeader(fields, QueryAPIVersion)
@@ -1986,92 +1732,53 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	kindValue, err := requiredString(fields, "kind")
+	kind, err := decodeQueryKind(fields)
 	if err != nil {
 		return err
 	}
-	kind := QueryKind(kindValue)
-	if !kind.valid() {
-		return fmt.Errorf("query kind %q is invalid", kind)
+	reader := fieldReader{fields: fields}
+	responseValue := QueryResponseV1{
+		APIVersion:       version,
+		OperationKey:     key,
+		QueryExecutionID: execution,
+		Kind:             kind,
+		ObservedAt:       reader.requiredString("observed_at"),
+		Source:           reader.requiredString("source"),
+		Freshness:        reader.requiredString("freshness"),
+		Complete:         reader.requiredBool("complete"),
 	}
-	observed, err := requiredString(fields, "observed_at")
-	if err != nil {
-		return err
+	resultRaw := reader.requireField("result")
+	if reader.err != nil {
+		return reader.err
 	}
-	source, err := requiredString(fields, "source")
-	if err != nil {
-		return err
-	}
-	freshness, err := requiredString(fields, "freshness")
-	if err != nil {
-		return err
-	}
-	complete, err := requiredBool(fields, "complete")
-	if err != nil {
-		return err
-	}
-	resultRaw, err := requireField(fields, "result")
-	if err != nil {
-		return err
-	}
-	var result QueryResult
 	switch kind {
 	case QueryProviderStatus:
-		var value ProviderStatusPage
-		err = json.Unmarshal(resultRaw, &value)
-		result = value
+		responseValue.Result, err = unmarshalQueryResult[ProviderStatusPage](resultRaw)
 	case QueryModelInventory:
-		var value ModelInventoryPage
-		err = json.Unmarshal(resultRaw, &value)
-		result = value
+		responseValue.Result, err = unmarshalQueryResult[ModelInventoryPage](resultRaw)
 	case QueryCreditStatus:
-		var value CreditStatusPage
-		err = json.Unmarshal(resultRaw, &value)
-		result = value
+		responseValue.Result, err = unmarshalQueryResult[CreditStatusPage](resultRaw)
 	case QueryBudgetStatus:
-		var value BudgetStatus
-		err = json.Unmarshal(resultRaw, &value)
-		result = value
+		responseValue.Result, err = unmarshalQueryResult[BudgetStatus](resultRaw)
 	case QuerySpendSummary:
-		var value SpendSummary
-		err = json.Unmarshal(resultRaw, &value)
-		result = value
+		responseValue.Result, err = unmarshalQueryResult[SpendSummary](resultRaw)
 	}
 	if err != nil {
 		return err
 	}
-	status, err := requiredString(fields, "cost_status")
-	if err != nil {
+	responseValue.Cost.Status = reader.requiredString("cost_status")
+	reader.requireField("actual_cost_usd")
+	readPresentField(&reader, "actual_cost_usd", &responseValue.Cost.ActualCostUSD, decodeActualCostUSD)
+	responseValue.Cost.Method = reader.optionalString("cost_method")
+	responseValue.Cost.UnknownReason = reader.optionalString("cost_unknown_reason_code")
+	if reader.err != nil {
+		return reader.err
+	}
+	if err := responseValue.Cost.validate(); err != nil {
 		return err
 	}
-	cost := CostV1{Status: status}
-	raw, err := requireField(fields, "actual_cost_usd")
-	if err != nil {
-		return err
-	}
-	if string(raw) != "null" {
-		value, err := requiredString(map[string]json.RawMessage{"actual_cost_usd": raw}, "actual_cost_usd")
-		if err != nil {
-			return err
-		}
-		canonical, err := canonicalDecimalString(value)
-		if err != nil {
-			return err
-		}
-		cost.ActualCostUSD = &canonical
-	}
-	if cost.Method, _, err = optionalString(fields, "cost_method"); err != nil {
-		return err
-	}
-	if cost.UnknownReason, _, err = optionalString(fields, "cost_unknown_reason_code"); err != nil {
-		return err
-	}
-	if err := cost.validate(); err != nil {
-		return err
-	}
-	responseValue := QueryResponseV1{APIVersion: version, OperationKey: key, QueryExecutionID: execution, Kind: kind, ObservedAt: observed, Source: source, Freshness: freshness, Complete: complete, Result: result, Cost: cost}
 	if raw, ok := fields["next_cursor"]; ok && string(raw) != "null" {
-		value, err := requiredString(map[string]json.RawMessage{"next_cursor": raw}, "next_cursor")
+		value, err := decodeStringField("next_cursor", raw)
 		if err != nil {
 			return err
 		}
@@ -2135,34 +1842,16 @@ func (response QueryResponseV1) validate() error {
 	}
 	switch response.Kind {
 	case QueryBudgetStatus:
-		budget, ok := response.Result.(BudgetStatus)
-		if !ok {
-			if pointer, pointerOK := response.Result.(*BudgetStatus); pointerOK && pointer != nil {
-				budget, ok = *pointer, true
-			}
-		}
-		if !ok {
-			return fmt.Errorf("budget status result has unexpected type")
-		}
-		if err := validateQueryTimestamp("budget active_at", budget.ActiveAt); err != nil {
-			return err
-		}
+		return validateTypedResult(response.Result, "budget status", func(budget BudgetStatus) error {
+			return validateQueryTimestamp("budget active_at", budget.ActiveAt)
+		})
 	case QuerySpendSummary:
-		spend, ok := response.Result.(SpendSummary)
-		if !ok {
-			if pointer, pointerOK := response.Result.(*SpendSummary); pointerOK && pointer != nil {
-				spend, ok = *pointer, true
+		return validateTypedResult(response.Result, "spend summary", func(spend SpendSummary) error {
+			if err := validateQueryTimestamp("spend start_time", spend.StartTime); err != nil {
+				return err
 			}
-		}
-		if !ok {
-			return fmt.Errorf("spend summary result has unexpected type")
-		}
-		if err := validateQueryTimestamp("spend start_time", spend.StartTime); err != nil {
-			return err
-		}
-		if err := validateQueryTimestamp("spend end_time", spend.EndTime); err != nil {
-			return err
-		}
+			return validateQueryTimestamp("spend end_time", spend.EndTime)
+		})
 	}
 	return nil
 }
@@ -2228,6 +1917,45 @@ func decodeContractHeader(fields map[string]json.RawMessage, apiVersion string) 
 		return "", "", err
 	}
 	return version, key, nil
+}
+
+// decodeContractContext reads the required v1 context object.
+func decodeContractContext(fields map[string]json.RawMessage) (RequestContext, error) {
+	raw, err := requireField(fields, "context")
+	if err != nil {
+		return RequestContext{}, err
+	}
+	return decodeRequestContextV1(raw)
+}
+
+// decodeParentHandle reads the optional, nullable parent checkpoint handle.
+// A handle that is not valid is reported as invalid.
+func decodeParentHandle(fields map[string]json.RawMessage, invalid string) (*CheckpointHandle, error) {
+	raw, ok := fields["parent"]
+	if !ok || string(raw) == "null" {
+		return nil, nil
+	}
+	value, err := decodeStringField("parent", raw)
+	if err != nil {
+		return nil, err
+	}
+	handle := CheckpointHandle(value)
+	if !handle.valid() {
+		return nil, errors.New(invalid)
+	}
+	return &handle, nil
+}
+
+// decodeCachePolicy decodes and validates a v1 cache policy.
+func decodeCachePolicy(data []byte) (*CachePolicyV1, error) {
+	var policy CachePolicyV1
+	if err := json.Unmarshal(data, &policy); err != nil {
+		return nil, err
+	}
+	if err := policy.validate(); err != nil {
+		return nil, err
+	}
+	return &policy, nil
 }
 
 // decodeRequiredJSON unmarshals the required field name into target.

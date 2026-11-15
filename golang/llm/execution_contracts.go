@@ -32,7 +32,7 @@ func (origin GenerationOriginV1) MarshalJSON() ([]byte, error) {
 }
 
 func (origin *GenerationOriginV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "parent"); err != nil {
+	if _, err := executionFields(data, "parent"); err != nil {
 		return err
 	}
 	type wire GenerationOriginV1
@@ -59,7 +59,7 @@ func (request PrepareExecutionV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(request))
 }
 func (request *PrepareExecutionV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "generate", "compact", "original_generate"); err != nil {
+	if _, err := executionFields(data, "generate", "compact", "original_generate"); err != nil {
 		return err
 	}
 	type wire PrepareExecutionV1
@@ -107,11 +107,8 @@ func (request ExecutionReferenceV1) MarshalJSON() ([]byte, error) {
 	return marshalObject(fields)
 }
 func (request *ExecutionReferenceV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "request_id", "context", "capability")
 	if err != nil {
-		return err
-	}
-	if err = checkUnknownFields(fields, "request_id", "context", "capability"); err != nil {
 		return err
 	}
 	id, err := requiredString(fields, "request_id")
@@ -125,11 +122,7 @@ func (request *ExecutionReferenceV1) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("execution capability is invalid")
 		}
 	}
-	raw, err := requireField(fields, "context")
-	if err != nil {
-		return err
-	}
-	caller, err := decodeRequestContextV1(raw)
+	caller, err := decodeContractContext(fields)
 	if err != nil {
 		return err
 	}
@@ -250,7 +243,8 @@ func (result ExecutionResultV1) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire(result))
 }
 func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "provider_status", "retryable", "generate", "compact", "capability"); err != nil {
+	fields, err := executionFields(data, "request_id", "kind", "state", "retry_after_seconds", "failure_code", "error_code", "dispatch", "provider_status", "retryable", "generate", "compact", "capability")
+	if err != nil {
 		return err
 	}
 	type wire ExecutionResultV1
@@ -259,10 +253,6 @@ func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	candidate := ExecutionResultV1(value)
-	fields, err := decodeObject(data)
-	if err != nil {
-		return err
-	}
 	forbidden := []string{}
 	if candidate.State != ExecutionBudgetWait && candidate.State != ExecutionCacheWait && candidate.State != ExecutionPending {
 		forbidden = append(forbidden, "retry_after_seconds")
@@ -318,18 +308,18 @@ func validExecutionCapability(value string) bool {
 	}
 	return true
 }
-func executionFields(data []byte, allowed ...string) error {
-	fields, err := decodeObject(data)
+
+// executionFields decodes a closed execution object whose members may not be
+// null and returns its fields.
+func executionFields(data []byte, allowed ...string) (map[string]json.RawMessage, error) {
+	fields, err := decodeClosedObject(data, allowed...)
 	if err != nil {
-		return err
-	}
-	if err := checkUnknownFields(fields, allowed...); err != nil {
-		return err
+		return nil, err
 	}
 	for _, value := range fields {
 		if string(value) == "null" {
-			return fmt.Errorf("execution fields cannot be null")
+			return nil, fmt.Errorf("execution fields cannot be null")
 		}
 	}
-	return nil
+	return fields, nil
 }

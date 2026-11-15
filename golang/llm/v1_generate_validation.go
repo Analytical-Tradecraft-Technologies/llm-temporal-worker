@@ -29,17 +29,8 @@ func validateGenerateRequestV1Bounds(request GenerateRequestV1) error {
 	if len(request.Append) > generateAppendMaxItems {
 		return fmt.Errorf("append contains %d items; maximum is %d", len(request.Append), generateAppendMaxItems)
 	}
-	for _, component := range []struct {
-		name  string
-		value string
-	}{
-		{name: "context.tenant", value: request.Context.Tenant},
-		{name: "context.project", value: request.Context.Project},
-		{name: "context.actor", value: request.Context.Actor},
-	} {
-		if err := validateCodePointLength(component.name, component.value, 1, generateContextMaxCodePoints); err != nil {
-			return err
-		}
+	if err := validateContextBoundsV1(request.Context); err != nil {
+		return err
 	}
 	if request.SettingsPatch.Model.Set != nil {
 		if err := validateCodePointLength("settings_patch.model.set", *request.SettingsPatch.Model.Set, 1, generateModelMaxCodePoints); err != nil {
@@ -55,13 +46,19 @@ func validateCompactRequestV1Bounds(request CompactRequestV1) error {
 	if err := validateCodePointLength("operation_key", request.OperationKey, 1, generateOperationKeyMaxCodePoints); err != nil {
 		return err
 	}
+	return validateContextBoundsV1(request.Context)
+}
+
+// validateContextBoundsV1 applies the v1 code-point bounds to the context's
+// tenant, project and actor.
+func validateContextBoundsV1(context RequestContext) error {
 	for _, component := range []struct {
 		name  string
 		value string
 	}{
-		{name: "context.tenant", value: request.Context.Tenant},
-		{name: "context.project", value: request.Context.Project},
-		{name: "context.actor", value: request.Context.Actor},
+		{name: "context.tenant", value: context.Tenant},
+		{name: "context.project", value: context.Project},
+		{name: "context.actor", value: context.Actor},
 	} {
 		if err := validateCodePointLength(component.name, component.value, 1, generateContextMaxCodePoints); err != nil {
 			return err
@@ -99,13 +96,13 @@ func validateCompactionPolicyPatchV1(raw json.RawMessage) error {
 	}
 	for name, want := range map[string]string{"version": "generic-2026-07-18", "prompt_version": "v1"} {
 		if value, ok := fields[name]; ok {
-			if text, err := requiredString(map[string]json.RawMessage{name: value}, name); err != nil || text != want {
+			if text, err := decodeStringField(name, value); err != nil || text != want {
 				return fmt.Errorf("compaction_policy.set.%s must be %q", name, want)
 			}
 		}
 	}
 	if value, ok := fields["summary_style"]; ok {
-		style, err := requiredString(map[string]json.RawMessage{"summary_style": value}, "summary_style")
+		style, err := decodeStringField("summary_style", value)
 		if err != nil || (style != "concise" && style != "balanced" && style != "detailed") {
 			return fmt.Errorf("compaction_policy.set.summary_style must be concise, balanced or detailed")
 		}
