@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	taskqueuepb "go.temporal.io/api/taskqueue/v1"
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -231,4 +233,75 @@ func TestLegacyExportCapabilityRecoveryIsBounded(t *testing.T) {
 	if exports != 0 || len(f.calls) != 4 {
 		t.Fatalf("exports = %d, calls = %v", exports, f.calls)
 	}
+}
+
+// The capability change IDs carry a per-check suffix, so a run records a new
+// version marker for every check that runs past its old history. The worst
+// case is a rolling deploy whose Activity workers predate the capability:
+// every re-preparation still returns none, so every reference step checks
+// again. Continue-As-New after maxStepsPerRun steps bounds that to one marker
+// per step, and the continued run starts again from suffix 1 (#1564).
+func TestCapabilityChangeIDsAreBoundedPerRun(t *testing.T) {
+	env := newWorkflowEnv()
+	changes := &versionRecorder{}
+	env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{changes}})
+	var input llm.PrepareExecutionV1
+	input.Generate = new(llm.GenerateRequestV1)
+	workflowJSON(t, "generate-root", input.Generate)
+	RegisterInternal(env, activity.PayloadLimits{})
+	pending := func() (*llm.ExecutionResultV1, error) {
+		return &llm.ExecutionResultV1{RequestID: testRequestID, Kind: "generate", State: llm.ExecutionPending, RetryAfterSeconds: 3}, nil
+	}
+	env.RegisterActivityWithOptions(func(context.Context, llm.PrepareExecutionV1) (*llm.ExecutionResultV1, error) { return pending() },
+		sdkactivity.RegisterOptions{Name: activity.PrepareActivityName})
+	env.RegisterActivityWithOptions(func(context.Context, llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) { return pending() },
+		sdkactivity.RegisterOptions{Name: activity.PollActivityName})
+	env.ExecuteWorkflow(RequestWorkflowName, input)
+	if !workflow.IsContinueAsNewError(env.GetWorkflowError()) {
+		t.Fatalf("error = %v, want Continue-As-New", env.GetWorkflowError())
+	}
+	seen, highest := map[string]bool{}, 0
+	for _, changeID := range changes.ids {
+		suffix, ok := strings.CutPrefix(changeID, requestCapabilityChange)
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(suffix)
+		if err != nil || seen[changeID] {
+			t.Fatalf("change ID %q is malformed or repeated", changeID)
+		}
+		seen[changeID], highest = true, max(highest, n)
+	}
+	if len(seen) != maxStepsPerRun || highest != maxStepsPerRun {
+		t.Fatalf("recorded %d capability change IDs up to suffix %d, want %d", len(seen), highest, maxStepsPerRun)
+	}
+}
+
+// versionRecorder records the change ID of every GetVersion call.
+type versionRecorder struct {
+	interceptor.WorkerInterceptorBase
+	ids []string
+}
+
+func (r *versionRecorder) InterceptWorkflow(_ workflow.Context, next interceptor.WorkflowInboundInterceptor) interceptor.WorkflowInboundInterceptor {
+	return &versionInbound{WorkflowInboundInterceptorBase: interceptor.WorkflowInboundInterceptorBase{Next: next}, recorder: r}
+}
+
+type versionInbound struct {
+	interceptor.WorkflowInboundInterceptorBase
+	recorder *versionRecorder
+}
+
+func (i *versionInbound) Init(outbound interceptor.WorkflowOutboundInterceptor) error {
+	return i.Next.Init(&versionOutbound{WorkflowOutboundInterceptorBase: interceptor.WorkflowOutboundInterceptorBase{Next: outbound}, recorder: i.recorder})
+}
+
+type versionOutbound struct {
+	interceptor.WorkflowOutboundInterceptorBase
+	recorder *versionRecorder
+}
+
+func (o *versionOutbound) GetVersion(ctx workflow.Context, changeID string, minSupported, maxSupported workflow.Version) workflow.Version {
+	o.recorder.ids = append(o.recorder.ids, changeID)
+	return o.Next.GetVersion(ctx, changeID, minSupported, maxSupported)
 }

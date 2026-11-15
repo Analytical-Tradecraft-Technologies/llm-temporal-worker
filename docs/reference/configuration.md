@@ -2031,6 +2031,10 @@ Versioning does not change the configured graceful shutdown deadline. Keep old
 worker versions available until Temporal reports them drained, then stop them
 within that deadline. Drain existing unversioned workflows before retiring an
 unversioned worker; enabling versioning does not migrate those executions.
+Versioning does not replace the `GetVersion` guards in workflow code. See
+[workflow versioning](workflow-versioning.md) for when each applies, the
+Temporal CLI promotion, ramp and rollback steps, and how to retire a version
+marker.
 
 ## Optional OpenAI Responses API
 
