@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 from urllib.parse import urlsplit
 
 
@@ -679,78 +679,37 @@ def command_annotate_scan(args: argparse.Namespace) -> None:
     write_json(Path(args.output), document)
 
 
+def add_command(
+    commands: Any, name: str, handler: Callable[[argparse.Namespace], None], *required: str
+) -> argparse.ArgumentParser:
+    """Register a subcommand whose listed ``--option`` flags are all required."""
+    command = commands.add_parser(name)
+    for option in required:
+        command.add_argument(f"--{option}", required=True)
+    command.set_defaults(handler=handler)
+    return command
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
 
-    gate = commands.add_parser("gate-summary")
-    gate.add_argument("--kind", required=True)
-    gate.add_argument("--input", required=True)
-    gate.add_argument("--output", required=True)
-    gate.set_defaults(handler=command_gate_summary)
-
-    diagnostics = commands.add_parser("gate-diagnostics")
-    diagnostics.add_argument("--input", required=True)
+    add_command(commands, "gate-summary", command_gate_summary, "kind", "input", "output")
+    diagnostics = add_command(commands, "gate-diagnostics", command_gate_diagnostics, "input")
     diagnostics.add_argument("--detail", action="store_true")
-    diagnostics.set_defaults(handler=command_gate_diagnostics)
-
-    fixture = commands.add_parser("fixture-manifest")
-    fixture.add_argument("--root", required=True)
-    fixture.add_argument("--output", required=True)
-    fixture.set_defaults(handler=command_fixture_manifest)
-
-    benchmark = commands.add_parser("benchmark-summary")
-    benchmark.add_argument("--kind", required=True)
-    benchmark.add_argument("--input", required=True)
-    benchmark.add_argument("--output", required=True)
-    benchmark.set_defaults(handler=command_benchmark_summary)
-
-    service = commands.add_parser("service-summary")
-    service.add_argument("--kind", required=True)
-    service.add_argument("--state", required=True)
-    service.add_argument("--health", required=True)
-    service.add_argument("--output", required=True)
-    service.set_defaults(handler=command_service_summary)
-
-    compose = commands.add_parser("compose-summary")
-    compose.add_argument("--output", required=True)
-    compose.set_defaults(handler=command_compose_summary)
-
-    log = commands.add_parser("redacted-log")
-    log.add_argument("--kind", required=True)
-    log.add_argument("--input", required=True)
-    log.add_argument("--output", required=True)
-    log.set_defaults(handler=command_redacted_log)
-
-    rendered = commands.add_parser("rendered-manifests")
+    add_command(commands, "fixture-manifest", command_fixture_manifest, "root", "output")
+    add_command(commands, "benchmark-summary", command_benchmark_summary, "kind", "input", "output")
+    add_command(commands, "service-summary", command_service_summary, "kind", "state", "health", "output")
+    add_command(commands, "compose-summary", command_compose_summary, "output")
+    add_command(commands, "redacted-log", command_redacted_log, "kind", "input", "output")
+    # --entry is registered before --output to keep the help text order.
+    rendered = add_command(commands, "rendered-manifests", command_rendered_manifests)
     rendered.add_argument("--entry", action="append", default=[])
     rendered.add_argument("--output", required=True)
-    rendered.set_defaults(handler=command_rendered_manifests)
-
-    dependencies = commands.add_parser("dependency-license")
-    dependencies.add_argument("--baseline", required=True)
-    dependencies.add_argument("--go-mod", required=True)
-    dependencies.add_argument("--output", required=True)
-    dependencies.set_defaults(handler=command_dependency_license)
-
-    vulnerabilities = commands.add_parser("vulnerability-results")
-    vulnerabilities.add_argument("--input", required=True)
-    vulnerabilities.add_argument("--output", required=True)
-    vulnerabilities.set_defaults(handler=command_vulnerability_results)
-
-    sbom = commands.add_parser("annotate-sbom")
-    sbom.add_argument("--input", required=True)
-    sbom.add_argument("--output", required=True)
-    sbom.add_argument("--reference", required=True)
-    sbom.add_argument("--digest", required=True)
-    sbom.set_defaults(handler=command_annotate_sbom)
-
-    scan = commands.add_parser("annotate-scan")
-    scan.add_argument("--input", required=True)
-    scan.add_argument("--output", required=True)
-    scan.add_argument("--reference", required=True)
-    scan.add_argument("--digest", required=True)
-    scan.set_defaults(handler=command_annotate_scan)
+    add_command(commands, "dependency-license", command_dependency_license, "baseline", "go-mod", "output")
+    add_command(commands, "vulnerability-results", command_vulnerability_results, "input", "output")
+    add_command(commands, "annotate-sbom", command_annotate_sbom, "input", "output", "reference", "digest")
+    add_command(commands, "annotate-scan", command_annotate_scan, "input", "output", "reference", "digest")
 
     return result
 
