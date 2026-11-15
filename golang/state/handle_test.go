@@ -71,9 +71,7 @@ func TestKeyringIssueRejectsEmptyTenantAndEntropyFailure(t *testing.T) {
 func mustKeyring(t testing.TB, keys []Key, reader io.Reader) *Keyring {
 	t.Helper()
 	keyring, err := NewKeyring(keys, reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return keyring
 }
 
@@ -96,18 +94,14 @@ func mustIssueVerified(t testing.TB, keyring *Keyring, tenant, keyID string) str
 	if !strings.HasPrefix(handle, "ctn_v1."+keyID+".") {
 		t.Fatalf("issued handle = %q, want primary key %s", handle, keyID)
 	}
-	if _, err := keyring.Verify(tenant, handle); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(keyring.Verify(tenant, handle)))
 	return handle
 }
 
 func mustIssue(t testing.TB, keyring *Keyring, tenant string) string {
 	t.Helper()
 	handle, err := keyring.Issue(tenant)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return handle
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"net/http"
 	"testing"
 
@@ -41,9 +42,7 @@ func TestBudgetDefaultOutputLimitSurvivesRecovery(t *testing.T) {
 			} else {
 				_, err = recovery.Generate(context.Background(), f.generate, binding)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			check(f.adapter.inputs[len(f.adapter.inputs)-1].Request)
 			if request.Output.MaxTokens != nil {
 				t.Fatal("caller request mutated")
@@ -65,9 +64,7 @@ func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 		var wire struct {
 			MaxOutputTokens int64 `json:"max_output_tokens"`
 		}
-		if err := json.Unmarshal(data, &wire); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, json.Unmarshal(data, &wire))
 		if wire.MaxOutputTokens != 16 || wire.MaxOutputTokens != planned.Estimate.OutputTokens {
 			t.Fatalf("wire limit %d differs from reservation %d", wire.MaxOutputTokens, planned.Estimate.OutputTokens)
 		}
@@ -76,9 +73,7 @@ func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 	binding := recoveryBinding(t, planned)
 	recovery := mustProviderRecovery(t, f.cap)
 	restored, err := recovery.Generate(context.Background(), f.generate, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	check(restored)
 	f.cap.BudgetEstimator.MaxOutput = 32
 	recovery = mustProviderRecovery(t, f.cap)
@@ -123,9 +118,7 @@ func TestBudgetDefaultOutputLimitIsCappedAtRouteCeilingThroughRecovery(t *testin
 			} else {
 				_, err = recovery.Generate(context.Background(), f.generate, binding)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			check(f.adapter.inputs[len(f.adapter.inputs)-1].Request)
 			if request.Output.MaxTokens != nil {
 				t.Fatal("caller request mutated")

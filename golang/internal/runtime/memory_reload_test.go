@@ -9,6 +9,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // Memory mode's state belongs to the process, not to one snapshot: a reload
@@ -38,9 +39,7 @@ func TestBuildMemoryKeepsProcessStateAcrossReloads(t *testing.T) {
 	build()
 	admissionStore, blobs, continuations, results := factory.memory.admission, factory.memory.blobs, factory.memory.continuations, factory.memory.results
 	begin := admission.BeginRequest{ID: "op", ScopeKey: "tenant/op", RequestDigest: admission.Digest([]byte("request")), LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)}
-	if _, err := admissionStore.Begin(context.Background(), begin); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(admissionStore.Begin(context.Background(), begin)))
 	build()
 	// The result store keeps the operation-to-locator index that replaying a
 	// completed operation needs; a BlobRef alone cannot rebuild it.

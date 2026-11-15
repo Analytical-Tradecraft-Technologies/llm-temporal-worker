@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -233,9 +234,7 @@ func parityCompactResponses() map[string]llm.CompactResponseV1 {
 func assertCodecRecordMatchesSchema[T any](t *testing.T, validate func([]byte) error, value T) {
 	t.Helper()
 	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	testassert.NoError(t, err, "marshal")
 	if err := validate(encoded); err != nil {
 		t.Fatalf("published schema rejects the Go-marshalled record: %v\n%s", err, encoded)
 	}
@@ -244,9 +243,7 @@ func assertCodecRecordMatchesSchema[T any](t *testing.T, validate func([]byte) e
 		t.Fatalf("Go decoder rejects its own record: %v\n%s", err, encoded)
 	}
 	again, err := json.Marshal(decoded)
-	if err != nil {
-		t.Fatalf("re-marshal: %v", err)
-	}
+	testassert.NoError(t, err, "re-marshal")
 	if !bytes.Equal(encoded, again) {
 		t.Fatalf("record changed on round trip\n got %s\nwant %s", again, encoded)
 	}
@@ -334,17 +331,11 @@ func TestV1PositiveFixturesMatchSchemaAndCodec(t *testing.T) {
 			}
 			compiled := readV1Schema(t, schemaName)
 			fixture := readV1Fixture(t, name)
-			if err := compiled.Validate(fixture); err != nil {
-				t.Fatalf("schema rejects fixture: %v", err)
-			}
+			testassert.NoError(t, compiled.Validate(fixture), "schema rejects fixture")
 			value := target()
-			if err := json.Unmarshal(fixture, value); err != nil {
-				t.Fatalf("Go codec rejects schema-valid fixture: %v", err)
-			}
+			testassert.NoError(t, json.Unmarshal(fixture, value), "Go codec rejects schema-valid fixture")
 			encoded, err := json.Marshal(value)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if err := compiled.Validate(encoded); err != nil {
 				t.Fatalf("schema rejects the re-marshalled fixture: %v\n%s", err, encoded)
 			}
@@ -360,9 +351,7 @@ func TestV1SchemasShareDefinitions(t *testing.T) {
 		var document struct {
 			Defs map[string]any `json:"$defs"`
 		}
-		if err := json.Unmarshal(readV1SchemaFile(t, name), &document); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, json.Unmarshal(readV1SchemaFile(t, name), &document))
 		return document.Defs
 	}
 	for _, test := range []struct {
@@ -416,21 +405,15 @@ func compileV1ExecutionSchema(t *testing.T, name string) func([]byte) error {
 	var target string
 	for _, resource := range []string{"generate-request", "compact-request", "generate-response", "compact-response", "prepare-execution", "execution-result"} {
 		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(readV1SchemaFile(t, resource+".schema.json")))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		id := document.(map[string]any)["$id"].(string)
-		if err := compiler.AddResource(id, document); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, compiler.AddResource(id, document))
 		if resource+".schema.json" == name {
 			target = id
 		}
 	}
 	compiled, err := compiler.Compile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return func(instance []byte) error {
 		value, err := jsonschema.UnmarshalJSON(bytes.NewReader(instance))
 		if err != nil {

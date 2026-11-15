@@ -18,6 +18,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
@@ -136,14 +137,10 @@ func TestCloudWorkflowCacheHitLatency(t *testing.T) {
 		t.Fatalf("cold runs made %d provider calls, want %d", calls, cold)
 	}
 	data, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Logf("cache hit latency report:\n%s", data)
 	if out := os.Getenv("LLMTW_CACHE_BENCH_OUT"); out != "" {
-		if err := os.WriteFile(out, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.WriteFile(out, data, 0o600))
 	}
 }
 
@@ -223,9 +220,7 @@ func (h *liveCloudWorkflow) breakDown(t *testing.T, run *cacheBenchRun) {
 		iterator := h.client.GetWorkflowHistory(h.ctx, id, runID, false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 		for iterator.HasNext() {
 			event, err := iterator.Next()
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			events = append(events, event)
 		}
 		scheduled := map[int64]time.Time{}
@@ -380,9 +375,7 @@ func (h *liveCloudWorkflow) childTypes(t *testing.T, id string) []string {
 	iterator := h.client.GetWorkflowHistory(h.ctx, id, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	for iterator.HasNext() {
 		event, err := iterator.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if attributes := event.GetChildWorkflowExecutionStartedEventAttributes(); attributes != nil {
 			types = append(types, attributes.GetWorkflowType().GetName())
 		}
@@ -406,9 +399,7 @@ func TestCloudWorkflowResolvedCacheSemantics(t *testing.T) {
 		t.Helper()
 		id := h.queue + "-" + uuid.NewString()
 		execution, err := h.client.ExecuteWorkflow(h.ctx, client.StartWorkflowOptions{ID: id, TaskQueue: h.queue, WorkflowExecutionTimeout: 2 * time.Minute}, workflows.GenerateWorkflowName, request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		var response llm.GenerateResponseV1
 		err = execution.Get(h.ctx, &response)
 		return response, h.childTypes(t, id), err

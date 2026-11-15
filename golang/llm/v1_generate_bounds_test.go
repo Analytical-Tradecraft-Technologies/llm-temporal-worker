@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -42,9 +43,7 @@ func TestGenerateRequestV1AcceptsSchemaBoundaries(t *testing.T) {
 			test.mutate(&request)
 
 			encoded, err := json.Marshal(request)
-			if err != nil {
-				t.Fatalf("Marshal() rejected a valid boundary: %v", err)
-			}
+			testassert.NoError(t, err, "Marshal() rejected a valid boundary")
 			mustUnmarshal[llm.GenerateRequestV1](t, encoded, "Unmarshal() rejected a valid boundary")
 		})
 	}

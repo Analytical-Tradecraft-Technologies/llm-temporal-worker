@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -54,9 +55,7 @@ func TestCompileSequentialToolUsePolicy(t *testing.T) {
 				lifted, err := adapter.liftResponse(call, &bedrockruntime.ConverseOutput{
 					Output:     &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "answer"}}}},
 					StopReason: types.StopReasonEndTurn, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if call.Metadata.SequentialToolUseDropped {
 					if len(lifted.Diagnostics) != 1 || lifted.Diagnostics[0].Code != "tool_policy_parallel_dropped" || lifted.Diagnostics[0].Severity != llm.DiagnosticWarning {
 						t.Fatalf("%s best effort: diagnostics = %#v", name, lifted.Diagnostics)

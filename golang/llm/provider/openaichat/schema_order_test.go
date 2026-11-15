@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -22,9 +23,7 @@ func sendSchemaRequest(t *testing.T, toolSchema, outputSchema string) []byte {
 			sent, _ = io.ReadAll(request.Body)
 			return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"chatcmpl-1","object":"chat.completion","created":1700000000,"model":"chat-model","choices":[]}`), nil
 		})}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter := testAdapter(t)
 	adapter.client = client
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
@@ -34,9 +33,7 @@ func sendSchemaRequest(t *testing.T, toolSchema, outputSchema string) []byte {
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(outputSchema)}}},
 		Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// The canned response is empty; only the request matters.
 	_, _ = adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	return sent
@@ -62,9 +59,7 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 			} `json:"function"`
 		} `json:"tools"`
 	}
-	if err := json.Unmarshal(sent, &requestBody); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(sent, &requestBody))
 	if len(requestBody.Tools) != 1 {
 		t.Fatalf("tool schema missing: %s", sent)
 	}

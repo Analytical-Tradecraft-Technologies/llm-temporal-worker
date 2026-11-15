@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/google/uuid"
 )
@@ -30,20 +31,14 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 	rootID := CheckpointID("root")
 	childID := CheckpointID("child")
 	rootDelta, err := codec.EncodeDelta([]llm.Item{llm.HumanText("root")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	encoded := mustEncoded(t)
 	rootResponse := encoded(codec.EncodeResponse(nil))
 	rootPatch := encoded(codec.EncodeSettingsPatch(strictRootSettingsPatch()))
 	childDelta, err := codec.EncodeDelta([]llm.Item{llm.HumanText("child")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	childResponse, err := codec.EncodeResponse([]llm.Item{llm.ModelText("answer")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	childPatch := encoded(codec.EncodeSettingsPatch(SettingsPatch{}))
 	rootRefs := durableMaterializePutBlobs(reader, rootDelta, rootResponse, rootPatch)
 	childRefs := durableMaterializePutBlobs(reader, childDelta, childResponse, childPatch)
@@ -65,9 +60,7 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 func mustEncoded(t testing.TB) func([]byte, error) []byte {
 	return func(data []byte, err error) []byte {
 		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return data
 	}
 }
@@ -96,9 +89,7 @@ func durableMaterializePutBlobs(reader *durableMaterializeBlobReader, values ...
 func TestDurableCheckpointMaterializerReplaysScopedRows(t *testing.T) {
 	fixture := newDurableMaterializeFixture(t)
 	got, err := fixture.materializer().Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.Handle != Handle(fixture.childID) || got.Tenant != "scope-a" || got.Depth != 1 || len(got.Items) != 3 {
 		t.Fatalf("materialized state = %#v", got)
 	}
@@ -113,14 +104,10 @@ func TestDurableCheckpointMaterializerReplaysScopedRows(t *testing.T) {
 func TestDurableCheckpointMaterializerVerifiesOpaqueHandleAndScope(t *testing.T) {
 	fixture := newDurableMaterializeFixture(t)
 	keyring, err := NewKeyring([]Key{{ID: "key-1", Secret: []byte("01234567890123456789012345678901"), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	checkpointUUID := uuidLikeCheckpointID(fixture.childID)
 	handle, err := keyring.IssueCheckpointHandle("scope-a", checkpointUUID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	verified, err := keyring.VerifyCheckpointHandle(context.Background(), "scope-a", handle)
 	if err != nil || verified != checkpointUUID {
 		t.Fatalf("verified checkpoint ID = %q, %v; want %q", verified, err, checkpointUUID)

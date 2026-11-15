@@ -10,6 +10,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
@@ -29,13 +30,13 @@ func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
 				return store.Complete(ctx, lease, completion)
 			}
 			table.hook = failTableWrites("replace", "/cache/fill/", nil, contracts.ErrOutcomeUnknown)
-			requireErrorIs(t, finish(r.ResponseFills()), contracts.ErrOutcomeUnknown, "")
+			testassert.ErrorIs(t, finish(r.ResponseFills()), contracts.ErrOutcomeUnknown)
 			table.hook = nil
 			next := lease
 			next.Attempt, next.AcquiredAt, next.ExpiresAt = "replacement", entry.CompletedAt.Add(time.Second), entry.CompletedAt.Add(time.Minute)
 			// Takeover must preserve the terminal witness before changing head.
 			table.hook = failTableWrites("", "/cache/fill-receipt/", contracts.ErrUnavailable, nil)
-			requireErrorIs(t, errOf(r.ResponseFills().Acquire(ctx, next, next.AcquiredAt)), contracts.ErrUnavailable, "takeover discarded receipt")
+			testassert.ErrorIs(t, testassert.Err(r.ResponseFills().Acquire(ctx, next, next.AcquiredAt)), contracts.ErrUnavailable, "takeover discarded receipt")
 			table.hook = nil
 			mustAcquireFill(t, r.ResponseFills(), next, cache.FillOwned)
 			mustStartFill(t, r.ResponseFills(), next, next.AcquiredAt)
@@ -46,7 +47,7 @@ func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
 			mustAcquireFill(t, r.ResponseFills(), lease, cache.FillAttemptFinished)
 			changed := lease
 			changed.OperationID = "different-operation"
-			requireErrorIs(t, errOf(r.ResponseFills().Acquire(ctx, changed, changed.AcquiredAt)), contracts.ErrConflict, "reused completed attempt identity")
+			testassert.ErrorIs(t, testassert.Err(r.ResponseFills().Acquire(ctx, changed, changed.AcquiredAt)), contracts.ErrConflict, "reused completed attempt identity")
 		})
 	}
 }
@@ -57,18 +58,18 @@ func TestCloudFillWaitsForCachePublicationAndPreservesOldSuccess(t *testing.T) {
 	mustAcquireFill(t, r.ResponseFills(), lease, cache.FillOwned)
 	mustStartFill(t, r.ResponseFills(), lease, lease.AcquiredAt)
 	table.hook = failTableWrites("", "/cache/success/", contracts.ErrUnavailable, nil)
-	requireErrorIs(t, r.Responses().Publish(ctx, entry), contracts.ErrUnavailable, "")
+	testassert.ErrorIs(t, r.Responses().Publish(ctx, entry), contracts.ErrUnavailable)
 	table.hook = nil
 	completion := cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: entry.CompletedAt}
-	requireErrorIs(t, r.ResponseFills().Complete(ctx, lease, completion), contracts.ErrConflict, "finished before visible publication")
+	testassert.ErrorIs(t, r.ResponseFills().Complete(ctx, lease, completion), contracts.ErrConflict, "finished before visible publication")
 	mustAcquireFill(t, r.ResponseFills(), lease, cache.FillRecoveryNeeded)
 	mustPublishResponse(t, r, entry)
-	mustNoError(t, r.ResponseFills().Complete(ctx, lease, completion))
+	testassert.NoError(t, r.ResponseFills().Complete(ctx, lease, completion))
 	next := lease
 	next.Attempt, next.AcquiredAt, next.ExpiresAt = "failed-refresh", entry.CompletedAt.Add(time.Second), entry.CompletedAt.Add(time.Minute)
 	mustAcquireFill(t, r.ResponseFills(), next, cache.FillOwned)
 	mustStartFill(t, r.ResponseFills(), next, next.AcquiredAt)
-	mustNoError(t, r.ResponseFills().Complete(ctx, next, cache.FillCompletion{Outcome: cache.FillFailed, CompletedAt: next.ExpiresAt}))
+	testassert.NoError(t, r.ResponseFills().Complete(ctx, next, cache.FillCompletion{Outcome: cache.FillFailed, CompletedAt: next.ExpiresAt}))
 	requireResponseHit(t, r, entry, next.ExpiresAt, "failure invalidated success")
 }
 
@@ -87,7 +88,7 @@ func TestCloudFillCompletionRejectsOtherOrigins(t *testing.T) {
 		mutate(&lease)
 		mustAcquireFill(t, r.ResponseFills(), lease, cache.FillOwned)
 		mustStartFill(t, r.ResponseFills(), lease, lease.AcquiredAt)
-		requireErrorIs(t, r.ResponseFills().Complete(ctx, lease, cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: lease.ExpiresAt}), ErrInvalid, "bound wrong origin")
+		testassert.ErrorIs(t, r.ResponseFills().Complete(ctx, lease, cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: lease.ExpiresAt}), ErrInvalid, "bound wrong origin")
 	}
 }
 
@@ -123,6 +124,6 @@ func TestCloudFillMalformedStateAndBoundedContention(t *testing.T) {
 	table.hook = nil
 	store := r.ResponseFills().(*cacheFills)
 	bad := cache.FillRecord{Lease: lease, State: "invented", UpdatedAt: lease.AcquiredAt}
-	mustNoError(t, store.write(ctx, bad, ""))
-	requireErrorIs(t, errOf(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "unknown stored state")
+	testassert.NoError(t, store.write(ctx, bad, ""))
+	testassert.ErrorIs(t, testassert.Err(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "unknown stored state")
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/contractkit"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -248,9 +249,7 @@ func TestReleaseEvidenceLayoutDigestRejectsFilesAndUnsafeDirectoryPaths(t *testi
 		target := filepath.Join(t.TempDir(), "image.oci")
 		writeReleaseEvidenceOCILayout(t, target)
 		path := filepath.Join(t.TempDir(), "image.oci")
-		if err := os.Symlink(target, path); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.Symlink(target, path))
 
 		output, err := runReleaseEvidenceLayoutDigest(root, path)
 		assertCommandRejected(t, output, err, "layout digest accepted a symlinked OCI directory", "real directory", "symlinked OCI directory")
@@ -277,9 +276,7 @@ func TestReleaseEvidenceLayoutDigestRejectsUnsafeOrUnboundDirectoryEntries(t *te
 			name: "nested blob symlink",
 			mutate: func(t *testing.T, path string) {
 				t.Helper()
-				if err := os.Symlink("missing-blob", filepath.Join(path, "blobs", "sha256", "nested-link")); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.Symlink("missing-blob", filepath.Join(path, "blobs", "sha256", "nested-link")))
 			},
 			failure: "contains a symlink",
 		},
@@ -448,9 +445,7 @@ func TestReleaseEvidenceCollectorEnforcesCanonicalProvenanceURLPolicy(t *testing
 							"source":  test.url,
 						}},
 					})
-					if marshalErr != nil {
-						t.Fatal(marshalErr)
-					}
+					testassert.NoError(t, marshalErr)
 					writeReleaseArtifact(t, baselinePath, baseline)
 					writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/module","Version":"v1.2.3"}]}`))
 					outputPath = filepath.Join(directory, "dependencies.json")
@@ -565,9 +560,7 @@ func TestReleaseEvidenceCollectorRejectsRetainedOrSymlinkedOCIDirectoryDestinati
 			prepare: func(t *testing.T, _ string) string {
 				t.Helper()
 				layoutPath := filepath.Join(t.TempDir(), "image.oci")
-				if err := os.Symlink(filepath.Join(t.TempDir(), "missing-image.oci"), layoutPath); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "missing-image.oci"), layoutPath))
 				return layoutPath
 			},
 			want: "path must not already exist",
@@ -911,9 +904,7 @@ func TestReleaseEvidenceVerifierRejectsDuplicateJSONMembers(t *testing.T) {
 		bundle := writeReleaseEvidenceBundle(t, false)
 		path := filepath.Join(bundle.directory, "evidence.json")
 		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		ambiguous := append([]byte(`{"schema_version":1,`), bytes.TrimPrefix(data, []byte{'{'})...)
 		writeReleaseArtifact(t, path, ambiguous)
 
@@ -1006,12 +997,8 @@ func TestReleaseEvidenceVerifierRejectsEscapingAndSymlinkedArtifacts(t *testing.
 				data := []byte(`{"status":"outside"}`)
 				writeReleaseArtifact(t, outside, data)
 				path := filepath.Join(directory, "test-summary.json")
-				if err := os.Remove(path); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(outside, path); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.Remove(path))
+				testassert.NoError(t, os.Symlink(outside, path))
 				artifact := evidence["artifacts"].(map[string]any)["test_summary"].(map[string]any)
 				artifact["bytes"] = len(data)
 				artifact["sha256"] = sha256Hex(data)
@@ -1221,9 +1208,7 @@ func TestReleaseEvidenceVerifierScansEveryRetainedArtifact(t *testing.T) {
 			sentinel := "api_key=retained-" + strings.ReplaceAll(name, "_", "-") + "-secret-0123456789"
 			path := filepath.Join(bundle.directory, releaseEvidenceArtifactPaths[name])
 			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			replaceReleaseEvidenceArtifact(t, bundle, evidence, name, append(data, []byte("\n"+sentinel)...))
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
@@ -1240,9 +1225,7 @@ func TestReleaseEvidenceVerifierRejectsNoncanonicalEvidencePath(t *testing.T) {
 	directory := resolvedReleaseEvidenceDirectory(t, bundle.directory)
 	renamedPath := filepath.Join(directory, "nested", "evidence.json")
 	makeDirectory(t, 0o700, filepath.Dir(renamedPath))
-	if err := os.Rename(filepath.Join(directory, "evidence.json"), renamedPath); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Rename(filepath.Join(directory, "evidence.json"), renamedPath))
 
 	command := exec.Command(
 		"bash", filepath.Join(root, "scripts", "release", "verify.sh"),
@@ -1332,9 +1315,7 @@ func TestReleaseEvidenceRecorderRejectsSymlinkedOutputParent(t *testing.T) {
 	directory := resolvedReleaseEvidenceDirectory(t, bundle.directory)
 	outside := makeDirectory(t, 0o700, filepath.Dir(directory), "outside-output")
 	link := filepath.Join(directory, "escaped")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Symlink(outside, link))
 
 	output, err := runReleaseEvidenceRecorder(root, directory, filepath.Join(link, "evidence.json"), bundle)
 	assertCommandRejected(t, output, err, "release evidence recorder accepted a symlinked output parent", "symlink", "symlinked output")
@@ -1513,9 +1494,7 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 				assertPathAbsent(t, outputPath, "benchmark collector retained output "+retained)
 			}
 
-			if err := os.Remove(outputPath); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Remove(outputPath))
 			assertRejected(input+"BenchmarkV1ActivitiesAdmissionMemory"+suffix+" 1 1 ns/op 1 p99_ms/op\n",
 				"multiple measurements", "after rejecting multiple measurements")
 			// Output of the legacy engine benchmark is not the v1
@@ -1599,9 +1578,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		path := releaseEvidenceArtifactPaths[name]
 		writeReleaseArtifact(t, filepath.Join(directory, path), []byte(contents[name]))
 		data, err := os.ReadFile(filepath.Join(directory, path))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		evidenceArtifacts[name] = map[string]any{
 			"path":     path,
 			"bytes":    len(data),
@@ -1813,9 +1790,7 @@ func writeReleaseEvidenceFixtureMetadata(t *testing.T, fixtureRoot, metadata str
 func assertNoTemporaryEvidence(t *testing.T, outputPath string) {
 	t.Helper()
 	temporary, err := filepath.Glob(outputPath + ".tmp-*")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(temporary) != 0 {
 		t.Fatalf("recorder left temporary evidence files: %v", temporary)
 	}
@@ -1925,9 +1900,7 @@ func writeReleaseArtifact(t *testing.T, path string, data []byte) {
 func marshalJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -2009,17 +1982,13 @@ func writeUnrecordedReleaseEvidenceBundle(t *testing.T, criticalFinding bool) (r
 	t.Helper()
 	bundle := writeReleaseEvidenceBundle(t, criticalFinding)
 	directory := resolvedReleaseEvidenceDirectory(t, bundle.directory)
-	if err := os.Remove(filepath.Join(directory, "evidence.json")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Remove(filepath.Join(directory, "evidence.json")))
 	return bundle, directory
 }
 
 func resolvedReleaseEvidenceDirectory(t *testing.T, directory string) string {
 	t.Helper()
 	resolved, err := filepath.EvalSymlinks(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return resolved
 }

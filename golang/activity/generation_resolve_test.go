@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -93,9 +94,7 @@ func TestResolveGenerationReturnsOnlyCompletedPreparation(t *testing.T) {
 			}
 			runtime := &resolveRuntime{plan: tc.plan, prepare: tc.prepare}
 			resolution, err := (&Activities{V1Runtime: runtime}).ResolveGenerationV1(context.Background(), request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !reflect.DeepEqual(resolution.Plan, tc.plan) || len(runtime.prepared) != tc.prepares || (resolution.Result != nil) != tc.resolved {
 				t.Fatalf("resolution = %+v after %d preparations", resolution, len(runtime.prepared))
 			}
@@ -106,9 +105,7 @@ func TestResolveGenerationReturnsOnlyCompletedPreparation(t *testing.T) {
 				}
 			}
 			if tc.resolved {
-				if _, err := resolution.MarshalJSON(); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(resolution.MarshalJSON()))
 			}
 		})
 	}

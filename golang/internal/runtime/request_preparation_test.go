@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -67,9 +68,7 @@ func TestPrepareGenerateInputInheritsAndAppliesSparseSettings(t *testing.T) {
 	request.SettingsPatch.Instructions.Set = preparationPointer([]llm.Instruction{{Text: "replacement"}})
 	request.SettingsPatch.Temperature.Set = preparationPointer(llm.DecimalV1("0.100000000000000001"))
 	prepared, err := PrepareGenerateInput(context.Background(), request, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := prepared.Request
 	if got.APIVersion != llm.APIVersion || got.OperationKey != request.OperationKey || !reflect.DeepEqual(got.Context, request.Context) || got.Model != "new-model" || got.Continuation != nil {
 		t.Fatalf("lost request identity or invented provider continuation: %+v", got)
@@ -171,9 +170,7 @@ func TestPrepareGenerateInputRejectsCorruptReplayAndInvalidDelta(t *testing.T) {
 			}
 			_, err := PrepareGenerateInput(ctx, request, replay)
 			if name == "canceled" {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled)
 			} else {
 				assertPreparationError(t, err, code)
 			}
@@ -186,9 +183,7 @@ func TestPreparedInputCopiesMutableApplicationAndTranscriptValues(t *testing.T) 
 	request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"value":1}`)}}}}
 	request.SettingsPatch.Tools.Set = preparationPointer([]llm.Tool{{Name: "patched", InputSchema: json.RawMessage(`{"type":"object"}`)}})
 	prepared, err := PrepareGenerateInput(context.Background(), request, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	prepared.Request.Tools[0].InputSchema[0] = '['
 	prepared.Request.Extensions["example"][0] = '['
 	prepared.Request.Input[2].(llm.Message).Content[0].(llm.JSONPart).Value[0] = '['
@@ -293,9 +288,7 @@ func TestDecodeCompactionPolicyAcceptsPublishedFixture(t *testing.T) {
 		t.Fatal("fixture omitted the compaction policy")
 	}
 	policy, err := decodeCompactionPolicy(*request.SettingsPatch.CompactionPolicy.Set)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := compaction.Policy{
 		Version: compaction.PolicyVersion, PromptVersion: compaction.PromptVersion,
 		SummaryStyle: compaction.SummaryDetailed, TriggerTokens: 50000, TargetTokens: 40000,
@@ -336,9 +329,7 @@ func TestPrepareCompactInputRejectsMismatchedAndResolvedReplay(t *testing.T) {
 			}
 			_, err := PrepareCompactInput(ctx, request, replay)
 			if name == "canceled" {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled)
 			} else {
 				assertPreparationError(t, err, code)
 			}
@@ -388,9 +379,7 @@ func TestResponseCachePlannerReceivesEffectiveHistoryAndSettings(t *testing.T) {
 		}
 		return f.genLease, nil
 	}
-	if _, err := f.helper.Generate(context.Background(), f.gen, f.genReplay); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(f.helper.Generate(context.Background(), f.gen, f.genReplay)))
 	_, generation, compact := preparationFixture()
 	compact.Cache = &llm.CachePolicyV1{MaxAgeSeconds: 60}
 	compact.Policy = json.RawMessage(`{"summary_style":"concise","target_tokens":1000}`)
@@ -400,9 +389,7 @@ func TestResponseCachePlannerReceivesEffectiveHistoryAndSettings(t *testing.T) {
 		}
 		return f.compLease, nil
 	}
-	if _, err := f.helper.Compact(context.Background(), compact, durable.CompactReplay{State: generation.State}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(f.helper.Compact(context.Background(), compact, durable.CompactReplay{State: generation.State})))
 }
 
 func TestPrepareInputsConcurrentInvocationsDoNotShareMutableState(t *testing.T) {
@@ -454,15 +441,11 @@ func TestPrepareGenerateInputRejectsUndecodableCompactionPolicy(t *testing.T) {
 				assertPreparationError(t, err, provider.CodeInvalidArgument)
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			// An accepted policy must remain usable by a descendant's plan.
 			child := durable.CompactReplay{State: replay.State}
 			child.State.Settings = prepared.Settings
-			if _, err := PrepareCompactInput(context.Background(), compact, child); err != nil {
-				t.Fatalf("descendant compaction rejected an accepted policy: %v", err)
-			}
+			testassert.NoError(t, testassert.Err(PrepareCompactInput(context.Background(), compact, child)), "descendant compaction rejected an accepted policy")
 		})
 	}
 }
@@ -485,7 +468,5 @@ func TestPrepareGenerateInputRejectsBlobReferencedMediaAsUnsupported(t *testing.
 	}
 	request, replay, _ := preparationFixture()
 	request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{Bytes: []byte{0x89, 'P', 'N', 'G'}, MediaType: "image/png"}}}}
-	if _, err := PrepareGenerateInput(context.Background(), request, replay); err != nil {
-		t.Fatalf("inline image rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(PrepareGenerateInput(context.Background(), request, replay)), "inline image rejected")
 }

@@ -37,12 +37,8 @@ func TestMutationOverlaySmoke(t *testing.T) {
 	}`)
 	mutant := fixtureMutation()
 
-	if err := runInvariant(root, "go", mutant); err != nil {
-		t.Fatalf("runInvariant() = %v", err)
-	}
-	if err := killMutant(root, "go", mutant); err != nil {
-		t.Fatalf("killMutant() = %v", err)
-	}
+	testassert.NoError(t, runInvariant(root, "go", mutant), "runInvariant()")
+	testassert.NoError(t, killMutant(root, "go", mutant), "killMutant()")
 
 	t.Run("surviving mutation is rejected", func(t *testing.T) {
 		surviving := mutant
@@ -88,9 +84,7 @@ func fixtureMutation() mutation {
 func writeMutationFixture(t *testing.T, testBody string) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "contract"), 0o700); err != nil {
-		t.Fatalf("MkdirAll() = %v", err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Join(root, "contract"), 0o700), "MkdirAll()")
 	files := map[string]string{
 		"go.mod":                    "module example.test\n\ngo 1.26\n",
 		"contract/contract.go":      "package contract\n\nfunc Allows() bool {\n\treturn true\n}\n",

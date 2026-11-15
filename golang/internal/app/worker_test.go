@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
@@ -126,9 +127,7 @@ func resumeWorkerAfterDrain(t *testing.T, temporalWorker *app.TemporalWorker, de
 // mustStartWorker starts temporalWorker, failing the test on an error.
 func mustStartWorker(t *testing.T, temporalWorker *app.TemporalWorker) {
 	t.Helper()
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, temporalWorker.Start())
 }
 
 // runInBackground runs call on a new goroutine and returns a channel closed
@@ -227,9 +226,7 @@ func queueAWorkerOptions(health *httpserver.HealthState, newController func(work
 func mustNewWorker(t *testing.T, options app.WorkerOptions) *app.TemporalWorker {
 	t.Helper()
 	temporalWorker, err := app.NewWorker(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return temporalWorker
 }
 
@@ -352,9 +349,7 @@ func TestWorkerResumeRebuildsControllerAfterStartFailure(t *testing.T) {
 	temporalWorker := mustNewWorker(t, options)
 	t.Cleanup(func() { temporalWorker.Stop() })
 
-	if err := temporalWorker.Start(); !errors.Is(err, startErr) {
-		t.Fatalf("Start() error = %v, want %v", err, startErr)
-	}
+	testassert.ErrorIs(t, temporalWorker.Start(), startErr, "Start()")
 	if failed.stopCalls.Load() != 1 {
 		t.Fatalf("failed controller stop calls = %d, want 1", failed.stopCalls.Load())
 	}
@@ -417,9 +412,7 @@ func TestWorkerResumeWaitsForFailedStartCleanup(t *testing.T) {
 	}
 
 	release()
-	if err := <-started; !errors.Is(err, startErr) {
-		t.Fatalf("Start() error = %v, want %v", err, startErr)
-	}
+	testassert.ErrorIs(t, <-started, startErr, "Start()")
 	if err := temporalWorker.Resume(); err != nil {
 		t.Fatalf("Resume() after cleanup error = %v, want nil", err)
 	}
@@ -444,9 +437,7 @@ func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
 	requireStillRunning(t, stopped, "Stop returned before failed controller cleanup completed")
 
 	release()
-	if err := <-started; !errors.Is(err, startErr) {
-		t.Fatalf("Start() error = %v, want %v", err, startErr)
-	}
+	testassert.ErrorIs(t, <-started, startErr, "Start()")
 	waitForWorkerEvent(t, stopped, "Stop after failed controller cleanup")
 	if failed.stopCalls.Load() != 1 {
 		t.Fatalf("failed controller stop calls = %d, want 1", failed.stopCalls.Load())
@@ -480,9 +471,7 @@ func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
 func workerPollingGauge(t *testing.T, metrics *observability.Metrics) float64 {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() == "llmtw_worker_polling" && len(family.GetMetric()) == 1 {
 			return family.GetMetric()[0].GetGauge().GetValue()
@@ -509,9 +498,7 @@ func (worker *fatalWorker) fail(err error) {
 func TestWorkerFatalSDKStopClearsReadinessAndResumeRebuildsController(t *testing.T) {
 	health := httpserver.NewHealthState()
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var mu sync.Mutex
 	controllers := make([]*fatalWorker, 0, 2)
 	options := queueAWorkerOptions(health, func(options worker.Options) app.WorkerController {
@@ -607,9 +594,7 @@ func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 
 	stopped := runInBackground(temporalWorker.Stop)
 	requireStillRunning(t, stopped, "permanent Stop returned before the owned pause drain completed")
-	if err := temporalWorker.Resume(); !errors.Is(err, app.ErrWorkerStopping) {
-		t.Fatalf("Resume while stopping = %v, want ErrWorkerStopping", err)
-	}
+	testassert.ErrorIs(t, temporalWorker.Resume(), app.ErrWorkerStopping, "Resume while stopping")
 	if first.stopCalls.Load() != 1 {
 		t.Fatalf("pause drain was stopped %d times", first.stopCalls.Load())
 	}
@@ -644,9 +629,7 @@ func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t
 	releaseStartGate()
 	select {
 	case err := <-started:
-		if err != nil {
-			t.Fatalf("Start after Pause = %v", err)
-		}
+		testassert.NoError(t, err, "Start after Pause")
 	case <-time.After(time.Second):
 		t.Fatal("Start waited for the paused controller's graceful drain")
 	}
@@ -689,9 +672,7 @@ func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
 		case <-buildEntered:
 			resumeDone = attempt
 		case err := <-attempt:
-			if !errors.Is(err, app.ErrWorkerDraining) {
-				t.Fatalf("Resume before build = %v, want ErrWorkerDraining", err)
-			}
+			testassert.ErrorIs(t, err, app.ErrWorkerDraining, "Resume before build")
 		case <-time.After(time.Second):
 			t.Fatal("timed out waiting for replacement build")
 		}
@@ -701,16 +682,12 @@ func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
 	// completed Resume must leave the newly built controller detached.
 	temporalWorker.Pause()
 	releaseBuildGate()
-	if err := <-resumeDone; err != nil {
-		t.Fatalf("Resume after Pause during build = %v", err)
-	}
+	testassert.NoError(t, <-resumeDone, "Resume after Pause during build")
 	if builtWhilePaused.started.Load() || health.Ready() || temporalWorker.Started() {
 		t.Fatalf("uncommitted build started=%v ready=%v worker-started=%v", builtWhilePaused.started.Load(), health.Ready(), temporalWorker.Started())
 	}
 
-	if err := temporalWorker.Resume(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, temporalWorker.Resume())
 	if !replacement.started.Load() || !health.Ready() || !temporalWorker.Started() {
 		t.Fatalf("replacement after cancelled build started=%v ready=%v worker-started=%v", replacement.started.Load(), health.Ready(), temporalWorker.Started())
 	}
@@ -740,9 +717,7 @@ func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 
 	releaseStopGate()
 	waitForWorkerEvent(t, first.stopExited, "controller stop completion")
-	if err := <-started; !errors.Is(err, app.ErrWorkerStopping) {
-		t.Fatalf("Start after Stop = %v, want ErrWorkerStopping", err)
-	}
+	testassert.ErrorIs(t, <-started, app.ErrWorkerStopping, "Start after Stop")
 	waitForWorkerEvent(t, stopped, "Stop after the in-progress controller completed")
 	if first.stopCalls.Load() != 1 || health.Ready() || temporalWorker.Started() {
 		t.Fatalf("stop-during-start calls=%d ready=%v started=%v", first.stopCalls.Load(), health.Ready(), temporalWorker.Started())
@@ -775,9 +750,7 @@ func TestWorkerRegistersV1WorkflowsAndActivitiesAgainAfterDrain(t *testing.T) {
 		t.Fatal("worker was not replaced")
 	}
 	descriptors, err := domainactivity.V1ActivityDescriptors("v1-queue")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	expectedActivities := make([]string, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		expectedActivities = append(expectedActivities, descriptor.Name)

@@ -2,13 +2,13 @@ package fileblob
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
@@ -27,9 +27,7 @@ func TestStoreConstructorAndPutValidation(t *testing.T) {
 	}
 
 	fileRoot := filepath.Join(t.TempDir(), "root-file")
-	if err := os.WriteFile(fileRoot, []byte("not a directory"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(fileRoot, []byte("not a directory"), 0600))
 	if _, err := New(Options{Root: fileRoot, MaxBytes: 1}); err == nil {
 		t.Fatal("file path unexpectedly accepted as blob root")
 	}
@@ -62,52 +60,28 @@ func TestStorePutConflictAndSecureObjectLayout(t *testing.T) {
 	store := newTestStore(t, root, 64, now)
 	request := blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("wanted"), ExpiresAt: now.Add(time.Hour)}
 	prefix, err := blob.TenantPrefix(request.Tenant)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	digest := blob.Digest(request.Data)
 	path := filepath.Join(root, prefix, digest)
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("different"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-		t.Fatalf("conflicting object error = %v", err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
+	testassert.NoError(t, os.WriteFile(path, []byte("different"), 0600))
+	testassert.ErrorIs(t, testassert.Err(store.Put(context.Background(), request)), blob.ErrConflict, "conflicting object")
 
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(path, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-		t.Fatalf("directory object error = %v", err)
-	}
-	if _, err := store.Get(context.Background(), request.Tenant, blob.Ref{Store: "file", Locator: prefix + "/" + digest, Digest: digest, ByteLength: int64(len(request.Data)), MediaType: request.MediaType, ExpiresAt: request.ExpiresAt}); !errors.Is(err, blob.ErrNotFound) {
-		t.Fatalf("directory get error = %v", err)
-	}
+	testassert.NoError(t, os.Remove(path))
+	testassert.NoError(t, os.Mkdir(path, 0700))
+	testassert.ErrorIs(t, testassert.Err(store.Put(context.Background(), request)), blob.ErrConflict, "directory object")
+	testassert.ErrorIs(t, testassert.Err(store.Get(context.Background(), request.Tenant, blob.Ref{Store: "file", Locator: prefix + "/" + digest, Digest: digest, ByteLength: int64(len(request.Data)), MediaType: request.MediaType, ExpiresAt: request.ExpiresAt})), blob.ErrNotFound, "directory get")
 
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Remove(path))
 	ref, err := store.Put(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	fileInfo, err := os.Stat(filepath.Join(root, ref.Locator))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if fileInfo.Mode().Perm() != 0600 {
 		t.Fatalf("blob mode = %o, want 600", fileInfo.Mode().Perm())
 	}
 	tenantInfo, err := os.Stat(filepath.Dir(filepath.Join(root, ref.Locator)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if tenantInfo.Mode().Perm() != 0700 {
 		t.Fatalf("tenant directory mode = %o, want 700", tenantInfo.Mode().Perm())
 	}
@@ -119,38 +93,22 @@ func TestStoreGetAndProbeHonorCancellationAndValidatePaths(t *testing.T) {
 	ref := putTestText(t, store, "tenant", "value", now.Add(time.Hour))
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Get(canceled, "tenant", ref); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled get = %v", err)
-	}
-	if _, err := store.Put(canceled, blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("other"), ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled put = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Get(canceled, "tenant", ref)), context.Canceled, "canceled get")
+	testassert.ErrorIs(t, testassert.Err(store.Put(canceled, blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("other"), ExpiresAt: now.Add(time.Hour)})), context.Canceled, "canceled put")
 	if _, err := store.Get(context.Background(), "tenant", blob.Ref{Store: "file", Locator: "tenant/not-a-digest", Digest: "short", ByteLength: 1, MediaType: "text/plain", ExpiresAt: now.Add(time.Hour)}); err == nil {
 		t.Fatal("invalid digest unexpectedly accepted")
 	}
-	if _, err := store.Get(context.Background(), "tenant", ref); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(store.root, ref.Locator)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Get(context.Background(), "tenant", ref); !errors.Is(err, blob.ErrNotFound) {
-		t.Fatalf("missing object error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(store.Get(context.Background(), "tenant", ref)))
+	testassert.NoError(t, os.Remove(filepath.Join(store.root, ref.Locator)))
+	testassert.ErrorIs(t, testassert.Err(store.Get(context.Background(), "tenant", ref)), blob.ErrNotFound, "missing object")
 
-	if err := store.ProbeBucket(canceled); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled probe = %v", err)
-	}
-	if err := store.ProbeBucket(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, store.ProbeBucket(canceled), context.Canceled, "canceled probe")
+	testassert.NoError(t, store.ProbeBucket(context.Background()))
 }
 
 func TestStoreObjectPathCannotEscapeRoot(t *testing.T) {
 	store, err := New(Options{Root: t.TempDir(), MaxBytes: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	digest := strings.Repeat("a", 64)
 	if _, err := store.objectPath("..", digest); err == nil {
 		t.Fatal("parent prefix escaped configured root")

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -67,13 +68,9 @@ func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T)
 		},
 	}
 	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
-	if _, err := activities.Generate(context.Background(), payload); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(activities.Generate(context.Background(), payload)))
 	payload.Request.OperationKey = "operation-2"
-	if _, err := activities.Generate(context.Background(), payload); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(activities.Generate(context.Background(), payload)))
 	if len(created) != 2 || created[0] == created[1] {
 		t.Fatalf("created heartbeater instances = %#v, want two distinct per-Activity instances", created)
 	}
@@ -90,9 +87,7 @@ func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	value := &fakeEngine{response: completedEngineResponse()}
 	activities := Activities{Engine: value, Heartbeater: heartbeater}
 	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.Metadata.OperationID != "operation-id" || len(heartbeater.progress) != 2 || heartbeater.progress[0].Phase != "planning" || heartbeater.progress[1].Phase != "finalization" {
 		t.Fatalf("response=%#v heartbeats=%#v", response, heartbeater.progress)
 	}
@@ -111,9 +106,7 @@ func TestGenerateTemporalReturnsPointerOnlyOnSuccess(t *testing.T) {
 	activities := Activities{Engine: &fakeEngine{response: want}}
 
 	response, err := activities.generateTemporal(context.Background(), inputlessGeneratePayload())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response == nil {
 		t.Fatal("Temporal Activity response = nil, want success response")
 	}

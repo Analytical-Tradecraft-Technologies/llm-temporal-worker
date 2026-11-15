@@ -53,9 +53,7 @@ func TestLoadRejectsContentAfterTheFirstDocument(t *testing.T) {
 		})
 	}
 	// A bare end marker and trailing comments add no content.
-	if _, err := config.Load([]byte(example + "\n...\n# end of file\n")); err != nil {
-		t.Fatalf("document end marker rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load([]byte(example+"\n...\n# end of file\n"))), "document end marker rejected")
 }
 
 func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
@@ -100,9 +98,7 @@ func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
 		})
 	}
 	// A long policy ID whose window identities still fit is accepted.
-	if _, err := config.Load(replaceExample(t, "id: acme-production", "id: "+strings.Repeat("p", 120))); err != nil {
-		t.Fatalf("120-byte policy ID rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load(replaceExample(t, "id: acme-production", "id: "+strings.Repeat("p", 120)))), "120-byte policy ID rejected")
 }
 
 func TestLoadRejectsLegacyBudgetLimitOutsideTheRedisRange(t *testing.T) {
@@ -145,18 +141,14 @@ func TestLoadRejectsBudgetMatchersThatCanNeverMatch(t *testing.T) {
 
 	t.Run("wildcards and declared values stay valid", func(t *testing.T) {
 		replacement := "match:\n        tenant: acme\n        project: \"*\"\n        environment: production\n        logical_model: invoice-summarizer\n        endpoint: openai-prod"
-		if _, err := config.Load(replaceExample(t, match, replacement)); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, testassert.Err(config.Load(replaceExample(t, match, replacement))))
 	})
 
 	t.Run("scopes are not checked without an allowlist", func(t *testing.T) {
 		loaded := mustLoadConfig(t, exampleYAML(t))
 		loaded.Authorization = nil
 		loaded.Budgets.Policies[0].Match.Tenant = "embedding-tenant"
-		if err := loaded.Validate(); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, loaded.Validate())
 	})
 }
 
@@ -202,13 +194,9 @@ func TestLoadAcceptsNullListsAndTheRenderedEffectiveConfiguration(t *testing.T) 
 	if !strings.Contains(string(rendered), `"allowed_tenants":null`) {
 		t.Fatal("fixture no longer renders an unset list as null")
 	}
-	if _, err := config.Load(rendered); err != nil {
-		t.Fatalf("rendered effective configuration no longer loads: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load(rendered)), "rendered effective configuration no longer loads")
 	compiled := configSchema(t)
-	if err := compiled.Validate(rendered); err != nil {
-		t.Fatalf("schema rejects a model without a tenant restriction: %v", err)
-	}
+	testassert.NoError(t, compiled.Validate(rendered), "schema rejects a model without a tenant restriction")
 }
 
 // An endpoint reaches budget matching only through a route of the requested
@@ -222,13 +210,9 @@ func TestValidateRejectsBudgetEndpointOutsideTheMatchedModel(t *testing.T) {
 	loaded.Models["search"] = config.ModelConfig{Routes: []config.RouteConfig{{ID: "exa", Endpoint: "exa-answer", Model: "exa", Classes: []llm.ServiceClass{class}}}}
 	match := &loaded.Budgets.Policies[0].Match
 	*match = config.BudgetMatch{EndpointID: "exa-answer"}
-	if err := loaded.Validate(); err != nil {
-		t.Fatalf("endpoint routed by a model rejected: %v", err)
-	}
+	testassert.NoError(t, loaded.Validate(), "endpoint routed by a model rejected")
 	match.LogicalModel = "search"
-	if err := loaded.Validate(); err != nil {
-		t.Fatalf("endpoint routed by the matched model rejected: %v", err)
-	}
+	testassert.NoError(t, loaded.Validate(), "endpoint routed by the matched model rejected")
 	match.LogicalModel = "invoice-summarizer"
 	err := loaded.Validate()
 	testassert.ErrorContains(t, err, `budgets.policies[0].match.endpoint "exa-answer" is not used by a route of model "invoice-summarizer"`)

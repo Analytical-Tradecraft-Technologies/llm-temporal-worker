@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
@@ -22,7 +23,5 @@ func TestInlineMediaRejectsEmptyBytesOnMarshalAndDecode(t *testing.T) {
 			t.Fatalf("%s with empty bytes decoded, want a validation error", name)
 		}
 	}
-	if _, err := json.Marshal(Message{Actor: ActorHuman, Content: []Part{ImagePart{Bytes: []byte{1}, MediaType: "image/png"}}}); err != nil {
-		t.Fatalf("one-byte image rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(json.Marshal(Message{Actor: ActorHuman, Content: []Part{ImagePart{Bytes: []byte{1}, MediaType: "image/png"}}})), "one-byte image rejected")
 }

@@ -79,9 +79,7 @@ func TestLoweringPreservesTypedInputAndControls(t *testing.T) {
 		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content"],"store":false,"truncation":"auto"}`)},
 	}
 	params, err := lowerRequest(request, llm.ServiceClassEconomy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.JSONObject(t, params)
 	if got := wire["model"]; got != "gpt-contract" {
 		t.Fatalf("model = %#v", got)
@@ -186,9 +184,7 @@ func TestUntitledInlineDocumentGetsDeterministicFilename(t *testing.T) {
 func mustLower(t *testing.T, request llm.Request) responses.ResponseNewParams {
 	t.Helper()
 	params, err := lowerRequest(request, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return params
 }
 
@@ -218,9 +214,7 @@ func TestLoweringReasoningSummaryPreservesEffort(t *testing.T) {
 				Model: "gpt", OperationKey: "op",
 				Reasoning: &llm.ReasoningSpec{Mode: test.mode, Effort: test.effort, Summary: test.summary},
 			}, llm.ServiceClassStandard)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			reasoning, ok := contract.JSONObject(t, params)["reasoning"].(map[string]any)
 			if !ok {
 				t.Fatal("missing reasoning configuration")
@@ -244,9 +238,7 @@ func TestReplayToolCallDoesNotInventProviderItemID(t *testing.T) {
 		llm.ToolCall{ID: "call_abc", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 		llm.ToolResult{CallID: "call_abc", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "result"}}},
 	}}, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	input := contract.JSONObject(t, params)["input"].([]any)
 	call := input[0].(map[string]any)
 	if _, exists := call["id"]; exists {
@@ -267,9 +259,7 @@ func TestReplayAssistantHistoryUsesOutputContentTypes(t *testing.T) {
 		}},
 		llm.HumanText("follow-up"),
 	}}, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	input := contract.JSONObject(t, params)["input"].([]any)
 	if len(input) != 3 {
 		t.Fatalf("input = %#v", input)

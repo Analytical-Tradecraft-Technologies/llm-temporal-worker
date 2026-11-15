@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -26,9 +27,7 @@ func TestProviderExecutionSettlementIgnoresArgumentKeyOrder(t *testing.T) {
 		e.Response = response(`{"query":"x","limit":5}`)
 	})
 	loaded, err := r.LoadProviderExecution(ctx, record.Request.Scope, record.Request.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if call, ok := loaded.Execution.Response.Output[0].(llm.ToolCall); !ok || string(call.Arguments) != `{"limit":5,"query":"x"}` {
 		t.Fatalf("stored output = %+v", loaded.Execution.Response.Output)
 	}

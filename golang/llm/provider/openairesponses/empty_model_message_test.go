@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -32,9 +33,7 @@ func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 	for name, strict := range map[string]bool{"strict": true, "best effort": false} {
 		t.Run(name, func(t *testing.T) {
 			call, err := adaptertest.Compile(adapter, "openai-fixture", provider.FamilyOpenAIResponses, request, strict)
-			if err != nil {
-				t.Fatalf("compile replayed empty model message: %v", err)
-			}
+			testassert.NoError(t, err, "compile replayed empty model message")
 			encoded := contract.MarshalJSON(t, call.SDKParams)
 			var wire struct {
 				Input []struct {
@@ -43,9 +42,7 @@ func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 					Content []json.RawMessage `json:"content"`
 				} `json:"input"`
 			}
-			if err := json.Unmarshal(encoded, &wire); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, json.Unmarshal(encoded, &wire))
 			kinds := make([]string, 0, len(wire.Input))
 			for _, item := range wire.Input {
 				if item.Type == "message" && len(item.Content) == 0 {

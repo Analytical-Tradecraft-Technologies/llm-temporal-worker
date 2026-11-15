@@ -9,6 +9,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -46,20 +47,14 @@ func requireDanglingIsCorrupt(t *testing.T, blobs *lostBlobs, read func() error)
 	if blobs.opens == 0 {
 		t.Fatalf("the reader opened no blob (error %v)", err)
 	}
-	if !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("lost blob behind a committed reference = %v, want ErrCorrupt", err)
-	}
-	if errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("lost blob still reads as an absent record: %v", err)
-	}
+	testassert.ErrorIs(t, err, ErrCorrupt, "lost blob behind a committed reference")
+	testassert.ErrorIsNot(t, err, contracts.ErrNotFound, "lost blob still reads as an absent record")
 	blobs.fail = &contracts.StorageError{Kind: contracts.ErrUnavailable, Operation: "blob.open"}
 	if err := read(); !errors.Is(err, contracts.ErrUnavailable) || errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
 		t.Fatalf("transient blob read = %v, want the retryable storage error unchanged", err)
 	}
 	blobs.fail = nil
-	if err := read(); err != nil {
-		t.Fatalf("intact blob: %v", err)
-	}
+	testassert.NoError(t, read(), "intact blob")
 }
 
 func TestRequestRecordDanglingBlobIsCorruptNotAbsent(t *testing.T) {
@@ -85,12 +80,10 @@ func TestRequestRecordDanglingBlobIsCorruptNotAbsent(t *testing.T) {
 	})
 	// A request that was never created is still simply absent.
 	absent, err := NewRequestID()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	blobs.fail = contracts.ErrNotFound
-	requireAbsentNotCorrupt(t, errOf(r.Read(ctx, request.Scope, absent)), "absent request")
-	requireAbsentNotCorrupt(t, errOf(r.Read(ctx, Scope{Tenant: "other", Project: "other"}, request.ID)), "cross-scope request")
+	requireAbsentNotCorrupt(t, testassert.Err(r.Read(ctx, request.Scope, absent)), "absent request")
+	requireAbsentNotCorrupt(t, testassert.Err(r.Read(ctx, Scope{Tenant: "other", Project: "other"}, request.ID)), "cross-scope request")
 }
 
 func TestOperationDanglingRecordBlobIsNotANewOperation(t *testing.T) {
@@ -111,7 +104,7 @@ func TestOperationDanglingRecordBlobIsNotANewOperation(t *testing.T) {
 	other := operation
 	other.Key = "never-started"
 	blobs.fail = contracts.ErrNotFound
-	requireAbsentNotCorrupt(t, errOf(r.LookupOperation(ctx, other)), "absent operation")
+	requireAbsentNotCorrupt(t, testassert.Err(r.LookupOperation(ctx, other)), "absent operation")
 }
 
 func TestResponseCacheDanglingBlobIsCorruptNotAbsent(t *testing.T) {
@@ -143,7 +136,7 @@ func TestResponseCacheDanglingBlobIsCorruptNotAbsent(t *testing.T) {
 	if got, err := r.Responses().Lookup(ctx, cache.ResponseLookup{Key: other, Now: entry.CompletedAt}); got != nil || err != nil {
 		t.Fatalf("absent cache entry = %v, %v, want a miss", got, err)
 	}
-	requireAbsentNotCorrupt(t, errOf(r.Responses().ReadUse(ctx, use.ScopeID, "never-used")), "absent use receipt")
+	requireAbsentNotCorrupt(t, testassert.Err(r.Responses().ReadUse(ctx, use.ScopeID, "never-used")), "absent use receipt")
 }
 
 func TestCheckpointDanglingBlobIsCorruptNotAbsent(t *testing.T) {
@@ -162,6 +155,6 @@ func TestCheckpointDanglingBlobIsCorruptNotAbsent(t *testing.T) {
 		return err
 	})
 	blobs.fail = contracts.ErrNotFound
-	requireAbsentNotCorrupt(t, errOf(store.Get(ctx, cp.ScopeID, state.CheckpointID("00000000-0000-4000-8000-000000000000"))), "absent checkpoint")
-	requireAbsentNotCorrupt(t, errOf(store.Read(ctx, "other-scope", cp.DeltaBlob)), "cross-scope blob reference")
+	requireAbsentNotCorrupt(t, testassert.Err(store.Get(ctx, cp.ScopeID, state.CheckpointID("00000000-0000-4000-8000-000000000000"))), "absent checkpoint")
+	requireAbsentNotCorrupt(t, testassert.Err(store.Read(ctx, "other-scope", cp.DeltaBlob)), "cross-scope blob reference")
 }

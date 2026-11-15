@@ -11,6 +11,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -45,9 +46,7 @@ func checkpointReplayFixture(t *testing.T) (*CheckpointReplay, *checkpointReplay
 		}
 		return "opaque-scope", nil
 	}, state.MaterializeLimits{MaxDepth: 8, MaxRows: 9, MaxItems: 20, MaxBytes: 4096})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return r, m, llm.GenerateRequestV1{OperationKey: "generate", Context: caller, Parent: &parent}, llm.CompactRequestV1{OperationKey: "compact", Context: caller, Parent: parent}
 }
 func assertCheckpointReplayError(t *testing.T, err error, code provider.Code) {
@@ -173,12 +172,8 @@ func TestCheckpointReplayCancellationAndMalformedRequestsDoNotRead(t *testing.T)
 	r, m, g, c := checkpointReplayFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := r.Generate(ctx, g); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if _, err := r.Compact(ctx, c); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(r.Generate(ctx, g)), context.Canceled)
+	testassert.ErrorIs(t, testassert.Err(r.Compact(ctx, c)), context.Canceled)
 	_, err := r.Generate(nil, g)
 	assertCheckpointReplayError(t, err, provider.CodeConfiguration)
 	var missing *CheckpointReplay
@@ -197,18 +192,12 @@ func TestCheckpointReplayCancellationAndMalformedRequestsDoNotRead(t *testing.T)
 func TestCheckpointReplayRealHandleVerifierRejectsOtherScopeBeforeRead(t *testing.T) {
 	keyring := testKeyring(t, state.Key{ID: "key", Secret: bytes.Repeat([]byte{4}, 32)})
 	handle, err := keyring.IssueCheckpointHandle("signed-scope", "00000000-0000-4000-8000-000000000001")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store := &checkpointReplayPoisonStore{}
 	cap, err := cloudCheckpointCapabilities(&recordingCloudRequests{checkpointStore: store}, keyring, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	replay, err := (V1RuntimeCapabilities{Checkpoints: cap}).NewCheckpointReplay(func(context.Context, llm.RequestContext) (string, error) { return "other-scope", nil }, state.MaterializeLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	parent := llm.CheckpointHandle(handle)
 	_, err = replay.Generate(context.Background(), llm.GenerateRequestV1{OperationKey: "key", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}, Parent: &parent})
 	assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
@@ -226,9 +215,7 @@ func TestCheckpointReplayRetainsOriginalSnapshotBinding(t *testing.T) {
 	resolver := func(context.Context, llm.RequestContext) (string, error) { return "opaque-scope", nil }
 	limits := state.MaterializeLimits{MaxRows: 7}
 	old, err := capabilities.NewCheckpointReplay(resolver, limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	capabilities.Checkpoints.Materializer = second
 	limits.MaxRows = 99
 	_, err = old.Generate(context.Background(), g)
@@ -236,9 +223,7 @@ func TestCheckpointReplayRetainsOriginalSnapshotBinding(t *testing.T) {
 		t.Fatalf("mixed snapshot: %v", err)
 	}
 	next, err := capabilities.NewCheckpointReplay(resolver, limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = next.Generate(context.Background(), g)
 	assertCheckpointReplayError(t, err, provider.CodeStateUnavailable)
 	if second.calls != 1 || second.limits.MaxRows != 99 {

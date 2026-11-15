@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/memory"
 )
@@ -58,13 +59,9 @@ func TestGenerateDoesNotReplayAnExpiredCompletedOperation(t *testing.T) {
 	clock := func() time.Time { return now }
 	adapter := &fakeAdapter{name: "replay", response: successfulResponse()}
 	harness := newHarnessWithAdmission(t, adapter, memory.NewAdmissionStore(memory.AdmissionOptions{Clock: clock}), clock)
-	if _, err := harness.engine.Generate(context.Background(), baseRequest("replay-after-retention")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(harness.engine.Generate(context.Background(), baseRequest("replay-after-retention"))))
 	now = now.Add(2 * time.Hour)
-	if _, err := harness.engine.Generate(context.Background(), baseRequest("replay-after-retention")); err != nil {
-		t.Fatalf("generate after retention: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(harness.engine.Generate(context.Background(), baseRequest("replay-after-retention"))), "generate after retention")
 	if adapter.invokes != 2 {
 		t.Fatalf("provider invokes = %d, want a fresh dispatch after retention", adapter.invokes)
 	}

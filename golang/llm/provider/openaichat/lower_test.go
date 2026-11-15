@@ -187,15 +187,11 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 		Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Refusal: "I can't help with that."}}},
 	}
 	lifted, err := liftStandard(&refused)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	input := append([]llm.Item{llm.HumanText("question")}, lifted.Output...)
 	input = append(input, llm.HumanText("a benign follow-up"))
 	params, err := lowerRequest(llm.Request{Model: "chat-model", Input: input}, testProfile(), "default")
-	if err != nil {
-		t.Fatalf("replaying a lifted refusal: %v", err)
-	}
+	testassert.NoError(t, err, "replaying a lifted refusal")
 	encoded := contract.MarshalJSON(t, params)
 	var wire struct {
 		Messages []struct {

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -35,9 +36,7 @@ type fakeClusterNode struct {
 func newFakeClusterNode(t *testing.T, id string, topology *[]*fakeClusterNode) *fakeClusterNode {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	node := &fakeClusterNode{
 		id:       id,
 		listener: listener,
@@ -236,15 +235,11 @@ func TestRedisDependencyProbeChecksReplicasOnClusterClient(t *testing.T) {
 			value.AdmissionMode = "lua"
 			value.AdmissionDigest = redisstore.AdmissionLuaDigest()
 			probe, err := NewRedisDependencyProbe(cluster, value)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			ownerClient, err := cluster.MasterForKey(ctx, redisAdmissionSlotKey(value))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var owner *fakeClusterNode
 			var others []*fakeClusterNode
 			for _, master := range topology {

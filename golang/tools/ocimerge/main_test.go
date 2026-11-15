@@ -26,9 +26,7 @@ type builtImage struct {
 func newFixture(t *testing.T, name string) *fixture {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), name)
-	if err := os.MkdirAll(filepath.Join(dir, "blobs", "sha256"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Join(dir, "blobs", "sha256"), 0o755))
 	f := &fixture{t: t, dir: dir}
 	f.writeFile("oci-layout", []byte(`{"imageLayoutVersion":"1.0.0"}`))
 	return f
@@ -147,15 +145,11 @@ func TestMergeBuildsTwoPlatformIndexWithAttestations(t *testing.T) {
 
 	var stdout bytes.Buffer
 	err := run([]string{"merge", "-output", output, "-platform", "linux/amd64=" + amd64.dir, "-platform", "linux/arm64=" + arm64.dir}, &stdout)
-	if err != nil {
-		t.Fatalf("merge: %v", err)
-	}
+	testassert.NoError(t, err, "merge")
 	digest := strings.TrimSpace(stdout.String())
 
 	top, err := readLayoutRoot(output)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if top.Digest != digest || top.MediaType != mediaTypeImageIndex {
 		t.Fatalf("index.json references %s %s, merge printed %s", top.MediaType, top.Digest, digest)
 	}
@@ -164,9 +158,7 @@ func TestMergeBuildsTwoPlatformIndexWithAttestations(t *testing.T) {
 		t.Fatalf("merged index blob missing or does not hash to %s", digest)
 	}
 	var merged imageIndex
-	if err := json.Unmarshal(indexBytes, &merged); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(indexBytes, &merged))
 	if merged.SchemaVersion != 2 || merged.MediaType != mediaTypeImageIndex {
 		t.Fatalf("merged index header = %d %q", merged.SchemaVersion, merged.MediaType)
 	}
@@ -180,9 +172,7 @@ func TestMergeBuildsTwoPlatformIndexWithAttestations(t *testing.T) {
 		}
 	}
 	var attestation descriptor
-	if err := json.Unmarshal(merged.Manifests[3], &attestation); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(merged.Manifests[3], &attestation))
 	if attestation.Annotations[referenceDigestAnnotation] != arm64Image.manifest.Digest || attestation.Annotations[referenceTypeAnnotation] != attestationManifestType {
 		t.Fatalf("arm64 attestation lost its reference annotations: %v", attestation.Annotations)
 	}
@@ -191,15 +181,11 @@ func TestMergeBuildsTwoPlatformIndexWithAttestations(t *testing.T) {
 	// per-platform inner indexes (not reachable from the merged index) are not.
 	for _, image := range []builtImage{amd64Image, arm64Image} {
 		for _, d := range []descriptor{image.manifest, image.attestation} {
-			if err := verifyBlob(output, d); err != nil {
-				t.Fatalf("merged layout: %v", err)
-			}
+			testassert.NoError(t, verifyBlob(output, d), "merged layout")
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(output, "blobs", "sha256"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// 2 platforms x (manifest, config, layer, attestation manifest,
 	// attestation config, statement) + merged index, less the attestation
 	// config the platforms share, which is copied once.
@@ -208,9 +194,7 @@ func TestMergeBuildsTwoPlatformIndexWithAttestations(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := run([]string{"verify", "-layout", output, "-platform", "linux/arm64", "-platform", "linux/amd64"}, &stdout); err != nil {
-		t.Fatalf("verify merged layout: %v", err)
-	}
+	testassert.NoError(t, run([]string{"verify", "-layout", output, "-platform", "linux/arm64", "-platform", "linux/amd64"}, &stdout), "verify merged layout")
 	if strings.TrimSpace(stdout.String()) != digest {
 		t.Fatalf("verify printed %q, want %s", stdout.String(), digest)
 	}
@@ -221,13 +205,9 @@ func TestMergeIsDeterministic(t *testing.T) {
 	arm64, _ := buildxLayout(t, linuxARM64)
 	inputs := []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: arm64.dir}}
 	first, err := merge(mergeOutput(t), inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	second, err := merge(mergeOutput(t), inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if first != second {
 		t.Fatalf("merging the same layouts twice gave %s and %s", first, second)
 	}
@@ -242,12 +222,8 @@ func TestMergeAcceptsDirectManifestLayout(t *testing.T) {
 	arm64.writeIndexJSON(manifest)
 
 	output := mergeOutput(t)
-	if _, err := merge(output, []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: arm64.dir}}); err != nil {
-		t.Fatalf("merge direct manifest layout: %v", err)
-	}
-	if _, err := verifyMultiPlatformLayout(output, []platform{linuxAMD64, linuxARM64}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(merge(output, []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: arm64.dir}})), "merge direct manifest layout")
+	testassert.NoError(t, testassert.Err(verifyMultiPlatformLayout(output, []platform{linuxAMD64, linuxARM64})))
 }
 
 func TestMergeRejectsUnsafeInputs(t *testing.T) {
@@ -289,9 +265,7 @@ func TestMergeRejectsUnsafeInputs(t *testing.T) {
 				f, image := buildxLayout(t, linuxAMD64)
 				layer := f.readManifest(image.manifest.Digest).Layers[0]
 				corrupt := bytes.Repeat([]byte{'x'}, int(layer.Size))
-				if err := os.WriteFile(blobPath(f.dir, layer.Digest), corrupt, 0o644); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(blobPath(f.dir, layer.Digest), corrupt, 0o644))
 				return []platformInput{{platform: linuxAMD64, layout: f.dir}}
 			},
 			want: "does not match its descriptor",
@@ -300,9 +274,7 @@ func TestMergeRejectsUnsafeInputs(t *testing.T) {
 			name: "missing attestation blob",
 			setup: func(t *testing.T) []platformInput {
 				f, image := buildxLayout(t, linuxAMD64)
-				if err := os.Remove(blobPath(f.dir, image.attestation.Digest)); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.Remove(blobPath(f.dir, image.attestation.Digest)))
 				return []platformInput{{platform: linuxAMD64, layout: f.dir}}
 			},
 			want: "is missing",
@@ -376,9 +348,7 @@ func TestMergeRejectsUnsafeInputs(t *testing.T) {
 func TestMergeRefusesExistingOutput(t *testing.T) {
 	amd64, _ := buildxLayout(t, linuxAMD64)
 	output := mergeOutput(t)
-	if err := os.Mkdir(output, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Mkdir(output, 0o755))
 	if _, err := merge(output, []platformInput{{platform: linuxAMD64, layout: amd64.dir}}); err == nil {
 		t.Fatal("merge overwrote an existing directory")
 	}
@@ -391,9 +361,7 @@ func TestVerifyRejectsWrongPlatformSet(t *testing.T) {
 	amd64, _ := buildxLayout(t, linuxAMD64)
 	arm64, _ := buildxLayout(t, linuxARM64)
 	output := mergeOutput(t)
-	if _, err := merge(output, []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: arm64.dir}}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(merge(output, []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: arm64.dir}})))
 	for _, expected := range [][]platform{
 		{linuxAMD64},
 		{linuxAMD64, linuxARM64, {OS: "linux", Architecture: "s390x"}},
@@ -404,9 +372,7 @@ func TestVerifyRejectsWrongPlatformSet(t *testing.T) {
 		}
 	}
 	// arm64/v8 is the same platform as arm64.
-	if _, err := verifyMultiPlatformLayout(output, []platform{linuxAMD64, {OS: "linux", Architecture: "arm64", Variant: "v8"}}); err != nil {
-		t.Fatalf("verify rejected linux/arm64/v8: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(verifyMultiPlatformLayout(output, []platform{linuxAMD64, {OS: "linux", Architecture: "arm64", Variant: "v8"}})), "verify rejected linux/arm64/v8")
 	// A single-platform Buildx layout is not the merged multi-platform index.
 	if _, err := verifyMultiPlatformLayout(amd64.dir, []platform{linuxAMD64, linuxARM64}); err == nil {
 		t.Fatal("verify accepted a single-platform layout")
@@ -417,9 +383,7 @@ func TestConfigDigestBindsTheScannedPlatformImage(t *testing.T) {
 	f, image := buildxLayout(t, linuxARM64)
 	manifest := f.readManifest(image.manifest.Digest)
 	var stdout bytes.Buffer
-	if err := run([]string{"config-digest", "-layout", f.dir, "-platform", "linux/arm64"}, &stdout); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, run([]string{"config-digest", "-layout", f.dir, "-platform", "linux/arm64"}, &stdout))
 	if got := strings.TrimSpace(stdout.String()); got != manifest.Config.Digest {
 		t.Fatalf("config-digest = %s, want the platform manifest config %s", got, manifest.Config.Digest)
 	}
@@ -431,9 +395,7 @@ func TestConfigDigestBindsTheScannedPlatformImage(t *testing.T) {
 func TestMergeAcceptsARM64V8ImageConfig(t *testing.T) {
 	amd64, _ := buildxLayout(t, linuxAMD64)
 	f, _ := buildxLayout(t, platform{OS: "linux", Architecture: "arm64", Variant: "v8"})
-	if _, err := merge(mergeOutput(t), []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: f.dir}}); err != nil {
-		t.Fatalf("merge rejected an arm64/v8 image: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(merge(mergeOutput(t), []platformInput{{platform: linuxAMD64, layout: amd64.dir}, {platform: linuxARM64, layout: f.dir}})), "merge rejected an arm64/v8 image")
 }
 
 func TestRunRejectsMalformedArguments(t *testing.T) {

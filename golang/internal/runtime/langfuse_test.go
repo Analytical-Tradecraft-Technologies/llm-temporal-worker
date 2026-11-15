@@ -10,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -38,20 +39,14 @@ func TestCloudLangfuseExportsFinalizedRequestOnce(t *testing.T) {
 	}))
 	defer server.Close()
 	exporter, err := langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.cap.Langfuse = exporter
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	result := f.finish(t)
 	ref := f.ref(result)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), ref); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.runtime.ExportLangfuseV1(context.Background(), ref); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), ref))
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), ref))
 	if calls != 1 || !strings.Contains(payload, "answer") || !strings.Contains(payload, "actor") || !strings.Contains(payload, "endpoint_id") {
 		t.Fatalf("unexpected export: calls=%d payload=%s", calls, payload)
 	}
@@ -114,9 +109,7 @@ func TestCloudLangfuseExportOmitsInlineMediaBytes(t *testing.T) {
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(result)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), f.ref(result)))
 	// The OTLP body nests content as JSON strings, so check the raw base64 run
 	// that survives any level of string escaping.
 	encoded := base64.StdEncoding.EncodeToString(media)
@@ -168,9 +161,7 @@ func TestCloudLangfuseDefaultOpenRouterExcludesContent(t *testing.T) {
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat", Extensions: map[string]map[string]any{"openrouter": {}}}}
 	f.restart(t)
 	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(result)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), f.ref(result)))
 	if calls != 0 {
 		t.Fatal("disabled OpenRouter exported content")
 	}
@@ -198,9 +189,7 @@ func TestCloudLangfuseCacheHitHasTraceWithoutPaidGeneration(t *testing.T) {
 	if second.Generate.Cache.Disposition != "hit" {
 		t.Fatal("fixture did not use cache", second.Generate.Cache)
 	}
-	if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(second)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), f.ref(second)))
 	if calls != 2 || !strings.Contains(payloads[1], "hit") || strings.Contains(payloads[1], `"stringValue":"generation"`) {
 		t.Fatalf("cache trace fabricated paid generation: %v", payloads)
 	}
@@ -220,9 +209,7 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 	keepNoRecentTurns(&f.request)
 	export := func(v llm.ExecutionResultV1) {
 		t.Helper()
-		if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(v)); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), f.ref(v)))
 	}
 	parent := f.finish(t)
 	export(parent)
@@ -328,9 +315,7 @@ func TestCloudLangfuseDisabledFallbackDoesNotExportResponse(t *testing.T) {
 		t.Fatal("fixture did not fall back", loadErr)
 	}
 
-	if err := f.runtime.ExportLangfuseV1(ctx, ref); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(ctx, ref))
 	if payload == "" || strings.Contains(payload, "answer") || strings.Contains(payload, "actual_cost_usd") {
 		t.Fatalf("disabled response exported: %s", payload)
 	}
@@ -376,9 +361,7 @@ func TestCloudLangfuseSupersededPlanDoesNotExportDisabledRequest(t *testing.T) {
 	if err != nil || len(paid) != 1 || paid[last].Plan.Route.EndpointID != "fallback" {
 		t.Fatal("fixture was not served only by the disabled endpoint", err)
 	}
-	if err := f.runtime.ExportLangfuseV1(ctx, ref); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(ctx, ref))
 	if calls != 0 {
 		t.Fatal("superseded plan exported a request served by a disabled endpoint")
 	}
@@ -391,9 +374,7 @@ func (s failedLangfuseCapture) SaveLangfuseCapture(context.Context, cloudstate.S
 }
 func TestCloudLangfuseCaptureFailurePreservesModelAndFailsExport(t *testing.T) {
 	traced, err := exportThroughCapture(t, func(r *cloudstate.Repository) CloudRequestRepository { return failedLangfuseCapture{r} })
-	if !errors.Is(err, langfuse.ErrExport) {
-		t.Fatalf("capture loss silently acknowledged: %v", err)
-	}
+	testassert.ErrorIs(t, err, langfuse.ErrExport, "capture loss silently acknowledged")
 	if traced {
 		t.Fatal("capture failure changed model execution")
 	}
@@ -442,9 +423,7 @@ func TestCloudLangfuseNoWorkCompactionExportsOnlyRoot(t *testing.T) {
 	parent := f.finish(t)
 	compact := llm.CompactRequestV1{OperationKey: "no-work", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
 	v := f.prepare(t, context.Background(), llm.PrepareExecutionV1{Compact: &compact}, llm.ExecutionCompleted)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), executionRef(v, compact.Context)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.runtime.ExportLangfuseV1(context.Background(), executionRef(v, compact.Context)))
 	if serverCalls != 1 || !strings.Contains(payload, "no_work") || strings.Contains(payload, `\"stringValue\":\"generation\"`) {
 		t.Fatalf("no-work trace incorrect: %s", payload)
 	}

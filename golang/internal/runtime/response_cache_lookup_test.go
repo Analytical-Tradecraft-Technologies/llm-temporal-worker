@@ -11,6 +11,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -117,9 +118,7 @@ func newCacheLookupFixture(t *testing.T) *cacheLookupFixture {
 			return f.compLease, nil
 		},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return f
 }
 
@@ -286,9 +285,7 @@ func TestResponseCacheLookupRejectsInvalidRequestsAndPlansBeforeStorage(t *testi
 				_, err = f.helper.Generate(ctx, f.gen, f.genReplay)
 			}
 			if name == "canceled" || name == "planning cancellation" {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled)
 			} else {
 				assertCacheLookupError(t, err, code, retry)
 			}
@@ -314,9 +311,7 @@ func cacheLookupEntry(t *testing.T, f *cacheLookupFixture, compact bool) cache.R
 		response.Cache.Variant = f.gen.Cache.Variant
 		data, err = json.Marshal(response)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return cache.ResponseEntry{ID: "entry-origin", Key: lease.Key, OriginOperationID: "origin-operation", OriginCheckpointID: "checkpoint-origin", CompletedAt: f.now.Add(-30 * time.Second), Response: data}
 }
 
@@ -406,17 +401,13 @@ func TestResponseCacheLookupRejectsCorruptOrigins(t *testing.T) {
 						response.Cache.Variant = 1
 						var err error
 						entry.Response, err = json.Marshal(response)
-						if err != nil {
-							t.Fatal(err)
-						}
+						testassert.NoError(t, err)
 					} else {
 						response := decodeJSON[llm.GenerateResponseV1](t, entry.Response)
 						response.Cache.Variant++
 						var err error
 						entry.Response, err = json.Marshal(response)
-						if err != nil {
-							t.Fatal(err)
-						}
+						testassert.NoError(t, err)
 					}
 				case "expired":
 					entry.CompletedAt = f.now.Add(-10 * time.Minute)
@@ -545,18 +536,12 @@ func TestResponseCacheLookupRunnerGatesBothActivities(t *testing.T) {
 				switch outcome {
 				case "hit":
 					want = []string{"replay", "lookup", "cache-finalize"}
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 				case "wait":
-					if !errors.Is(err, durable.ErrCacheWait) {
-						t.Fatal(err)
-					}
+					testassert.ErrorIs(t, err, durable.ErrCacheWait)
 				case "recovery", "finished":
 					want = want[:3]
-					if !errors.Is(err, durable.ErrCacheRecoveryRequired) {
-						t.Fatal(err)
-					}
+					testassert.ErrorIs(t, err, durable.ErrCacheRecoveryRequired)
 				case "lookup failure":
 					want = want[:2]
 					assertCacheLookupError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
@@ -570,13 +555,9 @@ func TestResponseCacheLookupRunnerGatesBothActivities(t *testing.T) {
 					}
 					if outcome == "miss" {
 						want = append(want, "claim", "dispatch")
-						if !errors.Is(err, stop) {
-							t.Fatal(err)
-						}
+						testassert.ErrorIs(t, err, stop)
 					} else if outcome == "uncertain start" {
-						if !errors.Is(err, durable.ErrCacheRecoveryRequired) {
-							t.Fatal(err)
-						}
+						testassert.ErrorIs(t, err, durable.ErrCacheRecoveryRequired)
 					} else if err == nil {
 						t.Fatal("changed route was accepted")
 					}
@@ -637,9 +618,7 @@ func TestResponseCacheLookupRetainsOriginalSnapshot(t *testing.T) {
 	next, err := f.cap.NewResponseCacheLookup(func(context.Context, llm.GenerateRequestV1, PreparedGenerateInput) (cache.FillLease, error) {
 		return newLease, nil
 	}, f.helper.compact)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	old, err := f.helper.Generate(context.Background(), f.gen, f.genReplay)
 	if err != nil || old.Disposition != durable.CacheMiss || newReads != 0 || len(f.lookups) != 2 || !f.lookups[0].Now.Equal(f.now) {
 		t.Fatalf("old snapshot mixed repositories/clock: %+v, %v", old, err)

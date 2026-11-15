@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -51,9 +52,7 @@ func TestDurableCheckpointMaterializerReplaysThreeWayForkAfterRestart(t *testing
 	// Materialize one branch before the simulated restart. A later materializer
 	// must not depend on the first instance's in-memory graph.
 	first, err := fixture.materializer().Materialize(context.Background(), "scope-a", branches[0].id, MaterializeLimits{})
-	if err != nil {
-		t.Fatalf("materialize first branch: %v", err)
-	}
+	testassert.NoError(t, err, "materialize first branch")
 	assertDurableFork(t, first, fixture.rootID, branches[0])
 
 	for _, branch := range branches[1:] {

@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -182,9 +183,7 @@ func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
 // watches a scheduled run, so without the report a red run goes unnoticed.
 func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(repositoryRoot(t), ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var scheduled []string
 	for _, path := range paths {
 		workflow := readWorkflow(t, filepath.Base(path))

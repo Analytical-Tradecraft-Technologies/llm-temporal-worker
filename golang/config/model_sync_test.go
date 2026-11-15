@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -37,9 +38,7 @@ func modelSyncConfig(t *testing.T) config.Config {
 
 func TestModelSyncConfigValidates(t *testing.T) {
 	value := modelSyncConfig(t)
-	if err := value.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, value.Validate())
 	// A sync-only deployment needs no configured models or price catalogs.
 	value.Models = map[string]config.ModelConfig{}
 	value.Pricing.Catalogs = nil
@@ -50,12 +49,8 @@ func TestModelSyncConfigValidates(t *testing.T) {
 		}
 		value.Endpoints[id] = endpoint
 	}
-	if err := value.Validate(); err != nil {
-		t.Fatalf("sync-only configuration rejected: %v", err)
-	}
-	if err := validateConfigSchema(t, value); err != nil {
-		t.Fatalf("sync-only configuration does not match the schema: %v", err)
-	}
+	testassert.NoError(t, value.Validate(), "sync-only configuration rejected")
+	testassert.NoError(t, validateConfigSchema(t, value), "sync-only configuration does not match the schema")
 }
 
 func TestModelSyncConfigRejectsUnsafeShapes(t *testing.T) {

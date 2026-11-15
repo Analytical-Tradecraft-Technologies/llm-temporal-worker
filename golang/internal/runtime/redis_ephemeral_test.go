@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
@@ -24,9 +25,7 @@ func TestEphemeralRedisProbeRequiresExactSafePolicies(t *testing.T) {
 			client.settings["appendonly"] = test.aof
 			client.settings["save"] = test.save
 			probe, err := NewRedisDependencyProbe(client, value)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if result := probe.Probe(context.Background()); (result.Status == ProbeStatusReady) != test.ready {
 				t.Fatalf("probe result = %#v", result)
 			}

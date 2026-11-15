@@ -3,6 +3,7 @@ package llm
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"strings"
 	"testing"
@@ -53,9 +54,7 @@ func assertDigestCompatibility(t *testing.T, request Request) {
 func readRequestFile(t *testing.T, path string) Request {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return mustUnmarshalJSON[Request](t, data, "decode "+path)
 }
 
@@ -120,9 +119,7 @@ func BenchmarkRequestDigestLargeTranscript(b *testing.B) {
 		b.Run(method.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := method.run(request); err != nil {
-					b.Fatal(err)
-				}
+				testassert.NoError(b, testassert.Err(method.run(request)))
 			}
 		})
 	}

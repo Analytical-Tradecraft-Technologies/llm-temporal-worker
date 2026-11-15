@@ -10,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -30,13 +31,9 @@ func (harness testHarness) updateSnapshot(change func(*Snapshot)) {
 func (harness testHarness) useMemoryContinuations(t *testing.T, keySeed byte) *memory.ContinuationStore {
 	t.Helper()
 	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{keySeed}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{keySeed + 1}, 16)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store, err := memory.NewContinuationStore(memory.ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return harness.clock }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	harness.engine.dependencies.Continuations = store
 	return store
 }
@@ -45,9 +42,7 @@ func (harness testHarness) useMemoryContinuations(t *testing.T, keySeed byte) *m
 func (harness testHarness) operation(t *testing.T, operationID string) admission.Operation {
 	t.Helper()
 	operation, err := harness.admission.Get(context.Background(), operationID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return operation
 }
 
@@ -64,9 +59,7 @@ type testOperationIdentity struct {
 func normalizedIdentityForTest(t *testing.T, request llm.Request) testOperationIdentity {
 	t.Helper()
 	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return identityForTest(t, normalized)
 }
 
@@ -75,18 +68,14 @@ func normalizedIdentityForTest(t *testing.T, request llm.Request) testOperationI
 func preparedIdentityForTest(t *testing.T, request llm.Request) testOperationIdentity {
 	t.Helper()
 	prepared, err := (budget.Estimator{MaxOutput: 1}).PrepareRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return identityForTest(t, prepared)
 }
 
 func identityForTest(t *testing.T, normalized llm.Request) testOperationIdentity {
 	t.Helper()
 	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	id, scopeKey := operationIdentity(normalized, digest)
 	return testOperationIdentity{normalized: normalized, digest: digest, id: id, scopeKey: scopeKey}
 }
@@ -187,9 +176,7 @@ func newTestTrace() testTrace {
 // shutdown flushes every span to the exporter.
 func (trace testTrace) shutdown(t *testing.T) {
 	t.Helper()
-	if err := trace.tracer.Shutdown(trace.ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, trace.tracer.Shutdown(trace.ctx))
 }
 
 // newFakeHarness returns a harness around a fresh successful "fake" adapter.
@@ -203,9 +190,7 @@ func newFakeHarness(t *testing.T) (*fakeAdapter, testHarness) {
 func (harness testHarness) mustGenerate(t *testing.T, request llm.Request) llm.Response {
 	t.Helper()
 	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return response
 }
 
@@ -251,8 +236,6 @@ func (harness testHarness) generateFailure(t *testing.T, request llm.Request, un
 func (harness testHarness) mustStream(t *testing.T, ctx context.Context, request llm.Request) llm.EventStream {
 	t.Helper()
 	stream, err := harness.engine.Stream(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return stream
 }

@@ -118,9 +118,7 @@ func TestParseComposeContainerRestartDiagnostic(t *testing.T) {
 	}, "\n")
 
 	diagnostic, err := parseComposeContainerRestartDiagnostic(output)
-	if err != nil {
-		t.Fatalf("parse restart diagnostic: %v", err)
-	}
+	testassert.NoError(t, err, "parse restart diagnostic")
 	if got, want := diagnostic.running, "true"; got != want {
 		t.Fatalf("running = %q, want %q", got, want)
 	}
@@ -244,9 +242,7 @@ func TestParseComposeContainerHealthSnapshot(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			snapshot, err := parseComposeContainerHealthSnapshot(test.output)
-			if err != nil {
-				t.Fatalf("parse health snapshot: %v", err)
-			}
+			testassert.NoError(t, err, "parse health snapshot")
 			if got, want := snapshot.status, "unhealthy"; got != want {
 				t.Fatalf("health status = %q, want %q", got, want)
 			}
@@ -377,9 +373,7 @@ func TestComposeMetricScrapeIsBoundedAndReadsWorkerPolling(t *testing.T) {
 	defer server.Close()
 
 	value, err := composeMetricValue(strings.TrimPrefix(server.URL, "http://"), "llmtw_worker_polling")
-	if err != nil {
-		t.Fatalf("scrape worker polling metric: %v", err)
-	}
+	testassert.NoError(t, err, "scrape worker polling metric")
 	if value != 1 {
 		t.Fatalf("worker polling metric = %v, want 1", value)
 	}
@@ -562,13 +556,9 @@ func waitForComposeContainerHealthy(t *testing.T, address, container string, res
 func composeContainerStartedAt(t *testing.T, container string) time.Time {
 	t.Helper()
 	output, err := composeDockerInspect(container, "{{.State.StartedAt}}")
-	if err != nil {
-		t.Fatalf("inspect Redis container start time: %v", err)
-	}
+	testassert.NoError(t, err, "inspect Redis container start time")
 	startedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(output))
-	if err != nil {
-		t.Fatalf("parse Redis container start time: %v", err)
-	}
+	testassert.NoError(t, err, "parse Redis container start time")
 	return startedAt
 }
 
@@ -728,9 +718,7 @@ func composeContainerHealthVerdictAfterRestart(snapshot composeContainerHealthSn
 func assertComposeStatus(t *testing.T, address, path string, want int) {
 	t.Helper()
 	status, err := composeStatus(address, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if status != want {
 		t.Fatalf("%s status = %d, want %d", path, status, want)
 	}
@@ -739,9 +727,7 @@ func assertComposeStatus(t *testing.T, address, path string, want int) {
 func assertComposeMetric(t *testing.T, address, name string, want float64) {
 	t.Helper()
 	value, err := composeMetricValue(address, name)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if value != want {
 		t.Fatalf("%s = %v, want %v", name, value, want)
 	}

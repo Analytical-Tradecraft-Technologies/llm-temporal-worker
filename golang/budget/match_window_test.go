@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -89,9 +90,7 @@ func TestMatchPlanPreservesPolicyOrderAndUsesAttemptedClass(t *testing.T) {
 
 func TestPolicyAndWindowValidationRejectsUnsafeBounds(t *testing.T) {
 	valid := Window{ID: "hour", Duration: time.Hour, Bucket: time.Minute, Limit: 100}
-	if err := (Policy{ID: "acme", Match: Matcher{Tenant: "acme"}, Windows: []Window{valid}}).Validate(64); err != nil {
-		t.Fatalf("valid policy rejected: %v", err)
-	}
+	testassert.NoError(t, (Policy{ID: "acme", Match: Matcher{Tenant: "acme"}, Windows: []Window{valid}}).Validate(64), "valid policy rejected")
 
 	for _, test := range []struct {
 		name   string
@@ -146,9 +145,7 @@ func TestWindowActiveSumIncludesFullIntersectingBuckets(t *testing.T) {
 	buckets := map[int64]pricing.MicroUSD{0: 2, 1: 3, 2: 4, 3: 100}
 
 	got, err := window.ActiveSum(buckets, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got != 9 {
 		t.Fatalf("active sum = %d, want 9", got)
 	}
@@ -184,9 +181,7 @@ func TestWindowRetryAfterWaitsForSlidingWindowExpiryAndCapacity(t *testing.T) {
 	window := Window{Duration: 2 * time.Second, Bucket: time.Second, Limit: 10}
 	at := time.Unix(0, int64(2250*time.Millisecond))
 	firstBucketOnly, err := window.RetryAfter(map[int64]pricing.MicroUSD{0: 6}, 5, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if firstBucketOnly != 750*time.Millisecond {
 		t.Fatalf("single-bucket retry after = %s, want 750ms", firstBucketOnly)
 	}
@@ -194,9 +189,7 @@ func TestWindowRetryAfterWaitsForSlidingWindowExpiryAndCapacity(t *testing.T) {
 	buckets := map[int64]pricing.MicroUSD{0: 4, 1: 6}
 
 	got, err := window.RetryAfter(buckets, 5, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got != 1750*time.Millisecond {
 		t.Fatalf("retry after = %s, want 1.75s", got)
 	}

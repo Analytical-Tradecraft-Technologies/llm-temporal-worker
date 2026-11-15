@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
@@ -208,9 +209,7 @@ func TestBudgetRecoveryResumesAfterInterruption(t *testing.T) {
 	var logs bytes.Buffer
 	recovery := budgetRecovery{Recoverer: redis, Source: source, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
 	ctx := context.Background()
-	if _, err := establishBudgetAuthority(ctx, store, redis, recovery, true, time.Now); !errors.Is(err, cloudstate.ErrCorrupt) {
-		t.Fatalf("interrupted recovery = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(establishBudgetAuthority(ctx, store, redis, recovery, true, time.Now)), cloudstate.ErrCorrupt, "interrupted recovery")
 	if !strings.HasPrefix(redis.marker, "recovering:") || redis.lease != "" {
 		t.Fatalf("interruption published readiness or kept the lease: %q %q", redis.marker, redis.lease)
 	}
@@ -265,9 +264,7 @@ func TestBudgetRecoveryConcurrentStartupsWaitForOneRecoverer(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	if redis.commits != 1 || len(redis.holders) != 1 {
 		t.Fatalf("%d commits by %d lease holders", redis.commits, len(redis.holders))
@@ -307,9 +304,7 @@ func TestBudgetRecoveryForcedAndConflictingMarkers(t *testing.T) {
 
 	redis = newRecoveryTestRedis(receipt.Identity)
 	redis.marker = "preparing:" + receipt.Marker()
-	if _, err := establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: source}, true, time.Now); !errors.Is(err, redisstore.ErrBudgetAuthorityUnavailable) {
-		t.Fatalf("preparing marker = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(establishBudgetAuthority(ctx, store, redis, budgetRecovery{Recoverer: redis, Source: source}, true, time.Now)), redisstore.ErrBudgetAuthorityUnavailable, "preparing marker")
 }
 
 func TestBudgetRecoveryOperationNeverAssumesAnUnusedClaim(t *testing.T) {
@@ -393,9 +388,7 @@ func (r *orderedProgressRedis) HoldRecoveryLease(ctx context.Context, value budg
 func TestBudgetRecoveryCheckpointsNeverRewind(t *testing.T) {
 	receipt, store := recoveryTestReceipt(t)
 	redis := &orderedProgressRedis{recoveryTestRedis: newRecoveryTestRedis(receipt.Identity)}
-	if _, err := establishBudgetAuthority(context.Background(), store, redis, budgetRecovery{Recoverer: redis, Source: &recoveryTestSource{}}, true, time.Now); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(establishBudgetAuthority(context.Background(), store, redis, budgetRecovery{Recoverer: redis, Source: &recoveryTestSource{}}, true, time.Now)))
 	for index := 1; index < len(redis.saved); index++ {
 		if redis.saved[index].Scanned < redis.saved[index-1].Scanned || redis.saved[index].shardsDone() < redis.saved[index-1].shardsDone() {
 			t.Fatalf("checkpoint %d rewound progress: %#v after %#v", index, redis.saved[index], redis.saved[index-1])

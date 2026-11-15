@@ -46,9 +46,7 @@ generated_field_exemptions: []
 	mustWriteFile(t, filepath.Join(profileDir, "events.wire"), "event: completed\n")
 
 	report, err := ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(report.Bootstrap) != 1 || report.Bootstrap[0].ID != "example" {
 		t.Fatalf("bootstrap profiles = %#v", report.Bootstrap)
 	}
@@ -163,9 +161,7 @@ cases:
 	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
 	mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
 
-	if _, err := ValidateRepository(root); err != nil {
-		t.Fatalf("supplemental service class scenarios rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(ValidateRepository(root)), "supplemental service class scenarios rejected")
 }
 
 func TestValidateRepositoryRejectsUnsafeFixtureBytesWithoutLeakingThem(t *testing.T) {
@@ -482,9 +478,7 @@ func TestVerifySemanticRoundTripIgnoresGeneratedFields(t *testing.T) {
 		},
 		[]string{"provider.response_id"},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 }
 
 func TestVerifyStreamAssemblyEquivalentRejectsDifferentResponse(t *testing.T) {
@@ -536,9 +530,7 @@ func TestRepositoryManifestReportRequiresAllProfilesEnforced(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			err := validateRepositoryManifestReport(test.report)
 			if test.wantErr == "" {
-				if err != nil {
-					t.Fatalf("validate report: %v", err)
-				}
+				testassert.NoError(t, err, "validate report")
 				return
 			}
 			testassert.ErrorContains(t, err, test.wantErr)
@@ -549,12 +541,8 @@ func TestRepositoryManifestReportRequiresAllProfilesEnforced(t *testing.T) {
 func TestRepositoryManifests(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", "..", ".."))
 	report, err := ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateRepositoryManifestReport(report); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, validateRepositoryManifestReport(report))
 	t.Logf("adapter contract bootstrap profiles: %s", profileIDs(report.Bootstrap))
 	t.Logf("adapter contract enforced profiles: %s", profileIDs(report.Enforced))
 }
@@ -578,12 +566,8 @@ func profileIDs(profiles []Profile) string {
 
 func mustWriteFile(t *testing.T, path, contents string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	testassert.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 }
 
 func mustWriteManifestWithValidServiceClasses(t *testing.T, path, contents string) {

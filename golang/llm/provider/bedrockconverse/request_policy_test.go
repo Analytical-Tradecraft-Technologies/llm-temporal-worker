@@ -17,9 +17,7 @@ func TestCompilePreservesStopSequences(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		request := llm.Request{OperationKey: "test-operation", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Hello")}, Sampling: &llm.SamplingSpec{StopSequences: []string{"END", "\nSTOP"}}}
 		call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		params := call.SDKParams.(bedrockruntime.ConverseInput)
 		if params.InferenceConfig == nil || !reflect.DeepEqual(params.InferenceConfig.StopSequences, request.Sampling.StopSequences) {
 			t.Fatalf("stop sequences lost: %#v", params.InferenceConfig)
@@ -34,9 +32,7 @@ func TestExplicitNoToolsNeverCompilesToAuto(t *testing.T) {
 		testassert.ErrorContains(t, err, "none")
 	}
 	request.Tools = nil
-	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: true}); err != nil {
-		t.Fatalf("no-tools request: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: true})), "no-tools request")
 }
 
 func TestCompileRejectsUnimplementedStructuredOutput(t *testing.T) {

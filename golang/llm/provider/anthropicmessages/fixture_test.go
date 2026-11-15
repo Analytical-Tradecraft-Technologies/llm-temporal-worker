@@ -16,9 +16,7 @@ import (
 func TestWireFixtureMatchesTypedSDKParams(t *testing.T) {
 	profile := mustProfile(t, testProfile())
 	params, err := lowerRequest(llm.Request{OperationKey: "fixture-op", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}}, profile, "standard_only")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertFixture(t, mustReadFixture(t, "request.wire.json"), contract.MarshalJSON(t, params))
 }
 
@@ -26,9 +24,7 @@ func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
 	profile := mustProfile(t, testProfile())
 	request := multimodalToolRequest("fixture-multimodal-tools")
 	params, err := lowerRequest(request, profile, "auto")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertFixture(t, mustReadFixture(t, "request.multimodal-tools.json"), contract.MarshalJSON(t, params))
 }
 
@@ -41,9 +37,7 @@ func TestMediaRejectionFixture(t *testing.T) {
 			ExpectedErrorContains string `json:"expected_error_contains"`
 		} `json:"cases"`
 	}
-	if err := json.Unmarshal(mustReadFixture(t, "request.media-rejection.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(mustReadFixture(t, "request.media-rejection.json"), &fixture))
 	for _, test := range fixture.Cases {
 		t.Run(test.Kind+"/"+test.MediaType, func(t *testing.T) {
 			var part llm.Part

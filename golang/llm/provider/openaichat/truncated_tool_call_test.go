@@ -5,6 +5,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -13,9 +14,7 @@ func TestLengthTruncatedToolCallKeepsTheResponseAsLength(t *testing.T) {
 	body := `{"id":"truncated","object":"chat.completion","created":1,"model":"chat-model","service_tier":"default","usage":{"prompt_tokens":10,"completion_tokens":64,"total_tokens":74},"choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"Looking that up","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\": \"abc"}}]}}]}`
 	truncated := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 	lifted, err := liftStandard(&truncated)
-	if err != nil {
-		t.Fatalf("truncated tool call failed the response: %v", err)
-	}
+	testassert.NoError(t, err, "truncated tool call failed the response")
 	if lifted.Status != llm.ResponseStatusLength || lifted.Usage.OutputTokens != 64 {
 		t.Fatalf("lifted = status %q usage %#v", lifted.Status, lifted.Usage)
 	}

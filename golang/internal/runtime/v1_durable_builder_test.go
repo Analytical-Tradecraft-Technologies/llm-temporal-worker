@@ -53,9 +53,7 @@ func TestDurableV1RuntimeBuilderComposesBothPhasesFromOneSnapshot(t *testing.T) 
 	)
 
 	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, clients)
-	if err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, err, "builder error")
 	if _, ok := runtimeValue.(*activity.DurableV1Runtime); !ok {
 		t.Fatalf("runtime type = %T, want *activity.DurableV1Runtime", runtimeValue)
 	}
@@ -109,9 +107,7 @@ func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *test
 		return want, nil
 	}
 	runtimeValue, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})
-	if err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, err, "builder error")
 	if compositionCalls != 1 {
 		t.Fatalf("composition factory calls = %d, want 1", compositionCalls)
 	}
@@ -155,14 +151,10 @@ func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 		return composition, nil
 	}
 	preflight, err := capabilities.BuildDurableComposition(context.Background())
-	if err != nil {
-		t.Fatalf("preflight composition error = %v", err)
-	}
+	testassert.NoError(t, err, "preflight composition error")
 	capabilities.composition = &preflight
 
-	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})), "builder error")
 	if compositionCalls != 1 {
 		t.Fatalf("composition factory calls = %d, want one preflight call", compositionCalls)
 	}
@@ -224,9 +216,7 @@ func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testi
 		composition.Identity.Cloud = capabilities.CloudIdentity
 		return composition, nil
 	}
-	if _, err := NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities}); err != nil {
-		t.Fatalf("builder rejected composition bound to snapshot: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities})), "builder rejected composition bound to snapshot")
 }
 
 func TestDurableV1RuntimeBuilderFailsBeforePhaseFactoriesOnInvalidComposition(t *testing.T) {
@@ -316,9 +306,7 @@ func TestNewProductionEngineFactoryInstallsCompleteBuilderWhenBothFactoriesExist
 			return validCapabilityComposition(), nil
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	if factory.options.V1RuntimeBuilder == nil {
 		t.Fatal("complete phase factories did not install durable v1 builder")
 	}
@@ -331,9 +319,7 @@ func TestNewProductionEngineFactoryLeavesPhaseFactoriesUnconfiguredWithoutCompos
 		GeneratePortsFactory: validGeneratePortsFactory,
 		CompactPortsFactory:  validCompactPortsFactory,
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	if factory.options.V1RuntimeBuilder != nil {
 		t.Fatal("phase factories without a durable composition installed a v1 builder")
 	}
@@ -350,9 +336,7 @@ func TestNewProductionEngineFactoryPreservesExplicitBuilderWithoutComposition(t 
 		GeneratePortsFactory: validGeneratePortsFactory,
 		CompactPortsFactory:  validCompactPortsFactory,
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	if got, want := reflect.ValueOf(factory.options.V1RuntimeBuilder).Pointer(), reflect.ValueOf(customBuilder).Pointer(); got != want {
 		t.Fatal("production factory replaced the explicit v1 runtime builder")
 	}
@@ -364,9 +348,7 @@ func TestNewProductionEngineFactoryLeavesPartialPhaseCompositionUnconfigured(t *
 		SnapshotLoader:       emptySnapshotLoader,
 		GeneratePortsFactory: validGeneratePortsFactory,
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	if factory.options.V1RuntimeBuilder != nil {
 		t.Fatal("partial phase factories installed a durable v1 builder")
 	}
@@ -400,12 +382,8 @@ func TestV1RuntimeCapabilitiesBuildDurableCompositionUsesSnapshotOwnedPorts(t *t
 		return validCapabilityComposition(), nil
 	}
 	composition, err := capabilities.BuildDurableComposition(context.Background())
-	if err != nil {
-		t.Fatalf("BuildDurableComposition() error = %v", err)
-	}
-	if err := composition.Validate(); err != nil {
-		t.Fatalf("returned composition invalid after construction: %v", err)
-	}
+	testassert.NoError(t, err, "BuildDurableComposition() error")
+	testassert.NoError(t, composition.Validate(), "returned composition invalid after construction")
 }
 
 // The capability stubs intentionally embed the narrow interfaces. The
@@ -441,9 +419,7 @@ var (
 func TestDurableBuilderBindsCloudIdentityToBothPhases(t *testing.T) {
 	snapshot := cloudSnapshot(t, "cloud-builder")
 	expected, err := cloudRequestIdentity(snapshot.Config().State.Requests)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, stale := range []bool{false, true} {
 		t.Run(map[bool]string{false: "matching snapshot", true: "stale snapshot"}[stale], func(t *testing.T) {
 			phases, compositions := 0, 0
@@ -493,9 +469,7 @@ func durableBuilderSnapshot(t *testing.T) *config.Snapshot {
 	t.Helper()
 	data := exampleConfig(t)
 	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
+	testassert.NoError(t, err, "compile example config")
 	return snapshot
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -15,7 +16,5 @@ func TestLowerRequestRejectsTemperatureAboveOne(t *testing.T) {
 		t.Fatal("temperature 1.5 was accepted")
 	}
 	temperature = 1
-	if _, err := lowerRequest(request, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true); err != nil {
-		t.Fatalf("temperature 1 rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(lowerRequest(request, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true)), "temperature 1 rejected")
 }

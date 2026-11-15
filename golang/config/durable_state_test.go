@@ -20,9 +20,7 @@ func TestDurableStateRequiresCloudRequests(t *testing.T) {
 
 func TestMemoryStateUsesNoExternalStateConfiguration(t *testing.T) {
 	state := retainedState(StateKindMemory)
-	if err := state.validate("development"); err != nil {
-		t.Fatalf("memory state with no external dependencies rejected: %v", err)
-	}
+	testassert.NoError(t, state.validate("development"), "memory state with no external dependencies rejected")
 }
 
 func TestMemoryStateIsDevelopmentOnly(t *testing.T) {

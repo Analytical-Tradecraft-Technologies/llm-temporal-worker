@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +22,7 @@ func TestOCamlTemporalPinCheckerRejectsMismatchedPrefetchHelperCommit(t *testing
 		source := filepath.Join(root, path)
 		destination := filepath.Join(fixtureRoot, path)
 		contents, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		makeDirectory(t, 0o755, filepath.Dir(destination))
 		writeFile(t, destination, contents, 0o755)
 	}

@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -24,9 +25,7 @@ func TestComposeLogRedactionTerminatesWhenSecretMatchesMarker(t *testing.T) {
 	if ctx.Err() != nil {
 		t.Fatal("redaction did not terminate when a secret occurs in its own replacement marker")
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := string(output)
 	for _, secret := range []string{"REDACTED", "ACT", "mock-key", "hmac-value"} {
 		if strings.Contains(got, secret) {

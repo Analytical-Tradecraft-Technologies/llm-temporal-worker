@@ -13,6 +13,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 const sloEvidenceSourceRevision = "0123456789abcdef0123456789abcdef01234567"
@@ -58,9 +59,7 @@ func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testin
 	}
 	assertCanonicalJSON(t, raw, "record")
 
-	if _, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest); err != nil {
-		t.Fatalf("verify recorded SLO evidence: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest)), "verify recorded SLO evidence")
 	if _, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath); err == nil {
 		t.Fatal("record unexpectedly overwrote immutable evidence path")
 	}
@@ -114,15 +113,11 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 	assertSLOSchemaRejectsUnknownField(t, bindingSchema, binding, "binding schema", "binding")
 	assertCanonicalJSON(t, raw, "binding")
 
-	if _, err := runSLOEvidence(root, append([]string{"verify-binding"}, args...)...); err != nil {
-		t.Fatalf("verify SLO binding: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(runSLOEvidence(root, append([]string{"verify-binding"}, args...)...)), "verify SLO binding")
 	before := append([]byte(nil), raw...)
 	assertSLOEvidenceRejected(t, root, "bind unexpectedly overwrote immutable binding", append([]string{"bind"}, args...)...)
 	after, err := os.ReadFile(bindingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !bytes.Equal(after, before) {
 		t.Fatal("failed bind changed immutable binding")
 	}
@@ -275,9 +270,7 @@ func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
 	root := repositoryRoot(t)
 	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-candidate.schema.json", "urn:llmtw:slo-evidence-candidate:v1")
 	candidate := validSLOEvidenceCandidate()
-	if err := validateJSONSchema(schema, candidate); err != nil {
-		t.Fatalf("candidate schema rejects recorder input: %v", err)
-	}
+	testassert.NoError(t, validateJSONSchema(schema, candidate), "candidate schema rejects recorder input")
 	candidate["content_sha256"] = strings.Repeat("c", 64)
 	if err := validateJSONSchema(schema, candidate); err == nil {
 		t.Fatal("candidate schema accepts recorder-owned persisted fields")
@@ -454,9 +447,7 @@ func assertCanonicalJSON(t *testing.T, raw []byte, label string) {
 func assertPrivateFileMode(t *testing.T, path, label string) {
 	t.Helper()
 	metadata, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := metadata.Mode().Perm(); got != 0o600 {
 		t.Fatalf("%s mode = %o, want 600", label, got)
 	}
@@ -505,9 +496,7 @@ func compileSLOEvidenceJSONSchemaFile(t *testing.T, root, filename, resourceURL 
 func TestSLOEvidenceAcceptsAHealthyWorkerExport(t *testing.T) {
 	root := repositoryRoot(t)
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for index := 0; index < 1000; index++ {
 		metrics.RecordActivity("completed", "none", time.Millisecond, "finalize")
 	}

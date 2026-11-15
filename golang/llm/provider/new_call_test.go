@@ -3,6 +3,7 @@ package provider
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -15,9 +16,7 @@ func TestNewCallCompletesMetadataAndCarriesOutputSchema(t *testing.T) {
 	}
 	params := map[string]any{"model": "model-a"}
 	call, err := NewCall("endpoint-1", FamilyOpenAIChat, normalized, llm.ServiceClassStandard, params, CallMetadata{WebSearch: true}, "caps/v1", "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if call.EndpointID != "endpoint-1" || call.Family != FamilyOpenAIChat || call.Model != "model-a" || call.OperationKey != "op-1" || call.ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("call identity = %+v", call)
 	}
@@ -28,9 +27,7 @@ func TestNewCallCompletesMetadataAndCarriesOutputSchema(t *testing.T) {
 		t.Fatalf("OutputSchema = %s", call.OutputSchema)
 	}
 	want, err := CompileMetadata(CallMetadata{WebSearch: true}, normalized, "caps/v1", "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if call.Metadata != want || !call.Metadata.WebSearch || call.Metadata.ProviderTier != "default" {
 		t.Fatalf("Metadata = %+v, want %+v", call.Metadata, want)
 	}

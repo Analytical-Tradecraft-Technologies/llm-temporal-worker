@@ -12,6 +12,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func operationFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Operation) {
@@ -44,14 +45,14 @@ func TestOperationRestartReplayAndInputBinding(t *testing.T) {
 	}
 	table.hook, blobs.hook = nil, nil
 	mustCompleteOperation(t, r, op.Scope, first.Request.ID, progress, op.Now.Add(time.Hour))
-	requireErrorIs(t, errOf(r.CompleteOperation(context.Background(), op.Scope, first.Request.ID, json.RawMessage(`{"version":1,"different":true}`), op.Now)), contracts.ErrConflict, "replaced completion")
+	testassert.ErrorIs(t, testassert.Err(r.CompleteOperation(context.Background(), op.Scope, first.Request.ID, json.RawMessage(`{"version":1,"different":true}`), op.Now)), contracts.ErrConflict, "replaced completion")
 	for _, mutate := range []func(*Operation){
 		func(o *Operation) { o.Manifest = json.RawMessage(`{"different":true}`) },
 		func(o *Operation) { o.RequestIndex++ },
 	} {
 		changed := op
 		mutate(&changed)
-		requireErrorIs(t, errOf(r.BeginOperation(context.Background(), changed)), contracts.ErrConflict, "input change accepted")
+		testassert.ErrorIs(t, testassert.Err(r.BeginOperation(context.Background(), changed)), contracts.ErrConflict, "input change accepted")
 	}
 	for _, mutate := range []func(*Operation){
 		func(o *Operation) { o.Key += "-new" },
@@ -142,9 +143,7 @@ func TestOperationRecoversInterruptedAndUnacknowledgedWrites(t *testing.T) {
 				op.Now = op.Now.Add(time.Hour)
 				record, err = reopen(t, table, blobs).BeginOperation(context.Background(), op)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if strings.HasPrefix(stage, "complete-") {
 				table.hook = func(action string, item kv.KeyValueItem) (error, error) {
 					match := stage == "complete-index" && action == "replace"
@@ -172,14 +171,14 @@ func TestOperationRecoversInterruptedAndUnacknowledgedWrites(t *testing.T) {
 
 func TestOperationValidationAndReadiness(t *testing.T) {
 	r, _, _, op := operationFixture(t)
-	mustNoError(t, r.Probe(context.Background()))
+	testassert.NoError(t, r.Probe(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	requireErrorIs(t, r.Probe(ctx), context.Canceled, "")
+	testassert.ErrorIs(t, r.Probe(ctx), context.Canceled)
 	for _, mutate := range []func(*Operation){func(o *Operation) { o.Key = "" }, func(o *Operation) { o.Kind = "query" }, func(o *Operation) { o.Now = time.Time{} }, func(o *Operation) { o.Manifest = json.RawMessage(`[]`) }, func(o *Operation) { o.RequestIndex = -1 }} {
 		bad := op
 		mutate(&bad)
-		requireErrorIs(t, errOf(r.BeginOperation(context.Background(), bad)), ErrInvalid, "")
+		testassert.ErrorIs(t, testassert.Err(r.BeginOperation(context.Background(), bad)), ErrInvalid)
 	}
 }
 
@@ -191,7 +190,7 @@ func TestLookupOperationIsReadOnlyAndScoped(t *testing.T) {
 		return nil, nil
 	}
 	forbidWrites(t, nil, blobs, "lookup")
-	requireErrorIs(t, errOf(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "missing operation")
+	testassert.ErrorIs(t, testassert.Err(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "missing operation")
 	for shard := range PendingShards {
 		page, err := r.ListPending(ctx, shard, 100, "")
 		if err != nil || len(page.Requests) != 0 {
@@ -206,12 +205,12 @@ func TestLookupOperationIsReadOnlyAndScoped(t *testing.T) {
 	}
 	other := op
 	other.Scope.Project = "other"
-	requireErrorIs(t, errOf(r.LookupOperation(ctx, other)), contracts.ErrNotFound, "lookup crossed scope")
+	testassert.ErrorIs(t, testassert.Err(r.LookupOperation(ctx, other)), contracts.ErrNotFound, "lookup crossed scope")
 	other = op
 	other.Key = "different-key"
-	requireErrorIs(t, errOf(r.LookupOperation(ctx, other)), contracts.ErrNotFound, "lookup matched another key")
+	testassert.ErrorIs(t, testassert.Err(r.LookupOperation(ctx, other)), contracts.ErrNotFound, "lookup matched another key")
 	other.Key = ""
-	requireErrorIs(t, errOf(r.LookupOperation(ctx, other)), ErrInvalid, "empty key")
+	testassert.ErrorIs(t, testassert.Err(r.LookupOperation(ctx, other)), ErrInvalid, "empty key")
 }
 
 func TestBeginOperationValidatedRejectsNewInputBeforePublication(t *testing.T) {
@@ -220,17 +219,15 @@ func TestBeginOperationValidatedRejectsNewInputBeforePublication(t *testing.T) {
 	rejected := errors.New("invalid new request")
 	reject := func() error { return rejected }
 
-	requireErrorIs(t, errOf(r.BeginOperationValidated(ctx, op, reject)), rejected, "validation error =")
-	requireErrorIs(t, errOf(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "rejected operation became discoverable")
+	testassert.ErrorIs(t, testassert.Err(r.BeginOperationValidated(ctx, op, reject)), rejected, "validation error =")
+	testassert.ErrorIs(t, testassert.Err(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "rejected operation became discoverable")
 
 	first, err := r.BeginOperationValidated(ctx, op, func() error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	replay, err := r.BeginOperationValidated(ctx, op, reject)
 	if err != nil || replay.Request.ID != first.Request.ID || replay.Revision != first.Revision {
 		t.Fatalf("replay changed or reapplied validation: %v", err)
 	}
 	op.Manifest = json.RawMessage(`{"different":true}`)
-	requireErrorIs(t, errOf(r.BeginOperationValidated(ctx, op, reject)), contracts.ErrConflict, "changed operation binding =")
+	testassert.ErrorIs(t, testassert.Err(r.BeginOperationValidated(ctx, op, reject)), contracts.ErrConflict, "changed operation binding =")
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -48,9 +49,7 @@ func TestValidateBoundsKeywordWork(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			compiled, err := schema.Parse([]byte(test.schema))
-			if err != nil {
-				t.Fatalf("Parse = %v", err)
-			}
+			testassert.NoError(t, err, "Parse")
 			started := time.Now()
 			err = compiled.Validate([]byte(test.instance))
 			var validation *schema.ValidationError
@@ -88,12 +87,8 @@ func TestValidateAcceptsOrdinaryKeywordWork(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			compiled, err := schema.Parse([]byte(test.schema))
-			if err != nil {
-				t.Fatalf("Parse = %v", err)
-			}
-			if err := compiled.Validate([]byte(test.instance)); err != nil {
-				t.Fatalf("Validate = %v", err)
-			}
+			testassert.NoError(t, err, "Parse")
+			testassert.NoError(t, compiled.Validate([]byte(test.instance)), "Validate")
 		})
 	}
 }
@@ -101,9 +96,7 @@ func TestValidateAcceptsOrdinaryKeywordWork(t *testing.T) {
 // One parsed schema meters concurrent validations without shared mutation.
 func TestValidateMetersConcurrently(t *testing.T) {
 	compiled, err := schema.Parse([]byte(`{"type":"array","items":{"$ref":"#/$defs/item"},"$defs":{"item":{"anyOf":[{"enum":[1,2,3]},{"type":"string","pattern":"^x+$"}]}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	instance := []byte(`[1,"xx",3,"xxx"]`)
 	var group sync.WaitGroup
 	for range 8 {

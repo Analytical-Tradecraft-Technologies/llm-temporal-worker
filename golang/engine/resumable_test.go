@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -99,16 +100,12 @@ func seedDispatchingOperation(t *testing.T, harness testHarness, request llm.Req
 		ID: identity.id, ScopeKey: identity.scopeKey, RequestDigest: identity.digest,
 		ExpiresAt: harness.clock.Add(time.Hour),
 	})
-	if err != nil {
-		t.Fatalf("seed operation: %v", err)
-	}
-	if err := harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
+	testassert.NoError(t, err, "seed operation")
+	testassert.NoError(t, harness.admission.MarkDispatching(context.Background(), admission.DispatchRequest{
 		OperationID: started.Operation.ID, DispatchToken: started.Operation.DispatchToken,
 		Attempt:    admission.AttemptFacts{RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", ServiceClass: "standard", Dispatch: admission.Accepted},
 		LeaseUntil: harness.clock.Add(time.Minute),
-	}); err != nil {
-		t.Fatalf("seed dispatching operation: %v", err)
-	}
+	}), "seed dispatching operation")
 	return identity.id
 }
 
@@ -230,9 +227,7 @@ func TestGenerateResumesDurableProviderOperationAfterEngineRestart(t *testing.T)
 		t.Fatal("test admission store does not expose provider-pending recovery")
 	}
 	providerOperationID, err := pending.ProviderOperation(context.Background(), operationID)
-	if err != nil {
-		t.Fatalf("load persisted provider operation ID: %v", err)
-	}
+	testassert.NoError(t, err, "load persisted provider operation ID")
 	if providerOperationID != "fixture-provider-operation" {
 		t.Fatalf("persisted provider operation ID = %q, want fixture-provider-operation", providerOperationID)
 	}
@@ -452,9 +447,7 @@ func TestGenerateResumesTheAcceptedServiceClassOnASharedEndpoint(t *testing.T) {
 		t.Fatal("first attempt unexpectedly completed")
 	}
 	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatalf("resume failed: %v", err)
-	}
+	testassert.NoError(t, err, "resume failed")
 	adapter.mu.Lock()
 	submits, polls := append([]llm.ServiceClass(nil), adapter.submitClasses...), append([]llm.ServiceClass(nil), adapter.pollClasses...)
 	adapter.mu.Unlock()

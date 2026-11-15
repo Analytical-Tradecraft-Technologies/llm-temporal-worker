@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -22,17 +23,11 @@ func recoveryFixture(t *testing.T) (V1RuntimeCapabilities, *planningSource, *pla
 	planning := mustProviderPlanning(t, capabilities)
 	prepared := mustPrepareGenerate(t, request)
 	planned, err := planning.Generate(context.Background(), prepared)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	route, err := planned.Route("paid-operation", "generation")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	binding, err := planned.RecoveryBinding(route)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter.inputs = nil
 	return capabilities, source, adapter, prepared, planned, binding
 }
@@ -57,9 +52,7 @@ func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testin
 			original := phases.plan(t, kind)
 			route, _ := original.Route("paid-operation", "generation")
 			binding, err := original.RecoveryBinding(route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			// The projection round-trips without SDK objects or the raw key.
 			data := encodeJSON(t, binding)
 			for _, value := range []string{"SDKParams", "Adapter", "sensitive prompt", "sensitive history", `"OperationKey"`} {
@@ -259,20 +252,14 @@ func TestProviderRecoveryPreservesResolvedQuoteVersionWithoutPricing(t *testing.
 	planning := mustProviderPlanning(t, capabilities)
 	prepared, _ := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
 	original, err := planning.Generate(context.Background(), prepared)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	route, _ := original.Route("paid-operation", "generation")
 	route.PriceVersion = "original-quoted-price"
 	binding, err := original.RecoveryBinding(route)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	recovery := mustProviderRecovery(t, capabilities)
 	restored, err := recovery.Generate(context.Background(), prepared, binding)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if rebound, err := restored.RecoveryBinding(route); err != nil || rebound.Route.PriceVersion != "original-quoted-price" || restored.Candidate.PriceVersion != "" {
 		t.Fatalf("lost original quote version or changed configured candidate: %v", err)
 	}
@@ -313,9 +300,7 @@ func TestProviderRecoveryCompilerFailuresNeverBecomeFallbackOrPermission(t *test
 				adapter.compile = func(input provider.CompileInput) (provider.Call, error) { cancel(); return planningCall(input), nil }
 			}
 			recovery, err := capabilities.NewProviderRecovery(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			result, err := recovery.Generate(ctx, prepared, binding)
 			if result.Adapter != nil || result.Call.SDKParams != nil {
 				t.Fatal("failed recovery returned a usable call")
@@ -369,9 +354,7 @@ func TestProviderRecoveryRejectsMissingCapabilitiesNoWorkAndInvalidProjection(t 
 			}
 			_, err := capabilities.NewProviderRecovery(ctx)
 			if name == "canceled" {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled)
 			} else {
 				assertRecoveryError(t, err, code, retry)
 			}

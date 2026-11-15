@@ -12,6 +12,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -38,13 +39,9 @@ func saveAttemptPlan(t *testing.T, r *Repository, scope Scope, attempt RequestAt
 	}
 	mustSaveBudgetPlan(t, r, scope, attempt.ID, plan)
 	leaser, err := durable.NewReferenceBudgetMaterializer(plan.Route.GenerationID, "incarnation", func() time.Time { return plan.QuotedAt })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	accepted, err := leaser.Accept(context.Background(), plan.Reservation)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return child, plan, accepted
 }
 
@@ -74,9 +71,7 @@ func TestRequestAttemptConcurrentInitializationAndReadOnlyReplay(t *testing.T) {
 	wg.Wait()
 	close(results)
 	active, err := r.LoadRequestAttempt(ctx, root.Request.Scope, root.Request.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for a := range results {
 		if !equalExecutionJSON(a, active) {
 			t.Fatal("competing attempt identities")
@@ -92,7 +87,7 @@ func TestRequestAttemptConcurrentInitializationAndReadOnlyReplay(t *testing.T) {
 	if _, err := r.LoadRequestPreparation(ctx, root.Request.Scope, active.ID); err != nil {
 		t.Fatal("preparation missing", err)
 	}
-	requireErrorIs(t, errOf(r.LoadRequestAttempt(ctx, Scope{Tenant: root.Request.Scope.Tenant, Project: "other"}, root.Request.ID)), contracts.ErrNotFound, "cross-scope lookup")
+	testassert.ErrorIs(t, testassert.Err(r.LoadRequestAttempt(ctx, Scope{Tenant: root.Request.Scope.Tenant, Project: "other"}, root.Request.ID)), contracts.ErrNotFound, "cross-scope lookup")
 	forbidWrites(t, table, blobs, "healthy replay")
 	again, err := r.BeginRequestAttempt(ctx, root.Request.Scope, root.Request.ID, "", root.Request.CreatedAt.Add(2*time.Second))
 	if err != nil || !equalExecutionJSON(active, again) {
@@ -107,7 +102,7 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	child, plan, accepted := saveAttemptPlan(t, r, scope, first, template)
 	// An unused quote renews within the margin before it expires (#1360).
 	renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
-	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt.Add(-time.Nanosecond))), contracts.ErrConflict, "renewed active quote")
+	testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt.Add(-time.Nanosecond))), contracts.ErrConflict, "renewed active quote")
 	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt)
 	if err != nil || next.ID == first.ID || next.Number != 2 || next.PreviousID != first.ID {
 		t.Fatal("renewal", err)
@@ -137,7 +132,7 @@ func TestRequestAttemptExpiredQuoteUsesNewBudgetAndFencesOldStart(t *testing.T) 
 	if err != nil || replay.ID != next.ID {
 		t.Fatal("uncertain renewal replay advanced again", err)
 	}
-	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, "", newPlan.QuotedAt)), contracts.ErrConflict, "stale first initializer accepted")
+	testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(ctx, scope, root.Request.ID, "", newPlan.QuotedAt)), contracts.ErrConflict, "stale first initializer accepted")
 }
 
 func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *testing.T) {
@@ -147,7 +142,7 @@ func TestRequestAttemptUnknownPaidWorkRemainsDiscoverableAfterRootCompletion(t *
 	child, plan, budget := saveAttemptPlan(t, r, scope, first, template)
 	saved := startExecution(t, r, child, plan, budget)
 	saved = markExecutionUnknown(t, r, child, saved)
-	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter.Add(-time.Nanosecond))), contracts.ErrConflict, "replaced work inside recovery interval")
+	testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter.Add(-time.Nanosecond))), contracts.ErrConflict, "replaced work inside recovery interval")
 	next, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, saved.Execution.RecoverAfter)
 	if err != nil || next.Number != 2 {
 		t.Fatal(err)
@@ -204,7 +199,7 @@ func TestRequestAttemptCannotReplaceKnownPendingOrSuccessfulWork(t *testing.T) {
 					e.CompletedAt = e.UpdatedAt.Add(time.Second)
 				})
 			}
-			requireErrorIs(t, errOf(r.BeginRequestAttempt(context.Background(), root.Request.Scope, root.Request.ID, a.ID, saved.Execution.RecoverAfter.Add(time.Hour))), contracts.ErrConflict, "replaced known work")
+			testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(context.Background(), root.Request.Scope, root.Request.ID, a.ID, saved.Execution.RecoverAfter.Add(time.Hour))), contracts.ErrConflict, "replaced known work")
 		})
 	}
 }
@@ -299,7 +294,7 @@ func TestRequestAttemptRetiredUnknownCanRecoverLater(t *testing.T) {
 	if err != nil || active.ID != next.ID {
 		t.Fatal("recovery replaced active attempt", err)
 	}
-	requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, next.ID, "", next.CreatedAt)), contracts.ErrConflict, "allowed a nested paid attempt")
+	testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(ctx, scope, next.ID, "", next.CreatedAt)), contracts.ErrConflict, "allowed a nested paid attempt")
 }
 
 func TestRequestAttemptHistorySurvivesUnusedRenewalsAndReplay(t *testing.T) {

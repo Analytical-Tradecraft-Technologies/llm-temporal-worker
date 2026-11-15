@@ -22,30 +22,22 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 		lookupCall("call-1", `{"q":"x"}`),
 	}
 	delta, err := codec.EncodeDelta(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotDelta, err := codec.DecodeDelta(delta)
 	if err != nil || !reflect.DeepEqual(gotDelta, items) {
 		t.Fatalf("delta round trip = %#v, %v; want %#v", gotDelta, err, items)
 	}
 	response, err := codec.EncodeResponse([]llm.Item{llm.ModelText("world")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotResponse, err := codec.DecodeResponse(response)
 	if err != nil || len(gotResponse) != 1 {
 		t.Fatalf("response round trip = %#v, %v", gotResponse, err)
 	}
 	patch := SettingsPatch{Model: SetPatch("gpt-test"), ServiceClass: SetPatch(llm.ServiceClassPriority), Instructions: SetPatch([]llm.Instruction{{Kind: llm.InstructionKindParts, Level: llm.InstructionLevelApplication, Content: []llm.Part{llm.TextPart{Text: "be concise"}}}}), Tools: ClearPatch[[]llm.Tool](), Temperature: SetPatch(0.25)}
 	encodedPatch, err := codec.EncodeSettingsPatch(patch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotPatch, err := codec.DecodeSettingsPatch(encodedPatch)
-	if err != nil {
-		t.Fatalf("settings patch decode = %v", err)
-	}
+	testassert.NoError(t, err, "settings patch decode")
 	// The wire contract now records the exact decimal alongside the legacy
 	// provider-facing float projection. A patch authored with a float gains
 	// that exact projection when decoded.
@@ -67,29 +59,21 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 func TestCheckpointBlobCodecPreservesExactTemperatureDecimal(t *testing.T) {
 	codec := CheckpointBlobCodec{}
 	decimal, err := llm.NewDecimalV1("0.123456789012345678")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	patch := SettingsPatch{TemperatureDecimal: SetPatch(decimal)}
 	encoded, err := codec.EncodeSettingsPatch(patch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !strings.Contains(string(encoded), `"temperature":{"set":"0.123456789012345678"}`) {
 		t.Fatalf("encoded patch rounded exact decimal: %s", encoded)
 	}
 	decoded, err := codec.DecodeSettingsPatch(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if decoded.TemperatureDecimal.Set == nil || decoded.TemperatureDecimal.Set.String() != decimal.String() {
 		t.Fatalf("decoded exact decimal = %#v", decoded.TemperatureDecimal.Set)
 	}
 	base := RootModelState("gpt-test")
 	materialized, err := ApplySettingsPatch(base, decoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if materialized.TemperatureDecimal == nil || materialized.TemperatureDecimal.String() != decimal.String() {
 		t.Fatalf("materialized exact decimal = %#v", materialized.TemperatureDecimal)
 	}
@@ -117,9 +101,7 @@ func TestCheckpointBlobCodecRejectsEmptyReasoningPatchValues(t *testing.T) {
 func TestCheckpointBlobCodecRejectsVersionKindAndEnvelopeTampering(t *testing.T) {
 	codec := CheckpointBlobCodec{}
 	encoded, err := codec.EncodeDelta(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	tests := []struct {
 		name string
 		data string
@@ -144,9 +126,7 @@ func TestCheckpointBlobCodecRejectsVersionKindAndEnvelopeTampering(t *testing.T)
 func FuzzCheckpointBlobCodecDecodeDeltaNeverPanics(f *testing.F) {
 	codec := CheckpointBlobCodec{}
 	seed, err := codec.EncodeDelta([]llm.Item{llm.HumanText("seed")})
-	if err != nil {
-		f.Fatal(err)
-	}
+	testassert.NoError(f, err)
 	f.Add(seed)
 	f.Add([]byte(`{"version":"checkpoint-blob/v1","kind":"delta","payload":[]}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -180,12 +160,8 @@ func TestCheckpointBlobDecodersCheckNestedPayloadLimits(t *testing.T) {
 			}
 			duplicate := envelope(`{"nested":{"x":1,"\u0078":2}}`)
 			testassert.ErrorContains(t, decode(CheckpointBlobCodec{}, duplicate), "duplicate")
-			if err := decode(CheckpointBlobCodec{MaxDepth: 2}, envelope(`[[[]]]`)); !errors.Is(err, ErrLimitExceeded) {
-				t.Fatalf("nested depth limit: %v", err)
-			}
-			if err := decode(CheckpointBlobCodec{MaxBytes: len(duplicate) - 1}, duplicate); !errors.Is(err, ErrLimitExceeded) {
-				t.Fatalf("byte limit: %v", err)
-			}
+			testassert.ErrorIs(t, decode(CheckpointBlobCodec{MaxDepth: 2}, envelope(`[[[]]]`)), ErrLimitExceeded, "nested depth limit")
+			testassert.ErrorIs(t, decode(CheckpointBlobCodec{MaxBytes: len(duplicate) - 1}, duplicate), ErrLimitExceeded, "byte limit")
 		})
 	}
 }
@@ -248,13 +224,9 @@ func newScopedBlobFixture(id BlobID, written, stored []byte) (ScopedBlobReader, 
 func mustRoundTripSnapshot(t *testing.T, codec CheckpointBlobCodec, snapshot CheckpointSnapshot) ([]byte, CheckpointSnapshot) {
 	t.Helper()
 	encoded, err := codec.EncodeSnapshot(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	decoded, err := codec.DecodeSnapshot(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded, decoded
 }
 
@@ -281,8 +253,6 @@ func (store *testCheckpointBlobStore) Get(ctx context.Context, tenant string, re
 func mustCanonical(t *testing.T, data []byte) []byte {
 	t.Helper()
 	canonical, err := llm.CanonicalJSON(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return canonical
 }

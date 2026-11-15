@@ -11,6 +11,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -142,9 +143,7 @@ func cloudPreparationFixture(t *testing.T, kind string) (*CloudRequestPreparatio
 	caps := replayCapabilities(materializer)
 	caps.Requests, caps.ConfigDigest, caps.Clock = store, [32]byte{1}, func() time.Time { return time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC) }
 	helper, err := caps.NewCloudRequestPreparation(func(context.Context, llm.RequestContext) (string, error) { return "opaque-scope", nil }, state.MaterializeLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	helper.references = preparationTestKeyring
 	var input llm.PrepareExecutionV1
 	if kind == "compact" {
@@ -163,9 +162,7 @@ func cloudPreparationFixture(t *testing.T, kind string) (*CloudRequestPreparatio
 func mustPrepare(t *testing.T, p *CloudRequestPreparation, input llm.PrepareExecutionV1) PreparedCloudRequest {
 	t.Helper()
 	prepared, err := p.Prepare(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return prepared
 }
 
@@ -319,9 +316,7 @@ func TestCloudRequestPreparationRejectsWrongSampleButRestoresAcrossConfiguration
 	}
 	store.record.Request.RequestIndex--
 	p.digest[0]++
-	if _, err := p.Load(context.Background(), referenceFor(prepared)); err != nil {
-		t.Fatalf("saved input could not be restored after reload: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(p.Load(context.Background(), referenceFor(prepared))), "saved input could not be restored after reload")
 }
 
 func TestCloudRequestPreparationRecoversInputWhileProviderIsPendingOrUnknown(t *testing.T) {
@@ -395,15 +390,11 @@ func TestCloudRequestPreparationConcurrentBeginReusesValidatedSnapshot(t *testin
 				m.err = state.ErrExpired
 			}
 			prepared, err := p.Prepare(context.Background(), input)
-			if err != nil {
-				t.Fatalf("prepare after concurrent begin: %v", err)
-			}
+			testassert.NoError(t, err, "prepare after concurrent begin")
 			if m.calls != 1 || store.saves != 1 || !prepared.Preparation.PreparedAt.Equal(competitorAt) || prepared.Record.Request.ID != store.record.Request.ID {
 				t.Fatalf("calls=%d saves=%d prepared_at=%v", m.calls, store.saves, prepared.Preparation.PreparedAt)
 			}
-			if _, err := p.Load(context.Background(), referenceFor(prepared)); err != nil {
-				t.Fatalf("saved preparation does not restore: %v", err)
-			}
+			testassert.NoError(t, testassert.Err(p.Load(context.Background(), referenceFor(prepared))), "saved preparation does not restore")
 		})
 	}
 }
@@ -448,9 +439,7 @@ func TestCloudProjectDefaultIsPinnedWithoutChangingCallerInput(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			p, store, _, input := cloudPreparationFixture(t, kind)
 			catalog, err := (routing.Catalog{}).WithClassPolicies([]routing.ClassPolicy{{ID: "experiments", Classes: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard}, DefaultClass: llm.ServiceClassEconomy}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: catalog}}
 			original, _ := json.Marshal(input)
 			first := mustPrepare(t, p, input)
@@ -470,9 +459,7 @@ func TestCloudProjectDefaultIsPinnedWithoutChangingCallerInput(t *testing.T) {
 					t.Fatal("retry changed default")
 				}
 				loaded, err := p.Load(context.Background(), referenceFor(first))
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				prepared, err = loaded.generateInput(context.Background())
 				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
 					t.Fatal("load changed default")
@@ -533,9 +520,7 @@ func TestCloudProjectDefaultSnapshotErrorsRemainRetryable(t *testing.T) {
 			})
 			_, err := p.Prepare(ctx, input)
 			if canceled {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatalf("lost cancellation: %v", err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled, "lost cancellation")
 			} else {
 				if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 					t.Fatalf("transient failure became permanent: %v", err)
@@ -545,9 +530,7 @@ func TestCloudProjectDefaultSnapshotErrorsRemainRetryable(t *testing.T) {
 				t.Fatal("failed snapshot created an operation")
 			}
 			p.source = engine.StaticSnapshot{Value: engine.Snapshot{}}
-			if _, err := p.Prepare(context.Background(), input); err != nil {
-				t.Fatalf("same operation could not retry: %v", err)
-			}
+			testassert.NoError(t, testassert.Err(p.Prepare(context.Background(), input)), "same operation could not retry")
 		})
 	}
 }

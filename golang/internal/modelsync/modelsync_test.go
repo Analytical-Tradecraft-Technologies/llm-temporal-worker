@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -74,9 +75,7 @@ func serveUpstreamLists(writer http.ResponseWriter, request *http.Request) bool 
 func testPolicy(t *testing.T) UpstreamPolicy {
 	t.Helper()
 	policy, err := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return policy
 }
 
@@ -84,30 +83,22 @@ func fetchFixture(t *testing.T) Document {
 	t.Helper()
 	server := fixtureServer(t, nil)
 	document, err := Fetcher{Client: server.Client(), BaseURL: server.URL, Clock: func() time.Time { return fixtureTime }}.Fetch(context.Background(), Document{})
-	if err != nil {
-		t.Fatalf("Fetch() error = %v", err)
-	}
+	testassert.NoError(t, err, "Fetch() error")
 	return document
 }
 
 func mergedRules(t *testing.T, layers ...string) Rules {
 	t.Helper()
 	builtIn, err := ParseRules(DefaultRulesDocument())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	documents := []RulesDocument{builtIn}
 	for _, layer := range layers {
 		document, err := ParseRules([]byte(layer))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		documents = append(documents, document)
 	}
 	rules, err := MergeRules(documents...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return rules
 }
 
@@ -582,9 +573,7 @@ func TestRulesRejectInvalidDocuments(t *testing.T) {
 func generateRules(t *testing.T, document Document) []byte {
 	t.Helper()
 	rendered, err := GenerateDefaultRules(document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return rendered
 }
 
@@ -592,13 +581,9 @@ func generateRules(t *testing.T, document Document) []byte {
 func mergeRendered(t *testing.T, rendered []byte) Rules {
 	t.Helper()
 	parsed, err := ParseRules(rendered)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	rules, err := MergeRules(parsed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return rules
 }
 
@@ -614,17 +599,13 @@ func renderModel(t *testing.T, provider generatedProvider, model Model) string {
 
 func mustRefresh(t *testing.T, refresher *Refresher) {
 	t.Helper()
-	if err := refresher.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, refresher.Refresh(context.Background()))
 }
 
 func mustCompile(t *testing.T, input Input) Compiled {
 	t.Helper()
 	compiled, err := Compile(input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return compiled
 }
 
@@ -724,12 +705,8 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	if got := priceFor(t, compiled.Prices, "exa-direct", "exa", "standard").Prices.PerRequest.CanonicalString(); got != "0.005" {
 		t.Fatalf("exa per-request price = %s", got)
 	}
-	if _, err := pricing.CompileUSD("test", compiled.Prices); err != nil {
-		t.Fatalf("compiled prices do not form a valid catalog: %v", err)
-	}
-	if _, err := routing.CompileCatalog("test", compiled.Models); err != nil {
-		t.Fatalf("compiled routes do not form a valid catalog: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(pricing.CompileUSD("test", compiled.Prices)), "compiled prices do not form a valid catalog")
+	testassert.NoError(t, testassert.Err(routing.CompileCatalog("test", compiled.Models)), "compiled routes do not form a valid catalog")
 }
 
 func TestCompileNarrowsFeaturesTheModelCannotAccept(t *testing.T) {
@@ -822,9 +799,7 @@ func TestRefresherKeepsThePublishedDocumentWhenAFetchFails(t *testing.T) {
 	store := NewMemoryStore(nil)
 	good := fetchFixture(t)
 	encoded, _ := good.Encode()
-	if _, err := store.Publish(context.Background(), Digest(encoded), good.FetchedAt, encoded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(store.Publish(context.Background(), Digest(encoded), good.FetchedAt, encoded)))
 	refresher := &Refresher{Store: store, MinInterval: time.Hour, MaxInterval: time.Hour,
 		Clock:   func() time.Time { return fixtureTime.Add(2 * time.Hour) },
 		Fetch:   func(context.Context, Document) (Document, error) { return Document{}, context.DeadlineExceeded },
@@ -931,9 +906,7 @@ func TestOpenRouterRoutePricesEachTierFromItsEndpoints(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, entries, err := openRouterRoute(source, Model{ID: "vendor/model", ContextLength: 1000, Endpoints: tc.endpoints}, "v", "test")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			for tier, want := range tc.want {
 				if got := priceFor(t, entries, "openrouter", "vendor/model", tier).Prices.InputPerMillion.CanonicalString(); got != want {
 					t.Fatalf("%s input = %s, want %s", tier, got, want)

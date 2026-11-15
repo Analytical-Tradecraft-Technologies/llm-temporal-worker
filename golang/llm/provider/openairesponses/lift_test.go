@@ -8,6 +8,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -132,16 +133,12 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 			Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema,
 		}},
 	}, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := liftCall("op-json", llm.ServiceClassStandard)
 	call.SDKParams = params
 	valid := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	valid.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}]`)
-	if _, err := liftResponse(call, &valid, "req"); err != nil {
-		t.Fatalf("valid JSON response = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(liftResponse(call, &valid, "req")), "valid JSON response")
 	invalid := valid
 	invalid.ID = "invalid"
 	invalid.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":3}","annotations":[]}]}]`)
@@ -155,9 +152,7 @@ func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
 		Input:  contract.WireAuditUserText("reply in JSON"),
 		Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}},
 	}, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := liftCall("op-json-object", llm.ServiceClassStandard)
 	call.SDKParams = params
 	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
@@ -165,9 +160,7 @@ func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
 		"type":"message","id":"msg","role":"assistant","status":"completed",
 		"content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]
 	}]`)
-	if _, err := liftResponse(call, &response, "req"); err != nil {
-		t.Fatalf("valid JSON object response = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(liftResponse(call, &response, "req")), "valid JSON object response")
 
 	response.ID = "array"
 	response.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"[1,2,3]","annotations":[]}]}]`)
@@ -181,9 +174,7 @@ func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
 func loadResponseFixture(t *testing.T, name string) responses.Response {
 	t.Helper()
 	data, err := os.ReadFile("testdata/contracts/openai-responses/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response := contract.DecodeJSON[responses.Response](t, data)
 	return response
 }
@@ -208,9 +199,7 @@ func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
 		}
 
 		params, err := lowerRequest(llm.Request{Model: "gpt", Input: contract.WireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: format}}, llm.ServiceClassStandard)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		call := provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "partial", ServiceClass: llm.ServiceClassStandard, SDKParams: params}
 		for _, reason := range []string{"max_output_tokens", "content_filter", "completed"} {
 			response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusIncomplete)
@@ -250,18 +239,14 @@ func TestLiftValidatesFinalAnswerAfterCommentary(t *testing.T) {
 			Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema,
 		}},
 	}, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := liftCall("op-phase", llm.ServiceClassStandard)
 	call.SDKParams = params
 	commentary := `{"type":"message","id":"msg-1","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"Let me work on that.","annotations":[]}]}`
 	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	response.Output = decodeOutputItems(t, `[`+commentary+`,{"type":"message","id":"msg-2","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}]`)
 	lifted, err := liftResponse(call, &response, "req")
-	if err != nil {
-		t.Fatalf("commentary before the final answer = %v", err)
-	}
+	testassert.NoError(t, err, "commentary before the final answer")
 	if lifted.Status != llm.ResponseStatusCompleted || len(lifted.Output) != 2 {
 		t.Fatalf("lifted = %#v", lifted)
 	}
@@ -280,8 +265,6 @@ func liftCall(operationKey string, class llm.ServiceClass) provider.Call {
 func mustLift(t *testing.T, call provider.Call, response *responses.Response, requestID string) llm.Response {
 	t.Helper()
 	lifted, err := liftResponse(call, response, requestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return lifted
 }

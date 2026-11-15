@@ -3,7 +3,7 @@ package redis
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"testing"
 	"time"
@@ -11,23 +11,15 @@ import (
 
 func TestBudgetManifestValidationAndPointerProvenance(t *testing.T) {
 	manifest := testBudgetManifest(t)
-	if err := manifest.Validate(); err != nil {
-		t.Fatalf("valid manifest rejected: %v", err)
-	}
+	testassert.NoError(t, manifest.Validate(), "valid manifest rejected")
 	if got, err := manifest.ManifestDigestHex(); err != nil || len(got) != sha256.Size*2 {
 		t.Fatalf("manifest digest = %q, %v", got, err)
 	}
 	pointer, err := manifest.Pointer()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pointer.ValidateAgainst(manifest); err != nil {
-		t.Fatalf("valid pointer rejected: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, pointer.ValidateAgainst(manifest), "valid pointer rejected")
 	pointer.ManifestDigest = hex.EncodeToString(make([]byte, sha256.Size))
-	if err := pointer.ValidateAgainst(manifest); !errors.Is(err, ErrBudgetManifestInvalid) {
-		t.Fatalf("stale pointer error = %v, want ErrBudgetManifestInvalid", err)
-	}
+	testassert.ErrorIs(t, pointer.ValidateAgainst(manifest), ErrBudgetManifestInvalid, "stale pointer")
 }
 
 func TestBudgetManifestCanonicalDigestIsOrderIndependent(t *testing.T) {
@@ -35,24 +27,16 @@ func TestBudgetManifestCanonicalDigestIsOrderIndependent(t *testing.T) {
 	second := first
 	second.Members = []BudgetManifestMember{first.Members[1], first.Members[0]}
 	firstDigest, err := first.ManifestDigestHex()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	secondDigest, err := second.ManifestDigestHex()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if firstDigest != secondDigest {
 		t.Fatalf("member order changed manifest digest: %s != %s", firstDigest, secondDigest)
 	}
 	firstCanonical, err := first.Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	secondCanonical, err := second.Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !reflect.DeepEqual(firstCanonical, secondCanonical) {
 		t.Fatalf("canonical bytes changed with member order")
 	}
@@ -86,9 +70,7 @@ func TestBudgetManifestRejectsMissingDuplicateOrUnprovenMembers(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			value := testBudgetManifest(t)
 			test.mutate(&value)
-			if err := value.Validate(); !errors.Is(err, ErrBudgetManifestInvalid) {
-				t.Fatalf("Validate() = %v, want ErrBudgetManifestInvalid", err)
-			}
+			testassert.ErrorIs(t, value.Validate(), ErrBudgetManifestInvalid, "Validate()")
 		})
 	}
 }
@@ -108,11 +90,9 @@ func TestBudgetManifestValidateAgainstExpectedCatalog(t *testing.T) {
 		RoundingVersion:     manifest.RoundingVersion,
 		Members:             append([]BudgetManifestMember(nil), manifest.Members...),
 	}
-	if err := manifest.ValidateAgainst(expected); err != nil {
-		t.Fatalf("matching expectation rejected: %v", err)
-	}
+	testassert.NoError(t, manifest.ValidateAgainst(expected), "matching expectation rejected")
 	expected.Members[0].WindowID = "missing-window"
-	requireErrorIs(t, manifest.ValidateAgainst(expected), ErrBudgetManifestInvalid, "incomplete expected catalog error =")
+	testassert.ErrorIs(t, manifest.ValidateAgainst(expected), ErrBudgetManifestInvalid, "incomplete expected catalog error =")
 }
 
 func TestMemberCatalogDigestIsOrderIndependentAndRejectsDuplicates(t *testing.T) {
@@ -136,13 +116,9 @@ func FuzzBudgetManifestMemberOrder(f *testing.F) {
 		if seed%2 == 1 {
 			manifest.Members[0], manifest.Members[1] = manifest.Members[1], manifest.Members[0]
 		}
-		if err := manifest.Validate(); err != nil {
-			t.Fatalf("generated valid manifest rejected: %v", err)
-		}
+		testassert.NoError(t, manifest.Validate(), "generated valid manifest rejected")
 		digest, err := manifest.ManifestDigestHex()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if len(digest) != sha256.Size*2 {
 			t.Fatalf("digest length = %d", len(digest))
 		}

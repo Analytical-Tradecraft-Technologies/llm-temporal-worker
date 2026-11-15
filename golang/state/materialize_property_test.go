@@ -3,12 +3,12 @@ package state
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -33,24 +33,18 @@ func childCheckpoint(handle, parent, tenant, operation, text string) Checkpoint 
 
 func mustPutRoot(t testing.TB, graph *CheckpointGraph, checkpoint Checkpoint) {
 	t.Helper()
-	if err := graph.PutRoot(checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, graph.PutRoot(checkpoint))
 }
 
 func mustPutChild(t testing.TB, graph *CheckpointGraph, checkpoint Checkpoint) {
 	t.Helper()
-	if err := graph.PutChild(checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, graph.PutChild(checkpoint))
 }
 
 func mustMaterialize(t testing.TB, graph *CheckpointGraph, tenant string, handle Handle) MaterializedState {
 	t.Helper()
 	state, err := graph.Materialize(tenant, handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return state
 }
 
@@ -58,9 +52,7 @@ func mustMaterialize(t testing.TB, graph *CheckpointGraph, tenant string, handle
 func mustJSON(t testing.TB, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -69,28 +61,17 @@ func lookupCall(id, arguments string) llm.ToolCall {
 	return llm.ToolCall{ID: id, Name: "lookup", Arguments: []byte(arguments)}
 }
 
-// assertErrIs fails the test unless errors.Is(err, want); a nil want expects
-// success.
-func assertErrIs(t testing.TB, err, want error, what string) {
-	t.Helper()
-	if !errors.Is(err, want) {
-		t.Fatalf("%s = %v, want %v", what, err, want)
-	}
-}
-
 // assertMaterializeErr checks the error graph.Materialize returns for handle.
 func assertMaterializeErr(t testing.TB, graph *CheckpointGraph, tenant string, handle Handle, want error, what string) {
 	t.Helper()
 	_, err := graph.Materialize(tenant, handle)
-	assertErrIs(t, err, want, what)
+	testassert.ErrorIs(t, err, want, what)
 }
 
 func canonicalItemsForTest(t *testing.T, items []llm.Item) []byte {
 	t.Helper()
 	canonical, err := llm.CanonicalJSON(mustJSON(t, items))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return canonical
 }
 
@@ -123,9 +104,9 @@ func TestCheckpointGraphLiveChildOutlivesRetainedAncestor(t *testing.T) {
 	// expired content is never resurrected through a new descendant.
 	late := childCheckpoint("late", "root", "tenant-a", "operation-late", "late")
 	late.ExpiresAt = clock.Add(time.Hour)
-	assertErrIs(t, graph.PutChild(late), ErrExpired, "child of expired parent")
+	testassert.ErrorIs(t, graph.PutChild(late), ErrExpired, "child of expired parent")
 	// Republishing the existing child stays idempotent.
-	assertErrIs(t, graph.PutChild(child), nil, "republish child")
+	testassert.NoError(t, graph.PutChild(child), "republish child")
 	clock = start.Add(110 * time.Minute)
 	assertMaterializeErr(t, graph, "tenant-a", "child", ErrExpired, "materialize expired child")
 }
@@ -152,11 +133,11 @@ func TestCheckpointGraphScopesOperationKeysByTenantAndProject(t *testing.T) {
 	// Operation keys are stable retry identities within a caller scope, not
 	// globally unique values. Independent tenants may safely reuse a key.
 	otherTenant := rootCheckpoint("tenant-b-root", "tenant-b", "same-operation")
-	assertErrIs(t, graph.PutRoot(otherTenant), nil, "same operation key in another tenant")
+	testassert.NoError(t, graph.PutRoot(otherTenant), "same operation key in another tenant")
 	otherProject := rootCheckpoint("project-b-root", "tenant-a", "same-operation")
 	otherProject.Project = "another-project"
-	assertErrIs(t, graph.PutRoot(otherProject), nil, "same operation key in another project")
-	assertErrIs(t, graph.PutRoot(rootCheckpoint("conflict", "tenant-a", "same-operation")), ErrConflict, "same scoped operation key")
+	testassert.NoError(t, graph.PutRoot(otherProject), "same operation key in another project")
+	testassert.ErrorIs(t, graph.PutRoot(rootCheckpoint("conflict", "tenant-a", "same-operation")), ErrConflict, "same scoped operation key")
 }
 
 func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
@@ -228,9 +209,7 @@ func TestCheckpointGraphThreeWayForksRemainIsolated(t *testing.T) {
 func TestExtraHighReasoningSurvivesSettingsInheritance(t *testing.T) {
 	base := RootModelState("openai/gpt-6-luna")
 	patched, err := ApplySettingsPatch(base, SettingsPatch{ReasoningEffort: SetPatch(llm.ReasoningEffortExtraHigh)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	inherited, err := ApplySettingsPatch(patched, SettingsPatch{})
 	if err != nil || inherited.ReasoningEffort != llm.ReasoningEffortExtraHigh {
 		t.Fatalf("extra high was not preserved: %s, %v", inherited.ReasoningEffort, err)
@@ -246,16 +225,12 @@ func TestSettingsPatchOmittedSetAndClearRemainDistinct(t *testing.T) {
 	base.Tools = []llm.Tool{{Name: "lookup", InputSchema: []byte(`{"type":"object"}`)}}
 	high := llm.ReasoningEffortHigh
 	patched, err := ApplySettingsPatch(base, SettingsPatch{ReasoningEffort: SetPatch(high)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if patched.ReasoningEffort != high || len(patched.Tools) != 1 {
 		t.Fatalf("omitted leaves were not inherited: %#v", patched)
 	}
 	cleared, err := ApplySettingsPatch(patched, SettingsPatch{Tools: ClearPatch[[]llm.Tool]()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if cleared.Tools != nil || cleared.ReasoningEffort != high {
 		t.Fatalf("clear reset unrelated leaves: %#v", cleared)
 	}

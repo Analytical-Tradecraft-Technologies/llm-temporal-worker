@@ -53,9 +53,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 		Schema: json.RawMessage(`{"type":"object","properties":{"total":{"type":"number"},"lines":{"type":"array","items":{"type":"string"},"uniqueItems":true}},"required":["total"]}`),
 	}}}
 	requestMap, err := lowerRequestMap(request, testProfile(), "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, requestMap["response_format"])
 	want := `{"json_schema":{"name":"invoice","schema":{"additionalProperties":false,"properties":{"lines":{"description":"{uniqueItems: true}","items":{"type":"string"},"type":"array"},"total":{"type":"number"}},"required":["total","lines"],"type":"object"},"strict":true},"type":"json_schema"}`
 	if string(got) != want {
@@ -68,9 +66,7 @@ func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 	adaptertest.StrictOutputValidation(t, func(t *testing.T, schema, text string) error {
 		call, err := adaptertest.Compile(testAdapter(t), "chat-prod", provider.FamilyOpenAIChat, llm.Request{OperationKey: "op-strict", Model: "chat-model", Input: contract.WireAuditUserText("hi"),
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}}, false)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return validateFinalJSON(call, []llm.Item{llm.ModelText(text)}, llm.ResponseStatusCompleted, false, false)
 	})
 }
@@ -99,7 +95,5 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 	// An instruction mentioning the word satisfies the provider's rule.
 	request := llm.Request{Model: "chat-model", Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "Reply with JSON."}},
 		Input: contract.WireAuditUserText("List three primary colours."), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}
-	if _, err := lowerRequestMap(request, testProfile(), "default"); err != nil {
-		t.Fatalf("json mode mentioning json: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(lowerRequestMap(request, testProfile(), "default")), "json mode mentioning json")
 }

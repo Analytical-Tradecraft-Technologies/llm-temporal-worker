@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,9 +29,7 @@ func testPriceEntry(endpointID, model, tier string) pricing.Entry {
 func compiledPriceCatalog(t *testing.T, id, version string, entries []pricing.Entry) catalog.PricingCatalog {
 	t.Helper()
 	compiled, err := pricing.CompileUSD(version, entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return catalog.PricingCatalog{ID: id, Version: version, Catalog: compiled}
 }
 
@@ -46,9 +43,7 @@ func TestCatalogSnapshotLoaderRejectsMissingSnapshotAndCancellation(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = loader.Load(ctx, &config.Snapshot{})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled load error = %v, want context.Canceled", err)
-	}
+	testassert.ErrorIs(t, err, context.Canceled, "canceled load")
 }
 
 func TestSnapshotLoaderFuncDelegatesToFunction(t *testing.T) {
@@ -70,20 +65,14 @@ func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
 	directory := t.TempDir()
 	capabilitiesPath := filepath.Join(directory, "capabilities.yaml")
 	pricesPath := filepath.Join(directory, "prices.yaml")
-	if err := os.WriteFile(capabilitiesPath, capabilities, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pricesPath, prices, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(capabilitiesPath, capabilities, 0o600))
+	testassert.NoError(t, os.WriteFile(pricesPath, prices, 0o600))
 	data := strings.ReplaceAll(string(configData), "/etc/llmtw/capabilities.yaml", capabilitiesPath)
 	data = strings.ReplaceAll(data, "/etc/llmtw/prices.yaml", pricesPath)
 	compiled := mustCompileConfig(t, []byte(data))
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	model, ok := loaded.Routes.Models["demo-model"]
 	if !ok || len(model.Routes) != 1 || model.Routes[0].Provider != "provider-mock" || model.Routes[0].PriceVersion != "local-v1" {
 		t.Fatalf("loaded route snapshot = %#v", loaded.Routes)
@@ -91,9 +80,7 @@ func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
 	if loaded.Prices == nil || len(loaded.BudgetPolicies) != 1 || !loaded.RequireBudgetMatch || !loaded.RequirePriceWhenBudgeted || loaded.Environment != "development" {
 		t.Fatalf("loaded runtime snapshot = %#v", loaded)
 	}
-	if _, err := loaded.Prices.Resolve(pricing.Query{Provider: "provider-mock", Family: "openai_chat", EndpointID: "provider-mock", Region: "local", Model: "demo-model", ProviderTier: "standard", At: now}); err != nil {
-		t.Fatalf("loaded price resolver cannot resolve route quote: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(loaded.Prices.Resolve(pricing.Query{Provider: "provider-mock", Family: "openai_chat", EndpointID: "provider-mock", Region: "local", Model: "demo-model", ProviderTier: "standard", At: now})), "loaded price resolver cannot resolve route quote")
 }
 
 func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.T) {
@@ -102,9 +89,7 @@ func TestMergePricingCatalogsIsDeterministicAndRejectsInvalidBundles(t *testing.
 		"a": compiledPriceCatalog(t, "a", "a-v1", []pricing.Entry{testPriceEntry("endpoint-a", "model-a", "standard")}),
 	}}
 	merged, err := mergePricingCatalogs(bundle, "config-v1", false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if merged.Version != "runtime-prices/config-v1" || len(merged.Entries) != 2 {
 		t.Fatalf("merged catalog = %#v", merged)
 	}
@@ -243,9 +228,7 @@ func TestCompileRoutesEnforcesBedrockModelServiceClasses(t *testing.T) {
 			value, bundle := bedrockRouteInputs(t, test.configFamily, test.providerFamily, test.model, test.profileClasses, test.routeClasses)
 			_, err := compileRoutes(value, bundle, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
 			if test.wantErr == "" {
-				if err != nil {
-					t.Fatalf("compileRoutes() error = %v", err)
-				}
+				testassert.NoError(t, err, "compileRoutes() error")
 				return
 			}
 			testassert.ErrorContains(t, err, test.wantErr)
@@ -311,9 +294,7 @@ func TestRuntimeCatalogRouteAffinityUsesCompiledAccountIdentity(t *testing.T) {
 			Region: compiled[1].Region, EndpointFamily: compiled[1].Family, ModelLineage: compiled[1].ModelLineage, RouteModelRevision: compiled[1].ModelRevision, CacheEpoch: "epoch-1", LastSuccessAt: now.Add(-time.Minute),
 		}}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(plan.Candidates) != 2 || plan.Candidates[0].RouteID != "route-b" {
 		t.Fatalf("runtime route affinity did not move compiled route: %#v", plan.Candidates)
 	}
@@ -325,9 +306,7 @@ func TestRuntimeCatalogRouteAffinityUsesCompiledAccountIdentity(t *testing.T) {
 		Request: llm.Request{OperationKey: "runtime-affinity-wrong-account", Model: "logical-model", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant-a"}},
 		Catalog: routes, Now: now, Affinity: &routing.AffinityPreferences{Soft: wrongAccount},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if unchanged.Candidates[0].RouteID != "route-a" {
 		t.Fatalf("affinity from another runtime account changed route order: %#v", unchanged.Candidates)
 	}
@@ -405,9 +384,7 @@ func TestCompileRoutesAllowsUnpricedClassWhenAnotherClassHasAnActivePrice(t *tes
 	value.Models["logical-model"] = model
 
 	routes, err := compileRoutes(value, bundle, time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("compileRoutes() error = %v", err)
-	}
+	testassert.NoError(t, err, "compileRoutes() error")
 	route := routes.Models["logical-model"].Routes[0]
 	if route.PriceAvailable || route.PriceVersion != "prices-v1" {
 		t.Fatalf("route price metadata = %#v, want partial availability and prices-v1", route)
@@ -422,9 +399,7 @@ func TestCompileRoutesAllowsUnpricedRouteWithVerifiedEndpointIdentity(t *testing
 	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{stale})
 
 	routes, err := compileRoutes(value, bundle, when)
-	if err != nil {
-		t.Fatalf("compileRoutes() error = %v", err)
-	}
+	testassert.NoError(t, err, "compileRoutes() error")
 	route := routes.Models["logical-model"].Routes[0]
 	if route.Provider != "test-provider" || route.Region != "australiaeast" || route.PriceAvailable || route.PriceVersion != "" {
 		t.Fatalf("route identity = %#v, want verified unpriced route", route)
@@ -491,18 +466,14 @@ func TestCompileBudgetPoliciesMaterializesExactLimitForLegacyAdmission(t *testin
 		ID: "exact-policy", Match: config.BudgetMatch{Tenant: "tenant-a"}, Windows: []config.BudgetWindow{{Duration: config.Duration(time.Hour), Bucket: config.Duration(time.Minute), LimitUSD: pricing.MustUSD("2.000000000000000001")}},
 	}}}}
 	policies, err := compileBudgetPolicies(value)
-	if err != nil {
-		t.Fatalf("compileBudgetPolicies() = %v", err)
-	}
+	testassert.NoError(t, err, "compileBudgetPolicies()")
 	if got, want := policies[0].Windows[0].Limit, pricing.MicroUSD(2_000_000); got != want {
 		t.Fatalf("legacy exact limit = %d, want %d", got, want)
 	}
 
 	value.Budgets.Policies[0].Windows[0].LimitUSD = pricing.MustUSD("0.000000000000000001")
 	policies, err = compileBudgetPolicies(value)
-	if err != nil {
-		t.Fatalf("compileBudgetPolicies(sub-micro) = %v", err)
-	}
+	testassert.NoError(t, err, "compileBudgetPolicies(sub-micro)")
 	if got := policies[0].Windows[0].Limit; got != 1 {
 		t.Fatalf("sub-micro exact limit = %d, want one compatibility micro-dollar", got)
 	}
@@ -567,9 +538,7 @@ func TestCompileRoutesLeavesScheduledPriceVersionChangeUnpinned(t *testing.T) {
 			// The pin must not depend on which side of the boundary the load ran.
 			for _, loadedAt := range []time.Time{boundary.Add(-time.Hour), boundary, boundary.Add(time.Hour)} {
 				routes, err := compileRoutes(value, bundle, loadedAt)
-				if err != nil {
-					t.Fatalf("compileRoutes() error = %v", err)
-				}
+				testassert.NoError(t, err, "compileRoutes() error")
 				route := routes.Models["logical-model"].Routes[0]
 				if !route.PriceAvailable || route.PriceVersion != test.want {
 					t.Fatalf("loaded at %s: price version = %q available = %t, want %q", loadedAt, route.PriceVersion, route.PriceAvailable, test.want)
@@ -603,9 +572,7 @@ func scheduledPriceRoutes(t *testing.T, b *budgetPlanningFixture, boundary time.
 		Pricing: map[string]catalog.PricingCatalog{"prices": compiledPriceCatalog(t, "prices", "prices/v1", entries)},
 	}
 	routes, err := compileRoutes(value, bundle, boundary.Add(-2*time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	b.source.value.Routes = routes
 	b.prices(t, entries)
 }
@@ -680,9 +647,7 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
 		data := mustReadFile(t, "../../deploy/local/"+name)
 		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.WriteFile(path, data, 0o600))
 		base = strings.ReplaceAll(base, "/etc/llmtw/"+name, path)
 	}
 	load := func(old, replacement string) (routing.Route, [32]byte) {
@@ -692,9 +657,7 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 		}
 		compiled := mustCompileConfig(t, []byte(strings.Replace(base, old, replacement, 1)))
 		loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC) }}).Load(context.Background(), compiled)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return loaded.Routes.Models["demo-model"].Routes[0], loaded.ConfigDigest
 	}
 	original, originalConfig := load("\n", "\n")
@@ -734,9 +697,7 @@ func TestCompileRoutesCarriesServiceClassPolicies(t *testing.T) {
 	value.ServiceClassPolicies = []config.ServiceClassPolicy{{ID: "no-priority", Match: config.ServiceClassPolicyMatch{Tenant: "tenant-a"}, Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}
 	routes := mustCompileRoutes(t, value, bundle)
 	copied, err := copyProviderCatalog(routes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, catalog := range []routing.Catalog{routes, copied} {
 		if len(catalog.ClassPolicies) != 1 || catalog.ClassPolicies[0].ID != "no-priority" || catalog.ClassPolicies[0].Tenant != "tenant-a" {
 			t.Fatalf("class policies = %+v", catalog.ClassPolicies)
@@ -749,8 +710,6 @@ func TestCompileRoutesCarriesServiceClassPolicies(t *testing.T) {
 func mustCompileRoutes(t *testing.T, value config.Config, bundle catalog.Bundle) routing.Catalog {
 	t.Helper()
 	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return routes
 }

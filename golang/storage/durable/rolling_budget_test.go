@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/conformance"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -13,9 +14,7 @@ func TestReferenceRollingBudget(t *testing.T) {
 		now := time.Date(2026, 7, 26, 2, 1, 0, 0, time.UTC)
 		clock := func() time.Time { return now }
 		m, err := durable.NewReferenceBudgetMaterializer("rolling-gen", "rolling-inc", clock)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return m, clock, func(d time.Duration) { now = now.Add(d) }
 	})
 }

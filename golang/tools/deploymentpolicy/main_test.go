@@ -7,9 +7,7 @@ import (
 )
 
 func TestVerifyRenderedAcceptsBaseWorkloadPolicy(t *testing.T) {
-	if err := verifyRendered("base", []byte(validRenderedWorkload)); err != nil {
-		t.Fatalf("verify rendered base workload: %v", err)
-	}
+	testassert.NoError(t, verifyRendered("base", []byte(validRenderedWorkload)), "verify rendered base workload")
 }
 
 func TestVerifyRenderedRejectsPublicStateAndControlEgress(t *testing.T) {
@@ -181,9 +179,7 @@ func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 func TestVerifyRenderedAllowsOnlyAnnotatedIdentityOverlays(t *testing.T) {
 	awsWorkload := strings.ReplaceAll(validRenderedWorkload, "automountServiceAccountToken: false", "automountServiceAccountToken: true")
 	awsWorkload = strings.Replace(awsWorkload, "metadata:\n  name: llmtw-worker\nautomount", "metadata:\n  name: llmtw-worker\n  annotations:\n    eks.amazonaws.com/role-arn: arn:aws:iam::REPLACE_ACCOUNT:role/REPLACE_ROLE\nautomount", 1)
-	if err := verifyRendered("aws-workload-identity", []byte(awsWorkload)); err != nil {
-		t.Fatalf("verify rendered AWS workload identity: %v", err)
-	}
+	testassert.NoError(t, verifyRendered("aws-workload-identity", []byte(awsWorkload)), "verify rendered AWS workload identity")
 
 	testassert.ErrorContains(t, verifyRendered("azure-workload-identity", []byte(awsWorkload)), "Azure workload identity")
 }

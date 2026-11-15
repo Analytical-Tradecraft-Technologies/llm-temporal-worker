@@ -122,13 +122,9 @@ func TestCatalogDerivedChatAdapterCompilesTextAndImageRequests(t *testing.T) {
 		SnapshotLoader: emptySnapshotLoader,
 		HTTPClient:     &http.Client{},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := factory.buildAdapter(context.Background(), azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"}), snapshot, "azure-chat", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, strict := range []bool{true, false} {
 		_, err = adapter.Compile(context.Background(), provider.CompileInput{
 			Request: llm.Request{OperationKey: "catalog-capabilities", Model: "chat-deployment", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{

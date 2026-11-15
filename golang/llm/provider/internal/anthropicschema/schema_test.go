@@ -27,9 +27,7 @@ func TestLowerMovesUnsupportedKeywordsIntoDescriptions(t *testing.T) {
 		"$defs": {"leaf": {"type": "object"}}
 	}`)
 	lowered, err := Lower(schema, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, lowered)
 	want := `{"$defs":{"leaf":{"additionalProperties":false,"properties":{},"type":"object"}},"additionalProperties":false,"properties":{` +
 		`"age":{"description":"{exclusiveMaximum: 150, minimum: 0, multipleOf: 1}","type":"integer"},` +
@@ -43,9 +41,7 @@ func TestLowerMovesUnsupportedKeywordsIntoDescriptions(t *testing.T) {
 		t.Fatalf("lowered schema\n got: %s\nwant: %s", got, want)
 	}
 	again, err := Lower(schema, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if repeated, _ := json.Marshal(again); string(repeated) != want {
 		t.Fatalf("lowering is not deterministic: %s", repeated)
 	}
@@ -61,9 +57,7 @@ func TestLowerOpenObjects(t *testing.T) {
 		}
 	}
 	lowered, err := Lower(declared, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if lowered["additionalProperties"] != false || lowered["description"] != "{additionalProperties: true}" {
 		t.Fatalf("best-effort open object = %#v", lowered)
 	}
@@ -92,9 +86,7 @@ func TestLowerRejectsRecursiveAndUnrepresentableReferences(t *testing.T) {
 	// A definition shared by two properties is a DAG, not recursion, and a
 	// property that happens to be named $ref is not a reference.
 	shared := `{"type":"object","properties":{"a":{"$ref":"#/$defs/leaf"},"b":{"$ref":"#/$defs/leaf"},"$ref":{"type":"string"}},"$defs":{"leaf":{"type":"string"}}}`
-	if _, err := Lower(json.RawMessage(shared), true); err != nil {
-		t.Fatalf("shared definition = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(Lower(json.RawMessage(shared), true)), "shared definition")
 }
 
 func TestLowerRejectsSchemasOutsideTheLocalSubset(t *testing.T) {
@@ -122,9 +114,7 @@ func TestValidateAppliesTheCallerSchema(t *testing.T) {
 	output := func(text string) []llm.Item {
 		return []llm.Item{llm.ModelText(text)}
 	}
-	if err := Validate(schema, output(`{"name":"abc"}`)); err != nil {
-		t.Fatalf("conforming JSON = %v", err)
-	}
+	testassert.NoError(t, Validate(schema, output(`{"name":"abc"}`)), "conforming JSON")
 	testassert.ErrorContains(t, Validate(schema, output(`{"name":"ab"}`)), "does not satisfy schema")
 	if err := Validate(schema, nil); err == nil {
 		t.Fatal("missing text accepted")

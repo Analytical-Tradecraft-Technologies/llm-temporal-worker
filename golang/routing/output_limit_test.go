@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"testing"
 )
@@ -23,9 +24,7 @@ func TestPlannerEnforcesPerRouteOutputLimits(t *testing.T) {
 			larger.ID = "large"
 			larger.OutputTokens = 200
 			catalog, err := CompileCatalog("v1", map[string]Model{"logical": {Routes: []Route{route, larger}}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			request := llm.Request{OperationKey: "op", Model: "logical", Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindText}, MaxTokens: test.limit}}
 			originalLimit := 0
 			if test.limit != nil {

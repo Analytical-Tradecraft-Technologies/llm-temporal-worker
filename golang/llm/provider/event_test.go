@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -24,9 +25,7 @@ func TestAssemblerBuildsTerminalResponseInOrder(t *testing.T) {
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.OperationKey != "operation-1" || response.Status != llm.ResponseStatusCompleted {
 		t.Fatalf("response identity = %#v", response)
 	}
@@ -52,9 +51,7 @@ func TestAssemblerKeepsResponseOutputOrderWhenCompletionsAreInterleaved(t *testi
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(response.Output) != 2 || !reflect.DeepEqual(response.Output[0], first) || !reflect.DeepEqual(response.Output[1], second) {
 		t.Fatalf("response output order = %#v, want first then second", response.Output)
 	}
@@ -72,9 +69,7 @@ func TestAssemblerMergesPartialUsageUpdates(t *testing.T) {
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.Usage.InputTokens != 4 || response.Usage.OutputTokens != 2 {
 		t.Fatalf("merged usage = %#v", response.Usage)
 	}
@@ -121,9 +116,7 @@ func TestAssemblerRejectsDuplicateTerminalAndPreservesOpaqueState(t *testing.T) 
 		t.Fatal("accepted duplicate terminal")
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	message, ok := response.Output[0].(llm.Message)
 	if !ok || len(message.Content) != 1 {
 		t.Fatalf("assembled opaque output = %#v", response.Output)
@@ -148,9 +141,7 @@ func TestAssemblerAllowsDeferredToolIdentityOutsideStreamingPort(t *testing.T) {
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	tool, ok := response.Output[0].(llm.ToolCall)
 	if !ok || tool.ID != "call-1" || tool.Name != "lookup" || string(tool.Arguments) != `{"argument":true}` {
 		t.Fatalf("assembled deferred-identity tool = %#v", response.Output[0])
@@ -159,9 +150,7 @@ func TestAssemblerAllowsDeferredToolIdentityOutsideStreamingPort(t *testing.T) {
 
 func TestAssemblerRejectsInvalidUTF8AndUnfinishedOutput(t *testing.T) {
 	assembler := provider.NewAssembler("operation-1")
-	if err := assembler.Add(provider.OutputStarted{Index: 0}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, assembler.Add(provider.OutputStarted{Index: 0}))
 	if err := assembler.Add(provider.TextDelta{Index: 0, Text: string([]byte{0xff})}); err == nil {
 		t.Fatal("accepted invalid UTF-8 delta")
 	}

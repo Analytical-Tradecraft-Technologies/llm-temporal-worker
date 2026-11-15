@@ -3,6 +3,7 @@ package cloudstate
 import (
 	"context"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -15,9 +16,7 @@ func listAllBudgetRecovery(t *testing.T, r *Repository, notBefore time.Time) ([]
 		token := ""
 		for {
 			page, err := r.ListBudgetRecovery(context.Background(), shard, 1, token, notBefore)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			executions = append(executions, page.Executions...)
 			scanned += page.Scanned
 			if token = page.NextPageToken; token == "" {

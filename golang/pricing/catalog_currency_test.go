@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -88,17 +89,13 @@ func assertUSDResult(tb testing.TB, what, want string) func(USD, error) USD {
 func mustCompileUSD(t *testing.T, version string, entries []Entry) Catalog {
 	t.Helper()
 	catalog, err := CompileUSD(version, entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return catalog
 }
 
 func mustDecimalUSD(t *testing.T, value string) DecimalUSD {
 	t.Helper()
 	parsed, err := ParseDecimalUSD(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return parsed
 }

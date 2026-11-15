@@ -1,13 +1,13 @@
 package pricing
 
 import (
-	"errors"
 	"math"
 	"math/big"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -47,9 +47,7 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 		CacheWriteTokens: 1_000_000,
 		ReasoningTokens:  1_000_000,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if cost.USD.String() != "0.100015000000000000" || cost.MicroUSD != 100015 || cost.Method != CostCatalogUsage || cost.CatalogVersion != "entry-v1" {
 		t.Fatalf("cost = %#v", cost)
 	}
@@ -122,21 +120,15 @@ func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
 
 	valid.EffectiveFrom, valid.EffectiveUntil = from, from.Add(time.Hour)
 	catalog := mustCompileUSD(t, "v1", []Entry{valid})
-	if _, err := catalog.Resolve(entryQuery(valid, from.Add(time.Hour))); !errors.Is(err, ErrNoActivePrice) {
-		t.Fatalf("price at exclusive end = %v", err)
-	}
-	if _, err := catalog.Resolve(entryQuery(valid, from)); err != nil {
-		t.Fatalf("price at inclusive start = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(catalog.Resolve(entryQuery(valid, from.Add(time.Hour)))), ErrNoActivePrice, "price at exclusive end")
+	testassert.NoError(t, testassert.Err(catalog.Resolve(entryQuery(valid, from))), "price at inclusive start")
 
 	var nilResolver *PriceResolver
 	if _, err := nilResolver.Resolve(Query{}); err == nil {
 		t.Fatal("nil resolver unexpectedly resolved a quote")
 	}
 	nilResolver.Reload(catalog)
-	if _, err := catalog.Resolve(Query{Provider: "missing"}); !errors.Is(err, ErrNoActivePrice) {
-		t.Fatalf("missing price error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(catalog.Resolve(Query{Provider: "missing"})), ErrNoActivePrice, "missing price")
 }
 
 func TestLegacyMoneyConversionsUseExplicitFloorAndSafeBounds(t *testing.T) {
@@ -178,18 +170,14 @@ func TestUSDBoundariesValidateYAMLAndUnderflow(t *testing.T) {
 	var document struct {
 		Amount USD `yaml:"amount"`
 	}
-	if err := yaml.Unmarshal([]byte("amount: \"1.25\"\n"), &document); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, yaml.Unmarshal([]byte("amount: \"1.25\"\n"), &document))
 	if document.Amount.String() != "1.250000000000000000" {
 		t.Fatalf("YAML amount = %s", document.Amount.String())
 	}
 	if err := yaml.Unmarshal([]byte("amount: 1.25\n"), &document); err == nil {
 		t.Fatal("unquoted YAML money unexpectedly accepted")
 	}
-	if err := MustUSD("1").Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, MustUSD("1").Validate())
 	if err := (USD{units: big.NewInt(-1)}).Validate(); err == nil {
 		t.Fatal("negative USD unexpectedly validated")
 	}
@@ -233,9 +221,7 @@ func TestCostFromUsageRejectsMicroUSDAggregateOverflow(t *testing.T) {
 func TestCostFromUsagePreservesSubMicroUSDInExactCost(t *testing.T) {
 	entry := Entry{Prices: UnitPrices{PerRequest: MustDecimalUSD("0.000000000000000001")}}
 	cost, err := CostFromUsage(entry, Usage{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got, want := cost.USD.String(), "0.000000000000000001"; got != want {
 		t.Fatalf("exact sub-micro cost = %s, want %s", got, want)
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
@@ -23,9 +24,7 @@ func TestLargeNonStreamingRequestReachesTransport(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			messagestest.LargeNonStreamingRequestReachesTransport(t, func(t *testing.T, httpClient *http.Client, params anthropic.MessageNewParams) error {
 				client, err := newClient(httpClient)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				_, err = client.messages.New(context.Background(), params)
 				return err
 			})

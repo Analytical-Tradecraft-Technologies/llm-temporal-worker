@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -20,9 +21,7 @@ func TestEstimatePlanUsesMaximumAuthorizedCandidate(t *testing.T) {
 	}
 	estimator := Estimator{SafetyRatio: big.NewRat(1, 1)}
 	got, err := estimator.EstimatePlan(request, plan, entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.CandidateID != "priority" {
 		t.Fatalf("maximum estimate candidate = %q", got.CandidateID)
 	}
@@ -42,9 +41,7 @@ func TestEstimatePlanIdentifiesAllFreeMaximumCandidate(t *testing.T) {
 	}
 
 	got, err := (Estimator{}).EstimatePlan(request, plan, entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.CandidateID != "free-first" || got.CatalogVersion != "free-v1" {
 		t.Fatalf("all-free maximum = %#v, want first candidate identity", got)
 	}
@@ -177,9 +174,7 @@ func intPointer(value int) *int { return &value }
 func mustEstimateCandidate(tb testing.TB, estimator Estimator, request llm.Request, candidate routing.Candidate, entry pricing.Entry) Estimate {
 	tb.Helper()
 	estimate, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		tb.Fatalf("EstimateCandidate: %v", err)
-	}
+	testassert.NoError(tb, err, "EstimateCandidate")
 	return estimate
 }
 
@@ -188,9 +183,7 @@ func mustEstimateCandidate(tb testing.TB, estimator Estimator, request llm.Reque
 func mustCountInputTokens(tb testing.TB, estimator Estimator, request llm.Request, candidate routing.Candidate) int64 {
 	tb.Helper()
 	tokens, err := estimator.CountInputTokens(request, candidate)
-	if err != nil {
-		tb.Fatalf("CountInputTokens: %v", err)
-	}
+	testassert.NoError(tb, err, "CountInputTokens")
 	return tokens
 }
 
@@ -216,9 +209,7 @@ func TestHostedToolAllowanceAndKnownContext(t *testing.T) {
 		t.Fatalf("allowance=%+v plain=%+v", hosted, plain)
 	}
 	candidate.ContextTokens = 0
-	if _, err := estimator.EstimateCandidate(request, candidate, entry); !errors.Is(err, ErrUnusablePrice) {
-		t.Fatalf("unknown context accepted: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(estimator.EstimateCandidate(request, candidate, entry)), ErrUnusablePrice, "unknown context accepted")
 }
 
 func TestResearchReservationUsesTaskSizeNotModelContext(t *testing.T) {

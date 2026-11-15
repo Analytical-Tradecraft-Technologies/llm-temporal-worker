@@ -38,9 +38,7 @@ func TestLiftOmitsReasoningContentWithADiagnostic(t *testing.T) {
 			response := bedrockConverseResponse("unused", 3, 4)
 			response.Output = &types.ConverseOutputMemberMessage{Value: types.Message{Role: types.ConversationRoleAssistant, Content: test.content}}
 			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
-			if err != nil {
-				t.Fatalf("reasoning content failed the response: %v", err)
-			}
+			testassert.NoError(t, err, "reasoning content failed the response")
 			if len(lifted.Output) != 1 || lifted.Output[0].(llm.Message).Content[0].(llm.TextPart).Text != "answer" || lifted.Usage.OutputTokens != 4 {
 				t.Fatalf("lifted output = %#v usage = %#v", lifted.Output, lifted.Usage)
 			}
@@ -59,9 +57,7 @@ func TestLiftOmitsReasoningContentWithADiagnostic(t *testing.T) {
 			if len(found) != 1 || found[0].Severity != llm.DiagnosticWarning || found[0].Details["blocks"] != test.dropped {
 				t.Fatalf("diagnostics = %#v, want one reasoning_dropped warning for %s blocks", lifted.Diagnostics, test.dropped)
 			}
-			if _, err := json.Marshal(lifted); err != nil {
-				t.Fatalf("lifted response does not encode: %v", err)
-			}
+			testassert.NoError(t, testassert.Err(json.Marshal(lifted)), "lifted response does not encode")
 		})
 	}
 }
@@ -98,9 +94,7 @@ func TestLoweringRejectsReasoningAndExtensionsItCannotSend(t *testing.T) {
 			test.mutate(&request)
 			_, err := lowerRequest(request, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), test.strict)
 			if test.wantErr == "" {
-				if err != nil {
-					t.Fatalf("lowerRequest() error = %v", err)
-				}
+				testassert.NoError(t, err, "lowerRequest() error")
 				return
 			}
 			testassert.ErrorContains(t, err, test.wantErr)

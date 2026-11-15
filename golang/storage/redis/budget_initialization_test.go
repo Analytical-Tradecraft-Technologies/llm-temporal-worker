@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -18,9 +19,7 @@ func TestBudgetInitializerDisablesRetriesForOneTimeCreation(t *testing.T) {
 	} {
 		t.Cleanup(func() { _ = source.Close() })
 		client, err := singleAttemptBudgetClient(source)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		t.Cleanup(func() { _ = client.Close() })
 		switch concrete := client.(type) {
 		case *redisclient.Client:
@@ -54,9 +53,7 @@ func TestBudgetMaterializerRequiresReadyReceiptForItsOwnKeys(t *testing.T) {
 		}
 		_, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Keys: keys, Mode: AdmissionModeFunction, GenerationID: "redis-budget-v1", IncarnationID: "redis-budget-v1", Initialization: &value})
 		if kind == "valid" {
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 		} else if !errors.Is(err, ErrBudgetAuthorityUnavailable) {
 			t.Fatalf("%s receipt error = %v", kind, err)
 		}
@@ -91,9 +88,7 @@ func TestBudgetInitializationScansEveryPageAndMatchesLiteralNamespace(t *testing
 		t.Fatalf("occupied final page was missed: calls=%d err=%v", scanner.calls, err)
 	}
 	scanner.pages = scanner.pages[:2]
-	if err := scanBudgetNamespace(context.Background(), scanner, space); err != nil {
-		t.Fatalf("literal namespace matched unrelated keys: %v", err)
-	}
+	testassert.NoError(t, scanBudgetNamespace(context.Background(), scanner, space), "literal namespace matched unrelated keys")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	scanner.calls = 0

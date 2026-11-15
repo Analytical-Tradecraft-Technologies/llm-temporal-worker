@@ -12,6 +12,7 @@ import (
 
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -38,17 +39,11 @@ func TestAnthropicAWSContractFixtureLowersToolInputAndOutput(t *testing.T) {
 	profile := anthropicAWSFixtureProfile(t)
 	request := anthropicAWSFixture.loadRequest(t, "request.tool-input-output.semantic.json")
 	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	tier, err := profile.providerTier(normalized.ServiceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	params, err := lowerRequest(normalized, profile, tier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotWire := contract.MarshalJSON(t, params)
 	anthropicAWSFixture.assertCanonical(t, gotWire, "request.tool-input-output.wire.json")
 }
@@ -77,14 +72,10 @@ func TestAnthropicAWSContractFixtureDecoderIsFragmentationInvariant(t *testing.T
 	if strings.Join(fragments, "") != `{"q":"sydney"}` {
 		t.Fatalf("tool argument fragments = %#v", fragments)
 	}
-	if _, err := streamtest.Assemble("fixture-anthropic-aws-stream", want); err != nil {
-		t.Fatal(err)
-	}
-	if err := contracttest.VerifyStreamAssemblyEquivalent(wire, anthropicAWSFixture.read(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+	testassert.NoError(t, testassert.Err(streamtest.Assemble("fixture-anthropic-aws-stream", want)))
+	testassert.NoError(t, contracttest.VerifyStreamAssemblyEquivalent(wire, anthropicAWSFixture.read(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
 		return streamtest.AssembleJSON(events, "fixture-anthropic-aws-stream", DecodeStream)
-	}, metadata.GeneratedFieldExemptions); err != nil {
-		t.Fatal(err)
-	}
+	}, metadata.GeneratedFieldExemptions))
 }
 
 func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T) {
@@ -96,18 +87,14 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "Request-Id", "req-anthropic-aws-fixture"), nil
 	}))
 	adapter, err := New(client, anthropicAWSFixtureEndpoint, anthropicAWSFixtureProfile(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, anthropicAWSFixtureEndpoint, provider.FamilyAnthropicMessages, request)
 	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil {
 		t.Fatal("fixture transport was not called")
 	}
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	anthropicAWSFixture.assertCanonical(t, body, "request.wire.json")
 	if got.URL.Path != "/aws-contract/v1/messages" {
 		t.Fatalf("Anthropic AWS transport path = %q", got.URL.Path)
@@ -130,9 +117,7 @@ func newAnthropicAWSFixtureClient(t *testing.T, transport http.RoundTripper) *Cl
 			SkipAuth:    true,
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return client
 }
 
@@ -157,9 +142,7 @@ func assertAnthropicAWSFixtureClassifiedError(t *testing.T) {
 		return adaptertest.JSONResponse(request, http.StatusUnauthorized, string(anthropicAWSFixture.read(t, "error.authentication.json")), "Request-Id", "aws-auth-fixture"), nil
 	}))
 	adapter, err := New(client, anthropicAWSFixtureEndpoint, anthropicAWSFixtureProfile(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := anthropicAWSFixture.loadRequest(t, "request.semantic.json")
 	call := adaptertest.CompileStrict(t, adapter, anthropicAWSFixtureEndpoint, provider.FamilyAnthropicMessages, request)
 	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
@@ -171,9 +154,7 @@ func assertAnthropicAWSFixtureClassifiedError(t *testing.T) {
 		t.Fatalf("AWS gateway request count = %d, want 1", calls)
 	}
 	encoded, marshalErr := json.Marshal(mapped)
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
-	}
+	testassert.NoError(t, marshalErr)
 	if bytes.Contains(encoded, []byte("credentials rejected")) {
 		t.Fatal("normalized error leaked provider response body")
 	}
@@ -189,9 +170,7 @@ func assertAnthropicAWSFixtureOpaqueThinkingAndToolOutput(t *testing.T, profile 
 		OperationKey: "fixture-anthropic-aws-thinking",
 		ServiceClass: llm.ServiceClassPriority,
 	}, &response, "req-anthropic-aws-thinking")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if lifted.Status != llm.ResponseStatusToolCalls || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassPriority || lifted.Continuation == nil || len(lifted.Continuation.ProviderStates) != 2 {
 		t.Fatalf("thinking/tool response = %#v", lifted)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -29,18 +30,14 @@ func TestQueryAuditLogsMetadataWithoutPayloadsOrRawIdentifiers(t *testing.T) {
 		Source: "redis_budget_generation", ActualCostUSD: &cost, CostStatus: "exact", CostMethod: "control_query_zero",
 		StartedAt: started, CompletedAt: started.Add(50 * time.Millisecond),
 	}
-	if err := logger.QueryAudit(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, logger.QueryAudit(context.Background(), record))
 	for _, private := range []string{record.Tenant, record.Project, record.OperationKey, "private-request", "private-response", "RequestJSON", "ResponseJSON"} {
 		if strings.Contains(output.String(), private) {
 			t.Fatalf("private data %q in audit log", private)
 		}
 	}
 	var entry map[string]any
-	if err := json.Unmarshal(output.Bytes(), &entry); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(output.Bytes(), &entry))
 	for key, want := range map[string]any{"msg": "control query completed", "query_kind": "budget_status", "actual_cost_usd": "0", "duration_ms": float64(50), "started_at": "2026-09-23T02:00:00Z"} {
 		if entry[key] != want {
 			t.Errorf("%s=%v, want %v", key, entry[key], want)
@@ -54,9 +51,7 @@ func TestQueryAuditLogsMetadataWithoutPayloadsOrRawIdentifiers(t *testing.T) {
 	output.Reset()
 	record.ActualCostUSD = nil
 	record.CostStatus, record.CostMethod, record.CostUnknownReasonCode = "unknown", "", "usage_missing"
-	if err := logger.QueryAudit(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, logger.QueryAudit(context.Background(), record))
 	if strings.Contains(output.String(), "actual_cost_usd") || !strings.Contains(output.String(), `"cost_status":"unknown"`) {
 		t.Fatalf("unknown cost became zero: %s", output.String())
 	}
@@ -106,21 +101,15 @@ func TestScopeAccessDeniedLogsActivityTypeAndHashesOnly(t *testing.T) {
 func TestRequestAccessLogsHashesAndBoundedFieldsOnly(t *testing.T) {
 	var output bytes.Buffer
 	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	record := observability.RequestAccessRecord{
 		Phase: observability.RequestAccessPrepared, Kind: "compact", ActivityType: "llm.PrepareExecution.v1",
 		Tenant: "raw-tenant", Project: "raw-project", Actor: "raw-actor", OperationKey: "raw-operation-key",
 		OperationID: "llmtw_req_raw", ParentCheckpoint: "ctn_v1.raw-parent",
 	}
-	if err := logger.RequestAccess(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, logger.RequestAccess(context.Background(), record))
 	record.Phase, record.Checkpoint, record.RouteID, record.Status, record.ErrorCode = observability.RequestAccessCompleted, "ctn_v1.raw-child", "route-a", "failed", "invalid_argument"
-	if err := logger.RequestAccess(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, logger.RequestAccess(context.Background(), record))
 	for _, private := range []string{"raw-tenant", "raw-project", "raw-actor", "raw-operation-key", "llmtw_req_raw", "raw-parent", "raw-child"} {
 		if strings.Contains(output.String(), private) {
 			t.Fatalf("log %q leaks %q", output.String(), private)
@@ -144,9 +133,7 @@ func TestRequestAccessLogsHashesAndBoundedFieldsOnly(t *testing.T) {
 			want[key] = value
 		}
 		var entry map[string]any
-		if err := json.Unmarshal([]byte(lines[i]), &entry); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, json.Unmarshal([]byte(lines[i]), &entry))
 		delete(entry, "time")
 		if len(entry) != len(want) {
 			t.Errorf("line %d fields = %v, want %v", i, entry, want)
@@ -160,9 +147,7 @@ func TestRequestAccessLogsHashesAndBoundedFieldsOnly(t *testing.T) {
 
 	// Empty optional identifiers are omitted, and the level filter applies.
 	output.Reset()
-	if err := logger.RequestAccess(context.Background(), observability.RequestAccessRecord{Phase: observability.RequestAccessPrepared, Kind: "generate"}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, logger.RequestAccess(context.Background(), observability.RequestAccessRecord{Phase: observability.RequestAccessPrepared, Kind: "generate"}))
 	for _, absent := range []string{"actor_hash", "operation_id_hash", "parent_checkpoint_hash", "checkpoint_hash", "route_id", "status", "error_code", "activity_type"} {
 		if strings.Contains(output.String(), absent) {
 			t.Errorf("empty record logged %s: %s", absent, output.String())
@@ -170,15 +155,11 @@ func TestRequestAccessLogsHashesAndBoundedFieldsOnly(t *testing.T) {
 	}
 	writer := &failingAuditWriter{}
 	quiet, err := observability.NewLogger(observability.LogOptions{Output: writer, Level: "warn"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if err := quiet.RequestAccess(context.Background(), record); err != nil || writer.calls != 0 {
 		t.Fatalf("warn-level access audit err=%v, writes=%d", err, writer.calls)
 	}
-	if err := (*observability.Logger)(nil).RequestAccess(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, (*observability.Logger)(nil).RequestAccess(context.Background(), record))
 }
 
 func scopeHash(value string) string {

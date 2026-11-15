@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -39,15 +40,11 @@ func TestInvokeMakesExactlyOneSDKCallAndLiftsResponse(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "Request-Id", "req-invoke"), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileProdCall(t, client, "http://127.0.0.1/contract", "invoke")
 	observer := &adaptertest.Observer{}
 	result, err := adapter.Invoke(context.Background(), call, observer)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if calls != 1 || observer.Before != 1 || observer.Headers != 1 || observer.Progress != 1 {
 		t.Fatalf("transport/observer counts = %d %#v", calls, observer)
 	}
@@ -78,9 +75,7 @@ func TestInvokeMapsRateLimitAndAuthenticationErrorsWithoutRetry(t *testing.T) {
 					return adaptertest.JSONResponse(request, test.status, body, "Request-Id", test.requestID, "Retry-After", "2"), nil
 				})},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			adapter, call := compileProdCall(t, client, "http://127.0.0.1/contract", "error-"+test.name)
 			_, err = adapter.Invoke(context.Background(), call, nil)
 			var providerErr *provider.Error
@@ -104,9 +99,7 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileProdCall(t, client, "https://provider.example/v1", "anthropic-redirect")
 	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
@@ -126,9 +119,7 @@ func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 		APIKey:     "test-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileProdCall(t, client, "", "anthropic-pre-dial-deadline")
 	observer := &adaptertest.Observer{}
 	adaptertest.CallerDeadlineBeforeDial(t, transport, func(ctx context.Context) error {
@@ -150,9 +141,7 @@ func compileProdCall(t *testing.T, client *Client, baseURL, operationKey string)
 		profile.ExpectedBaseURL = baseURL
 	}
 	adapter, err := New(client, "anthropic-prod", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter, adaptertest.CompileStrict(t, adapter, "anthropic-prod", provider.FamilyAnthropicMessages, llm.Request{OperationKey: operationKey, Model: "claude-contract"})
 }
 

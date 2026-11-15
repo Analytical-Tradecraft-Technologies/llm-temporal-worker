@@ -32,9 +32,7 @@ func TestV1DecodersApplyTheSchemaBounds(t *testing.T) {
 	}
 	// The bounds are code points, so 256 multi-byte characters still fit.
 	var accepted llm.CompactRequestV1
-	if err := json.Unmarshal([]byte(sprintf(compact, quote(strings.Repeat("é", 256)), quote("acme"))), &accepted); err != nil {
-		t.Fatalf("256 code points rejected: %v", err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(sprintf(compact, quote(strings.Repeat("é", 256)), quote("acme"))), &accepted), "256 code points rejected")
 }
 
 func TestV1SettingsPatchDecodesTheCompactionPolicyShape(t *testing.T) {
@@ -56,9 +54,7 @@ func TestV1SettingsPatchDecodesTheCompactionPolicyShape(t *testing.T) {
 	}
 	valid := `{"compaction_policy":{"set":{"version":"generic-2026-07-18","prompt_version":"v1","summary_style":"concise","trigger_tokens":20000,"target_tokens":9000,"recent_turns":4,"output_reserve_tokens":2048,"materialization_threshold_bytes":0}}}`
 	patch := mustUnmarshal[llm.SettingsPatchV1](t, []byte(valid), "a complete valid policy was rejected")
-	if _, err := patch.MarshalJSON(); err != nil {
-		t.Fatalf("a complete valid policy does not encode: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(patch.MarshalJSON()), "a complete valid policy does not encode")
 }
 
 func TestV1GenerateResponseRejectsANullActualClass(t *testing.T) {

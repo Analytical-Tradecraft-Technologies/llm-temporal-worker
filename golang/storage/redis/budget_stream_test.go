@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -25,21 +26,15 @@ func TestMemoryBudgetEventPortBroadcastsFromCursor(t *testing.T) {
 	port := new(MemoryBudgetEventPort)
 	base := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventReserve, GenerationID: "generation-1", OperationHash: strings.Repeat("a", 64), MemberHash: strings.Repeat("b", 64), Revision: 1, NanoDelta: 4, OccurredAt: time.Unix(10, 0).UTC()}
 	first, err := port.Append(context.Background(), base)
-	if err != nil {
-		t.Fatalf("append first: %v", err)
-	}
+	testassert.NoError(t, err, "append first")
 	base.Kind = BudgetEventRelease
 	second, err := port.Append(context.Background(), base)
-	if err != nil {
-		t.Fatalf("append second: %v", err)
-	}
+	testassert.NoError(t, err, "append second")
 	if first == second {
 		t.Fatal("stream IDs are not monotonic")
 	}
 	rows, err := port.Read(context.Background(), first, 10)
-	if err != nil {
-		t.Fatalf("read after cursor: %v", err)
-	}
+	testassert.NoError(t, err, "read after cursor")
 	if len(rows) != 1 || rows[0].ID != second || rows[0].Event.Kind != BudgetEventRelease {
 		t.Fatalf("read after cursor = %#v", rows)
 	}
@@ -48,16 +43,10 @@ func TestMemoryBudgetEventPortBroadcastsFromCursor(t *testing.T) {
 func TestMemoryBudgetEventPortAcceptsCompoundRedisCursor(t *testing.T) {
 	port := &MemoryBudgetEventPort{}
 	event := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh, GenerationID: BudgetGenerationID("generation"), Revision: 1, OccurredAt: time.Unix(1, 0)}
-	if _, err := port.Append(context.Background(), event); err != nil {
-		t.Fatalf("append first event: %v", err)
-	}
-	if _, err := port.Append(context.Background(), event); err != nil {
-		t.Fatalf("append second event: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(port.Append(context.Background(), event)), "append first event")
+	testassert.NoError(t, testassert.Err(port.Append(context.Background(), event)), "append second event")
 	records, err := port.Read(context.Background(), "1-1", 10)
-	if err != nil {
-		t.Fatalf("compound cursor: %v", err)
-	}
+	testassert.NoError(t, err, "compound cursor")
 	if len(records) != 1 || records[0].ID != "2-0" {
 		t.Fatalf("compound cursor records = %#v, want second event", records)
 	}
@@ -67,9 +56,7 @@ func TestMemoryBudgetGenerationPortPublishesAndValidatesPointer(t *testing.T) {
 	port := new(MemoryBudgetGenerationPort)
 	manifest := testBudgetManifest(t)
 	pointer, err := port.PublishGeneration(context.Background(), manifest)
-	if err != nil {
-		t.Fatalf("publish generation: %v", err)
-	}
+	testassert.NoError(t, err, "publish generation")
 	active, err := port.ActiveGeneration(context.Background())
 	if err != nil || active != pointer {
 		t.Fatalf("active generation = %#v, %v; want %#v", active, err, pointer)
@@ -85,10 +72,8 @@ func TestMemoryBudgetGenerationPortPublishesAndValidatesPointer(t *testing.T) {
 	}
 	mutated := manifest
 	mutated.IncarnationID = BudgetIncarnationID("incarnation-2")
-	requireErrorIs(t, errOf(port.PublishGeneration(context.Background(), mutated)), ErrBudgetGenerationConflict, "mutable generation accepted")
-	if _, err := port.PublishGeneration(context.Background(), manifest); err != nil {
-		t.Fatalf("idempotent generation publish: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(port.PublishGeneration(context.Background(), mutated)), ErrBudgetGenerationConflict, "mutable generation accepted")
+	testassert.NoError(t, testassert.Err(port.PublishGeneration(context.Background(), manifest)), "idempotent generation publish")
 	if active, err := port.ActiveGeneration(context.Background()); err != nil || active != pointer {
 		t.Fatalf("active generation after idempotent publish = %#v, %v; want %#v", active, err, pointer)
 	}
@@ -124,7 +109,7 @@ func TestBudgetStreamClaimAndExpiryRequireOpaqueMembers(t *testing.T) {
 				}
 				event.OperationHash = strings.Repeat("a", 64)
 			}
-			mustNoError(t, errOf(event.Marshal()))
+			testassert.NoError(t, testassert.Err(event.Marshal()))
 		})
 	}
 }

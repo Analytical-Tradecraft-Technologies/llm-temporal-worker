@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -12,9 +13,7 @@ func validPolicy() ActivityPolicy {
 func TestActivityPolicyValidationAndTemporalOptions(t *testing.T) {
 	policy := validPolicy()
 	options, err := policy.TemporalOptions()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if options.StartToCloseTimeout != policy.StartToClose || options.ScheduleToCloseTimeout != policy.ScheduleToClose || options.RetryPolicy == nil || options.RetryPolicy.MaximumAttempts != policy.MaximumAttempts {
 		t.Fatalf("Temporal options = %#v", options)
 	}
@@ -41,9 +40,7 @@ func TestActivityPolicyHeartbeatKeepaliveInterval(t *testing.T) {
 		t.Fatalf("default keepalive interval = %s, want %s", got, want)
 	}
 	policy.HeartbeatKeepaliveInterval = 5 * time.Second
-	if err := policy.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, policy.Validate())
 	if got := policy.KeepaliveInterval(); got != 5*time.Second {
 		t.Fatalf("configured keepalive interval = %s", got)
 	}
@@ -86,9 +83,7 @@ func TestActivityPolicyRetentionCoversEmittedDeadline(t *testing.T) {
 		}
 		policy.OperationRetention = policy.ScheduleToClose
 		options, err := policy.TemporalOptions()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if options.ScheduleToCloseTimeout > policy.OperationRetention {
 			t.Fatal("emitted deadline exceeds retention")
 		}

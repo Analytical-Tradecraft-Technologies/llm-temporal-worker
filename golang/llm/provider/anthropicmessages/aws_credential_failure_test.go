@@ -11,6 +11,7 @@ import (
 
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -26,17 +27,13 @@ func TestAWSGatewayCredentialFailureIsPreDispatch(t *testing.T) {
 	}
 	dir := t.TempDir()
 	script := filepath.Join(dir, "credentials.sh")
-	if err := os.WriteFile(script, []byte(`#!/bin/sh
+	testassert.NoError(t, os.WriteFile(script, []byte(`#!/bin/sh
 if [ -e "$0.used" ]; then exit 1; fi
 : > "$0.used"
 echo '{"Version":1,"AccessKeyId":"AKIDFIXTURE","SecretAccessKey":"fixture-secret","SessionToken":"fixture-token","Expiration":"2000-01-01T00:00:00Z"}'
-`), 0o700); err != nil {
-		t.Fatal(err)
-	}
+`), 0o700))
 	configFile := filepath.Join(dir, "config")
-	if err := os.WriteFile(configFile, []byte("[profile gateway-fixture]\ncredential_process = "+script+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(configFile, []byte("[profile gateway-fixture]\ncredential_process = "+script+"\n"), 0o600))
 	for _, name := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "ANTHROPIC_AWS_API_KEY"} {
 		t.Setenv(name, "")
 	}
@@ -53,15 +50,11 @@ echo '{"Version":1,"AccessKeyId":"AKIDFIXTURE","SecretAccessKey":"fixture-secret
 		})},
 		AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", AWSProfile: "gateway-fixture"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := testProfile()
 	profile.ExpectedBaseURL = "http://127.0.0.1/aws-contract"
 	adapter, err := New(client, "anthropic-aws", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-credentials", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error

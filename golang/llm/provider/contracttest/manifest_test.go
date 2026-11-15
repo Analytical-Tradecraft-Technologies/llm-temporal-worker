@@ -7,6 +7,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -35,13 +36,9 @@ func TestFixtureManifestComplete(t *testing.T) {
 	providerRoot := filepath.Dir(filepath.Dir(source))
 	fixturePath := filepath.Join(providerRoot, "testdata", "contracts", "required-cases.yaml")
 	data, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatalf("read required-case inventory: %v", err)
-	}
+	testassert.NoError(t, err, "read required-case inventory")
 	var inventory requiredCaseFile
-	if err := yaml.Load(data, &inventory, yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()); err != nil {
-		t.Fatalf("parse required-case inventory: %v", err)
-	}
+	testassert.NoError(t, yaml.Load(data, &inventory, yaml.WithKnownFields(), yaml.WithUniqueKeys(), yaml.WithSingleDocument()), "parse required-case inventory")
 	if inventory.Version != 1 {
 		t.Fatalf("required-case inventory version = %d, want 1", inventory.Version)
 	}
@@ -49,12 +46,8 @@ func TestFixtureManifestComplete(t *testing.T) {
 	assertCaseInventory(t, inventory.Cases)
 
 	report, err := ValidateRepository(filepath.Join(providerRoot, "..", ".."))
-	if err != nil {
-		t.Fatalf("validate adapter fixture repository: %v", err)
-	}
-	if err := report.RequireAllEnforced(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err, "validate adapter fixture repository")
+	testassert.NoError(t, report.RequireAllEnforced())
 	if len(report.Enforced) == 0 {
 		t.Fatal("fixture repository has no enforced profiles")
 	}

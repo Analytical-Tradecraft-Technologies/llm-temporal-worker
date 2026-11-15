@@ -83,20 +83,14 @@ func TestCompileRejectsUnusableCapabilitiesBeforeDispatch(t *testing.T) {
 
 func TestInvokeRunsOneRequestAndLiftsResponse(t *testing.T) {
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var calls int
 	adapter := newFixtureAdapterWithTransport(t, responseBody, func() { calls++ })
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "op-invoke", Model: "gpt-contract"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	observer := &adaptertest.Observer{}
 	result, err := adapter.Invoke(context.Background(), call, observer)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if calls != 1 {
 		t.Fatalf("HTTP calls = %d, want one", calls)
 	}
@@ -114,9 +108,7 @@ func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{OperationKey: "op-empty", Model: "gpt-contract"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
@@ -137,9 +129,7 @@ func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
 
 func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter := newFixtureAdapter(t, responseBody)
 	first := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
 		OperationKey: "op-first",
@@ -168,9 +158,7 @@ func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 
 func TestInvokeOmitsContinuationForUnstoredResponse(t *testing.T) {
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter := newFixtureAdapter(t, responseBody)
 	call := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
 		OperationKey: "op-unstored",
@@ -203,17 +191,13 @@ func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {
 		t.Fatalf("endpoint detail = %q, want %q", got, want)
 	}
 	encoded, marshalErr := json.Marshal(mapped)
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
-	}
+	testassert.NoError(t, marshalErr)
 	for _, raw := range []string{"provider-secret", "private-content", "opaque-handle", "provider-raw"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe adapter error leaked %q: %s", raw, encoded)
 		}
 	}
-	if !errors.Is(mapped, cause) {
-		t.Fatal("adapter error did not retain the local diagnostic cause")
-	}
+	testassert.ErrorIs(t, mapped, cause, "adapter error did not retain the local diagnostic cause")
 }
 
 func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
@@ -235,9 +219,7 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 		t.Fatalf("observer = %#v, want one pre-write mark and no headers", observer)
 	}
 	encoded, marshalErr := json.Marshal(mapped)
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
-	}
+	testassert.NoError(t, marshalErr)
 	if strings.Contains(string(encoded), "redirect.example") || strings.Contains(mapped.Error(), "continuation-secret") {
 		t.Fatalf("safe adapter error leaked redirect target: %s", encoded)
 	}
@@ -254,13 +236,9 @@ func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 func newOpenAIProdAdapter(t *testing.T, baseURL string, httpClient *http.Client, options ...AdapterOption) *Adapter {
 	t.Helper()
 	client, err := NewClient(ClientConfig{BaseURL: baseURL, APIKey: "test-key", HTTPClient: httpClient})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "openai-prod", "cap-test", options...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -270,9 +248,7 @@ func compileOpenAIProdCall(t *testing.T, httpClient *http.Client, operationKey s
 	t.Helper()
 	adapter := newOpenAIProdAdapter(t, "https://provider.example/v1", httpClient)
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: operationKey, Model: "gpt-contract"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter, call
 }
 

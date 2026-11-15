@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -42,15 +43,11 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	requireCount(t, &f.submits, 2, "attempt limit exceeded")
 	for _, attempt := range attempts {
 		saved, err := f.repository.LoadProviderExecution(ctx, scope, attempt.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		assertUnknownWorkCharged(t, saved)
 		shard, _ := cloudstate.PendingShard(attempt.ID)
 		page, err := f.repository.ListPending(ctx, shard, 100, "")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		found := false
 		for _, entry := range page.Requests {
 			if entry.ID == attempt.ID {

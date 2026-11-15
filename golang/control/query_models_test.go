@@ -22,21 +22,15 @@ func TestTypedQueryRequestRoundTrip(t *testing.T) {
 		Filter:       ProviderStatusQuery{Provider: &provider, Endpoint: &endpoint, IncludeHealthy: boolPointer(true), RefreshIfOlderThan: refresh, Page: QueryPage{Size: 25, Cursor: &pageCursor}},
 	}
 	wire, err := EncodeQueryRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var fields map[string]any
 	data, _ := json.Marshal(wire)
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &fields))
 	if fields["api_version"] != llm.QueryAPIVersion {
 		t.Fatalf("wrong version: %#v", fields["api_version"])
 	}
 	decoded, err := DecodeQueryRequest(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	filter, ok := decoded.Filter.(ProviderStatusQuery)
 	if !ok || filter.Page.Size != 25 || filter.RefreshIfOlderThan != refresh || filter.Provider == nil || *filter.Provider != provider || filter.Page.Cursor == nil || *filter.Page.Cursor != pageCursor {
 		t.Fatalf("decoded filter lost typed values: %#v", decoded.Filter)
@@ -62,12 +56,8 @@ func TestTypedQueryRequestRejectsTags(t *testing.T) {
 func TestTypedQueryRequestAcceptsPointerFilters(t *testing.T) {
 	filter := &ProviderStatusQuery{}
 	wire, err := EncodeQueryRequest(scopedQuery(llm.QueryProviderStatus, filter))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := DecodeQueryRequest(wire); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, testassert.Err(DecodeQueryRequest(wire)))
 }
 
 func TestTypedQueryAPIsRejectTypedNilPointers(t *testing.T) {
@@ -119,13 +109,9 @@ func TestTypedQueryResponseRoundTrip(t *testing.T) {
 	response := persistedQueryResponse("credit-op", llm.QueryCreditStatus, now, CreditStatusResult{Endpoints: []CreditStatusRow{{Provider: "openai", Endpoint: "primary", Credit: credit, Billing: billing, EvidenceSource: QueryEvidenceProviderAPI}}})
 	response.ExecutionID = "execution-1"
 	wire, err := EncodeQueryResponse(response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	decoded, err := DecodeQueryResponse(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, ok := decoded.Result.(CreditStatusResult)
 	if !ok || len(result.Endpoints) != 1 || result.Endpoints[0].Credit != credit || result.Endpoints[0].Billing != billing {
 		t.Fatalf("decoded result lost typed values: %#v", decoded.Result)
@@ -225,9 +211,7 @@ func TestTypedQueryResponseAcceptsStableSpendGroupingWithNilDimensions(t *testin
 		{Group: nil, KnownActualCostUSD: "0", ExactOperationCount: 0, Completeness: "complete"},
 		{Group: &SpendGroup{Provider: &provider}, KnownActualCostUSD: "1", ExactOperationCount: 1, Completeness: "complete"},
 	}})
-	if _, err := EncodeQueryResponse(response); err != nil {
-		t.Fatalf("stable spend result with nil dimensions rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(EncodeQueryResponse(response)), "stable spend result with nil dimensions rejected")
 }
 
 func TestTypedQueryResponseRejectsDuplicateResultKey(t *testing.T) {
@@ -242,16 +226,12 @@ func TestTypedQueryResponseRejectsDuplicateResultKey(t *testing.T) {
 func TestBudgetWindowRetryDurationUsesWireSeconds(t *testing.T) {
 	window := BudgetWindow{PolicyKey: "daily", WindowKey: "hour", CoverageStart: time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC), CoverageEnd: time.Date(2026, time.July, 21, 1, 0, 0, 0, time.UTC), LimitUSD: "10", ReservedCostUSD: "1", AccountedCostUSD: "2", AvailableUSD: "7", RetryAfter: durationPointer(30 * time.Second)}
 	data, err := json.Marshal(window)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if string(data) == "" || !json.Valid(data) || !containsJSONNumber(data, "retry_after_seconds", 30) {
 		t.Fatalf("retry duration was not encoded as seconds: %s", data)
 	}
 	var decoded BudgetWindow
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &decoded))
 	if decoded.RetryAfter == nil || *decoded.RetryAfter != 30*time.Second {
 		t.Fatalf("retry duration round-trip mismatch: %#v", decoded.RetryAfter)
 	}
@@ -306,19 +286,13 @@ func TestTypedQueryResponseEncodesEmptyResultListsAsArrays(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			wire, err := EncodeQueryResponse(persistedQueryResponse("op", test.kind, now, test.result))
-			if err != nil {
-				t.Fatalf("EncodeQueryResponse() error = %v", err)
-			}
+			testassert.NoError(t, err, "EncodeQueryResponse() error")
 			encoded, err := json.Marshal(wire)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if strings.Contains(string(encoded), "null") {
 				t.Fatalf("empty result encoded with null: %s", encoded)
 			}
-			if _, err := DecodeQueryResponse(wire); err != nil {
-				t.Fatalf("DecodeQueryResponse() error = %v", err)
-			}
+			testassert.NoError(t, testassert.Err(DecodeQueryResponse(wire)), "DecodeQueryResponse() error")
 		})
 	}
 }

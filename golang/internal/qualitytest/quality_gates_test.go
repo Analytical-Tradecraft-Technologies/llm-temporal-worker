@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 var fuzzTargetName = regexp.MustCompile(`^Fuzz[[:alnum:]_]+$`)
@@ -50,9 +51,7 @@ func TestRepositoryFuzzTargetsIncludesOrdinaryTestFiles(t *testing.T) {
 func TestRepositoryFuzzTargetsIncludesOutsideLegacyAllowlist(t *testing.T) {
 	root := t.TempDir()
 	for _, directory := range []string{"llm", "pricing", "budget", "state", "storage/redis", "routing", "admission"} {
-		if err := os.MkdirAll(filepath.Join(root, directory), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.MkdirAll(filepath.Join(root, directory), 0o755))
 	}
 	writeFile(t, filepath.Join(root, "admission", "engine_fuzz_test.go"), []byte(`package admission
 
@@ -243,9 +242,7 @@ func repositoryFuzzTargets(t *testing.T, root string) []fuzzEntry {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	sort.Slice(targets, func(i, j int) bool {
 		if targets[i].packagePath != targets[j].packagePath {
 			return targets[i].packagePath < targets[j].packagePath

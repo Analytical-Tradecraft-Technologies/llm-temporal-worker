@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"sync"
 	"testing"
@@ -11,9 +12,7 @@ import (
 func TestNewConfiguresReadTimeouts(t *testing.T) {
 	t.Run("defaults read timeout from read header timeout", func(t *testing.T) {
 		server, err := New(Options{Address: "127.0.0.1:0"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if server.httpServer.ReadHeaderTimeout != defaultReadHeaderTimeout {
 			t.Fatalf("ReadHeaderTimeout = %v, want %v", server.httpServer.ReadHeaderTimeout, defaultReadHeaderTimeout)
 		}
@@ -25,9 +24,7 @@ func TestNewConfiguresReadTimeouts(t *testing.T) {
 	t.Run("inherits custom read header timeout", func(t *testing.T) {
 		timeout := 3 * time.Second
 		server, err := New(Options{Address: "127.0.0.1:0", ReadHeaderTimeout: timeout})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if server.httpServer.ReadTimeout != timeout {
 			t.Fatalf("ReadTimeout = %v, want %v", server.httpServer.ReadTimeout, timeout)
 		}
@@ -41,9 +38,7 @@ func TestNewConfiguresReadTimeouts(t *testing.T) {
 			ReadTimeout:       readTimeout,
 			ReadHeaderTimeout: readHeaderTimeout,
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if server.httpServer.ReadTimeout != readTimeout {
 			t.Fatalf("ReadTimeout = %v, want %v", server.httpServer.ReadTimeout, readTimeout)
 		}
@@ -55,9 +50,7 @@ func TestNewConfiguresReadTimeouts(t *testing.T) {
 
 func TestConcurrentServerStartHasExactlyOneOwner(t *testing.T) {
 	server, err := New(Options{Address: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = server.Shutdown(context.Background()) })
 
 	const callers = 64
@@ -93,9 +86,7 @@ func TestConcurrentServerStartHasExactlyOneOwner(t *testing.T) {
 		t.Fatal("successful Start did not publish its listener address")
 	}
 
-	if err := server.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, server.Shutdown(context.Background()))
 	select {
 	case _, ok := <-server.Errors():
 		if ok {

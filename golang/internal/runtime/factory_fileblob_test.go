@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/fileblob"
 )
 
@@ -26,13 +27,9 @@ func TestDefaultBlobFactoryBuildsDevelopmentFileStore(t *testing.T) {
   file:
     root: `+t.TempDir(), 1)
 	loaded, err := config.Load([]byte(value))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store, closer, err := defaultBlobFactory(context.Background(), loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if closer != nil {
 		t.Fatal("development file store unexpectedly returned a closer")
 	}

@@ -16,6 +16,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // These linearizable test doubles deliberately share no repository caches.
@@ -225,9 +226,7 @@ func fixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, CreateReque
 	blobs := &memoryBlobs{values: map[blob.BlobKey][]byte{}}
 	r := reopen(t, table, blobs)
 	id, err := NewRequestID()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := CreateRequest{ID: id, Scope: Scope{Tenant: "tenant-secret", Project: "project-secret"}, Kind: "generate", Manifest: json.RawMessage(`{"version":1,"prompt":"private prompt","account":9007199254740993}`), CreatedAt: time.Date(2026, 9, 24, 0, 0, 0, 123456789, time.UTC)}
 	return r, table, blobs, request
 }
@@ -235,9 +234,7 @@ func fixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, CreateReque
 func reopen(t *testing.T, table kv.KeyValueStore, blobs blob.BlobStore) *Repository {
 	t.Helper()
 	r, err := NewRepository(Options{Table: table, Blobs: blobs, Namespace: "requests-v1", Secret: bytes.Repeat([]byte{7}, 32)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return r
 }
 

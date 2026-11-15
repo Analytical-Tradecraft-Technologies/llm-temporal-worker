@@ -16,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -170,9 +171,7 @@ func TestRuntimeReloadFailureLogNamesCatalogDigestMismatch(t *testing.T) {
 		}
 	}
 	// A catalog file that disappears is the same class, not a config read error.
-	if err := os.Remove(filepath.Join(directory, "capabilities.yaml")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Remove(filepath.Join(directory, "capabilities.yaml")))
 	record = reloadFailureRecord(t, runtime, &logs, replaceOnce(t, data, "request_bytes: 1048576", "request_bytes: 1048575"))
 	if record["cause"] != "catalog" {
 		t.Fatalf("missing catalog record = %v", record)
@@ -190,9 +189,7 @@ func localCatalogConfig(t *testing.T, directory string) string {
 	data := string(read("config.yaml"))
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
 		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, read(name), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.WriteFile(path, read(name), 0o600))
 		data = replaceOnce(t, data, "/etc/llmtw/"+name, path)
 	}
 	return data

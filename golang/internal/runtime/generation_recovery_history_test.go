@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
 	commonpb "go.temporal.io/api/common/v1"
@@ -31,14 +32,10 @@ func generationRecoveryHistoryFixture(t *testing.T) ([]*historypb.HistoryEvent, 
 	value := codecConfig(codecKey("test", "KEY", true))
 	value.Server.InlinePayloadBytes = 1 << 20
 	dc, err := (DefaultTemporalClientFactory{SecretResolver: codecSecrets(map[string][]byte{"KEY": bytes.Repeat([]byte{4}, 32)})}).dataConverter(context.Background(), value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	payload := func(v any) *commonpb.Payloads {
 		p, err := dc.ToPayloads(v)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return p
 	}
 	encoded, _ := original.MarshalJSON()
@@ -120,9 +117,7 @@ func TestGenerationRecoveryHistoryRequiresCorrelatedEncryptedProvenance(t *testi
 				copyEvents[i] = proto.Clone(e).(*historypb.HistoryEvent)
 			}
 			mutate(copyEvents)
-			if _, err := parseGenerationRecoveryHistory(copyEvents, dc, "test"); !errors.Is(err, errGenerationRecoveryHistory) {
-				t.Fatalf("invalid history accepted: %v", err)
-			}
+			testassert.ErrorIs(t, testassert.Err(parseGenerationRecoveryHistory(copyEvents, dc, "test")), errGenerationRecoveryHistory, "invalid history accepted")
 		})
 	}
 	for length := 0; length < len(events); length++ {
@@ -149,19 +144,13 @@ func (i *recoveryHistoryIterator) Next() (*historypb.HistoryEvent, error) {
 
 func TestReadGenerationRecoveryHistoryFailsClosed(t *testing.T) {
 	events, dc, _ := generationRecoveryHistoryFixture(t)
-	if _, err := readGenerationRecoveryHistory(context.Background(), &recoveryHistoryIterator{events: events}, dc, "test"); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(readGenerationRecoveryHistory(context.Background(), &recoveryHistoryIterator{events: events}, dc, "test")))
 	if _, err := readGenerationRecoveryHistory(context.Background(), &recoveryHistoryIterator{err: errors.New("private transport detail")}, dc, "test"); err == nil || err.Error() != "generation recovery history could not be read" {
 		t.Fatalf("unsafe read error: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := readGenerationRecoveryHistory(ctx, &recoveryHistoryIterator{events: events}, dc, "test"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancel ignored: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(readGenerationRecoveryHistory(ctx, &recoveryHistoryIterator{events: events}, dc, "test")), context.Canceled, "cancel ignored")
 	oversized := &historypb.HistoryEvent{Attributes: &historypb.HistoryEvent_WorkflowExecutionStartedEventAttributes{WorkflowExecutionStartedEventAttributes: &historypb.WorkflowExecutionStartedEventAttributes{Input: &commonpb.Payloads{Payloads: []*commonpb.Payload{{Data: make([]byte, generationRecoveryMaxHistoryBytes+1)}}}}}}
-	if _, err := readGenerationRecoveryHistory(context.Background(), &recoveryHistoryIterator{events: []*historypb.HistoryEvent{oversized}}, dc, "test"); !errors.Is(err, errGenerationRecoveryHistory) {
-		t.Fatalf("history bound ignored: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(readGenerationRecoveryHistory(context.Background(), &recoveryHistoryIterator{events: []*historypb.HistoryEvent{oversized}}, dc, "test")), errGenerationRecoveryHistory, "history bound ignored")
 }

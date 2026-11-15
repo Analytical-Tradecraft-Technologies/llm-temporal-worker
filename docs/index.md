@@ -83,6 +83,7 @@ worker database; the service has no deployed SQL data. See the
 - [AWS Bedrock Converse provider](reference/provider-bedrock-converse.md)
 - [Generic compaction safeguards](reference/generic-compaction.md)
 - [v1 Activity runtime boundary](reference/activity-runtime.md)
+- [Workflow versioning and version-marker retirement](reference/workflow-versioning.md)
 - [Query audit logging](reference/query-audit-ledger.md)
 - [Cloud request repository foundation](reference/cloud-request-repository.md)
 - [Durable-storage key management (proposed design)](architecture/durable-storage-key-management.md)

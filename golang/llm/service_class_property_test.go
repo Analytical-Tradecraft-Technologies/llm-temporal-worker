@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -29,9 +30,7 @@ func TestServiceClassContractInvariants(t *testing.T) {
 	}
 
 	var request llm.Request
-	if err := json.Unmarshal([]byte(`{"api_version":"llm.temporal/v1","operation_key":"operation","model":"logical"}`), &request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(`{"api_version":"llm.temporal/v1","operation_key":"operation","model":"logical"}`), &request))
 	if request.ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("omitted request service class = %q, want standard", request.ServiceClass)
 	}

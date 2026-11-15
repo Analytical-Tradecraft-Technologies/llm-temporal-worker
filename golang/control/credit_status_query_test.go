@@ -8,9 +8,7 @@ import (
 
 func TestNewCreditStatusMapsSafeProviderEvidence(t *testing.T) {
 	status, err := NewCreditStatus("openai", "primary", CreditExhausted, BillingIssue, time.Unix(10, 0), SourceInference, "", "insufficient_quota")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if status.EvidenceSource != CreditEvidenceProviderAPI || status.SafeEvidenceCode != "insufficient_quota" {
 		t.Fatalf("status = %#v", status)
 	}
@@ -27,17 +25,13 @@ func TestNewCreditStatusRejectsUndocumentedIncidentEvidence(t *testing.T) {
 
 func TestNewCreditStatusMapsOperatorAndUnknownEvidence(t *testing.T) {
 	operator, err := NewCreditStatus("provider", "operator-endpoint", CreditLow, BillingUnknown, time.Time{}, SourceOperator, "credit_low", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if operator.EvidenceSource != CreditEvidenceOperator || operator.SafeEvidenceCode != "credit_low" || !operator.ConfirmedAt.IsZero() {
 		t.Fatalf("operator status = %#v", operator)
 	}
 
 	unknown, err := NewCreditStatus("provider", "inference-endpoint", CreditOK, BillingOK, time.Time{}, SourceInference, "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if unknown.EvidenceSource != CreditEvidenceUnknown || unknown.SafeEvidenceCode != "" {
 		t.Fatalf("unknown status = %#v", unknown)
 	}
@@ -72,7 +66,5 @@ func TestCreditStatusValidationRequiresOrderedProvenance(t *testing.T) {
 	}
 	testassert.ErrorContains(t, status.Validate(), "stale timestamp")
 	status.StaleAfter = observed.Add(time.Minute)
-	if err := status.Validate(); err != nil {
-		t.Fatalf("ordered provenance rejected: %v", err)
-	}
+	testassert.NoError(t, status.Validate(), "ordered provenance rejected")
 }

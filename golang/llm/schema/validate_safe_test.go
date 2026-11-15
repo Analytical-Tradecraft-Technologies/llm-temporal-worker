@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -66,9 +67,7 @@ func TestValidationErrorsAreContentFree(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			compiled, err := schema.Parse([]byte(test.schema))
-			if err != nil {
-				t.Fatalf("Parse = %v", err)
-			}
+			testassert.NoError(t, err, "Parse")
 			err = compiled.Validate([]byte(test.instance))
 			var validation *schema.ValidationError
 			if !errors.As(err, &validation) {
@@ -92,9 +91,7 @@ func TestValidationErrorsAreContentFree(t *testing.T) {
 // Malformed instance JSON is reported without quoting it.
 func TestInstanceJSONErrorsAreContentFree(t *testing.T) {
 	compiled, err := schema.Parse([]byte(`{"type":"object"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, instance := range []string{
 		`{"SECRETXYZ":1,"SECRETXYZ":2}`,
 		`{"a":1} "SECRETXYZ"`,

@@ -1,6 +1,9 @@
 package compaction
 
-import "testing"
+import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"testing"
+)
 
 // mustEvaluateTrigger runs policy.EvaluateTrigger and fails the test on an
 // error.
@@ -26,9 +29,7 @@ func TestPolicyEvaluateTriggerUsesProviderAndPolicyLimits(t *testing.T) {
 		ReservedReasoningTokens:    500,
 		ContinuationExpired:        false,
 	})
-	if err != nil {
-		t.Fatalf("evaluate trigger: %v", err)
-	}
+	testassert.NoError(t, err, "evaluate trigger")
 	if !decision.ShouldCompact {
 		t.Fatal("expected provider context reserve to trigger compaction")
 	}
@@ -51,9 +52,7 @@ func TestPolicyEvaluateTriggerPreservesHysteresisAndReasonPrecedence(t *testing.
 		ProviderLineageLimit:  10,
 		ContinuationExpired:   true,
 	})
-	if err != nil {
-		t.Fatalf("evaluate trigger: %v", err)
-	}
+	testassert.NoError(t, err, "evaluate trigger")
 	if decision.Reason != TriggerReasonTokens {
 		t.Fatalf("reason = %q, want token precedence", decision.Reason)
 	}

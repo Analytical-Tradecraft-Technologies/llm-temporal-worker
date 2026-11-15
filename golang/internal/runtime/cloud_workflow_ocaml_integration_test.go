@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -79,9 +80,7 @@ func TestCloudWorkflowLiveOCaml(t *testing.T) {
 	children := map[string]int{}
 	for history.HasNext() {
 		event, err := history.Next()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if child := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); child != nil {
 			if child.GetTaskQueue().GetName() != h.queue || child.GetParentClosePolicy() != enumspb.PARENT_CLOSE_POLICY_ABANDON {
 				t.Fatal("OCaml child lost queue routing or paid-work lifetime policy")
@@ -98,9 +97,7 @@ func TestCloudWorkflowLiveOCaml(t *testing.T) {
 func writeCloudOCamlInput(t *testing.T, path string, request llm.GenerateRequestV1) {
 	t.Helper()
 	raw := encodeJSON(t, request)
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, raw, 0o600))
 }
 
 func runCloudOCaml(t *testing.T, ctx context.Context, binary string, args ...string) {
@@ -118,9 +115,7 @@ func assertCloudOCamlResult(t *testing.T, path string, request llm.GenerateReque
 		Generate llm.GenerateResponseV1 `json:"generate"`
 		Compact  llm.CompactResponseV1  `json:"compact"`
 	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(raw, &result))
 	generation, compaction := result.Generate, result.Compact
 	if generation.OperationKey != request.OperationKey || generation.Checkpoint.Handle == "" || generation.Cache.Variant != request.Cache.Variant ||
 		compaction.OperationKey != request.OperationKey+"-compact" || compaction.Checkpoint.Handle == "" || compaction.Checkpoint.Parent == nil || *compaction.Checkpoint.Parent != generation.Checkpoint.Handle || compaction.Cache.Variant != request.Cache.Variant {

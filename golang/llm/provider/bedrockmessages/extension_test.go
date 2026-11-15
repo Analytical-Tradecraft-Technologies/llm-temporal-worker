@@ -9,6 +9,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -48,9 +49,7 @@ func TestCompileRejectsExtensionsInStrictMode(t *testing.T) {
 func TestCompileDropsExtensionsWithDiagnosticInBestEffortMode(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
 	call, err := compileExtensionRequest(t, adapter, false, map[string]json.RawMessage{"anthropic": json.RawMessage(`{"temperature":1.7}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !call.Metadata.ExtensionsDropped {
 		t.Fatal("best-effort compile did not record the dropped extensions")
 	}
@@ -61,9 +60,7 @@ func TestCompileDropsExtensionsWithDiagnosticInBestEffortMode(t *testing.T) {
 	response := anthropic.Message{ID: "msg_1", Model: "claude-contract", StopReason: anthropic.StopReasonEndTurn,
 		Content: []anthropic.ContentBlockUnion{{Type: "text", Text: "hi"}}}
 	lifted, err := adapter.profile.liftResponse(call, &response, "req_1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(lifted.Diagnostics) != 1 || lifted.Diagnostics[0].Code != "extensions_dropped" ||
 		lifted.Diagnostics[0].Severity != llm.DiagnosticWarning || lifted.Diagnostics[0].Path != "/extensions" {
 		t.Fatalf("diagnostics = %#v, want one extensions_dropped warning", lifted.Diagnostics)

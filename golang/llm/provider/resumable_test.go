@@ -66,9 +66,7 @@ func TestResumableResultValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.result.Validate()
 			if tc.want == "" {
-				if err != nil {
-					t.Fatalf("Validate() = %v", err)
-				}
+				testassert.NoError(t, err, "Validate()")
 				return
 			}
 			testassert.ErrorContains(t, err, tc.want)

@@ -107,9 +107,7 @@ func testStore(t *testing.T, client API, now time.Time, maxBytes int64) *Store {
 		MaxBytes: maxBytes,
 		Clock:    func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatalf("New() = %v", err)
-	}
+	testassert.NoError(t, err, "New()")
 	return store
 }
 
@@ -149,9 +147,7 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 	}
 
 	store, err := New(Options{Client: &fakeS3{}, Bucket: "bucket", Prefix: "/v1/", MaxBytes: 1})
-	if err != nil {
-		t.Fatalf("New(normalized prefix) = %v", err)
-	}
+	testassert.NoError(t, err, "New(normalized prefix)")
 	if store.prefix != "v1" {
 		t.Fatalf("normalized prefix = %q, want %q", store.prefix, "v1")
 	}
@@ -183,9 +179,7 @@ func TestPutRejectsInvalidRequestsBeforeS3(t *testing.T) {
 			store := testStore(t, fake, now, maxBytes)
 			_, err := store.Put(context.Background(), test.request)
 			if test.is != nil {
-				if !errors.Is(err, test.is) {
-					t.Fatalf("Put() = %v, want %v", err, test.is)
-				}
+				testassert.ErrorIs(t, err, test.is, "Put()")
 			} else if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Put() = %v, want error containing %q", err, test.want)
 			}
@@ -199,9 +193,7 @@ func TestPutRejectsInvalidRequestsBeforeS3(t *testing.T) {
 	cancel()
 	fake := &fakeS3{}
 	store := testStore(t, fake, now, 100)
-	if _, err := store.Put(ctx, blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("data"), ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Put(canceled) = %v, want context.Canceled", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Put(ctx, blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("data"), ExpiresAt: now.Add(time.Hour)})), context.Canceled, "Put(canceled)")
 	if fake.putInput != nil {
 		t.Fatal("PutObject called with canceled context")
 	}
@@ -223,9 +215,7 @@ func TestPutClassifiesS3WriteFailures(t *testing.T) {
 	t.Run("precondition conflict without head support", func(t *testing.T) {
 		fake := &fakeS3{putErr: &smithy.GenericAPIError{Code: "ConditionalRequestConflict", Message: "exists"}}
 		store := testStore(t, &apiOnlyS3{fake: fake}, now, 100)
-		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-			t.Fatalf("Put() = %v, want ErrConflict", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(store.Put(context.Background(), request)), blob.ErrConflict, "Put()")
 	})
 
 	t.Run("precondition conflict with failed head is rejected", func(t *testing.T) {
@@ -234,9 +224,7 @@ func TestPutClassifiesS3WriteFailures(t *testing.T) {
 			headErr: errors.New("head unavailable"),
 		}
 		store := testStore(t, fake, now, 100)
-		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-			t.Fatalf("Put() = %v, want ErrConflict", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(store.Put(context.Background(), request)), blob.ErrConflict, "Put()")
 		if fake.headCalls != 1 {
 			t.Fatalf("HeadObject calls = %d, want 1", fake.headCalls)
 		}
@@ -248,9 +236,7 @@ func TestPutClassifiesS3WriteFailures(t *testing.T) {
 			headOutput: &s3.HeadObjectOutput{ContentLength: int64Ptr(4), ContentType: stringPtr("text/plain")},
 		}
 		store := testStore(t, fake, now, 100)
-		if _, err := store.Put(context.Background(), request); !errors.Is(err, blob.ErrConflict) {
-			t.Fatalf("Put() = %v, want ErrConflict", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(store.Put(context.Background(), request)), blob.ErrConflict, "Put()")
 	})
 
 	t.Run("precondition conflict with matching head is idempotent", func(t *testing.T) {
@@ -310,9 +296,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 			test.configure(fake, ref)
 			_, err := store.Get(context.Background(), "tenant", ref)
 			if test.is != nil {
-				if !errors.Is(err, test.is) {
-					t.Fatalf("Get() = %v, want %v", err, test.is)
-				}
+				testassert.ErrorIs(t, err, test.is, "Get()")
 			} else if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Get() = %v, want error containing %q", err, test.want)
 			}
@@ -323,9 +307,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 		fake := &fakeS3{getOutput: &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("12345"))), ContentLength: int64Ptr(4), ContentType: stringPtr("text/plain")}}
 		store := testStore(t, fake, now, 4)
 		ref := testRef(store, now, "tenant", []byte("1234"))
-		if _, err := store.Get(context.Background(), "tenant", ref); !errors.Is(err, blob.ErrDigestMismatch) {
-			t.Fatalf("Get() = %v, want ErrDigestMismatch", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(store.Get(context.Background(), "tenant", ref)), blob.ErrDigestMismatch, "Get()")
 	})
 
 	t.Run("cancellation after read is observed", func(t *testing.T) {
@@ -334,9 +316,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 		store := testStore(t, fake, now, 100)
 		ref := testRef(store, now, "tenant", payload)
 		fake.getOutput = &s3.GetObjectOutput{Body: io.NopCloser(&cancelOnReadReader{reader: bytes.NewReader(payload), cancel: cancel}), ContentLength: int64Ptr(ref.ByteLength), ContentType: stringPtr(ref.MediaType)}
-		if _, err := store.Get(ctx, "tenant", ref); !errors.Is(err, context.Canceled) {
-			t.Fatalf("Get() = %v, want context.Canceled", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(store.Get(ctx, "tenant", ref)), context.Canceled, "Get()")
 	})
 
 	var nilStore *Store
@@ -346,9 +326,7 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 	testassert.ErrorContains(t, testassert.Err(store.Get(context.Background(), "tenant", blob.Ref{})), "store and locator are required")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Get(ctx, "tenant", testRef(store, now, "tenant", payload)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Get(canceled) = %v, want context.Canceled", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Get(ctx, "tenant", testRef(store, now, "tenant", payload))), context.Canceled, "Get(canceled)")
 }
 
 func TestProbeBucketFailsClosedForUnsupportedAndUnavailableClients(t *testing.T) {
@@ -365,9 +343,7 @@ func TestProbeBucketFailsClosedForUnsupportedAndUnavailableClients(t *testing.T)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := store.ProbeBucket(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("ProbeBucket(canceled) = %v, want context.Canceled", err)
-	}
+	testassert.ErrorIs(t, store.ProbeBucket(ctx), context.Canceled, "ProbeBucket(canceled)")
 
 	var nilStore *Store
 	testassert.ErrorContains(t, nilStore.ProbeBucket(context.Background()), "S3 blob store is nil")
@@ -377,13 +353,9 @@ func TestStoreUsesContentAddressedConditionalS3Object(t *testing.T) {
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	fake := &fakeS3{data: []byte("payload")}
 	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("payload"), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if fake.putInput == nil || fake.putInput.IfNoneMatch == nil || *fake.putInput.IfNoneMatch != "*" {
 		t.Fatal("PutObject did not request create-if-absent")
 	}
@@ -411,29 +383,21 @@ func TestStoreHandlesExistingAndDigestMismatch(t *testing.T) {
 		},
 	}
 	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: data, ExpiresAt: now.Add(time.Hour)})
 	if err != nil || fake.headCalls != 1 {
 		t.Fatalf("existing put = %v, head calls %d", err, fake.headCalls)
 	}
 	fake.data = []byte("other")
 	ref := blob.Ref{Store: "s3", Locator: "v1/" + "bad", Digest: blob.Digest([]byte("payload")), ByteLength: 7, MediaType: "text/plain", ExpiresAt: now.Add(time.Hour)}
-	if _, err := store.Get(context.Background(), "tenant", ref); !errors.Is(err, blob.ErrTenantMismatch) {
-		t.Fatalf("wrong locator error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Get(context.Background(), "tenant", ref)), blob.ErrTenantMismatch, "wrong locator")
 }
 
 func TestProbeBucketUsesOnlyBucketMetadata(t *testing.T) {
 	fake := &fakeS3{}
 	store, err := New(Options{Client: fake, Bucket: "bucket", Prefix: "v1", MaxBytes: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ProbeBucket(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, store.ProbeBucket(context.Background()))
 	if fake.bucketHeadCalls != 1 || fake.bucketHeadInput == nil || fake.bucketHeadInput.Bucket == nil || *fake.bucketHeadInput.Bucket != "bucket" {
 		t.Fatalf("HeadBucket calls/input = %d/%#v", fake.bucketHeadCalls, fake.bucketHeadInput)
 	}

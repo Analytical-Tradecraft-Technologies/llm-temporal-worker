@@ -1,7 +1,7 @@
 package pricing
 
 import (
-	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +16,7 @@ func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 	if err != nil || quote.Entry.Version != "entry-v1" {
 		t.Fatalf("quote = %#v %v", quote, err)
 	}
-	if _, err := resolver.Resolve(Query{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "other", ProviderTier: "default", At: time.Unix(2, 0)}); !errors.Is(err, ErrNoActivePrice) {
-		t.Fatalf("unknown price error = %v, want ErrNoActivePrice", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(resolver.Resolve(Query{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "other", ProviderTier: "default", At: time.Unix(2, 0)})), ErrNoActivePrice, "unknown price")
 	price, err := CostFromUsage(entry, Usage{InputTokens: 1_000_000})
 	if err != nil || price.MicroUSD != 1_000_000 {
 		t.Fatalf("cost = %#v %v", price, err)
@@ -72,16 +70,12 @@ func TestPriceResolverSnapshotIsDetachedAndSurvivesReload(t *testing.T) {
 	catalog := mustCompileUSD(t, "v1", []Entry{entry})
 	resolver := NewResolver(catalog)
 	pinned := resolver.Snapshot()
-	if err := pinned.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, pinned.Validate())
 	changed := resolver.Snapshot()
 	changed.Entries[0].Prices.InputPerMillion = MustDecimalUSD("2")
 	changed.Entries[0].UnknownComponents[0] = PriceComponentCacheRead
 	replacement := mustCompileUSD(t, "v2", changed.Entries)
-	if err := resolver.ReloadValidated(replacement); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, resolver.ReloadValidated(replacement))
 	query := entryQuery(entry, time.Unix(2, 0))
 	old, err := pinned.Resolve(query)
 	if err != nil || old.Entry.Prices.InputPerMillion.String() != "1" || !old.Entry.ComponentUnknown(PriceComponentOutput) {
@@ -105,9 +99,7 @@ func TestCostFromUsageRejectsUnknownCatalogComponent(t *testing.T) {
 	if _, err := CostFromUsage(entry, Usage{InputTokens: 1}); err == nil {
 		t.Fatal("CostFromUsage accepted an omitted input price as known zero")
 	}
-	if _, err := CostFromUsage(entry, Usage{}); err != nil {
-		t.Fatalf("zero usage should not require an unknown input price: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(CostFromUsage(entry, Usage{})), "zero usage should not require an unknown input price")
 }
 
 func TestCompileUSDRejectsInvalidUnknownComponent(t *testing.T) {
@@ -201,8 +193,6 @@ func TestCompileUSDPriceIntervals(t *testing.T) {
 	} {
 		other := base
 		change(&other)
-		if _, err := CompileUSD("v1", []Entry{base, other}); err != nil {
-			t.Fatalf("distinct route rejected: %v", err)
-		}
+		testassert.NoError(t, testassert.Err(CompileUSD("v1", []Entry{base, other})), "distinct route rejected")
 	}
 }

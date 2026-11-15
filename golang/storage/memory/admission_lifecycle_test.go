@@ -2,11 +2,11 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -82,21 +82,17 @@ func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
 	store, now, operation := newDispatchedMemoryOperation(t, "complete", 10)
 
 	ref := &state.BlobRef{Digest: [32]byte{1}, Size: 3, Media: "application/octet-stream"}
-	if err := store.Complete(context.Background(), admission.CompleteRequest{
+	testassert.NoError(t, store.Complete(context.Background(), admission.CompleteRequest{
 		OperationID:   operation.ID,
 		DispatchToken: operation.DispatchToken,
 		Actual:        3,
 		ResultRef:     ref,
 		Attempt:       admission.AttemptFacts{RouteID: "initial"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	}))
 	ref.Media = "mutated-input"
 
 	got, err := store.Get(context.Background(), operation.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.State != admission.StateCompleted || got.ReservedMicroUSD != 0 || got.IncurredMicroUSD != 3 || got.FinalMicroUSD != 3 {
 		t.Fatalf("completed operation = %#v", got)
 	}
@@ -110,29 +106,23 @@ func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
 		t.Fatalf("result ref was not cloned: %#v, %v", again, err)
 	}
 
-	if err := store.Complete(context.Background(), admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: 99}); err != nil {
-		t.Fatalf("completed replay = %v", err)
-	}
+	testassert.NoError(t, store.Complete(context.Background(), admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: 99}), "completed replay")
 	assertNextBeginSeesActive(t, store, now, "after-complete", 3)
 }
 
 func TestAdmissionProviderPendingRetainsPollGuidance(t *testing.T) {
 	store, now, operation := newDispatchedMemoryOperation(t, "pending-guidance", 1)
 	pollAfter := now.Add(5 * time.Second)
-	if err := store.MarkProviderPending(context.Background(), admission.ProviderPendingRequest{
+	testassert.NoError(t, store.MarkProviderPending(context.Background(), admission.ProviderPendingRequest{
 		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
 		ProviderOperationID: "provider-operation", EndpointID: "endpoint", PollAfter: pollAfter,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	}))
 	schedule, ok := any(store).(admission.ProviderPendingSchedule)
 	if !ok {
 		t.Fatal("memory admission store does not expose provider poll schedule")
 	}
 	got, err := schedule.ProviderPollAfter(context.Background(), operation.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !got.Equal(pollAfter) {
 		t.Fatalf("poll schedule = %s, want %s", got, pollAfter)
 	}
@@ -141,19 +131,15 @@ func TestAdmissionProviderPendingRetainsPollGuidance(t *testing.T) {
 func TestAdmissionDefiniteFailureReconcilesIncurredCost(t *testing.T) {
 	store, now, operation := newDispatchedMemoryOperation(t, "failed", 10)
 
-	if err := store.Fail(context.Background(), admission.FailRequest{
+	testassert.NoError(t, store.Fail(context.Background(), admission.FailRequest{
 		OperationID:   operation.ID,
 		DispatchToken: operation.DispatchToken,
 		Certainty:     admission.Rejected,
 		Incurred:      3,
 		Attempt:       admission.AttemptFacts{RouteID: "initial"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	}))
 	got, err := store.Get(context.Background(), operation.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.State != admission.StateDefiniteFailed || got.ReservedMicroUSD != 0 || got.IncurredMicroUSD != 3 || got.FinalMicroUSD != 3 || got.Attempt.Dispatch != admission.Rejected {
 		t.Fatalf("failed operation = %#v", got)
 	}
@@ -172,15 +158,9 @@ func TestAdmissionContinueReconcilesAndRotatesDispatchToken(t *testing.T) {
 	if continued.Operation.State != admission.StateReserved || continued.Operation.ReservedMicroUSD != 7 || continued.Operation.DispatchToken == operation.DispatchToken || continued.Operation.Attempt.Dispatch != admission.NotDispatched || continued.Operation.Attempt.RouteID != "fallback" {
 		t.Fatalf("continued operation = %#v", continued.Operation)
 	}
-	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Attempt: continued.Operation.Attempt}); !errors.Is(err, admission.ErrInvalidToken) {
-		t.Fatalf("old dispatch token error = %v", err)
-	}
-	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: operation.ID, DispatchToken: continued.Operation.DispatchToken, Attempt: continued.Operation.Attempt}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Complete(context.Background(), admission.CompleteRequest{OperationID: operation.ID, DispatchToken: continued.Operation.DispatchToken, Actual: 7, Attempt: admission.AttemptFacts{RouteID: "fallback", AttemptNumber: 2}}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Attempt: continued.Operation.Attempt}), admission.ErrInvalidToken, "old dispatch token")
+	testassert.NoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: operation.ID, DispatchToken: continued.Operation.DispatchToken, Attempt: continued.Operation.Attempt}))
+	testassert.NoError(t, store.Complete(context.Background(), admission.CompleteRequest{OperationID: operation.ID, DispatchToken: continued.Operation.DispatchToken, Actual: 7, Attempt: admission.AttemptFacts{RouteID: "fallback", AttemptNumber: 2}}))
 	completed, err := store.Get(context.Background(), operation.ID)
 	if err != nil || completed.State != admission.StateCompleted || completed.FinalMicroUSD != 7 || completed.Attempt.AttemptNumber != 2 {
 		t.Fatalf("completed fallback = %#v, %v", completed, err)

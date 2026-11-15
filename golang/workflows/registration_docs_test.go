@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -29,9 +30,7 @@ func TestRegistrationPagesNameEveryWorkflowAndActivity(t *testing.T) {
 	Register(registry, activity.PayloadLimits{MaxInlineBytes: 1 << 20})
 	workflows := registry.names
 	descriptors, err := activity.V1ActivityDescriptors("docs")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	counts := map[int]string{6: "six", 10: "ten"}
 	workflowCount, activityCount := counts[len(workflows)], counts[len(descriptors)]
 	if workflowCount == "" || activityCount == "" {
@@ -39,9 +38,7 @@ func TestRegistrationPagesNameEveryWorkflowAndActivity(t *testing.T) {
 	}
 	for _, page := range []string{"architecture/system-overview.md", "architecture/temporal-worker.md", "reference/mvp-v1-status.md"} {
 		data, err := os.ReadFile(filepath.Join("..", "..", "docs", filepath.FromSlash(page)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		text := strings.Join(strings.Fields(string(data)), " ")
 		if !strings.Contains(text, workflowCount+" workflows and "+activityCount+" activities") && !strings.Contains(text, workflowCount+" Temporal workflows and "+activityCount+" activities") {
 			t.Errorf("%s does not state %s workflows and %s activities", page, workflowCount, activityCount)

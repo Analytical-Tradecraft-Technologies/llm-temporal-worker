@@ -3,6 +3,7 @@ package streamdecode
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -222,9 +223,7 @@ func TestDecodersRejectSequencesTheAssemblerWouldReject(t *testing.T) {
 // into the response for operationKey.
 func assembleDecoded(t *testing.T, operationKey string, events []provider.Event, err error) llm.Response {
 	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assembler := provider.NewAssembler(operationKey)
 	for _, event := range events {
 		if err := assembler.Add(event); err != nil {
@@ -232,8 +231,6 @@ func assembleDecoded(t *testing.T, operationKey string, events []provider.Event,
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return response
 }

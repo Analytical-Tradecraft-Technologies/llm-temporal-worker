@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
 
@@ -101,9 +102,7 @@ func TestRuntimeKeepsPollingWhileCloudRequestTableIsUpdating(t *testing.T) {
 		Provider:     map[string]any{"type": "aws", "aws": map[string]any{"region": "us-east-1"}, "key_value_stores": map[string]any{"requests": "physical-table"}, "blob_stores": map[string]any{"payloads": "payload-bucket"}},
 		RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1",
 	}, bytes.Repeat([]byte{7}, 32))
-	if err != nil {
-		t.Fatalf("open cloud request storage: %v", err)
-	}
+	testassert.NoError(t, err, "open cloud request storage")
 
 	runtime, controller := newMonitoredRuntime(t, ctx, runtimeConfig(t), cloudRequestProbe(repository))
 
@@ -111,9 +110,7 @@ func TestRuntimeKeepsPollingWhileCloudRequestTableIsUpdating(t *testing.T) {
 	describes, queries := stores.describeCalls.Load(), stores.queryCalls.Load()
 	rounds := pauseAfterProbeFailures + 2
 	for round := 1; round <= rounds; round++ {
-		if err := runtime.syncDependencyReadiness(ctx); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, runtime.syncDependencyReadiness(ctx))
 		if !runtime.Health.Ready() || controller.stops.Load() != 0 || controller.starts.Load() != 1 {
 			t.Fatalf("UPDATING probe round %d: ready=%v starts=%d stops=%d", round, runtime.Health.Ready(), controller.starts.Load(), controller.stops.Load())
 		}
@@ -131,9 +128,7 @@ func TestRuntimeKeepsPollingWhileCloudRequestTableIsUpdating(t *testing.T) {
 	stores.status.Store("ARCHIVED")
 	stores.queryError.Store("ResourceNotFoundException")
 	for round := 1; round <= pauseAfterProbeFailures; round++ {
-		if err := runtime.syncDependencyReadiness(ctx); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, runtime.syncDependencyReadiness(ctx))
 	}
 	waitForRuntime(t, func() bool { return controller.stops.Load() >= 1 && !runtime.Health.Ready() })
 }

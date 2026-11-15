@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -63,9 +64,7 @@ func TestLoadContinuationUsesTenantScopedLookup(t *testing.T) {
 	request.Continuation = &llm.Continuation{Handle: "continuation-handle"}
 
 	_, _, parent, err := engineValue.loadContinuation(context.Background(), request, now)
-	if err != nil {
-		t.Fatalf("loadContinuation returned error: %v", err)
-	}
+	testassert.NoError(t, err, "loadContinuation returned error")
 	if parent == nil || parent.Tenant != "tenant-1" {
 		t.Fatalf("loaded parent = %#v, want tenant-1 continuation", parent)
 	}
@@ -78,9 +77,7 @@ func validContinuation(t *testing.T, now time.Time, tenant string) state.Continu
 	t.Helper()
 	transcript := []llm.Item{llm.HumanText("hello")}
 	_, digest, err := state.CanonicalTranscript(transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return state.Continuation{
 		ID:                 "continuation-handle",
 		Tenant:             tenant,

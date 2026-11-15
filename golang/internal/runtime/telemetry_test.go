@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -38,9 +39,7 @@ func TestRuntimeConstructsConfiguredTelemetryAndFlushesOnShutdown(t *testing.T) 
 	span.End()
 	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := runtime.Shutdown(shutdownContext); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.Shutdown(shutdownContext))
 	if !closed.Load() {
 		t.Fatal("runtime clients were not closed before telemetry shutdown")
 	}
@@ -74,9 +73,7 @@ func TestRuntimeWithMetricsDisabledConstructsAndRunsLifecycle(t *testing.T) {
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := runtime.Shutdown(shutdownContext); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.Shutdown(shutdownContext))
 	if !controller.started.Load() || !controller.stopped.Load() || !closed.Load() {
 		t.Fatalf("disabled metrics lifecycle started=%v stopped=%v clients-closed=%v", controller.started.Load(), controller.stopped.Load(), closed.Load())
 	}

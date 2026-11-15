@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -26,9 +27,7 @@ var _ provider.Adapter = compileOnlyAdapter{}
 func TestAdapterPortKeepsSDKParamsOpaque(t *testing.T) {
 	var adapter provider.Adapter = compileOnlyAdapter{}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if call.SDKParams == nil {
 		t.Fatal("adapter call lost SDK params")
 	}

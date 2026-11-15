@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -83,13 +84,9 @@ func toolArgumentsExecution(t *testing.T, f *boundedCloudFixture, requestID stri
 	t.Helper()
 	scope := testRequestScope
 	attempt, err := f.repository.LoadRequestAttempt(context.Background(), scope, cloudstate.RequestID(requestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	saved, err := f.repository.LoadProviderExecution(context.Background(), scope, attempt.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return saved.Execution
 }
 

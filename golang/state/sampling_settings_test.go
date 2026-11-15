@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -15,9 +16,7 @@ func TestApplySettingsPatchV1InheritsReplacesAndClearsSamplingLeaves(t *testing.
 	parent, err := ApplySettingsPatchV1(RootModelState("model"), llm.SettingsPatchV1{
 		TopP: llm.Patch[llm.DecimalV1]{Set: &topP}, StopSequences: llm.Patch[[]string]{Set: &stop}, Seed: llm.Patch[int64]{Set: &seed},
 		ReasoningMode: llm.Patch[llm.ReasoningMode]{Set: &mode}, ReasoningTokenBudget: llm.Patch[int]{Set: &budget}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if parent.TopP.String() != "0.9" || !reflect.DeepEqual(parent.StopSequences, stop) || *parent.Seed != 7 || parent.ReasoningMode != mode || *parent.ReasoningTokenBudget != 2048 {
 		t.Fatalf("parent = %+v", parent)
 	}
@@ -40,17 +39,13 @@ func TestApplySettingsPatchV1InheritsReplacesAndClearsSamplingLeaves(t *testing.
 	replacement := []string{"STOP", "HALT"}
 	child, err := ApplySettingsPatchV1(parent, llm.SettingsPatchV1{StopSequences: llm.Patch[[]string]{Set: &replacement}, Seed: llm.Patch[int64]{Clear: true},
 		ReasoningTokenBudget: llm.Patch[int]{Clear: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !reflect.DeepEqual(child.StopSequences, replacement) || child.Seed != nil || child.ReasoningTokenBudget != nil || child.TopP.String() != "0.9" || child.ReasoningMode != mode {
 		t.Fatalf("child = %+v", child)
 	}
 	cleared, err := ApplySettingsPatchV1(child, llm.SettingsPatchV1{TopP: llm.Patch[llm.DecimalV1]{Clear: true}, StopSequences: llm.Patch[[]string]{Clear: true},
 		ReasoningMode: llm.Patch[llm.ReasoningMode]{Clear: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if cleared.TopP != nil || cleared.StopSequences != nil || cleared.ReasoningMode != "" || cleared.Model != "model" {
 		t.Fatalf("cleared = %+v", cleared)
 	}
@@ -85,9 +80,7 @@ func TestCheckpointBlobCodecRoundTripsSamplingLeaves(t *testing.T) {
 	patch := SettingsPatch{TopP: SetPatch(llm.DecimalV1("0.123456789012345678")), StopSequences: SetPatch([]string{"END"}), Seed: SetPatch(int64(llm.MaxSeedV1)),
 		ReasoningMode: SetPatch(llm.ReasoningModeAdaptive), ReasoningTokenBudget: ClearPatch[int]()}
 	encoded, err := codec.EncodeSettingsPatch(patch)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, fragment := range []string{`"top_p":{"set":"0.123456789012345678"}`, `"stop_sequences":{"set":["END"]}`, `"seed":{"set":9007199254740991}`,
 		`"reasoning_mode":{"set":"adaptive"}`, `"reasoning_token_budget":{"clear":true}`} {
 		if !strings.Contains(string(encoded), fragment) {
@@ -161,9 +154,7 @@ func TestSnapshotDigestAndEncodingUnchangedWithoutSamplingLeaves(t *testing.T) {
 
 	snapshot.Digest = snapshot.digest()
 	encoded, err := (CheckpointBlobCodec{}).EncodeSnapshot(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, name := range []string{"top_p", "stop_sequences", "seed", "reasoning_mode", "reasoning_token_budget"} {
 		if strings.Contains(string(encoded), `"`+name+`"`) {
 			t.Fatalf("snapshot without %s encodes it: %s", name, encoded)

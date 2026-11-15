@@ -34,13 +34,9 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "azure-responses", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "azure-op", Model: "gpt-contract", ServiceClass: llm.ServiceClassStandard})
 	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil {
@@ -53,9 +49,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 		t.Fatalf("Azure Responses auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !bytes.Contains(body, []byte(`"model":"gpt-contract"`)) {
 		t.Fatalf("Azure Responses request body = %s", body)
 	}
@@ -98,13 +92,9 @@ func TestAzureResponsesTokenCredentialUsesBearerAndV1Path(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, string(readContractFixture(t, "azure-responses", "response.completed.json"))), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-contract")})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if credential.calls == 0 {
 		t.Fatal("token credential was not called")
 	}
@@ -141,13 +131,9 @@ func TestAzureResponsesAdapterAliases(t *testing.T) {
 		APIKey:     "test-azure-key",
 		HTTPClient: http.DefaultClient,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewAzureOpenAIAdapter(client, "azure-responses", "azure-responses/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if adapter.Name() != adapterName {
 		t.Fatalf("adapter name = %q, want %q", adapter.Name(), adapterName)
 	}
@@ -161,9 +147,7 @@ func TestAzureResponsesPreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileAzureCall(t, client, "azure-pre-dial-deadline")
 	assertCallerDeadlineBeforeDial(t, transport, adapter, call)
 }
@@ -179,9 +163,7 @@ func TestAzureResponsesRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileAzureCall(t, client, "azure-redirect")
 	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
@@ -199,17 +181,13 @@ func TestAzureResponsesRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 func compileAzureCall(t *testing.T, client *Client, operationKey string) (*Adapter, provider.Call) {
 	t.Helper()
 	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter, adaptertest.CompileStrict(t, adapter, "azure-responses", provider.FamilyOpenAIResponses, llm.Request{OperationKey: operationKey, Model: "gpt-contract"})
 }
 
 func TestAzureResponsesPathShimLeavesOtherRoutesUntouched(t *testing.T) {
 	request, err := http.NewRequest(http.MethodPost, "https://resource.openai.azure.com/openai/models", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	called := false
 	_, err = azureResponsesPathMiddleware(request, func(got *http.Request) (*http.Response, error) {
 		called = true
@@ -264,12 +242,8 @@ func TestAzureResponsesAcceptsDocumentedEndpointForms(t *testing.T) {
 				} else {
 					client, err = NewAzureTokenClient(AzureTokenClientConfig{Endpoint: endpoint, APIVersion: "2024-10-21", TokenCredential: &fakeAzureTokenCredential{}, HTTPClient: httpClient})
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-contract")}); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
+				testassert.NoError(t, testassert.Err(client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-contract")})))
 				if got == nil || got.URL.Path != "/openai/v1/responses" || got.URL.Query().Get("api-version") != "2024-10-21" {
 					t.Fatalf("Azure Responses request URL = %v", gotURL(got))
 				}
@@ -301,9 +275,7 @@ func invokeAzureTokenAdapter(t *testing.T, credential azcore.TokenCredential, tr
 	t.Helper()
 	client, err := NewAzureTokenClient(AzureTokenClientConfig{Endpoint: "https://resource.openai.azure.com", APIVersion: "v1",
 		TokenCredential: credential, HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileAzureCall(t, client, "azure-token")
 	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)

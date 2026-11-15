@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"testing"
 )
@@ -15,9 +16,7 @@ func TestUniqueFeaturesKeepsFirstSeenOrder(t *testing.T) {
 }
 
 func TestValidateCapabilityQuery(t *testing.T) {
-	if err := ValidateCapabilityQuery(CapabilityQuery{}, "openai chat", FamilyOpenAIChat, "endpoint"); err != nil {
-		t.Fatalf("empty query rejected: %v", err)
-	}
+	testassert.NoError(t, ValidateCapabilityQuery(CapabilityQuery{}, "openai chat", FamilyOpenAIChat, "endpoint"), "empty query rejected")
 	err := ValidateCapabilityQuery(CapabilityQuery{Family: FamilyAnthropicMessages}, "openai chat", FamilyOpenAIChat, "endpoint")
 	if err == nil || err.Error() != `openai chat: capability family "anthropic_messages" does not match "openai_chat"` {
 		t.Fatalf("family mismatch error = %v", err)

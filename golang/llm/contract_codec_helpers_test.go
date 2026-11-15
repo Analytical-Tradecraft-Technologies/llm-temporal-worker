@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
@@ -11,9 +12,7 @@ func TestPatchSetHelpers(t *testing.T) {
 	failed := errors.New("failed")
 	invalid := ServiceClass("bogus")
 	seed := int64(1)
-	if err := firstError(nil, checkSetEnum(Patch[ServiceClass]{Clear: true}, "service_class", ServiceClass.Valid), checkSet(Patch[int64]{}, func(int64) error { return failed })); err != nil {
-		t.Fatalf("checks of unset patches = %v", err)
-	}
+	testassert.NoError(t, firstError(nil, checkSetEnum(Patch[ServiceClass]{Clear: true}, "service_class", ServiceClass.Valid), checkSet(Patch[int64]{}, func(int64) error { return failed })), "checks of unset patches")
 	if err := checkSetEnum(Patch[ServiceClass]{Set: &invalid}, "service_class", ServiceClass.Valid); err == nil || err.Error() != `service_class: invalid value "bogus"` {
 		t.Fatalf("checkSetEnum(invalid) = %v", err)
 	}

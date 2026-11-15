@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -24,17 +25,13 @@ func recordingBedrockAdapter(t *testing.T, text string, wire *[]byte) *Adapter {
 		"content": []any{map[string]any{"type": "text", "text": text}}, "stop_reason": "end_turn",
 		"usage": map[string]any{"input_tokens": 2, "output_tokens": 1, "service_tier": "default"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: adaptertest.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		*wire, _ = io.ReadAll(request.Body)
 		return adaptertest.JSONResponse(request, http.StatusOK, string(body), "X-Amzn-Requestid", "bedrock-structured"), nil
 	})}, nil)
 	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, "http://127.0.0.1"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -84,12 +81,8 @@ func TestCompileRejectsURLMediaAndKeepsInlineBytes(t *testing.T) {
 		}
 	}
 	call, err := adapter.Compile(context.Background(), bedrockCompileInput(media(llm.ImagePart{Bytes: []byte("image-bytes"), MediaType: "image/png"}), true))
-	if err != nil {
-		t.Fatalf("inline image = %v", err)
-	}
-	if _, err := adapter.Invoke(context.Background(), call, nil); err != nil {
-		t.Fatalf("inline image invoke = %v", err)
-	}
+	testassert.NoError(t, err, "inline image")
+	testassert.NoError(t, testassert.Err(adapter.Invoke(context.Background(), call, nil)), "inline image invoke")
 	if !strings.Contains(string(wire), `"type":"base64"`) || strings.Contains(string(wire), `"type":"url"`) {
 		t.Fatalf("inline image wire body = %s", wire)
 	}

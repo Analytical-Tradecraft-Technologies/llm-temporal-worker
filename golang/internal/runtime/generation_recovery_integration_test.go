@@ -16,6 +16,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
@@ -75,9 +76,7 @@ func TestCloudWorkflowLiveHistoricalGenerationRecovery(t *testing.T) {
 		return client.DialContext(ctx, options)
 	}}
 	encryptedClient, err := factory.New(h.ctx, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(encryptedClient.Close)
 	h.client = encryptedClient
 	w := worker.New(h.client, h.queue, worker.Options{WorkerStopTimeout: time.Second})
@@ -85,23 +84,15 @@ func TestCloudWorkflowLiveHistoricalGenerationRecovery(t *testing.T) {
 	w.RegisterWorkflowWithOptions(legacyRecoveryGenerate, workflow.RegisterOptions{Name: workflows.GenerateWorkflowName})
 	w.RegisterWorkflowWithOptions(workflows.Compact, workflow.RegisterOptions{Name: workflows.CompactWorkflowName})
 	a := &activity.Activities{V1Runtime: &generationRecoveryLegacyRuntime{cloudV1Runtime: &cloudV1Runtime{CloudExecutionRuntime: f.runtime}}}
-	if err := a.RegisterForTaskQueue(w, h.queue); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Start(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, a.RegisterForTaskQueue(w, h.queue))
+	testassert.NoError(t, w.Start())
 	t.Cleanup(w.Stop)
 	run := h.start(t, workflows.GenerateWorkflowName, original)
 	var want llm.GenerateResponseV1
-	if err := run.Get(h.ctx, &want); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, run.Get(h.ctx, &want))
 	w.Stop()
 	op := publicGenerationOperation(original, time.Now())
-	if _, err := f.repository.LoadGenerationPlan(h.ctx, op); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("fixture persisted a new generation plan: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(f.repository.LoadGenerationPlan(h.ctx, op)), contracts.ErrNotFound, "fixture persisted a new generation plan")
 	proof, err := readGenerationRecoveryHistory(h.ctx, h.client.GetWorkflowHistory(h.ctx, run.GetID(), run.GetRunID(), false, enumspb.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT), dc, "default")
 	if err != nil || !recoveryJSONEqual(proof.original, original) {
 		t.Fatalf("server history recovery failed: %v", err)
@@ -111,9 +102,7 @@ func TestCloudWorkflowLiveHistoricalGenerationRecovery(t *testing.T) {
 	if err != nil || report.Status != "recovery_required" {
 		t.Fatalf("dry run: %+v %v", report, err)
 	}
-	if _, err := restoreGenerationRecovery(h.ctx, f.repository, f.options.ResolveScope, proof, true, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(restoreGenerationRecovery(h.ctx, f.repository, f.options.ResolveScope, proof, true, time.Now())))
 	f.runtime.execution.admission.planning.providers.catalog.Models = map[string]routing.Model{}
 	h.startWorker(t)
 	got := h.generate(t, original)

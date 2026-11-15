@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -21,9 +22,7 @@ func structuredOutputAdapter(t *testing.T, text string, wire *[]byte) *Adapter {
 		"content": []any{map[string]any{"type": "text", "text": text}}, "stop_reason": "end_turn",
 		"usage": map[string]any{"input_tokens": 2, "output_tokens": 1, "service_tier": "standard"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	client, err := NewClient(ClientConfig{
 		BaseURL: "http://127.0.0.1/contract",
 		APIKey:  "test-key",
@@ -32,15 +31,11 @@ func structuredOutputAdapter(t *testing.T, text string, wire *[]byte) *Adapter {
 			return adaptertest.JSONResponse(request, http.StatusOK, string(body), "Request-Id", "req-structured"), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := testProfile()
 	profile.ExpectedBaseURL = "http://127.0.0.1/contract"
 	adapter, err := New(client, "anthropic-prod", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestVersionCommandEmitsBuildMetadata(t *testing.T) {
@@ -91,14 +92,10 @@ func exampleConfigPath(t *testing.T) string {
 func TestConfigCommandsDoNotPrintSecretValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data, err := os.ReadFile(exampleConfigPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	secret := "adversarial-secret-value"
 	data = append(data, []byte("\n# "+secret+"\n")...)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, data, 0600))
 	for _, command := range [][]string{{"validate-config", "--config", path}, {"print-effective-config", "--config", path}} {
 		var output, errorsOut bytes.Buffer
 		code := Execute(context.Background(), command, CommandOptions{Out: &output, ErrOut: &errorsOut})
@@ -190,9 +187,7 @@ func TestHealthcheckCommandFailsWhenAProbeIsUnavailable(t *testing.T) {
 
 func TestConfigCommandsReportValidationAndReferenceFailures(t *testing.T) {
 	example, err := os.ReadFile(exampleConfigPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, test := range []struct {
 		name     string
 		from, to string
@@ -220,9 +215,7 @@ func TestConfigCommandsReportValidationAndReferenceFailures(t *testing.T) {
 				}
 			}
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.WriteFile(path, []byte(data), 0600))
 			for _, command := range []string{"validate-config", "worker"} {
 				var output, errorsOut bytes.Buffer
 				code := Execute(context.Background(), []string{command, "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut, Resolver: test.resolver,
@@ -261,17 +254,13 @@ func TestWriteConfigErrorRedactsQuotedInputValues(t *testing.T) {
 
 func TestConfigCommandsRejectWorkloadIdentityTheBinaryCannotResolve(t *testing.T) {
 	example, err := os.ReadFile(exampleConfigPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	data := strings.Replace(string(example), "    password:\n      kind: file\n      path: /var/run/secrets/redis-password", "    password:\n      kind: workload_identity\n      audience: redis", 1)
 	if data == string(example) {
 		t.Fatal("example Redis password reference not found")
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, []byte(data), 0600))
 	for _, command := range []string{"validate-config", "worker"} {
 		var output, errorsOut bytes.Buffer
 		code := Execute(context.Background(), []string{command, "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut,
@@ -286,9 +275,7 @@ func TestConfigCommandsRejectWorkloadIdentityTheBinaryCannotResolve(t *testing.T
 // failed at worker start or on every matching request.
 func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
 	example, err := os.ReadFile(exampleConfigPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, row := range []struct{ name, old, replacement, want string }{
 		{"window bucket count", "bucket: 1h", "bucket: 1s", "budgets.policies[0].windows[2] needs 2592002 buckets"},
 		{"limit above the Redis range", `limit_usd: "25.000000000000000000"`, `limit_usd: "99999999999999999999"`, "budgets.policies[0].windows[0].limit_usd must not exceed"},
@@ -308,9 +295,7 @@ func TestValidateConfigRejectsSettingsThatFailAfterValidation(t *testing.T) {
 				data = string(example) + row.replacement
 			}
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.WriteFile(path, []byte(data), 0600))
 			var output, errorsOut bytes.Buffer
 			code := Execute(context.Background(), []string{"validate-config", "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut})
 			if code != 1 || !strings.Contains(errorsOut.String(), row.want) {
@@ -333,9 +318,7 @@ func TestUsageCommandsHaveCLIReferenceSections(t *testing.T) {
 	}
 	commands := append(strings.Split(line[start+1:end], "|"), "help")
 	reference, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "cli.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	headings := make(map[string]bool)
 	for _, text := range strings.Split(string(reference), "\n") {
 		headings[strings.TrimSpace(text)] = true
@@ -354,18 +337,14 @@ func TestUsageCommandsHaveCLIReferenceSections(t *testing.T) {
 // and the worker command reports the field rather than "command failed".
 func TestConfigAndWorkerCommandsRequireAuthorizationForDurableDevelopment(t *testing.T) {
 	example, err := os.ReadFile(exampleConfigPath(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	const policy = "authorization:\n  mode: trusted_temporal\n  allowed_scopes:\n    - tenant: acme\n      project: invoice-processing\n"
 	if !strings.Contains(string(example), policy) || !strings.Contains(string(example), "environment: production") {
 		t.Fatal("example configuration no longer contains the authorization block or production environment")
 	}
 	data := strings.ReplaceAll(strings.Replace(string(example), policy, "", 1), "environment: production", "environment: development")
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, []byte(data), 0600))
 	const want = "authorization is required when environment is production or state.kind is durable"
 	for _, command := range []string{"validate-config", "print-effective-config", "worker"} {
 		var output, errorsOut bytes.Buffer

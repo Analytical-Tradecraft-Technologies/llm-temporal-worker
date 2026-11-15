@@ -2,10 +2,10 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/redis/go-redis/v9"
@@ -53,18 +53,14 @@ func assertChildRetryConflicts(t *testing.T, store *ContinuationStore, parent st
 		value.Transcript = []llm.Item{llm.ModelText(text)}
 		var err error
 		_, value.TranscriptDigest, err = state.CanonicalTranscript(value.Transcript)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return value
 	}
 	first := mustPutChild(t, store, state.PutChildRequest{Parent: parent, Child: child("first result"), OperationKey: "op-1"})
 	if replay, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child("first result"), OperationKey: "op-1"}); err != nil || replay != first {
 		t.Fatalf("identical retry = %q, %v", replay, err)
 	}
-	if _, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child("conflicting result"), OperationKey: "op-1"}); !errors.Is(err, state.ErrConflict) {
-		t.Fatalf("conflicting retry error = %v, want ErrConflict", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child("conflicting result"), OperationKey: "op-1"})), state.ErrConflict, "conflicting retry")
 }
 
 // newTestContinuationStore builds a store over test doubles with the test

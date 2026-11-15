@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
@@ -26,9 +27,7 @@ func TestLangfuseCredentialsRequirePair(t *testing.T) {
 		t.Fatal("missing secret key accepted")
 	}
 	c.Langfuse.SecretKey = config.SecretRef{Kind: "env", Name: "LANGFUSE_SECRET_KEY"}
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, c.Validate())
 	c.Langfuse.BaseURL = "https://user:password@cloud.langfuse.com"
 	if c.Validate() == nil {
 		t.Fatal("embedded credentials accepted")

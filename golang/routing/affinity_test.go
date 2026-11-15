@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -37,9 +38,7 @@ func TestDeriveProviderCacheKeyIsStableAndDomainSeparated(t *testing.T) {
 		},
 	} {
 		mutated, err := mutate("tenant-a/project-a", parent, "epoch-1", "lineage-a")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if mutated == first {
 			t.Fatalf("%s did not domain-separate cache key", name)
 		}
@@ -178,9 +177,7 @@ func standardTenantRequest(operation string) llm.Request {
 func mustDeriveProviderCacheKey(tb testing.TB, secret []byte, scope string, parent [32]byte, epoch, lineage string) [32]byte {
 	tb.Helper()
 	key, err := DeriveProviderCacheKey(secret, scope, parent, epoch, lineage)
-	if err != nil {
-		tb.Fatalf("DeriveProviderCacheKey: %v", err)
-	}
+	testassert.NoError(tb, err, "DeriveProviderCacheKey")
 	return key
 }
 

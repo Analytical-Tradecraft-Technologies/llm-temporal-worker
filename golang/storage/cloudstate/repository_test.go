@@ -15,6 +15,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestRequestLifecycleRestartAndScopedReads(t *testing.T) {
@@ -32,8 +33,8 @@ func TestRequestLifecycleRestartAndScopedReads(t *testing.T) {
 			t.Fatalf("restart read differs: %v", err)
 		}
 	}
-	requireErrorIs(t, errOf(r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "other"}, request.ID)), contracts.ErrNotFound, "cross-scope read")
-	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "terminal"))), ErrInvalid, "terminal changed")
+	testassert.ErrorIs(t, testassert.Err(r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "other"}, request.ID)), contracts.ErrNotFound, "cross-scope read")
+	testassert.ErrorIs(t, testassert.Err(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "terminal"))), ErrInvalid, "terminal changed")
 	shard, _ := PendingShard(request.ID)
 	page, err := r.ListPending(ctx, shard, 100, "")
 	if err != nil || len(page.Requests) != 0 {
@@ -110,9 +111,7 @@ func TestConcurrentCreatesAndUpdates(t *testing.T) {
 	wg.Wait()
 	close(results)
 	for err := range results {
-		if err != nil {
-			t.Fatalf("identical concurrent creation: %v", err)
-		}
+		testassert.NoError(t, err, "identical concurrent creation")
 	}
 	initial := mustRead(t, r, request.Scope, request.ID)
 	results = make(chan error, workers)
@@ -146,7 +145,7 @@ func TestConcurrentCreatesAndUpdates(t *testing.T) {
 	}
 	changed := request
 	changed.Manifest = json.RawMessage(`{"other":true}`)
-	requireErrorIs(t, errOf(r.Create(ctx, changed)), contracts.ErrConflict, "conflicting create accepted")
+	testassert.ErrorIs(t, testassert.Err(r.Create(ctx, changed)), contracts.ErrConflict, "conflicting create accepted")
 }
 
 func TestIdenticalUpdateRetryAfterLaterCompletionDoesNotRegressIndex(t *testing.T) {
@@ -162,9 +161,7 @@ func TestIdenticalUpdateRetryAfterLaterCompletionDoesNotRegressIndex(t *testing.
 	}
 	mustCreate(t, r, request)
 	stored, err := r.table.Get(ctx, r.indexKey(request.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	index, err := r.decodeIndex(stored)
 	if err != nil || index.Revision != completed.Revision || index.Status != StatusCompleted {
 		t.Fatalf("index regressed: %+v %v", index, err)
@@ -261,9 +258,7 @@ func TestUpdateLostAcknowledgementsAndIndexRepair(t *testing.T) {
 			}
 			update := change(initial, StatusRunning, "start")
 			_, err := r.TryUpdate(ctx, request.Scope, request.ID, update)
-			if !errors.Is(err, contracts.ErrOutcomeUnknown) {
-				t.Fatalf("lost uncertainty: %v", err)
-			}
+			testassert.ErrorIs(t, err, contracts.ErrOutcomeUnknown, "lost uncertainty")
 			if stage == "index" && !errors.Is(err, ErrIndexPending) {
 				t.Fatalf("lost committed-event distinction: %v", err)
 			}
@@ -273,9 +268,7 @@ func TestUpdateLostAcknowledgementsAndIndexRepair(t *testing.T) {
 				t.Fatalf("retry: %+v %v", recovered, err)
 			}
 			row, err := table.Get(ctx, r.indexKey(request.ID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			index, err := r.decodeIndex(row)
 			if err != nil || index.Revision != 2 {
 				t.Fatalf("index repair: %+v %v", index, err)
@@ -315,9 +308,7 @@ func TestTamperingMissingPayloadAndWrongSecretFailClosed(t *testing.T) {
 			case "secret":
 				var err error
 				r, err = NewRepository(Options{Table: table, Blobs: blobs, Namespace: r.namespace, Secret: bytes.Repeat([]byte{9}, 32)})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 			case "event":
 				for key, row := range table.rows {
 					if strings.Contains(key.PartitionKey, "/request/") {
@@ -343,7 +334,7 @@ func TestInvalidRequestsFailBeforeStorageAndCancellationPreserved(t *testing.T) 
 	} {
 		r, table, blobs, request := fixture(t)
 		mutate(&request)
-		requireErrorIs(t, errOf(r.Create(context.Background(), request)), ErrInvalid, "invalid accepted")
+		testassert.ErrorIs(t, testassert.Err(r.Create(context.Background(), request)), ErrInvalid, "invalid accepted")
 		if len(table.rows) != 0 || len(blobs.values) != 0 {
 			t.Fatal("invalid input caused I/O")
 		}
@@ -351,8 +342,8 @@ func TestInvalidRequestsFailBeforeStorageAndCancellationPreserved(t *testing.T) 
 	r, table, blobs, request := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	requireErrorIs(t, errOf(r.Create(ctx, request)), context.Canceled, "cancellation lost")
-	requireErrorIs(t, errOf(r.Read(nil, request.Scope, request.ID)), ErrInvalid, "nil context")
+	testassert.ErrorIs(t, testassert.Err(r.Create(ctx, request)), context.Canceled, "cancellation lost")
+	testassert.ErrorIs(t, testassert.Err(r.Read(nil, request.Scope, request.ID)), ErrInvalid, "nil context")
 	if len(table.rows) != 0 || len(blobs.values) != 0 {
 		t.Fatal("canceled input caused I/O")
 	}
@@ -381,7 +372,7 @@ func TestHistoricalRetryAcrossPagesAndFailedTerminalState(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(loaded, record) {
 		t.Fatalf("paged replay: %v", err)
 	}
-	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "restart"))), ErrInvalid, "failed request was mutable")
+	testassert.ErrorIs(t, testassert.Err(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "restart"))), ErrInvalid, "failed request was mutable")
 }
 
 func TestRejectedUpdatesDoNotWrite(t *testing.T) {
@@ -396,13 +387,13 @@ func TestRejectedUpdatesDoNotWrite(t *testing.T) {
 	} {
 		u := change(record, StatusRunning, "start")
 		mutate(&u)
-		requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, u)), ErrInvalid, "bad update")
+		testassert.ErrorIs(t, testassert.Err(r.TryUpdate(ctx, request.Scope, request.ID, u)), ErrInvalid, "bad update")
 	}
 	u := change(record, StatusRunning, "start")
 	u.ExpectedRevision++
-	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, u)), contracts.ErrConflict, "future revision")
+	testassert.ErrorIs(t, testassert.Err(r.TryUpdate(ctx, request.Scope, request.ID, u)), contracts.ErrConflict, "future revision")
 	u.ExpectedRevision--
-	requireErrorIs(t, errOf(r.TryUpdate(ctx, Scope{Tenant: "other", Project: request.Scope.Project}, request.ID, u)), contracts.ErrNotFound, "foreign update")
+	testassert.ErrorIs(t, testassert.Err(r.TryUpdate(ctx, Scope{Tenant: "other", Project: request.Scope.Project}, request.ID, u)), contracts.ErrNotFound, "foreign update")
 	if len(table.rows) != 2 || len(blobs.values) != 1 {
 		t.Fatal("rejected update wrote state")
 	}
