@@ -46,12 +46,7 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 			mapped.Cause = recoveryErr
 			return provider.Result{}, mapped, false
 		}
-		if validationErr := recovered.ValidateForCall(call); validationErr != nil {
-			invalid := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider idempotency recovery response is invalid")
-			invalid.Cause = validationErr
-			return provider.Result{}, invalid, false
-		}
-		return engine.handleResumableOutcome(ctx, operation, candidate, call, observer, resumable, recovered)
+		return engine.handleValidResumableOutcome(ctx, operation, candidate, call, observer, resumable, recovered, recoveredInvalid)
 	}
 	outcome, err := resumable.Submit(ctx, call, observer)
 	if err != nil {
@@ -67,20 +62,24 @@ func (engine *Engine) invokeAttempt(ctx context.Context, operation admission.Ope
 					mapped.Cause = recoveryErr
 					return provider.Result{}, mapped, false
 				}
-				if validationErr := recovered.ValidateForCall(call); validationErr != nil {
-					invalid := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "provider idempotency recovery response is invalid")
-					invalid.Cause = validationErr
-					return provider.Result{}, invalid, false
-				}
-				return engine.handleResumableOutcome(ctx, operation, candidate, call, observer, resumable, recovered)
+				return engine.handleValidResumableOutcome(ctx, operation, candidate, call, observer, resumable, recovered, recoveredInvalid)
 			}
 		}
 		return provider.Result{}, err, false
 	}
+	return engine.handleValidResumableOutcome(ctx, operation, candidate, call, observer, resumable, outcome, "resumable provider response is invalid")
+}
+
+const recoveredInvalid = "provider idempotency recovery response is invalid"
+
+// handleValidResumableOutcome rejects an outcome that does not match call as
+// an ambiguous invalid provider response (with reason as its message) and
+// otherwise hands it to handleResumableOutcome.
+func (engine *Engine) handleValidResumableOutcome(ctx context.Context, operation admission.Operation, candidate routing.Candidate, call provider.Call, observer *dispatchObserver, resumable provider.ResumableAdapter, outcome provider.ResumableResult, reason string) (provider.Result, error, bool) {
 	if err := outcome.ValidateForCall(call); err != nil {
-		mapped := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "resumable provider response is invalid")
-		mapped.Cause = err
-		return provider.Result{}, mapped, false
+		invalid := provider.NewError(provider.CodeProviderInvalidResponse, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, reason)
+		invalid.Cause = err
+		return provider.Result{}, invalid, false
 	}
 	return engine.handleResumableOutcome(ctx, operation, candidate, call, observer, resumable, outcome)
 }

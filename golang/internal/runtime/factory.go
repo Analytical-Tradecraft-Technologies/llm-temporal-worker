@@ -564,10 +564,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		closeAll()
 		return nil, nil, err
 	}
-	planner := factory.options.Planner
-	if planner == nil {
-		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
-	}
+	planner := factory.planner(value)
 	adapterRegistry := engine.AdapterMap(adapters)
 	capabilityAdapterRegistry := newSnapshotAdapterRegistry(adapters)
 	engineValue, err := engine.New(engine.Dependencies{
@@ -914,10 +911,7 @@ func (factory *ProductionEngineFactory) buildMemory(ctx context.Context, value c
 	if err != nil {
 		return nil, nil, err
 	}
-	planner := factory.options.Planner
-	if planner == nil {
-		planner = routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
-	}
+	planner := factory.planner(value)
 	adapterRegistry := engine.AdapterMap(adapters)
 	capabilityAdapterRegistry := newSnapshotAdapterRegistry(adapters)
 	engineValue, err := engine.New(engine.Dependencies{
@@ -970,6 +964,15 @@ func buildEstimator(value config.Config) (budget.Estimator, error) {
 		return budget.Estimator{}, fmt.Errorf("invalid token estimate safety ratio")
 	}
 	return budget.Estimator{SafetyRatio: ratio, MaxOutput: int64(value.Limits.MaxOutputTokens)}, nil
+}
+
+// planner returns the configured route planner, or the deterministic planner
+// bounded by the snapshot's route attempts.
+func (factory *ProductionEngineFactory) planner(value config.Config) routing.Planner {
+	if factory.options.Planner != nil {
+		return factory.options.Planner
+	}
+	return routing.DeterministicPlanner{MaxRejections: value.Limits.RouteAttempts * 64}
 }
 
 func (factory *ProductionEngineFactory) buildRedis(ctx context.Context, value config.Config) (redis.UniversalClient, bool, error) {
@@ -1447,15 +1450,9 @@ func routeProviderCapabilities(route routing.Route) provider.CapabilitySet {
 
 func providerCapabilities(value routing.CapabilitySet) provider.CapabilitySet {
 	result := provider.CapabilitySet{Version: value.Version, Features: make(map[provider.Feature]provider.Capability)}
-	for source, target := range map[routing.Feature]provider.Feature{
-		routing.FeatureText:             provider.FeatureText,
-		routing.FeatureToolCall:         provider.FeatureToolCall,
-		routing.FeatureStructuredOutput: provider.FeatureStructuredOutput,
-		routing.FeatureReasoning:        provider.FeatureReasoning,
-		routing.FeatureContinuation:     provider.FeatureContinuation,
-	} {
-		if capability, ok := value.Features[source]; ok {
-			result.Features[target] = provider.Capability{State: provider.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
+	for _, pair := range routingFeatures {
+		if capability, ok := value.Features[pair.routing]; ok {
+			result.Features[pair.provider] = provider.Capability{State: provider.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
 		}
 	}
 	return result

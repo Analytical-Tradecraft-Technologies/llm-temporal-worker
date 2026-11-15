@@ -501,13 +501,7 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	defer cancel()
 	addresses, err := policy.resolver.LookupIPAddr(connectionContext, host)
 	if err != nil || len(addresses) == 0 {
-		if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
-			return nil, callerErr
-		}
-		if connectionContext.Err() != nil {
-			return nil, preDispatchProviderFailure("connection_timeout")
-		}
-		return nil, preDispatchProviderFailure("dns_resolution_failed")
+		return nil, providerEgressConnectError(connectionParent, connectionContext, state, "dns_resolution_failed")
 	}
 	resolved := make([]netip.Addr, 0, len(addresses))
 	seen := make(map[netip.Addr]struct{}, len(addresses))
@@ -526,11 +520,9 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 	for _, target := range resolved {
 		connection, dialErr := policy.dial(connectionContext, network, net.JoinHostPort(target.String(), port))
 		if dialErr != nil {
-			if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
-				return nil, callerErr
-			}
-			if connectionContext.Err() != nil {
-				return nil, preDispatchProviderFailure("connection_timeout")
+			// Try the next address unless the caller or connect budget ended.
+			if err := providerEgressConnectError(connectionParent, connectionContext, state, ""); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -544,13 +536,24 @@ func (policy *providerEgressPolicy) DialContext(ctx context.Context, network, ad
 		}
 		return connection, nil
 	}
-	if callerErr := providerEgressCallerContextError(connectionParent, state); callerErr != nil {
-		return nil, callerErr
+	return nil, providerEgressConnectError(connectionParent, connectionContext, state, "connection_failed")
+}
+
+// providerEgressConnectError reports why a connection attempt failed: the
+// caller's own cancellation first, then the connect timeout, and otherwise
+// reason. An empty reason means the attempt may continue and yields nil when
+// neither context has ended.
+func providerEgressConnectError(parent, connection context.Context, state *providerEgressCallState, reason string) error {
+	if callerErr := providerEgressCallerContextError(parent, state); callerErr != nil {
+		return callerErr
 	}
-	if connectionContext.Err() != nil {
-		return nil, preDispatchProviderFailure("connection_timeout")
+	if connection.Err() != nil {
+		return preDispatchProviderFailure("connection_timeout")
 	}
-	return nil, preDispatchProviderFailure("connection_failed")
+	if reason == "" {
+		return nil
+	}
+	return preDispatchProviderFailure(reason)
 }
 
 func providerEgressCallerContextError(fallback context.Context, state *providerEgressCallState) error {

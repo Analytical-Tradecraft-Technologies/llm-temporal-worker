@@ -78,21 +78,18 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 		err = llm.ValidateMediaURLs(normalized.Instructions, normalized.Input)
 	}
 	if err != nil {
-		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
-		normalizeSpan.End()
+		engine.endTraceError(normalizeCtx, normalizeSpan, err)
 		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request normalization failed", err)
 	}
 	if err := llm.RejectBlobMedia(normalized.Instructions, normalized.Input); err != nil {
 		// No adapter can lower blob-referenced media; reject it before
 		// admission instead of reserving budget and failing every route.
-		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
-		normalizeSpan.End()
+		engine.endTraceError(normalizeCtx, normalizeSpan, err)
 		return llm.Response{}, engineError(provider.CodeUnsupportedCapability, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "blob-referenced media is not supported", err)
 	}
 	digest, err := llm.RequestDigest(normalized)
 	if err != nil {
-		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
-		normalizeSpan.End()
+		engine.endTraceError(normalizeCtx, normalizeSpan, err)
 		return llm.Response{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request digest failed", err)
 	}
 	normalizeSpan.End()
@@ -113,34 +110,29 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 	}
 	snapshot, err := engine.dependencies.Snapshots.Current(planCtx)
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return llm.Response{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
 	}
 	stateCtx, stateSpan := engine.startTrace(planCtx, "llmtw.state.load", requestTraceAttrs(normalized)...)
 	providerRequest, constraints, parent, err := engine.loadContinuation(stateCtx, normalized, now)
 	if err != nil {
-		engine.recordTraceError(stateCtx, stateSpan, err)
-		stateSpan.End()
+		engine.endTraceError(stateCtx, stateSpan, err)
 		planSpan.End()
 		return llm.Response{}, err
 	}
 	stateSpan.End()
 	if err := engine.beat(planCtx, Progress{Phase: "planning", At: now}); err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return llm.Response{}, err
 	}
 	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints, now))
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return llm.Response{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
 	}
 	quoted, err := engine.quotePlan(planCtx, normalized, plan, snapshot, now)
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return llm.Response{}, err
 	}
 	planSpan.End()
@@ -149,8 +141,7 @@ func (engine *Engine) Generate(ctx context.Context, request llm.Request) (respon
 	admissionCtx, admissionSpan := engine.startTrace(ctx, "llmtw.admission", requestTraceAttrs(normalized)...)
 	operation, existing, err := engine.beginOrResume(admissionCtx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
 	if err != nil {
-		engine.recordTraceError(admissionCtx, admissionSpan, err)
-		admissionSpan.End()
+		engine.endTraceError(admissionCtx, admissionSpan, err)
 		return llm.Response{}, err
 	}
 	admissionSpan.End()

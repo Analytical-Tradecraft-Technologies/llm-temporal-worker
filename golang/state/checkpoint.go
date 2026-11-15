@@ -607,29 +607,16 @@ func cloneSettingsPatch(patch SettingsPatch) SettingsPatch {
 	result := patch
 	result.Model.Set = clonePointer(patch.Model.Set)
 	result.ServiceClass.Set = clonePointer(patch.ServiceClass.Set)
-	result.ServiceClassFallbacks.Set = clonePointer(patch.ServiceClassFallbacks.Set)
-	if patch.ServiceClassFallbacks.Set != nil {
-		result.ServiceClassFallbacks.Set = &[]llm.ServiceClass{}
-		*result.ServiceClassFallbacks.Set = append([]llm.ServiceClass(nil), (*patch.ServiceClassFallbacks.Set)...)
-	}
+	result.ServiceClassFallbacks.Set = patch.ServiceClassFallbacks.cloneSet(cloneSlice)
 	result.Portability.Set = clonePointer(patch.Portability.Set)
-	if patch.Instructions.Set != nil {
-		value := cloneInstructions(*patch.Instructions.Set)
-		result.Instructions.Set = &value
-	}
-	if patch.Tools.Set != nil {
-		value := cloneTools(*patch.Tools.Set)
-		result.Tools.Set = &value
-	}
+	result.Instructions.Set = patch.Instructions.cloneSet(cloneInstructions)
+	result.Tools.Set = patch.Tools.cloneSet(cloneTools)
 	result.ToolPolicy.Set = clonePointer(patch.ToolPolicy.Set)
 	result.Output.Set = cloneOutput(patch.Output.Set)
 	result.Temperature.Set = clonePointer(patch.Temperature.Set)
 	result.TemperatureDecimal.Set = clonePointer(patch.TemperatureDecimal.Set)
 	result.TopP.Set = clonePointer(patch.TopP.Set)
-	if patch.StopSequences.Set != nil {
-		value := append([]string(nil), (*patch.StopSequences.Set)...)
-		result.StopSequences.Set = &value
-	}
+	result.StopSequences.Set = patch.StopSequences.cloneSet(cloneSlice)
 	result.Seed.Set = clonePointer(patch.Seed.Set)
 	result.ReasoningMode.Set = clonePointer(patch.ReasoningMode.Set)
 	result.ReasoningTokenBudget.Set = clonePointer(patch.ReasoningTokenBudget.Set)
@@ -638,14 +625,8 @@ func cloneSettingsPatch(patch SettingsPatch) SettingsPatch {
 	result.WebFetch.Set = clonePointer(patch.WebFetch.Set)
 	result.CodeExecution.Set = clonePointer(patch.CodeExecution.Set)
 	result.WebSearch.Set = clonePointer(patch.WebSearch.Set)
-	if patch.CompactionPolicy.Set != nil {
-		value := append(json.RawMessage(nil), (*patch.CompactionPolicy.Set)...)
-		result.CompactionPolicy.Set = &value
-	}
-	if patch.Extensions.Set != nil {
-		value := cloneRawMap(*patch.Extensions.Set)
-		result.Extensions.Set = &value
-	}
+	result.CompactionPolicy.Set = patch.CompactionPolicy.cloneSet(cloneSlice)
+	result.Extensions.Set = patch.Extensions.cloneSet(cloneRawMap)
 	return result
 }
 

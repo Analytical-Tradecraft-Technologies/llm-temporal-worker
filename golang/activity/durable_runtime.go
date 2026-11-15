@@ -46,8 +46,8 @@ var _ V1Runtime = (*GenerateOnlyV1Runtime)(nil)
 // exposing it to Temporal. A nil or incomplete set fails during snapshot
 // composition, before a worker can poll an Activity task queue.
 func NewGenerateOnlyV1Runtime(generate durable.GeneratePorts) (*GenerateOnlyV1Runtime, error) {
-	if err := generate.Validate(); err != nil {
-		return nil, fmt.Errorf("generate runtime ports: %w", err)
+	if err := validateGeneratePorts(generate); err != nil {
+		return nil, err
 	}
 	return &GenerateOnlyV1Runtime{Generate: generate}, nil
 }
@@ -58,10 +58,7 @@ func (runtime *GenerateOnlyV1Runtime) Validate() error {
 	if runtime == nil {
 		return fmt.Errorf("generate-only v1 runtime is nil")
 	}
-	if err := runtime.Generate.Validate(); err != nil {
-		return fmt.Errorf("generate runtime ports: %w", err)
-	}
-	return nil
+	return validateGeneratePorts(runtime.Generate)
 }
 
 func (runtime *GenerateOnlyV1Runtime) GenerateV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
@@ -94,8 +91,8 @@ var _ V1Runtime = (*CompactOnlyV1Runtime)(nil)
 // exposing it to callers. No storage or provider work occurs during
 // construction.
 func NewCompactOnlyV1Runtime(compact durable.CompactPorts) (*CompactOnlyV1Runtime, error) {
-	if err := compact.Validate(); err != nil {
-		return nil, fmt.Errorf("compact runtime ports: %w", err)
+	if err := validateCompactPorts(compact); err != nil {
+		return nil, err
 	}
 	return &CompactOnlyV1Runtime{Compact: compact}, nil
 }
@@ -104,10 +101,7 @@ func (runtime *CompactOnlyV1Runtime) Validate() error {
 	if runtime == nil {
 		return fmt.Errorf("compact-only v1 runtime is nil")
 	}
-	if err := runtime.Compact.Validate(); err != nil {
-		return fmt.Errorf("compact runtime ports: %w", err)
-	}
-	return nil
+	return validateCompactPorts(runtime.Compact)
 }
 
 func (runtime *CompactOnlyV1Runtime) GenerateV1(context.Context, llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
@@ -131,11 +125,8 @@ func (runtime *CompactOnlyV1Runtime) QueryV1(context.Context, llm.QueryRequestV1
 // intentionally optional: deployments may bind it through Activities.QueryService
 // while composing the Generate/Compact runtime.
 func NewDurableV1Runtime(generate durable.GeneratePorts, compact durable.CompactPorts, query QueryV1Func) (*DurableV1Runtime, error) {
-	if err := generate.Validate(); err != nil {
-		return nil, fmt.Errorf("generate runtime ports: %w", err)
-	}
-	if err := compact.Validate(); err != nil {
-		return nil, fmt.Errorf("compact runtime ports: %w", err)
+	if err := validateDurablePorts(generate, compact); err != nil {
+		return nil, err
 	}
 	return &DurableV1Runtime{Generate: generate, Compact: compact, Query: query}, nil
 }
@@ -147,13 +138,29 @@ func (runtime *DurableV1Runtime) Validate() error {
 	if runtime == nil {
 		return fmt.Errorf("durable v1 runtime is nil")
 	}
-	if err := runtime.Generate.Validate(); err != nil {
+	return validateDurablePorts(runtime.Generate, runtime.Compact)
+}
+
+func validateGeneratePorts(generate durable.GeneratePorts) error {
+	if err := generate.Validate(); err != nil {
 		return fmt.Errorf("generate runtime ports: %w", err)
 	}
-	if err := runtime.Compact.Validate(); err != nil {
+	return nil
+}
+
+func validateCompactPorts(compact durable.CompactPorts) error {
+	if err := compact.Validate(); err != nil {
 		return fmt.Errorf("compact runtime ports: %w", err)
 	}
 	return nil
+}
+
+// validateDurablePorts checks both phase port sets, Generate first.
+func validateDurablePorts(generate durable.GeneratePorts, compact durable.CompactPorts) error {
+	if err := validateGeneratePorts(generate); err != nil {
+		return err
+	}
+	return validateCompactPorts(compact)
 }
 
 func (runtime *DurableV1Runtime) GenerateV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {

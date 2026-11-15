@@ -199,82 +199,56 @@ func canonicalFilter(filter QueryFilter) QueryFilter {
 	case ProviderStatusQuery:
 		value.Page.Cursor = nil
 		return value
-	case *ProviderStatusQuery:
-		if value == nil {
-			return filter
-		}
-		copy := *value
-		copy.Page.Cursor = nil
-		return &copy
 	case ModelInventoryQuery:
 		value.Page.Cursor = nil
 		return value
-	case *ModelInventoryQuery:
-		if value == nil {
-			return filter
-		}
-		copy := *value
-		copy.Page.Cursor = nil
-		return &copy
 	case CreditStatusQuery:
 		value.Page.Cursor = nil
 		return value
-	case *CreditStatusQuery:
-		if value == nil {
-			return filter
-		}
-		copy := *value
-		copy.Page.Cursor = nil
-		return &copy
 	case BudgetStatusQuery:
 		if value.ActiveAt != nil {
 			normalized := value.ActiveAt.UTC()
 			value.ActiveAt = &normalized
 		}
 		return value
-	case *BudgetStatusQuery:
-		if value == nil {
-			return filter
-		}
-		copy := *value
-		if copy.ActiveAt != nil {
-			normalized := copy.ActiveAt.UTC()
-			copy.ActiveAt = &normalized
-		}
-		return &copy
 	case SpendSummaryQuery:
 		value.StartTime = value.StartTime.UTC()
 		value.EndTime = value.EndTime.UTC()
 		value.GroupBy = append([]SpendDimension(nil), value.GroupBy...)
 		value.OperationKinds = append([]OperationKind(nil), value.OperationKinds...)
-		stableSortDimensions(value.GroupBy)
-		stableSortOperationKinds(value.OperationKinds)
+		stableSort(value.GroupBy)
+		stableSort(value.OperationKinds)
 		return value
+	case *ProviderStatusQuery:
+		return canonicalFilterPointer(value)
+	case *ModelInventoryQuery:
+		return canonicalFilterPointer(value)
+	case *CreditStatusQuery:
+		return canonicalFilterPointer(value)
+	case *BudgetStatusQuery:
+		return canonicalFilterPointer(value)
 	case *SpendSummaryQuery:
-		if value == nil {
-			return filter
-		}
-		copy := *value
-		copy.StartTime = copy.StartTime.UTC()
-		copy.EndTime = copy.EndTime.UTC()
-		copy.GroupBy = append([]SpendDimension(nil), value.GroupBy...)
-		copy.OperationKinds = append([]OperationKind(nil), value.OperationKinds...)
-		stableSortDimensions(copy.GroupBy)
-		stableSortOperationKinds(copy.OperationKinds)
-		return &copy
+		return canonicalFilterPointer(value)
 	default:
 		return filter
 	}
 }
 
-func stableSortDimensions(values []SpendDimension) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
+// canonicalFilterPointer returns a pointer to the canonical copy of *value,
+// leaving the caller's filter untouched. A typed nil pointer is returned as is.
+func canonicalFilterPointer[T QueryFilter, P interface {
+	*T
+	QueryFilter
+}](value P) QueryFilter {
+	if value == nil {
+		return value
 	}
+	canonical := canonicalFilter(*value).(T)
+	return P(&canonical)
 }
-func stableSortOperationKinds(values []OperationKind) {
+
+// stableSort is an insertion sort, so equal values keep their order.
+func stableSort[T ~string](values []T) {
 	for i := 1; i < len(values); i++ {
 		for j := i; j > 0 && values[j] < values[j-1]; j-- {
 			values[j], values[j-1] = values[j-1], values[j]

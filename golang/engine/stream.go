@@ -30,8 +30,7 @@ func (engine *Engine) Stream(ctx context.Context, request llm.Request) (llm.Even
 	ctx, requestSpan := engine.startTrace(ctx, "llmtw.stream", requestTraceAttrs(request)...)
 	setup, err := engine.prepareStream(ctx, request)
 	if err != nil {
-		engine.recordTraceError(ctx, requestSpan, err)
-		requestSpan.End()
+		engine.endTraceError(ctx, requestSpan, err)
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(setup.ctx)
@@ -79,62 +78,53 @@ func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (s
 		err = llm.ValidateMediaURLs(normalized.Instructions, normalized.Input)
 	}
 	if err != nil {
-		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
-		normalizeSpan.End()
+		engine.endTraceError(normalizeCtx, normalizeSpan, err)
 		return streamSetup{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request normalization failed", err)
 	}
 	if err := llm.RejectBlobMedia(normalized.Instructions, normalized.Input); err != nil {
 		// No adapter can lower blob-referenced media; reject it before
 		// admission instead of reserving budget and failing every route.
-		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
-		normalizeSpan.End()
+		engine.endTraceError(normalizeCtx, normalizeSpan, err)
 		return streamSetup{}, engineError(provider.CodeUnsupportedCapability, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "blob-referenced media is not supported", err)
 	}
 	digest, err := llm.RequestDigest(normalized)
 	if err != nil {
-		engine.recordTraceError(normalizeCtx, normalizeSpan, err)
-		normalizeSpan.End()
+		engine.endTraceError(normalizeCtx, normalizeSpan, err)
 		return streamSetup{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request digest failed", err)
 	}
 	normalizeSpan.End()
 	planCtx, planSpan := engine.startTrace(normalizeCtx, "llmtw.planning", requestTraceAttrs(normalized)...)
 	snapshot, err := engine.dependencies.Snapshots.Current(planCtx)
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return streamSetup{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
 	}
 	now := engine.dependencies.Clock()
 	stateCtx, stateSpan := engine.startTrace(planCtx, "llmtw.state.load", requestTraceAttrs(normalized)...)
 	providerRequest, constraints, parent, err := engine.loadContinuation(stateCtx, normalized, now)
 	if err != nil {
-		engine.recordTraceError(stateCtx, stateSpan, err)
-		stateSpan.End()
+		engine.endTraceError(stateCtx, stateSpan, err)
 		planSpan.End()
 		return streamSetup{}, err
 	}
 	stateSpan.End()
 	if err := engine.beat(planCtx, Progress{Phase: "planning", At: now}); err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return streamSetup{}, err
 	}
 	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints, now))
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return streamSetup{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
 	}
 	quoted, err := engine.quotePlan(planCtx, normalized, plan, snapshot, now)
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return streamSetup{}, err
 	}
 	quoted, err = engine.preflightStreamingPlan(planCtx, normalized, quoted)
 	if err != nil {
-		engine.recordTraceError(planCtx, planSpan, err)
-		planSpan.End()
+		engine.endTraceError(planCtx, planSpan, err)
 		return streamSetup{}, err
 	}
 	if len(quoted.candidates) == 0 {
@@ -146,8 +136,7 @@ func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (s
 	admissionCtx, admissionSpan := engine.startTrace(planCtx, "llmtw.admission", requestTraceAttrs(normalized)...)
 	operation, existing, err := engine.beginOrResume(admissionCtx, normalized, snapshot, operationID, scopeKey, digest, quoted, now)
 	if err != nil {
-		engine.recordTraceError(admissionCtx, admissionSpan, err)
-		admissionSpan.End()
+		engine.endTraceError(admissionCtx, admissionSpan, err)
 		return streamSetup{}, err
 	}
 	admissionSpan.End()
@@ -203,10 +192,7 @@ func (engine *Engine) runPreparedStream(ctx context.Context, setup streamSetup, 
 		}
 		if response != nil {
 			if err := emitter.started(ctx); err != nil {
-				if cause := ctx.Err(); cause != nil {
-					return engine.cancelPreparedStream(ctx, setup, operation, cause)
-				}
-				return err
+				return engine.preparedStreamError(ctx, setup, operation, err)
 			}
 			return emitter.completed(ctx, *response)
 		}
@@ -218,18 +204,21 @@ func (engine *Engine) runPreparedStream(ctx context.Context, setup streamSetup, 
 		return engine.cancelPreparedStream(ctx, setup, operation, err)
 	}
 	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "admission", At: setup.now}); err != nil {
-		if cause := ctx.Err(); cause != nil {
-			return engine.cancelPreparedStream(ctx, setup, operation, cause)
-		}
-		return err
+		return engine.preparedStreamError(ctx, setup, operation, err)
 	}
 	if err := emitter.started(ctx); err != nil {
-		if cause := ctx.Err(); cause != nil {
-			return engine.cancelPreparedStream(ctx, setup, operation, cause)
-		}
-		return err
+		return engine.preparedStreamError(ctx, setup, operation, err)
 	}
 	return engine.dispatchStreamPlan(ctx, setup.request, setup.providerRequest, setup.snapshot, setup.quoted, operation, setup.parent, emitter)
+}
+
+// preparedStreamError reports a failed stream setup step as a cancellation
+// when ctx has ended, and as err otherwise.
+func (engine *Engine) preparedStreamError(ctx context.Context, setup streamSetup, operation admission.Operation, err error) error {
+	if cause := ctx.Err(); cause != nil {
+		return engine.cancelPreparedStream(ctx, setup, operation, cause)
+	}
+	return err
 }
 
 // cancelPreparedStream closes only a reservation this stream owns. A replayed
@@ -308,28 +297,10 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 			engine.recordTraceError(attemptCtx, attemptSpan, openErr)
 		}
 		attemptSpan.End()
-		if openErr != nil {
-			next, retry, err := engine.handleStreamAttemptError(ctx, operation, candidate, quoted, index, snapshot, observer, openErr)
-			if err != nil {
-				return err
-			}
-			if retry {
-				operation = next
-			}
-			continue
-		}
-		if !result.Dispatch.Valid() {
+		if openErr == nil && !result.Dispatch.Valid() {
 			openErr = engineError(provider.CodeProviderInvalidResponse, provider.PhaseStream, provider.DispatchAmbiguous, provider.RetryNever, "provider stream returned invalid dispatch certainty", nil)
-			next, retry, err := engine.handleStreamAttemptError(ctx, operation, candidate, quoted, index, snapshot, observer, openErr)
-			if err != nil {
-				return err
-			}
-			if retry {
-				operation = next
-			}
-			continue
 		}
-		if result.Dispatch == provider.DispatchAccepted && !observer.marked {
+		if openErr == nil && result.Dispatch == provider.DispatchAccepted && !observer.marked {
 			if result.Source != nil {
 				_ = result.Source.Close()
 			}
@@ -342,20 +313,16 @@ func (engine *Engine) dispatchStreamPlan(ctx context.Context, request, providerR
 			}
 			return engine.finishFailed(ctx, operation, candidate.candidate, failure, candidate.estimate.MicroUSD)
 		}
-		if result.Source == nil {
+		if openErr == nil && result.Source == nil {
 			openErr = engineError(provider.CodeProviderInvalidResponse, provider.PhaseStream, result.Dispatch, provider.RetryNever, "provider stream source is nil", nil)
-			next, retry, err := engine.handleStreamAttemptError(ctx, operation, candidate, quoted, index, snapshot, observer, openErr)
-			if err != nil {
-				return err
-			}
-			if retry {
-				operation = next
-			}
-			continue
 		}
-		if result.Dispatch != provider.DispatchAccepted {
+		if openErr == nil && result.Dispatch != provider.DispatchAccepted {
 			_ = result.Source.Close()
 			openErr = engineError(provider.CodeProviderInvalidResponse, provider.PhaseStream, result.Dispatch, provider.RetryNever, "provider stream opened without accepted dispatch", nil)
+		}
+		// Any open failure, including an invalid open result above, either
+		// moves to the next candidate or finishes the operation.
+		if openErr != nil {
 			next, retry, err := engine.handleStreamAttemptError(ctx, operation, candidate, quoted, index, snapshot, observer, openErr)
 			if err != nil {
 				return err

@@ -120,10 +120,16 @@ const (
 )
 
 func (snapshot InventorySnapshot) ProvenanceAt(now time.Time) Provenance {
-	if snapshot.Source == InventoryUnsupported {
+	return inventoryProvenanceAt(snapshot.Source, snapshot.ExpiresAt, now)
+}
+
+// inventoryProvenanceAt classifies a snapshot from source expiring at
+// expiresAt, as observed at now.
+func inventoryProvenanceAt(source InventorySource, expiresAt, now time.Time) Provenance {
+	if source == InventoryUnsupported {
 		return ProvenanceUnsupported
 	}
-	if now.IsZero() || !now.Before(snapshot.ExpiresAt) {
+	if now.IsZero() || !now.Before(expiresAt) {
 		return ProvenanceStale
 	}
 	return ProvenanceCurrent

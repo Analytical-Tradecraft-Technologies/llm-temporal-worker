@@ -303,21 +303,15 @@ func (r *CloudExecutionRuntime) finishCache(ctx context.Context, p PreparedCloud
 		// The origin checkpoint records which route produced the replayed
 		// provider state. Recording the cache use reads the same row, so this
 		// adds no new dependency on its retention.
-		cp, err := r.capabilities.Checkpoints.Repository.Get(ctx, identity.Scope, origin.OriginCheckpointID)
+		cp, err := r.originCheckpoint(ctx, identity, origin, state.CheckpointGeneration)
 		if err != nil {
-			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
-		}
-		if cp.ScopeID != identity.Scope || cp.ID != origin.OriginCheckpointID || cp.Kind != state.CheckpointGeneration || cp.OriginOperationID != origin.OriginOperationID {
-			return llm.ExecutionResultV1{}, executionError(provider.CodeStateCorrupt)
+			return llm.ExecutionResultV1{}, err
 		}
 		identity.OriginProvenance = cp.ProviderStateProvenance
 	} else {
-		cp, err := r.capabilities.Checkpoints.Repository.Get(ctx, identity.Scope, origin.OriginCheckpointID)
+		cp, err := r.originCheckpoint(ctx, identity, origin, state.CheckpointCompaction)
 		if err != nil {
-			return llm.ExecutionResultV1{}, cloudRuntimeError(err, false)
-		}
-		if cp.ScopeID != identity.Scope || cp.ID != origin.OriginCheckpointID || cp.Kind != state.CheckpointCompaction || cp.OriginOperationID != origin.OriginOperationID {
-			return llm.ExecutionResultV1{}, executionError(provider.CodeStateCorrupt)
+			return llm.ExecutionResultV1{}, err
 		}
 		data, err := r.capabilities.Checkpoints.Blobs.Read(ctx, identity.Scope, cp.ResponseBlob)
 		if err != nil {
@@ -333,6 +327,20 @@ func (r *CloudExecutionRuntime) finishCache(ctx context.Context, p PreparedCloud
 	}
 	return r.publish(ctx, p, identity, &model, disposition, &origin, effects)
 }
+
+// originCheckpoint loads the checkpoint a cache origin published and checks
+// that it is the expected kind, in this scope, from the origin operation.
+func (r *CloudExecutionRuntime) originCheckpoint(ctx context.Context, identity CheckpointPublicationIdentity, origin cache.ResponseEntry, kind state.CheckpointKind) (state.DurableCheckpoint, error) {
+	cp, err := r.capabilities.Checkpoints.Repository.Get(ctx, identity.Scope, origin.OriginCheckpointID)
+	if err != nil {
+		return state.DurableCheckpoint{}, cloudRuntimeError(err, false)
+	}
+	if cp.ScopeID != identity.Scope || cp.ID != origin.OriginCheckpointID || cp.Kind != kind || cp.OriginOperationID != origin.OriginOperationID {
+		return state.DurableCheckpoint{}, executionError(provider.CodeStateCorrupt)
+	}
+	return cp, nil
+}
+
 func (r *CloudExecutionRuntime) finishNoWork(ctx context.Context, p PreparedCloudRequest) (llm.ExecutionResultV1, error) {
 	identity := r.publicationIdentity(p, p.Preparation.PreparedAt)
 	return r.publish(ctx, p, identity, nil, llm.CacheDispositionV1{Disposition: "disabled", Variant: int32(p.Record.Request.RequestIndex)}, nil, FinalizationEffects{NoWork: &NoWorkFinalizationEffects{}})
@@ -388,6 +396,19 @@ func (r *CloudExecutionRuntime) publish(ctx context.Context, p PreparedCloudRequ
 	return result, err
 }
 
+// publishedResponse encodes a published phase response and, when the
+// provider effects populate a cache entry, stores the encoding on that entry.
+func publishedResponse(response any, effects FinalizationEffects) ([]byte, error) {
+	data, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	if effects.Provider != nil && effects.Provider.Entry != nil {
+		effects.Provider.Entry.Response = data
+	}
+	return data, nil
+}
+
 func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloudRequest, identity CheckpointPublicationIdentity, model *llm.Response, disposition llm.CacheDispositionV1, origin *cache.ResponseEntry, effects FinalizationEffects) (llm.ExecutionResultV1, error) {
 	var data []byte
 	if p.Generate != nil {
@@ -399,12 +420,8 @@ func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloud
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
-		data, err = json.Marshal(response)
-		if err != nil {
+		if data, err = publishedResponse(response, effects); err != nil {
 			return llm.ExecutionResultV1{}, err
-		}
-		if effects.Provider != nil && effects.Provider.Entry != nil {
-			effects.Provider.Entry.Response = data
 		}
 		if err := r.capabilities.Finalizer.commitGenerate(ctx, *p.Generate, cp, response, effects, p.validatedPreparation()); err != nil {
 			return llm.ExecutionResultV1{}, err
@@ -418,12 +435,8 @@ func (r *CloudExecutionRuntime) publishOnce(ctx context.Context, p PreparedCloud
 		if err != nil {
 			return llm.ExecutionResultV1{}, err
 		}
-		data, err = json.Marshal(response)
-		if err != nil {
+		if data, err = publishedResponse(response, effects); err != nil {
 			return llm.ExecutionResultV1{}, err
-		}
-		if effects.Provider != nil && effects.Provider.Entry != nil {
-			effects.Provider.Entry.Response = data
 		}
 		if err := r.capabilities.Finalizer.commitCompact(ctx, *p.Compact, cp, response, effects, p.validatedPreparation()); err != nil {
 			return llm.ExecutionResultV1{}, err

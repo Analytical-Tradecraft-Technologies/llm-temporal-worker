@@ -23,6 +23,52 @@ func ClearPatch[T any]() Patch[T] { return Patch[T]{Clear: true} }
 
 func (patch Patch[T]) Omitted() bool { return patch.Set == nil && !patch.Clear }
 
+// apply writes the patch into *target: a set value replaces it and Clear
+// resets it to cleared. An omitted patch leaves it unchanged.
+func (patch Patch[T]) apply(target *T, cleared T) {
+	if patch.Set != nil {
+		*target = *patch.Set
+	} else if patch.Clear {
+		*target = cleared
+	}
+}
+
+// applyClone is apply for a mutable value: the set value is detached with
+// clone, and Clear resets it to the zero value.
+func (patch Patch[T]) applyClone(target *T, clone func(T) T) {
+	if patch.Set != nil {
+		*target = clone(*patch.Set)
+	} else if patch.Clear {
+		var zero T
+		*target = zero
+	}
+}
+
+// applyPointer is apply for an optional leaf: a set value is stored as a
+// detached pointer, and Clear resets it to nil.
+func (patch Patch[T]) applyPointer(target **T) {
+	if patch.Set != nil {
+		*target = clonePointer(patch.Set)
+	} else if patch.Clear {
+		*target = nil
+	}
+}
+
+// cloneSet returns a pointer to a clone of the set value, or nil when the
+// patch sets nothing.
+func (patch Patch[T]) cloneSet(clone func(T) T) *T {
+	if patch.Set == nil {
+		return nil
+	}
+	value := clone(*patch.Set)
+	return &value
+}
+
+// cloneSlice copies values; a nil or empty input yields nil.
+func cloneSlice[S ~[]E, E any](values S) S {
+	return append(S(nil), values...)
+}
+
 func (patch Patch[T]) Validate() error {
 	if patch.Set != nil && patch.Clear {
 		return fmt.Errorf("patch cannot contain both set and clear")

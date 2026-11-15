@@ -28,20 +28,10 @@ var ErrDurableV1Composition = errors.New("durable v1 composition is unavailable"
 // a fallback and no storage or provider work occurs in this constructor.
 func NewDurableV1RuntimeBuilder() V1RuntimeBuilder {
 	return func(ctx context.Context, snapshot *config.Snapshot, _ llm.Engine, clients app.ClientSet) (activity.V1Runtime, error) {
-		if ctx == nil {
-			return nil, fmt.Errorf("%w: context is nil", ErrDurableV1Composition)
+		capabilities, err := snapshotV1RuntimeCapabilities(ctx, snapshot, clients, ErrDurableV1Composition)
+		if err != nil {
+			return nil, err
 		}
-		if snapshot == nil {
-			return nil, fmt.Errorf("%w: configuration snapshot is nil", ErrDurableV1Composition)
-		}
-		if isNilCapability(clients) {
-			return nil, fmt.Errorf("%w: snapshot client set is nil", ErrDurableV1Composition)
-		}
-		source, ok := clients.(V1RuntimeCapabilitiesSource)
-		if !ok || isNilCapability(source) {
-			return nil, fmt.Errorf("%w: snapshot client set does not expose V1RuntimeCapabilitiesSource", ErrDurableV1Composition)
-		}
-		capabilities := source.V1RuntimeCapabilities()
 		if expected := snapshot.Digest(); expected != ([32]byte{}) {
 			if capabilities.ConfigDigest != ([32]byte{}) && capabilities.ConfigDigest != expected {
 				return nil, fmt.Errorf("%w: runtime capability config digest does not match configuration snapshot", ErrDurableV1Composition)
