@@ -24,44 +24,29 @@ func TestVerifyRenderedRejectsPublicStateAndControlEgress(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			workload := strings.Replace(validRenderedWorkload, "cidr: 10.64.0.0/16", "cidr: "+test.cidr, 1)
-			err := verifyRendered("base", []byte(workload))
-			if err == nil || !strings.Contains(err.Error(), "state/control egress CIDR must be private") {
-				t.Fatalf("verify rendered public state/control egress error = %v, want private-CIDR rejection", err)
-			}
+			assertRenderedBaseRejected(t, workload, "state/control egress CIDR must be private", "public state/control egress")
 		})
 	}
 }
 
 func TestVerifyRenderedRejectsUnscopedStateAndControlSelectors(t *testing.T) {
 	workload := strings.Replace(validRenderedWorkload, "namespaceSelector:\n            matchLabels:\n              llmtw.io/state-egress: allowed", "namespaceSelector: {}", 1)
-	err := verifyRendered("base", []byte(workload))
-	if err == nil || !strings.Contains(err.Error(), "state/control namespaceSelector must require llmtw.io/state-egress=allowed") {
-		t.Fatalf("verify rendered unscoped state/control selector error = %v, want explicit-selector rejection", err)
-	}
+	assertRenderedBaseRejected(t, workload, "state/control namespaceSelector must require llmtw.io/state-egress=allowed", "unscoped state/control selector")
 }
 
 func TestVerifyRenderedRequiresSeparateTLSAndStateControlRules(t *testing.T) {
 	workload := strings.Replace(validRenderedWorkload, "        - port: 7233\n          protocol: TCP", "        - port: 7233\n          protocol: TCP\n        - port: 443\n          protocol: TCP", 1)
-	err := verifyRendered("base", []byte(workload))
-	if err == nil || !strings.Contains(err.Error(), "state/control egress must be separate from general TLS") {
-		t.Fatalf("verify rendered mixed TLS and state/control egress error = %v, want rule-separation rejection", err)
-	}
+	assertRenderedBaseRejected(t, workload, "state/control egress must be separate from general TLS", "mixed TLS and state/control egress")
 }
 
 func TestVerifyRenderedRejectsUnrestrictedAllPortEgress(t *testing.T) {
 	workload := strings.Replace(validRenderedWorkload, "  egress:\n", "  egress:\n    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n", 1)
-	err := verifyRendered("base", []byte(workload))
-	if err == nil || !strings.Contains(err.Error(), "all-port egress must not use an unrestricted destination") {
-		t.Fatalf("verify rendered unrestricted all-port egress error = %v, want unrestricted-destination rejection", err)
-	}
+	assertRenderedBaseRejected(t, workload, "all-port egress must not use an unrestricted destination", "unrestricted all-port egress")
 }
 
 func TestVerifyRenderedRejectsPortRangesThatSpanStateControlPorts(t *testing.T) {
 	workload := strings.Replace(validRenderedWorkload, "        - port: 443\n          protocol: TCP", "        - port: 443\n          endPort: 8000\n          protocol: TCP", 1)
-	err := verifyRendered("base", []byte(workload))
-	if err == nil || !strings.Contains(err.Error(), "NetworkPolicy port ranges are not allowed") {
-		t.Fatalf("verify rendered ranged egress error = %v, want port-range rejection", err)
-	}
+	assertRenderedBaseRejected(t, workload, "NetworkPolicy port ranges are not allowed", "ranged egress")
 }
 
 func TestVerifyRenderedBindsNetworkPolicyToWorkerDeployment(t *testing.T) {
@@ -70,20 +55,8 @@ func TestVerifyRenderedBindsNetworkPolicyToWorkerDeployment(t *testing.T) {
 		change  func(string) string
 		message string
 	}{
-		{
-			name: "selector targets another workload",
-			change: func(workload string) string {
-				return strings.Replace(workload, "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: another-worker\n      app.kubernetes.io/component: worker", 1)
-			},
-			message: "podSelector must exactly match the worker Deployment selector",
-		},
-		{
-			name: "selector targets every pod",
-			change: func(workload string) string {
-				return strings.Replace(workload, "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector: {}", 1)
-			},
-			message: "podSelector must exactly match the worker Deployment selector",
-		},
+		{name: "selector targets another workload", change: replaceOnce("podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: another-worker\n      app.kubernetes.io/component: worker"), message: "podSelector must exactly match the worker Deployment selector"},
+		{name: "selector targets every pod", change: replaceOnce("podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector: {}"), message: "podSelector must exactly match the worker Deployment selector"},
 		{
 			name: "different namespace",
 			change: func(workload string) string {
@@ -92,21 +65,12 @@ func TestVerifyRenderedBindsNetworkPolicyToWorkerDeployment(t *testing.T) {
 			},
 			message: "NetworkPolicy namespace must match the worker Deployment namespace",
 		},
-		{
-			name: "egress policy type omitted",
-			change: func(workload string) string {
-				return strings.Replace(workload, "policyTypes: [Ingress, Egress]", "policyTypes: [Ingress]", 1)
-			},
-			message: "NetworkPolicy policyTypes must include Egress",
-		},
+		{name: "egress policy type omitted", change: replaceOnce("policyTypes: [Ingress, Egress]", "policyTypes: [Ingress]"), message: "NetworkPolicy policyTypes must include Egress"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := verifyRendered("base", []byte(test.change(validRenderedWorkload)))
-			if err == nil || !strings.Contains(err.Error(), test.message) {
-				t.Fatalf("verify rendered worker NetworkPolicy binding error = %v, want %q", err, test.message)
-			}
+			assertRenderedBaseRejected(t, test.change(validRenderedWorkload), test.message, "worker NetworkPolicy binding")
 		})
 	}
 }
@@ -134,10 +98,7 @@ func TestVerifyRenderedRejectsNegativeStateNamespaceSelectors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			workload := strings.Replace(validRenderedWorkload, "matchLabels:\n              llmtw.io/state-egress: allowed", test.expression, 1)
-			err := verifyRendered("base", []byte(workload))
-			if err == nil || !strings.Contains(err.Error(), "state/control namespaceSelector must require llmtw.io/state-egress=allowed") {
-				t.Fatalf("verify rendered negative namespace selector error = %v, want positive opt-in rejection", err)
-			}
+			assertRenderedBaseRejected(t, workload, "state/control namespaceSelector must require llmtw.io/state-egress=allowed", "negative namespace selector")
 		})
 	}
 }
@@ -148,10 +109,7 @@ func TestVerifyRenderedRejectsPodSelectorOnlyStateDestination(t *testing.T) {
               llmtw.io/state-egress: allowed`, `podSelector:
             matchLabels:
               app.kubernetes.io/name: redis`, 1)
-	err := verifyRendered("base", []byte(workload))
-	if err == nil || !strings.Contains(err.Error(), "state/control selector destination must include llmtw.io/state-egress=allowed namespaceSelector") {
-		t.Fatalf("verify rendered pod-selector-only destination error = %v, want required namespace opt-in rejection", err)
-	}
+	assertRenderedBaseRejected(t, workload, "state/control selector destination must include llmtw.io/state-egress=allowed namespaceSelector", "pod-selector-only destination")
 }
 
 func TestVerifyRenderedRejectsInsufficientShutdownGrace(t *testing.T) {
@@ -212,125 +170,23 @@ func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 		change  func(string) string
 		message string
 	}{
-		{
-			name: "root UID",
-			change: func(value string) string {
-				return strings.Replace(value, "runAsUser: 65532", "runAsUser: 0", 1)
-			},
-			message: "positive numeric UID",
-		},
-		{
-			name: "string UID",
-			change: func(value string) string {
-				return strings.Replace(value, "runAsUser: 65532", "runAsUser: \"65532\"", 1)
-			},
-			message: "positive numeric UID",
-		},
-		{
-			name: "container UID override",
-			change: func(value string) string {
-				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsUser: 65532\n            allowPrivilegeEscalation: false", 1)
-			},
-			message: "container securityContext must not set runAsUser",
-		},
-		{
-			name: "container group override",
-			change: func(value string) string {
-				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsGroup: 65532\n            allowPrivilegeEscalation: false", 1)
-			},
-			message: "container securityContext must not set runAsGroup",
-		},
-		{
-			name: "container non-root override",
-			change: func(value string) string {
-				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsNonRoot: true\n            allowPrivilegeEscalation: false", 1)
-			},
-			message: "container securityContext must not set runAsNonRoot",
-		},
-		{
-			name: "container privileged override",
-			change: func(value string) string {
-				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            privileged: true\n            allowPrivilegeEscalation: false", 1)
-			},
-			message: "container securityContext must not set privileged",
-		},
-		{
-			name: "container capability addition",
-			change: func(value string) string {
-				return strings.Replace(value, "drop: [ALL]", "drop: [ALL]\n              add: [NET_ADMIN]", 1)
-			},
-			message: "worker must not add Linux capabilities",
-		},
-		{
-			name: "container seccomp override",
-			change: func(value string) string {
-				return strings.Replace(value, "securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            seccompProfile:\n              type: RuntimeDefault\n            allowPrivilegeEscalation: false", 1)
-			},
-			message: "container securityContext must not set seccompProfile",
-		},
-		{
-			name: "unexpected group",
-			change: func(value string) string {
-				return strings.Replace(value, "runAsGroup: 65532", "runAsGroup: 1", 1)
-			},
-			message: "numeric GID 65532",
-		},
-		{
-			name: "missing file-system group",
-			change: func(value string) string {
-				return strings.Replace(value, "        fsGroup: 65532\n", "", 1)
-			},
-			message: "numeric fsGroup 65532",
-		},
-		{
-			name: "writable root",
-			change: func(value string) string {
-				return strings.Replace(value, "readOnlyRootFilesystem: true", "readOnlyRootFilesystem: false", 1)
-			},
-			message: "root filesystem",
-		},
-		{
-			name: "unbounded temporary storage",
-			change: func(value string) string {
-				return strings.Replace(value, "\n            sizeLimit: 128Mi", "", 1)
-			},
-			message: "bounded memory emptyDir",
-		},
-		{
-			name: "additional writable mount",
-			change: func(value string) string {
-				return strings.Replace(value, "mountPath: /etc/llmtw\n              readOnly: true", "mountPath: /etc/llmtw\n              readOnly: false", 1)
-			},
-			message: "must be read-only",
-		},
-		{
-			name: "unbounded resources",
-			change: func(value string) string {
-				return strings.Replace(value, "\n            limits:\n              cpu: \"2\"\n              memory: 2Gi", "", 1)
-			},
-			message: "limits must bound CPU and memory",
-		},
-		{
-			name: "wrong readiness endpoint",
-			change: func(value string) string {
-				return strings.Replace(value, "path: /health/ready", "path: /health/live", 1)
-			},
-			message: "/health/ready",
-		},
-		{
-			name: "wrong health container port",
-			change: func(value string) string {
-				return strings.Replace(value, "containerPort: 8080", "containerPort: 80", 1)
-			},
-			message: "named health port",
-		},
-		{
-			name: "wrong liveness port reference",
-			change: func(value string) string {
-				return strings.Replace(value, "path: /health/live\n              port: health", "path: /health/live\n              port: 9999", 1)
-			},
-			message: "health port",
-		},
+		{name: "root UID", change: replaceOnce("runAsUser: 65532", "runAsUser: 0"), message: "positive numeric UID"},
+		{name: "string UID", change: replaceOnce("runAsUser: 65532", "runAsUser: \"65532\""), message: "positive numeric UID"},
+		{name: "container UID override", change: replaceOnce("securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsUser: 65532\n            allowPrivilegeEscalation: false"), message: "container securityContext must not set runAsUser"},
+		{name: "container group override", change: replaceOnce("securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsGroup: 65532\n            allowPrivilegeEscalation: false"), message: "container securityContext must not set runAsGroup"},
+		{name: "container non-root override", change: replaceOnce("securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsNonRoot: true\n            allowPrivilegeEscalation: false"), message: "container securityContext must not set runAsNonRoot"},
+		{name: "container privileged override", change: replaceOnce("securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            privileged: true\n            allowPrivilegeEscalation: false"), message: "container securityContext must not set privileged"},
+		{name: "container capability addition", change: replaceOnce("drop: [ALL]", "drop: [ALL]\n              add: [NET_ADMIN]"), message: "worker must not add Linux capabilities"},
+		{name: "container seccomp override", change: replaceOnce("securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            seccompProfile:\n              type: RuntimeDefault\n            allowPrivilegeEscalation: false"), message: "container securityContext must not set seccompProfile"},
+		{name: "unexpected group", change: replaceOnce("runAsGroup: 65532", "runAsGroup: 1"), message: "numeric GID 65532"},
+		{name: "missing file-system group", change: replaceOnce("        fsGroup: 65532\n", ""), message: "numeric fsGroup 65532"},
+		{name: "writable root", change: replaceOnce("readOnlyRootFilesystem: true", "readOnlyRootFilesystem: false"), message: "root filesystem"},
+		{name: "unbounded temporary storage", change: replaceOnce("\n            sizeLimit: 128Mi", ""), message: "bounded memory emptyDir"},
+		{name: "additional writable mount", change: replaceOnce("mountPath: /etc/llmtw\n              readOnly: true", "mountPath: /etc/llmtw\n              readOnly: false"), message: "must be read-only"},
+		{name: "unbounded resources", change: replaceOnce("\n            limits:\n              cpu: \"2\"\n              memory: 2Gi", ""), message: "limits must bound CPU and memory"},
+		{name: "wrong readiness endpoint", change: replaceOnce("path: /health/ready", "path: /health/live"), message: "/health/ready"},
+		{name: "wrong health container port", change: replaceOnce("containerPort: 8080", "containerPort: 80"), message: "named health port"},
+		{name: "wrong liveness port reference", change: replaceOnce("path: /health/live\n              port: health", "path: /health/live\n              port: 9999"), message: "health port"},
 		{
 			name: "unapproved service account token",
 			change: func(value string) string {
@@ -338,28 +194,13 @@ func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 			},
 			message: "only in a workload identity overlay",
 		},
-		{
-			name: "init container",
-			change: func(value string) string {
-				return strings.Replace(value, "      containers:\n", "      initContainers:\n        - name: unsafe\n          image: busybox@sha256:REPLACE_WITH_RELEASE_DIGEST\n      containers:\n", 1)
-			},
-			message: "init containers are not allowed",
-		},
-		{
-			name: "additional container",
-			change: func(value string) string {
-				return strings.Replace(value, "      volumes:\n", "        - name: sidecar\n          image: busybox@sha256:REPLACE_WITH_RELEASE_DIGEST\n      volumes:\n", 1)
-			},
-			message: "exactly one container",
-		},
+		{name: "init container", change: replaceOnce("      containers:\n", "      initContainers:\n        - name: unsafe\n          image: busybox@sha256:REPLACE_WITH_RELEASE_DIGEST\n      containers:\n"), message: "init containers are not allowed"},
+		{name: "additional container", change: replaceOnce("      volumes:\n", "        - name: sidecar\n          image: busybox@sha256:REPLACE_WITH_RELEASE_DIGEST\n      volumes:\n"), message: "exactly one container"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := verifyRendered("base", []byte(test.change(validRenderedWorkload)))
-			if err == nil || !strings.Contains(err.Error(), test.message) {
-				t.Fatalf("verify rendered base workload error = %v, want %q", err, test.message)
-			}
+			assertRenderedBaseRejected(t, test.change(validRenderedWorkload), test.message, "base workload")
 		})
 	}
 }
@@ -527,10 +368,7 @@ func TestVerifyRenderedRequiresContentHashedImmutableConfigMap(t *testing.T) {
 		}, want: "must be immutable"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := verifyRendered("base", []byte(test.mutate(validRenderedWorkload)))
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("verifyRendered() error = %v, want %q", err, test.want)
-			}
+			assertRenderedBaseRejected(t, test.mutate(validRenderedWorkload), test.want, "base workload")
 		})
 	}
 }
@@ -571,5 +409,22 @@ func TestVerifyRenderedRequiresReplicaSpread(t *testing.T) {
 				t.Fatalf("verify rendered = %v, want a replica spread error", err)
 			}
 		})
+	}
+}
+
+// replaceOnce returns a change that replaces the first old with new.
+func replaceOnce(old, new string) func(string) string {
+	return func(value string) string {
+		return strings.Replace(value, old, new, 1)
+	}
+}
+
+// assertRenderedBaseRejected requires verifyRendered to reject workload as a
+// base overlay with an error containing want; label names the violation.
+func assertRenderedBaseRejected(t *testing.T, workload, want, label string) {
+	t.Helper()
+	err := verifyRendered("base", []byte(workload))
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("verify rendered %s error = %v, want %q", label, err, want)
 	}
 }

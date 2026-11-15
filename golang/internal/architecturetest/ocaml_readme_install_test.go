@@ -112,7 +112,7 @@ func TestWorkflowOCamlAptPackagesComeFromCacheAndRetryStalledFetches(t *testing.
 	}
 
 	script := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "install-ocaml-apt-packages.sh")
-	for _, want := range []string{
+	assertContainsEach(t, script, "OCaml apt install script does not retain %q",
 		`archives="${RUNNER_TEMP}/llmtw-apt-archives"`,
 		`"Dir::Cache::Archives=${archives}/"`,
 		"APT::Keep-Downloaded-Packages=true",
@@ -122,20 +122,12 @@ func TestWorkflowOCamlAptPackagesComeFromCacheAndRetryStalledFetches(t *testing.
 		"install --yes protobuf-compiler bubblewrap",
 		"install --yes cargo",
 		`sudo chown -R -- "$(id -u):$(id -g)" "${archives}"`,
-	} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("OCaml apt install script does not retain %q", want)
-		}
-	}
+	)
 }
 
 func TestOCamlReadmeInstallRunsDocumentedCommandsFromCleanCargoHome(t *testing.T) {
 	const packageRef = "1234567890abcdef1234567890abcdef12345678"
-	tempDir := t.TempDir()
-	fakeBin := filepath.Join(tempDir, "bin")
-	if err := os.Mkdir(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	tempDir, fakeBin := newFakeCommandDirectory(t)
 	prefix := filepath.Join(tempDir, "switch")
 	xdgCacheHome := filepath.Join(tempDir, "xdg-cache")
 	cargoHome := filepath.Join(xdgCacheHome, "dune", "cargo")

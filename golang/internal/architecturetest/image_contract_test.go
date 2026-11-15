@@ -11,11 +11,7 @@ import (
 const reviewedGoPatch = "1.26.10"
 
 func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dockerfile := string(data)
+	dockerfile := readRepositoryFile(t, moduleRoot(t), "Dockerfile")
 	if strings.Contains(dockerfile, "@sha256:") {
 		t.Fatal("Dockerfile base images must use mutable tags rather than pinned digests")
 	}
@@ -49,11 +45,7 @@ func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 }
 
 func TestDockerfileStatesTheOpenRouterUpstreamPolicy(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dockerfile := string(data)
+	dockerfile := readRepositoryFile(t, moduleRoot(t), "Dockerfile")
 	for _, want := range []string{
 		"ARG OPENROUTER_COUNTRIES=Core5",
 		"ENV LLMTW_OPENROUTER_COUNTRIES=\"${OPENROUTER_COUNTRIES}\"",
@@ -70,30 +62,24 @@ func TestDockerfileStatesTheOpenRouterUpstreamPolicy(t *testing.T) {
 }
 
 func TestImageBuildToolchainVersionPolicyUsesReviewedPatchTag(t *testing.T) {
-	dockerfileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	dockerfileData := readRepositoryFile(t, moduleRoot(t), "Dockerfile")
 
 	for _, want := range []string{
 		"ARG GO_IMAGE=docker.io/library/golang:" + reviewedGoPatch,
 		"FROM gcr.io/distroless/static-debian13:nonroot",
 	} {
-		if !strings.Contains(string(dockerfileData), want) {
+		if !strings.Contains(dockerfileData, want) {
 			t.Errorf("Dockerfile toolchain policy is missing %q", want)
 		}
 	}
 	// Upstream Distroless stopped updating Debian 12 images, so its mutable tag
 	// no longer picks up base security fixes.
-	if strings.Contains(string(dockerfileData), "static-debian12") {
+	if strings.Contains(dockerfileData, "static-debian12") {
 		t.Error("Dockerfile must not use the deprecated Distroless static-debian12 runtime")
 	}
 
-	makefileData, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(makefileData), "IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)") {
+	makefileData := readRepositoryFile(t, moduleRoot(t), "Makefile")
+	if !strings.Contains(makefileData, "IMAGE_VERIFY_GO_VERSION ?= $(shell $(GO) env GOVERSION)") {
 		t.Error("Makefile image verification must use the installed reviewed Go toolchain")
 	}
 }
@@ -157,58 +143,31 @@ func TestReviewedGoToolchainPinsStayAligned(t *testing.T) {
 }
 
 func TestImageVerifyTargetUsesHardenedRuntimeContract(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	makefile := string(data)
+	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
 
-	for _, want := range []string{
+	expectContainsEach(t, makefile, "Makefile image-verify contract is missing %q",
 		"image-verify:",
 		"docker build --tag",
 		"git rev-parse HEAD",
 		"LLMTW_IMAGE=",
 		"-tags=imageintegration ./integration",
-	} {
-		if !strings.Contains(makefile, want) {
-			t.Errorf("Makefile image-verify contract is missing %q", want)
-		}
-	}
+	)
 
-	runtimeData, err := os.ReadFile(filepath.Join(moduleRoot(t), "integration", "image_integration_test.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
+	runtimeData := readRepositoryFile(t, moduleRoot(t), "integration", "image_integration_test.go")
+	expectContainsEach(t, runtimeData, "image runtime verification is missing %q",
 		"--read-only",
 		"/tmp:rw,nosuid,nodev,noexec,size=64m",
 		"--user",
 		"65532:65532",
-	} {
-		if !strings.Contains(string(runtimeData), want) {
-			t.Errorf("image runtime verification is missing %q", want)
-		}
-	}
+	)
 }
 
 func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	makefile := string(data)
+	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
 
-	start := strings.Index(makefile, `if [ -n "$(IMAGE_VERIFY_OCI_LAYOUT)" ]; then`)
-	if start < 0 {
-		t.Fatal("Makefile is missing the OCI layout image-verify branch")
-	}
-	end := strings.Index(makefile[start:], "\t\telse \\")
-	if end < 0 {
-		t.Fatal("Makefile OCI layout image-verify branch is missing its fallback boundary")
-	}
-	branch := makefile[start : start+end]
+	branch := textSection(t, makefile, `if [ -n "$(IMAGE_VERIFY_OCI_LAYOUT)" ]; then`, "\t\telse \\", "Makefile OCI layout image-verify branch")
 
-	for _, want := range []string{
+	assertContainsEach(t, branch, "OCI layout image-verify branch is missing %q",
 		"docker buildx build --platform linux/amd64 --provenance=false --sbom=false",
 		`--output "type=oci,oci-mediatypes=true,dest=$$archive,tar=true,name=$(IMAGE_VERIFY_TAG)"`,
 		`archive_directory="$$(mktemp -d "$${TMPDIR:-/tmp}/llmtw-image-verify.XXXXXX")"`,
@@ -217,11 +176,7 @@ func TestImageVerifyOCIArchiveUsesOneSupportedBuildxSolve(t *testing.T) {
 		`tar -xf "$$archive" -C "$$layout"`,
 		`docker image inspect "$(IMAGE_VERIFY_TAG)"`,
 		"trap cleanup_archive EXIT",
-	} {
-		if !strings.Contains(branch, want) {
-			t.Fatalf("OCI layout image-verify branch is missing %q", want)
-		}
-	}
+	)
 	if strings.Count(branch, "docker buildx build") != 1 {
 		t.Fatalf("OCI layout image-verify branch must use exactly one Buildx solve: %q", branch)
 	}

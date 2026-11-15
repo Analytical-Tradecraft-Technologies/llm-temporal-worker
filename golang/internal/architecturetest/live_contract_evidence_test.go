@@ -12,23 +12,33 @@ import (
 
 const liveContractSourceRevision = "0123456789abcdef0123456789abcdef01234567"
 
+// liveContractEvidenceFields is the complete redacted evidence record; the
+// recorder writes exactly these fields and the schema requires all of them.
+var liveContractEvidenceFields = []string{
+	"schema_version",
+	"generated_at",
+	"source_revision",
+	"profile",
+	"tenant",
+	"ceiling_micro_usd",
+	"actual_spend",
+	"request_id",
+	"response_id",
+	"actual_service_class",
+	"continuation_verified",
+}
+
+// redactedEvidenceForbiddenFields must never appear in redacted live contract
+// or SLO evidence, nor in the live contract schema.
+var redactedEvidenceForbiddenFields = []string{"prompt", "output", "endpoint", "credential", "api_key", "raw"}
+
 func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *testing.T) {
 	root := repositoryRoot(t)
-	directory := t.TempDir()
-	rawPath := filepath.Join(directory, "live-contract.raw.log")
-	evidencePath := filepath.Join(directory, "evidence.json")
-	logPath := filepath.Join(directory, "live-contract.log")
-	writeLiveContractRawLog(t, rawPath, "openai-responses", "req_123", "resp_456", true, 17, "provider_reported", true)
+	paths := newLiveContractPaths(t)
+	evidencePath, logPath := paths.evidence, paths.log
+	validLiveContractRawLog().write(t, paths.raw)
 
-	output, err := runLiveContractEvidence(root,
-		"record",
-		"--profile", "openai-responses",
-		"--input", rawPath,
-		"--evidence", evidencePath,
-		"--log", logPath,
-		"--source-revision", liveContractSourceRevision,
-		"--generated-at", "2026-07-15T00:00:00Z",
-	)
+	output, err := recordLiveContractEvidence(root, "openai-responses", paths, liveContractSourceRevision)
 	if err != nil {
 		t.Fatalf("record safe live contract evidence: %v\n%s", err, output)
 	}
@@ -44,28 +54,8 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 	if err := json.Unmarshal(data, &evidence); err != nil {
 		t.Fatalf("decode redacted evidence: %v", err)
 	}
-	wantKeys := map[string]bool{
-		"schema_version":        true,
-		"generated_at":          true,
-		"source_revision":       true,
-		"profile":               true,
-		"tenant":                true,
-		"ceiling_micro_usd":     true,
-		"actual_spend":          true,
-		"request_id":            true,
-		"response_id":           true,
-		"actual_service_class":  true,
-		"continuation_verified": true,
-	}
-	if len(evidence) != len(wantKeys) {
-		t.Fatalf("evidence keys = %#v, want only %#v", evidence, wantKeys)
-	}
-	for key := range wantKeys {
-		if _, ok := evidence[key]; !ok {
-			t.Fatalf("evidence does not contain %q: %#v", key, evidence)
-		}
-	}
-	for _, forbidden := range []string{"prompt", "output", "endpoint", "credential", "api_key", "raw"} {
+	assertExactKeys(t, "evidence", evidence, liveContractEvidenceFields...)
+	for _, forbidden := range redactedEvidenceForbiddenFields {
 		if _, found := evidence[forbidden]; found {
 			t.Fatalf("evidence retains forbidden %q field: %#v", forbidden, evidence)
 		}
@@ -130,240 +120,74 @@ func TestLiveContractEvidenceRecorderRejectsInvalidSourceRevision(t *testing.T) 
 		"0123456789ABCDEF0123456789abcdef01234567",
 	} {
 		t.Run(revision, func(t *testing.T) {
-			directory := t.TempDir()
-			rawPath := filepath.Join(directory, "live-contract.raw.log")
-			evidencePath := filepath.Join(directory, "evidence.json")
-			logPath := filepath.Join(directory, "live-contract.log")
-			writeLiveContractRawLog(t, rawPath, "openai-responses", "req_123", "resp_456", true, 17, "provider_reported", true)
+			paths := newLiveContractPaths(t)
+			validLiveContractRawLog().write(t, paths.raw)
 
-			output, err := runLiveContractEvidence(root,
-				"record",
-				"--profile", "openai-responses",
-				"--input", rawPath,
-				"--evidence", evidencePath,
-				"--log", logPath,
-				"--source-revision", revision,
-				"--generated-at", "2026-07-15T00:00:00Z",
-			)
+			output, err := recordLiveContractEvidence(root, "openai-responses", paths, revision)
 			if err == nil {
 				t.Fatalf("record accepted invalid source revision %q: %s", revision, output)
 			}
-			for _, path := range []string{evidencePath, logPath} {
-				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
-					t.Fatalf("recorder left output %q after invalid source revision: %v", path, statErr)
-				}
-			}
+			paths.assertNoOutputs(t, "invalid source revision")
 		})
 	}
 }
 
 func TestLiveContractEvidenceRecorderRejectsUnsafeOrInconsistentInputWithoutEchoingIt(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, test := range []struct {
-		name         string
-		profile      string
-		logProfile   string
-		requestID    string
-		known        bool
-		microUSD     int
-		method       string
-		serviceClass string
-		continued    bool
-		secret       string
-	}{
-		{
-			name:       "unsafe request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "sk-unsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "sk-unsafe-live-secret",
-		},
-		{
-			name:       "mixed-case OpenAI-style request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "Sk-unsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "Sk-unsafe-live-secret",
-		},
-		{
-			name:       "JWT-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "EYJunsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "EYJunsafe-live-secret",
-		},
-		{
-			name:       "AWS access-key-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "AkIaunsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "AkIaunsafe-live-secret",
-		},
-		{
-			name:       "AWS session-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "ASIAunsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "ASIAunsafe-live-secret",
-		},
-		{
-			name:       "GitHub token-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "GHP_unsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "GHP_unsafe-live-secret",
-		},
-		{
-			name:       "GitHub fine-grained token-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "GitHub_Pat_unsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "GitHub_Pat_unsafe-live-secret",
-		},
-		{
-			name:       "Slack bot token-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "XoXb-unsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "XoXb-unsafe-live-secret",
-		},
-		{
-			name:       "Slack user token-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "xOxP-unsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "xOxP-unsafe-live-secret",
-		},
-		{
-			name:       "Google API key-like request identifier",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "AiZaunsafe-live-secret",
-			known:      true,
-			microUSD:   17,
-			method:     "provider_reported",
-			continued:  true,
-			secret:     "AiZaunsafe-live-secret",
-		},
-		{
-			name:       "unrecognized reported cost method",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "req_123",
-			known:      true,
-			microUSD:   17,
-			method:     "catalog_usage",
-			continued:  true,
-		},
-		{
-			name:         "nonstandard actual service class",
-			profile:      "openai-responses",
-			logProfile:   "openai-responses",
-			requestID:    "req_123",
-			known:        true,
-			microUSD:     17,
-			method:       "provider_reported",
-			serviceClass: "priority",
-			continued:    true,
-		},
-		{
-			name:       "spend over ceiling",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "req_123",
-			known:      true,
-			microUSD:   25_001,
-			method:     "provider_reported",
-			continued:  true,
-		},
-		{
-			name:       "profile mismatch",
-			profile:    "openai-responses",
-			logProfile: "openai-chat",
-			requestID:  "req_123",
-			known:      false,
-			microUSD:   0,
-			method:     "not_reported",
-			continued:  false,
-		},
-		{
-			name:       "unreported cost with a reported method",
-			profile:    "openai-responses",
-			logProfile: "openai-responses",
-			requestID:  "req_123",
-			known:      false,
-			microUSD:   0,
-			method:     "provider_reported",
-			continued:  true,
-		},
+	type rejectedInput struct {
+		name   string
+		log    liveContractRawLog
+		secret string
+	}
+	withLog := func(change func(*liveContractRawLog)) liveContractRawLog {
+		log := validLiveContractRawLog()
+		change(&log)
+		return log
+	}
+	var tests []rejectedInput
+	for _, unsafe := range []struct{ name, requestID string }{
+		{name: "unsafe request identifier", requestID: "sk-unsafe-live-secret"},
+		{name: "mixed-case OpenAI-style request identifier", requestID: "Sk-unsafe-live-secret"},
+		{name: "JWT-like request identifier", requestID: "EYJunsafe-live-secret"},
+		{name: "AWS access-key-like request identifier", requestID: "AkIaunsafe-live-secret"},
+		{name: "AWS session-like request identifier", requestID: "ASIAunsafe-live-secret"},
+		{name: "GitHub token-like request identifier", requestID: "GHP_unsafe-live-secret"},
+		{name: "GitHub fine-grained token-like request identifier", requestID: "GitHub_Pat_unsafe-live-secret"},
+		{name: "Slack bot token-like request identifier", requestID: "XoXb-unsafe-live-secret"},
+		{name: "Slack user token-like request identifier", requestID: "xOxP-unsafe-live-secret"},
+		{name: "Google API key-like request identifier", requestID: "AiZaunsafe-live-secret"},
 	} {
+		tests = append(tests, rejectedInput{
+			name:   unsafe.name,
+			log:    withLog(func(log *liveContractRawLog) { log.requestID = unsafe.requestID }),
+			secret: unsafe.requestID,
+		})
+	}
+	tests = append(tests,
+		rejectedInput{name: "unrecognized reported cost method", log: withLog(func(log *liveContractRawLog) { log.method = "catalog_usage" })},
+		rejectedInput{name: "nonstandard actual service class", log: withLog(func(log *liveContractRawLog) { log.serviceClass = "priority" })},
+		rejectedInput{name: "spend over ceiling", log: withLog(func(log *liveContractRawLog) { log.microUSD = 25_001 })},
+		rejectedInput{name: "profile mismatch", log: withLog(func(log *liveContractRawLog) {
+			log.profile = "openai-chat"
+			log.known, log.microUSD, log.method, log.continued = false, 0, "not_reported", false
+		})},
+		rejectedInput{name: "unreported cost with a reported method", log: withLog(func(log *liveContractRawLog) {
+			log.known, log.microUSD = false, 0
+		})},
+	)
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			rawPath := filepath.Join(directory, "live-contract.raw.log")
-			evidencePath := filepath.Join(directory, "evidence.json")
-			logPath := filepath.Join(directory, "live-contract.log")
-			serviceClass := test.serviceClass
-			if serviceClass == "" {
-				serviceClass = "standard"
-			}
-			writeLiveContractRawLogWithServiceClass(t, rawPath, test.logProfile, test.requestID, "resp_456", serviceClass, test.known, test.microUSD, test.method, test.continued)
+			paths := newLiveContractPaths(t)
+			test.log.write(t, paths.raw)
 
-			output, err := runLiveContractEvidence(root,
-				"record",
-				"--profile", test.profile,
-				"--input", rawPath,
-				"--evidence", evidencePath,
-				"--log", logPath,
-				"--source-revision", liveContractSourceRevision,
-				"--generated-at", "2026-07-15T00:00:00Z",
-			)
+			output, err := recordLiveContractEvidence(root, "openai-responses", paths, liveContractSourceRevision)
 			if err == nil {
 				t.Fatalf("record accepted %s: %s", test.name, output)
 			}
 			if test.secret != "" && strings.Contains(string(output), test.secret) {
 				t.Fatalf("recorder echoed rejected secret-like input: %q", output)
 			}
-			for _, path := range []string{evidencePath, logPath} {
-				if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
-					t.Fatalf("recorder left output %q after rejected input: %v", path, statErr)
-				}
-			}
+			paths.assertNoOutputs(t, "rejected input")
 		})
 	}
 }
@@ -380,26 +204,17 @@ func TestLiveContractEvidenceRecorderAllowsEachSupportedReportedCostMethod(t *te
 		{profile: "exa-chat", method: "exa_reported"},
 	} {
 		t.Run(test.method, func(t *testing.T) {
-			directory := t.TempDir()
-			rawPath := filepath.Join(directory, "live-contract.raw.log")
-			evidencePath := filepath.Join(directory, "evidence.json")
-			logPath := filepath.Join(directory, "live-contract.log")
-			writeLiveContractRawLog(t, rawPath, test.profile, "req_123", "resp_456", true, 17, test.method, true)
+			paths := newLiveContractPaths(t)
+			log := validLiveContractRawLog()
+			log.profile, log.method = test.profile, test.method
+			log.write(t, paths.raw)
 
-			output, err := runLiveContractEvidence(root,
-				"record",
-				"--profile", test.profile,
-				"--input", rawPath,
-				"--evidence", evidencePath,
-				"--log", logPath,
-				"--source-revision", liveContractSourceRevision,
-				"--generated-at", "2026-07-15T00:00:00Z",
-			)
+			output, err := recordLiveContractEvidence(root, test.profile, paths, liveContractSourceRevision)
 			if err != nil {
 				t.Fatalf("record %s evidence: %v\\n%s", test.method, err, output)
 			}
 
-			data, err := os.ReadFile(evidencePath)
+			data, err := os.ReadFile(paths.evidence)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -432,27 +247,14 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 		t.Fatalf("live provider evidence schema must be closed: %#v", schema["additionalProperties"])
 	}
 	got := stringSequence(t, "live provider evidence schema", schema, "required")
-	want := []string{
-		"schema_version",
-		"generated_at",
-		"source_revision",
-		"profile",
-		"tenant",
-		"ceiling_micro_usd",
-		"actual_spend",
-		"request_id",
-		"response_id",
-		"actual_service_class",
-		"continuation_verified",
-	}
-	if !sameStringSet(got, want) {
-		t.Fatalf("live provider evidence schema required fields = %#v, want %#v", got, want)
+	if !sameStringSet(got, liveContractEvidenceFields) {
+		t.Fatalf("live provider evidence schema required fields = %#v, want %#v", got, liveContractEvidenceFields)
 	}
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("live provider evidence schema properties = %#v, want mapping", schema["properties"])
 	}
-	for _, field := range []string{"schema_version", "generated_at", "source_revision", "profile", "tenant", "ceiling_micro_usd", "actual_spend", "request_id", "response_id", "actual_service_class", "continuation_verified"} {
+	for _, field := range liveContractEvidenceFields {
 		if _, ok := properties[field]; !ok {
 			t.Fatalf("live provider evidence schema is missing %q", field)
 		}
@@ -461,7 +263,7 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 	if !ok || sourceRevision["pattern"] != "^[0-9a-f]{40}$" {
 		t.Fatalf("live provider source revision schema must require a full lowercase Git SHA, got %#v", properties["source_revision"])
 	}
-	for _, forbidden := range []string{"prompt", "output", "endpoint", "credential", "api_key", "raw"} {
+	for _, forbidden := range redactedEvidenceForbiddenFields {
 		if _, found := properties[forbidden]; found {
 			t.Fatalf("live provider evidence schema permits forbidden %q", forbidden)
 		}
@@ -566,16 +368,74 @@ func runLiveContractEvidence(root string, arguments ...string) ([]byte, error) {
 	return command.CombinedOutput()
 }
 
-func writeLiveContractRawLog(t *testing.T, path, profile, requestID, responseID string, known bool, microUSD int, method string, continued bool) {
-	writeLiveContractRawLogWithServiceClass(t, path, profile, requestID, responseID, "standard", known, microUSD, method, continued)
+// liveContractPaths are the recorder's raw input and redacted outputs inside
+// one temporary directory.
+type liveContractPaths struct {
+	raw, evidence, log string
 }
 
-func writeLiveContractRawLogWithServiceClass(t *testing.T, path, profile, requestID, responseID, serviceClass string, known bool, microUSD int, method string, continued bool) {
+func newLiveContractPaths(t *testing.T) liveContractPaths {
+	t.Helper()
+	directory := t.TempDir()
+	return liveContractPaths{
+		raw:      filepath.Join(directory, "live-contract.raw.log"),
+		evidence: filepath.Join(directory, "evidence.json"),
+		log:      filepath.Join(directory, "live-contract.log"),
+	}
+}
+
+// assertNoOutputs fails if the recorder left evidence or a redacted log
+// behind after rejecting its input for reason.
+func (paths liveContractPaths) assertNoOutputs(t *testing.T, reason string) {
+	t.Helper()
+	for _, path := range []string{paths.evidence, paths.log} {
+		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("recorder left output %q after %s: %v", path, reason, statErr)
+		}
+	}
+}
+
+func recordLiveContractEvidence(root, profile string, paths liveContractPaths, sourceRevision string) ([]byte, error) {
+	return runLiveContractEvidence(root,
+		"record",
+		"--profile", profile,
+		"--input", paths.raw,
+		"--evidence", paths.evidence,
+		"--log", paths.log,
+		"--source-revision", sourceRevision,
+		"--generated-at", "2026-07-15T00:00:00Z",
+	)
+}
+
+// liveContractRawLog is the one live provider test result line the recorder
+// redacts.
+type liveContractRawLog struct {
+	profile, requestID, responseID, serviceClass string
+	known                                        bool
+	microUSD                                     int
+	method                                       string
+	continued                                    bool
+}
+
+func validLiveContractRawLog() liveContractRawLog {
+	return liveContractRawLog{
+		profile:      "openai-responses",
+		requestID:    "req_123",
+		responseID:   "resp_456",
+		serviceClass: "standard",
+		known:        true,
+		microUSD:     17,
+		method:       "provider_reported",
+		continued:    true,
+	}
+}
+
+func (log liveContractRawLog) write(t *testing.T, path string) {
 	t.Helper()
 	content := strings.Join([]string{
-		"=== RUN   TestLiveProviderContracts/" + profile,
-		"    live_provider_test.go:35: profile=" + profile + " tenant=llmtw-live-contract request_id=" + requestID + " response_id=" + responseID + " actual_service_class=" + serviceClass + " actual_spend_known=" + strconv.FormatBool(known) + " actual_micro_usd=" + strconv.Itoa(microUSD) + " cost_method=" + method + " continuation_verified=" + strconv.FormatBool(continued),
-		"--- PASS: TestLiveProviderContracts/" + profile,
+		"=== RUN   TestLiveProviderContracts/" + log.profile,
+		"    live_provider_test.go:35: profile=" + log.profile + " tenant=llmtw-live-contract request_id=" + log.requestID + " response_id=" + log.responseID + " actual_service_class=" + log.serviceClass + " actual_spend_known=" + strconv.FormatBool(log.known) + " actual_micro_usd=" + strconv.Itoa(log.microUSD) + " cost_method=" + log.method + " continuation_verified=" + strconv.FormatBool(log.continued),
+		"--- PASS: TestLiveProviderContracts/" + log.profile,
 	}, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)

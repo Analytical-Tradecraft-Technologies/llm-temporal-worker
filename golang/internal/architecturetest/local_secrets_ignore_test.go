@@ -22,12 +22,9 @@ func TestLocalContinuationKeyPathIsIgnored(t *testing.T) {
 		".gitignore":           "golang/.local/",
 		"golang/.dockerignore": ".local/",
 	} {
-		data, err := os.ReadFile(filepath.Join(root, path))
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := readRepositoryFile(t, root, path)
 		found := false
-		for _, line := range strings.Split(string(data), "\n") {
+		for _, line := range strings.Split(data, "\n") {
 			if strings.TrimSpace(line) == want {
 				found = true
 				break

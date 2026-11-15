@@ -108,7 +108,7 @@ func TestWorkflowGuardedPublicationBoundary(t *testing.T) {
 
 func TestReleaseRunbookDocumentsExternalAuthorizationBoundary(t *testing.T) {
 	runbook := readRepositoryFile(t, repositoryRoot(t), "docs", "release", "runbook.md")
-	for _, want := range []string{
+	assertContainsEach(t, runbook, "release runbook does not document guarded-publication prerequisite %q",
 		"Guarded manual publication boundary",
 		"workflow_dispatch",
 		"`refs/tags/vMAJOR.MINOR.PATCH`",
@@ -125,11 +125,7 @@ func TestReleaseRunbookDocumentsExternalAuthorizationBoundary(t *testing.T) {
 		"does not create or modify that environment",
 		"does not sign, publish, push, create a tag, or create a release",
 		"fails closed",
-	} {
-		if !strings.Contains(runbook, want) {
-			t.Fatalf("release runbook does not document guarded-publication prerequisite %q", want)
-		}
-	}
+	)
 }
 
 func TestReleaseRunbookListsRecentMergedValidation(t *testing.T) {
@@ -382,13 +378,7 @@ func TestPublicEvidenceRunVerifierValidatesTrustedMasterMetadata(t *testing.T) {
 		wantError bool
 	}{
 		{name: "matching successful master push"},
-		{
-			name: "different run ID",
-			mutate: func(metadata map[string]any) {
-				metadata["id"] = int64(29386817790)
-			},
-			wantError: true,
-		},
+		{name: "different run ID", mutate: setMetadataField("id", int64(29386817790)), wantError: true},
 		{
 			name: "different repository",
 			mutate: func(metadata map[string]any) {
@@ -396,48 +386,12 @@ func TestPublicEvidenceRunVerifierValidatesTrustedMasterMetadata(t *testing.T) {
 			},
 			wantError: true,
 		},
-		{
-			name: "different workflow path",
-			mutate: func(metadata map[string]any) {
-				metadata["path"] = ".github/workflows/release.yml"
-			},
-			wantError: true,
-		},
-		{
-			name: "non-push event",
-			mutate: func(metadata map[string]any) {
-				metadata["event"] = "workflow_dispatch"
-			},
-			wantError: true,
-		},
-		{
-			name: "non-master branch",
-			mutate: func(metadata map[string]any) {
-				metadata["head_branch"] = "release-candidate"
-			},
-			wantError: true,
-		},
-		{
-			name: "unfinished run",
-			mutate: func(metadata map[string]any) {
-				metadata["status"] = "in_progress"
-			},
-			wantError: true,
-		},
-		{
-			name: "failed run",
-			mutate: func(metadata map[string]any) {
-				metadata["conclusion"] = "failure"
-			},
-			wantError: true,
-		},
-		{
-			name: "different commit",
-			mutate: func(metadata map[string]any) {
-				metadata["head_sha"] = "cccccccccccccccccccccccccccccccccccccccc"
-			},
-			wantError: true,
-		},
+		{name: "different workflow path", mutate: setMetadataField("path", ".github/workflows/release.yml"), wantError: true},
+		{name: "non-push event", mutate: setMetadataField("event", "workflow_dispatch"), wantError: true},
+		{name: "non-master branch", mutate: setMetadataField("head_branch", "release-candidate"), wantError: true},
+		{name: "unfinished run", mutate: setMetadataField("status", "in_progress"), wantError: true},
+		{name: "failed run", mutate: setMetadataField("conclusion", "failure"), wantError: true},
+		{name: "different commit", mutate: setMetadataField("head_sha", "cccccccccccccccccccccccccccccccccccccccc"), wantError: true},
 		{
 			name: "run nearly at the age limit",
 			mutate: func(metadata map[string]any) {
@@ -951,6 +905,13 @@ func writeFixtureExecutable(t *testing.T, path, contents string) {
 	}
 }
 
+// setMetadataField returns a mutation that sets one run metadata field.
+func setMetadataField(key string, value any) func(map[string]any) {
+	return func(metadata map[string]any) {
+		metadata[key] = value
+	}
+}
+
 func trustedPublicEvidenceRunMetadata(repository, commit string) map[string]any {
 	return map[string]any{
 		"id":          int64(29386817789),
@@ -989,18 +950,14 @@ func assertPreflightRescansTheReleaseSubject(t *testing.T, workflow workflowDocu
 	if evidence < 0 || tagSource < evidence || image < tagSource {
 		t.Fatal("release preflight must rescan the tag commit and then the image after verifying the evidence binding")
 	}
-	for _, want := range []string{
+	assertContainsEach(t, workflow.raw, "release preflight rescan does not bind %q",
 		`--tag-commit "$TAG_COMMIT"`,
 		`--worktree "$RUNNER_TEMP/release-tag"`,
 		`--image-reference "$IMAGE_REFERENCE"`,
-	} {
-		if !strings.Contains(workflow.raw, want) {
-			t.Fatalf("release preflight rescan does not bind %q", want)
-		}
-	}
+	)
 
 	scan := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "preflight-scan.sh")
-	for _, want := range []string{
+	assertContainsEach(t, scan, "release preflight scan does not retain %q",
 		`git -C "$root" worktree add --quiet --detach "$worktree" "$tag_commit"`,
 		`chmod -R a-w "$worktree"`,
 		// Both tools come from the trusted master module, never the tag.
@@ -1017,11 +974,7 @@ func assertPreflightRescansTheReleaseSubject(t *testing.T, workflow workflowDocu
 		"--exit-code 1",
 		`python3 "$root/scripts/ci/summarize-image-scan.py" "$report"`,
 		"readonly platforms=(linux/amd64 linux/arm64)",
-	} {
-		if !strings.Contains(scan, want) {
-			t.Fatalf("release preflight scan does not retain %q", want)
-		}
-	}
+	)
 	for _, forbidden := range []string{
 		"--skip-db-update",
 		"--offline-scan",
@@ -1257,7 +1210,7 @@ func assertAnonymousFixedPublicCheckout(t *testing.T, workflow workflowDocument)
 func assertPublicRunVerifierIsTokenless(t *testing.T) {
 	t.Helper()
 	verifier := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "verify-public-run.py")
-	for _, required := range []string{
+	assertContainsEach(t, verifier, "public run verifier does not retain required fail-closed contract %q",
 		`PUBLIC_GITHUB_API = "https://api.github.com"`,
 		`f"{PUBLIC_GITHUB_API}/repos/{quote(owner, safe='')}/"`,
 		`f"{quote(repository, safe='')}/actions/runs/{run_id}"`,
@@ -1274,11 +1227,7 @@ func assertPublicRunVerifierIsTokenless(t *testing.T) {
 		`"conclusion"`,
 		`"head_sha"`,
 		`".github/workflows/master.yml"`,
-	} {
-		if !strings.Contains(verifier, required) {
-			t.Fatalf("public run verifier does not retain required fail-closed contract %q", required)
-		}
-	}
+	)
 	for _, forbidden := range []string{
 		"authorization",
 		"github.token",
@@ -1510,9 +1459,5 @@ func TestWorkflowPublicationAndEvidenceTriggers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"On every master\nrun (push, the daily schedule and manual dispatch)", "Those tags are development images"} {
-		if !strings.Contains(string(runbook), want) {
-			t.Fatalf("docs/release/runbook.md does not say %q", want)
-		}
-	}
+	assertContainsEach(t, string(runbook), "docs/release/runbook.md does not say %q", "On every master\nrun (push, the daily schedule and manual dispatch)", "Those tags are development images")
 }

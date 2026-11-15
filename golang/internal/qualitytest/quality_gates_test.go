@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 )
 
 var fuzzTargetName = regexp.MustCompile(`^Fuzz[[:alnum:]_]+$`)
@@ -132,32 +134,16 @@ func FuzzForeign(f *testing.F) {}
 func TestQualityGatesAreWiredIntoMakeCIAndTestingStrategy(t *testing.T) {
 	root := repositoryRoot(t)
 	makefile := readFile(t, filepath.Join(moduleRoot(t), "Makefile"))
-	for _, target := range []string{"fuzz-smoke:", "mutation-verify:", "scripts/run-fuzz.sh smoke", "scripts/run-mutation.sh"} {
-		if !strings.Contains(makefile, target) {
-			t.Fatalf("Makefile does not include %q", target)
-		}
-	}
+	assertContainsEach(t, makefile, "Makefile does not include %q", "fuzz-smoke:", "mutation-verify:", "scripts/run-fuzz.sh smoke", "scripts/run-mutation.sh")
 
 	pullRequest := readFile(t, filepath.Join(root, ".github", "workflows", "pull-request.yml"))
-	for _, command := range []string{"make fuzz-smoke", "make mutation-verify"} {
-		if !strings.Contains(pullRequest, command) {
-			t.Fatalf("pull-request workflow does not run %q", command)
-		}
-	}
+	assertContainsEach(t, pullRequest, "pull-request workflow does not run %q", "make fuzz-smoke", "make mutation-verify")
 
 	master := readFile(t, filepath.Join(root, ".github", "workflows", "master.yml"))
-	for _, value := range []string{"fuzz-shard", "matrix:", "shard: [0, 1, 2]", "scripts/run-fuzz.sh shard"} {
-		if !strings.Contains(master, value) {
-			t.Fatalf("master workflow does not configure %q", value)
-		}
-	}
+	assertContainsEach(t, master, "master workflow does not configure %q", "fuzz-shard", "matrix:", "shard: [0, 1, 2]", "scripts/run-fuzz.sh shard")
 
 	strategy := readFile(t, filepath.Join(root, "docs", "testing", "strategy.md"))
-	for _, command := range []string{"make fuzz-smoke", "make mutation-verify"} {
-		if !strings.Contains(strategy, command) {
-			t.Fatalf("testing strategy does not document %q", command)
-		}
-	}
+	assertContainsEach(t, strategy, "testing strategy does not document %q", "make fuzz-smoke", "make mutation-verify")
 }
 
 func TestMasterFuzzShardsUseFixedExecutionBudget(t *testing.T) {
@@ -176,26 +162,18 @@ func TestMasterFuzzShardsUseFixedExecutionBudget(t *testing.T) {
 	}
 
 	strategy := readFile(t, filepath.Join(root, "docs", "testing", "strategy.md"))
-	for _, value := range []string{"FUZZ_TIME=250000x", "248,282"} {
-		if !strings.Contains(strategy, value) {
-			t.Fatalf("testing strategy does not document %q", value)
-		}
-	}
+	assertContainsEach(t, strategy, "testing strategy does not document %q", "FUZZ_TIME=250000x", "248,282")
 }
 
 func TestMutationManifestCoversCriticalSemanticInvariants(t *testing.T) {
 	manifest := readFile(t, filepath.Join(moduleRoot(t), "tools", "mutationverify", "main.go"))
-	for _, name := range []string{
+	assertContainsEach(t, manifest, "mutation manifest does not include %q",
 		"money-round-up",
 		"window-comparison-boundary",
 		"dispatch-certainty",
 		"service-class-default",
 		"state-transition",
-	} {
-		if !strings.Contains(manifest, name) {
-			t.Fatalf("mutation manifest does not include %q", name)
-		}
-	}
+	)
 }
 
 type fuzzEntry struct {
@@ -334,27 +312,21 @@ func excludedFromFuzzTargetScan(name string) bool {
 	}
 }
 
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	directory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("repository checkout root not found")
-		}
-		directory = parent
-	}
-}
+// repositoryRoot and moduleRoot locate the checkout these tests verify.
+var (
+	repositoryRoot = repotest.RepositoryRoot
+	moduleRoot     = repotest.ModuleRoot
+)
 
-func moduleRoot(t *testing.T) string {
+// assertContainsEach fails with failure, formatted with the missing value,
+// unless text contains every value.
+func assertContainsEach(t *testing.T, text, failure string, values ...string) {
 	t.Helper()
-	return filepath.Join(repositoryRoot(t), "golang")
+	for _, value := range values {
+		if !strings.Contains(text, value) {
+			t.Fatalf(failure, value)
+		}
+	}
 }
 
 func readFile(t *testing.T, path string) string {

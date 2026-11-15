@@ -11,19 +11,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 )
 
 func TestVerifyAcceptsReviewedInventoryAndApprovedFinding(t *testing.T) {
 	t.Parallel()
 
 	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{{
-		ID:          "GO-2099-0001",
-		Owner:       "security@example.test",
-		Expires:     "2099-01-01T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001",
-		Scope:       "module_only",
-	}}
+	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
 
 	report, err := verify(
 		baseline,
@@ -63,13 +59,9 @@ func TestVerifyRejectsUnreviewedAndExpiredVulnerabilityFindings(t *testing.T) {
 			name: "expired exception",
 			baseline: func() baseline {
 				value := testBaseline()
-				value.VulnerabilityExceptions = []vulnerabilityException{{
-					ID:          "GO-2099-0001",
-					Owner:       "security@example.test",
-					Expires:     "2026-07-13T00:00:00Z",
-					Remediation: "https://example.test/security/GO-2099-0001",
-					Scope:       "module_only",
-				}}
+				exception := testVulnerabilityException("GO-2099-0001", "module_only")
+				exception.Expires = "2026-07-13T00:00:00Z"
+				value.VulnerabilityExceptions = []vulnerabilityException{exception}
 				return value
 			}(),
 			want: "expired",
@@ -109,12 +101,9 @@ func TestVerifyRejectsInventoryDriftAndIncompleteExceptions(t *testing.T) {
 			name: "missing exception owner",
 			baseline: func() baseline {
 				value := testBaseline()
-				value.VulnerabilityExceptions = []vulnerabilityException{{
-					ID:          "GO-2099-0001",
-					Expires:     "2099-01-01T00:00:00Z",
-					Remediation: "https://example.test/security/GO-2099-0001",
-					Scope:       "module_only",
-				}}
+				exception := testVulnerabilityException("GO-2099-0001", "module_only")
+				exception.Owner = ""
+				value.VulnerabilityExceptions = []vulnerabilityException{exception}
 				return value
 			}(),
 			requirements: testRequirements(),
@@ -124,12 +113,9 @@ func TestVerifyRejectsInventoryDriftAndIncompleteExceptions(t *testing.T) {
 			name: "missing exception scope",
 			baseline: func() baseline {
 				value := testBaseline()
-				value.VulnerabilityExceptions = []vulnerabilityException{{
-					ID:          "GO-2099-0001",
-					Owner:       "security@example.test",
-					Expires:     "2099-01-01T00:00:00Z",
-					Remediation: "https://example.test/security/GO-2099-0001",
-				}}
+				exception := testVulnerabilityException("GO-2099-0001", "module_only")
+				exception.Scope = ""
+				value.VulnerabilityExceptions = []vulnerabilityException{exception}
 				return value
 			}(),
 			requirements: testRequirements(),
@@ -155,13 +141,7 @@ func TestReportDoesNotRetainRawScannerTrace(t *testing.T) {
 	t.Parallel()
 
 	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{{
-		ID:          "GO-2099-0001",
-		Owner:       "security@example.test",
-		Expires:     "2099-01-01T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001",
-		Scope:       "reachable",
-	}}
+	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "reachable")}
 	report, err := verify(
 		baseline,
 		testRequirements(),
@@ -242,13 +222,7 @@ func TestVerifyRejectsReachableTraceOutsideModuleOnlyException(t *testing.T) {
 	t.Parallel()
 
 	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{{
-		ID:          "GO-2099-0001",
-		Owner:       "security@example.test",
-		Expires:     "2099-01-01T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001",
-		Scope:       "module_only",
-	}}
+	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
 
 	_, err := verify(
 		baseline,
@@ -302,13 +276,7 @@ func TestPullRequestVerificationRejectsReachabilityEscalation(t *testing.T) {
 	t.Parallel()
 
 	policy := testBaseline()
-	policy.VulnerabilityExceptions = []vulnerabilityException{{
-		ID:          "GO-2099-0001",
-		Owner:       "security@example.test",
-		Expires:     "2099-01-01T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001",
-		Scope:       "module_only",
-	}}
+	policy.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
 	base := `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`
 	head := base + "\n" + `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"},{"package":"example.test/one/vulnerable"}]}}`
 	_, err := verifyPullRequest(
@@ -477,10 +445,7 @@ func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
 	t.Parallel()
 
 	validException := func() vulnerabilityException {
-		return vulnerabilityException{
-			ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z",
-			Remediation: "https://example.test/security/GO-2099-0001", Scope: "module_only",
-		}
+		return testVulnerabilityException("GO-2099-0001", "module_only")
 	}
 	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -607,10 +572,7 @@ func TestWriteReportFileCreatesPrivateNestedReport(t *testing.T) {
 
 func TestCommandSmokeWritesRedactedReport(t *testing.T) {
 	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{{
-		ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001", Scope: "reachable",
-	}}
+	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "reachable")}
 	root := t.TempDir()
 	write := func(name string, contents []byte) string {
 		t.Helper()
@@ -725,10 +687,10 @@ func TestReleaseTagVerificationAppliesExceptionScopesWithoutRequiringUse(t *test
 
 	baseline := testBaseline()
 	baseline.VulnerabilityExceptions = []vulnerabilityException{
-		{ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z", Remediation: "https://example.test/security/GO-2099-0001", Scope: "module_only"},
-		{ID: "GO-2099-0002", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z", Remediation: "https://example.test/security/GO-2099-0002", Scope: "reachable"},
+		testVulnerabilityException("GO-2099-0001", "module_only"),
+		testVulnerabilityException("GO-2099-0002", "reachable"),
 		// The trusted master baseline may cover findings an older tag lacks.
-		{ID: "GO-2099-0003", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z", Remediation: "https://example.test/security/GO-2099-0003", Scope: "module_only"},
+		testVulnerabilityException("GO-2099-0003", "module_only"),
 	}
 	output := strings.Join([]string{
 		`{"config":{"scanner_name":"govulncheck"}}`,
@@ -755,10 +717,7 @@ func TestReleaseTagVerificationNamesEveryRejectedFinding(t *testing.T) {
 	t.Parallel()
 
 	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{{
-		ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2099-01-01T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001", Scope: "module_only",
-	}}
+	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
 	output := strings.Join([]string{
 		// An imported package is reachable for the baseline, not only a called
 		// function; govulncheck's text exit status counts only the latter.
@@ -791,10 +750,9 @@ func TestReleaseTagVerificationRejectsInvalidPolicyAndOutput(t *testing.T) {
 
 	now := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
 	expired := testBaseline()
-	expired.VulnerabilityExceptions = []vulnerabilityException{{
-		ID: "GO-2099-0001", Owner: "security@example.test", Expires: "2026-10-16T00:00:00Z",
-		Remediation: "https://example.test/security/GO-2099-0001", Scope: "reachable",
-	}}
+	exception := testVulnerabilityException("GO-2099-0001", "reachable")
+	exception.Expires = "2026-10-16T00:00:00Z"
+	expired.VulnerabilityExceptions = []vulnerabilityException{exception}
 	wrongVersion := testBaseline()
 	wrongVersion.Version = 1
 
@@ -918,6 +876,17 @@ func testBaseline() baseline {
 	}
 }
 
+// testVulnerabilityException is a complete, unexpired exception for id.
+func testVulnerabilityException(id, scope string) vulnerabilityException {
+	return vulnerabilityException{
+		ID:          id,
+		Owner:       "security@example.test",
+		Expires:     "2099-01-01T00:00:00Z",
+		Remediation: "https://example.test/security/" + id,
+		Scope:       scope,
+	}
+}
+
 func testRequirements() []moduleRequirement {
 	return []moduleRequirement{
 		{Path: "example.test/one", Version: "v1.2.3"},
@@ -925,25 +894,8 @@ func testRequirements() []moduleRequirement {
 	}
 }
 
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	directory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("repository root with .git not found")
-		}
-		directory = parent
-	}
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(repositoryRoot(t), "golang")
-}
+// repositoryRoot and moduleRoot locate the checkout these tests verify.
+var (
+	repositoryRoot = repotest.RepositoryRoot
+	moduleRoot     = repotest.ModuleRoot
+)
