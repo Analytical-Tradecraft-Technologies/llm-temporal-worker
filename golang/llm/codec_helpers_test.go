@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strconv"
 	"testing"
 )
@@ -60,9 +61,7 @@ func TestProviderStateItemAndPartKeepTheirLabels(t *testing.T) {
 		t.Fatalf("part opaque error = %v", err)
 	}
 	data, err := (ProviderStatePart{Provider: "p", EndpointFamily: "f", MediaType: "m", Opaque: []byte("x")}).MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	part, err := decodeProviderStatePart(data)
 	if err != nil || part.Provider != "p" || string(part.Opaque) != "x" {
 		t.Fatalf("part round trip = %+v, %v", part, err)

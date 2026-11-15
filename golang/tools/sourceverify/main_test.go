@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 const (
@@ -331,9 +332,7 @@ func TestVerifyAllowsCredentialVariableWiringInExecutableSource(t *testing.T) {
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			t.Parallel()
-			if err := verifyFile(t, test.path, test.content); err != nil {
-				t.Fatalf("verify rejected credential variable wiring: %v", err)
-			}
+			testassert.NoError(t, verifyFile(t, test.path, test.content), "verify rejected credential variable wiring")
 		})
 	}
 }
@@ -351,9 +350,7 @@ func TestVerifyAllowsDockerInstructionProse(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := verifyFile(t, "Dockerfile", test.content); err != nil {
-				t.Fatalf("verify rejected non-ENV Dockerfile prose: %v", err)
-			}
+			testassert.NoError(t, verifyFile(t, "Dockerfile", test.content), "verify rejected non-ENV Dockerfile prose")
 		})
 	}
 }
@@ -392,9 +389,7 @@ func TestVerifySkipsGeneratedBinaryAndVendorArtifacts(t *testing.T) {
 }
 
 func TestVerifyAllowsTestOutputAboveTheRepositoryFileLimit(t *testing.T) {
-	if err := verifyTestOutput(t, safeTestOutputAboveRepositoryFileLimit(t, "")); err != nil {
-		t.Fatalf("verify rejected benign bounded test output: %v", err)
-	}
+	testassert.NoError(t, verifyTestOutput(t, safeTestOutputAboveRepositoryFileLimit(t, "")), "verify rejected benign bounded test output")
 }
 
 func TestVerifyDetectsFindingsNearTheTailOfLargeTestStream(t *testing.T) {
@@ -472,26 +467,20 @@ func goTestJSONOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte 
 func TestVerifyAllowsCredentialVariableWiringInSource(t *testing.T) {
 	t.Parallel()
 
-	if err := verifyFile(t, "internal/factory.go", `package internal
+	testassert.NoError(t, verifyFile(t, "internal/factory.go", `package internal
 
 func configure(password string) {
 	_ = struct{ Password string }{Password: password}
 }
-`); err != nil {
-		t.Fatalf("verify rejected a credential variable reference: %v", err)
-	}
+`), "verify rejected a credential variable reference")
 }
 
 func TestVerifyCanInspectOnlyCapturedTestOutput(t *testing.T) {
 	t.Parallel()
 
 	output := filepath.Join(t.TempDir(), "go-test.json")
-	if err := os.WriteFile(output, []byte(`{"Action":"pass","Package":"example.test/package"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := verify("", output); err != nil {
-		t.Fatalf("test-output-only verification failed: %v", err)
-	}
+	testassert.NoError(t, os.WriteFile(output, []byte(`{"Action":"pass","Package":"example.test/package"}`), 0o600))
+	testassert.NoError(t, verify("", output), "test-output-only verification failed")
 	if err := verify("", ""); err == nil {
 		t.Fatal("verification accepted no source root and no test output")
 	}
@@ -501,9 +490,7 @@ func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 	t.Parallel()
 
 	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	makefile := string(data)
 	_, target, found := strings.Cut(makefile, "security-verify:")
 	if !found {
@@ -549,9 +536,7 @@ func TestSourceScannerClassifiesExecutableTextAsSource(t *testing.T) {
 func mustScan(t *testing.T, scan func([]byte) (*finding, error), content string) *finding {
 	t.Helper()
 	finding, err := scan([]byte(content))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return finding
 }
 
@@ -600,12 +585,8 @@ func requireSourceCode(t *testing.T, paths ...string) {
 func writeTestFile(t *testing.T, root, relative string, data []byte) {
 	t.Helper()
 	path := filepath.Join(root, relative)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	testassert.NoError(t, os.WriteFile(path, data, 0o600))
 }
 
 // repositoryRoot and moduleRoot locate the checkout these tests verify.

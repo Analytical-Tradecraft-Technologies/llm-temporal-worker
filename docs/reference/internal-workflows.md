@@ -33,8 +33,11 @@ saved cloud progress. Budget continuation carries only the scoped reference.
 There is no cancellation API. Work runs in a disconnected workflow context and
 children use the abandon parent-close policy so cancellation of a caller does
 not cancel paid work. An administrator can still terminate executions; the
-pending-request index remains the recovery source in that case. Automated orphan
-cleanup is a separate feature.
+pending-request index remains the recovery source in that case. The operator
+[`pending-list` and `pending-recover`](cli.md#pending-list) commands run the poll,
+completion and settlement steps such a workflow would have run next, never
+acquisition or submission; see the
+[terminated-workflow runbook](../runbooks/terminated-workflow-pending-recovery.md).
 
 Activities have a ten-minute start-to-close limit, 30-second heartbeat timeout,
 and a 24-hour schedule-to-close retry horizon with exponential backoff capped at

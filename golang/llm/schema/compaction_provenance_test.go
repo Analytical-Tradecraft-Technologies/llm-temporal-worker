@@ -2,15 +2,14 @@ package schema_test
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
 func TestCloudCompactionProvenanceSchema(t *testing.T) {
 	compiled := readV1Schema(t, "compact-response.schema.json")
 	var response map[string]json.RawMessage
-	if err := json.Unmarshal(readV1Fixture(t, "compact-response.json"), &response); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(readV1Fixture(t, "compact-response.json"), &response))
 	for _, test := range []struct {
 		provenance string
 		valid      bool
@@ -26,9 +25,7 @@ func TestCloudCompactionProvenanceSchema(t *testing.T) {
 		t.Run(test.provenance, func(t *testing.T) {
 			response["provenance"] = json.RawMessage(test.provenance)
 			raw, err := json.Marshal(response)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if err := compiled.Validate(raw); (err == nil) != test.valid {
 				t.Fatalf("valid=%t: %v", test.valid, err)
 			}

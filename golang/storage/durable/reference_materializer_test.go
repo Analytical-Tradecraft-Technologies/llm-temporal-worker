@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -54,12 +55,8 @@ func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 	claimReference(t, m, request)
 	completion := exactCompletion("completion-second", request.OperationID, request.GenerationID, second, 2, "0.10")
 	reconcile := referenceReconcile(request, completion)
-	if err := m.Reconcile(context.Background(), reconcile); err != nil {
-		t.Fatalf("reconcile = %v", err)
-	}
-	if err := m.Reconcile(context.Background(), reconcile); err != nil {
-		t.Fatalf("idempotent reconcile = %v", err)
-	}
+	testassert.NoError(t, m.Reconcile(context.Background(), reconcile), "reconcile")
+	testassert.NoError(t, m.Reconcile(context.Background(), reconcile), "idempotent reconcile")
 	changed := completion
 	changed.ActualCostUSD = ptr(pricing.MustUSD("0.11"))
 	changed.AccountedIncreaseUSD = pricing.MustUSD("0.11")
@@ -81,9 +78,7 @@ func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
 	assertReferenceAccept(t, m, request, true, "acceptance =")
 	claimReference(t, m, request)
 	completion := exactCompletion("completion-expiring", request.OperationID, request.GenerationID, reservation, 2, "0.20")
-	if err := m.Reconcile(context.Background(), referenceReconcile(request, completion)); err != nil {
-		t.Fatalf("reconcile = %v", err)
-	}
+	testassert.NoError(t, m.Reconcile(context.Background(), referenceReconcile(request, completion)), "reconcile")
 	now = now.Add(2 * time.Minute)
 	assertReferenceAccept(t, m, referenceRequest("still-accounted", referenceTestReservation(now, 0, "1.00")), false, "start deadline refunded accounted cost:")
 	now = now.Add(3 * time.Hour)
@@ -93,9 +88,7 @@ func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
 func newReferenceMaterializer(t *testing.T, now func() time.Time) *ReferenceBudgetMaterializer {
 	t.Helper()
 	m, err := NewReferenceBudgetMaterializer("gen-1", "inc-1", now)
-	if err != nil {
-		t.Fatalf("new reference materializer: %v", err)
-	}
+	testassert.NoError(t, err, "new reference materializer")
 	return m
 }
 
@@ -115,9 +108,7 @@ func assertReferenceAccept(t *testing.T, m *ReferenceBudgetMaterializer, request
 
 func claimReference(t *testing.T, m *ReferenceBudgetMaterializer, request ReserveRequest) {
 	t.Helper()
-	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"})))
 }
 
 // referenceReconcile settles request's "inc-1" claim with events.

@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -24,31 +25,21 @@ func cloudBuilderFixture(t *testing.T, async bool) (*boundedCloudFixture, *confi
 	snapshot := cloudSnapshot(t, "runtime-test")
 	f.cap.ConfigDigest = snapshot.Digest()
 	source, err := f.cap.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	source.ConfigDigest = snapshot.Digest()
 	f.cap.Snapshot = engine.StaticSnapshot{Value: source}
 	f.cap.CloudIdentity, err = cloudRequestIdentity(snapshot.Config().State.Requests)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	redis := snapshot.Config().State.Redis
 	f.cap.RedisIdentity = durable.RedisIdentity{KeyPrefix: redis.KeyPrefix, HashTag: redis.AdmissionHashTag}
 	f.cap.CheckpointKeyring = f.options.Keyring
 	f.cap.Budgets, err = durable.NewReferenceBudgetMaterializer(redisBudgetGeneration, "incarnation-1", f.cap.Clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.cap.Finalizer, err = newCloudFinalizer(f.repository, f.cap.Responses, f.cap.ResponseFills, f.cap.Budgets, f.cap.Clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	clients := &productionClientSet{v1Capabilities: f.cap, checkpointVerifier: f.options.Keyring, queryService: &testQueryService{}, probes: cloudBaseTestProbes()}
 	builder, err := NewCloudV1RuntimeBuilder(CloudV1RuntimeOptions{ResolveScope: f.options.ResolveScope, CheckpointTTL: f.options.CheckpointTTL})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return f, snapshot, clients, builder
 }
 
@@ -74,9 +65,7 @@ func TestCloudV1BuilderFactoryExecutionSurvivesReload(t *testing.T) {
 				next := *clients
 				next.close = func(context.Context) error { closed++; return nil }
 				_, set, err := factory.attachV1Runtime(context.Background(), snapshot, nil, &next)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				t.Cleanup(func() { _ = set.Close(context.Background()) })
 				v1 := set.(V1RuntimeSource).V1Runtime()
 				if v1 == prior {
@@ -87,9 +76,7 @@ func TestCloudV1BuilderFactoryExecutionSurvivesReload(t *testing.T) {
 				if !ok {
 					t.Fatal("factory hid planning interface")
 				}
-				if _, err := planning.PlanGenerationV1(context.Background(), f.request); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(planning.PlanGenerationV1(context.Background(), f.request)))
 				bounded, ok := v1.(activity.ExecutionRuntime)
 				if !ok {
 					t.Fatal("factory hid bounded execution interface")
@@ -124,9 +111,7 @@ func TestCloudV1BuilderFactoryExecutionSurvivesReload(t *testing.T) {
 			if _, err := prior.CompactV1(ctx, llm.CompactRequestV1{}); err == nil {
 				t.Fatal("legacy compact is enabled")
 			}
-			if _, err := prior.QueryV1(ctx, llm.QueryRequestV1{}); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(prior.QueryV1(ctx, llm.QueryRequestV1{})))
 			if clients.queryService.(*testQueryService).called.Load() != 1 {
 				t.Fatal("lost snapshot query service")
 			}
@@ -147,9 +132,7 @@ func TestCloudV1BuilderRejectsInvalidOptions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			options := valid
 			change(&options)
-			if _, err := NewCloudV1RuntimeBuilder(options); !errors.Is(err, ErrDurableV1Composition) {
-				t.Fatal(err)
-			}
+			testassert.ErrorIs(t, testassert.Err(NewCloudV1RuntimeBuilder(options)), ErrDurableV1Composition)
 		})
 	}
 }
@@ -185,9 +168,7 @@ func TestCloudV1BuilderContextAndClientGuards(t *testing.T) {
 	_, snapshot, clients, builder := cloudBuilderFixture(t, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := builder(ctx, snapshot, nil, clients); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(builder(ctx, snapshot, nil, clients)), context.Canceled)
 	for _, test := range []struct {
 		ctx      context.Context
 		snapshot *config.Snapshot
@@ -197,16 +178,12 @@ func TestCloudV1BuilderContextAndClientGuards(t *testing.T) {
 		{context.Background(), snapshot, (*productionClientSet)(nil)}, {context.Background(), snapshot, &testQueryClientSet{}},
 		{context.Background(), &config.Snapshot{}, clients},
 	} {
-		if _, err := builder(test.ctx, test.snapshot, nil, test.clients); !errors.Is(err, ErrDurableV1Composition) {
-			t.Fatal(err)
-		}
+		testassert.ErrorIs(t, testassert.Err(builder(test.ctx, test.snapshot, nil, test.clients)), ErrDurableV1Composition)
 	}
 	for _, query := range []activity.QueryService{nil, (*testQueryService)(nil)} {
 		clients.queryService = query
 		runtime, err := builder(context.Background(), snapshot, nil, clients)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if _, err = runtime.QueryV1(context.Background(), llm.QueryRequestV1{}); err == nil {
 			t.Fatal("query authorization was inferred")
 		}
@@ -217,13 +194,9 @@ func TestCloudV1BuilderAuthorizationPrecedesStorage(t *testing.T) {
 	f, snapshot, clients, _ := cloudBuilderFixture(t, false)
 	denied := errors.New("private denied reason")
 	builder, err := NewCloudV1RuntimeBuilder(CloudV1RuntimeOptions{ResolveScope: func(context.Context, llm.RequestContext) (string, error) { return "", denied }, CheckpointTTL: time.Hour, Limits: state.MaterializeLimits{MaxItems: 100}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	runtime, err := builder(context.Background(), snapshot, nil, clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, err = runtime.(activity.ExecutionRuntime).PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request}); err == nil {
 		t.Fatal("unauthorized preparation accepted")
 	}

@@ -17,17 +17,13 @@ func TestConfigValidationRequiresShutdownBudgetForGraceAndFinalization(t *testin
 	testassert.ErrorContains(t, loaded.Validate(), "server.shutdown_timeout must exceed temporal.worker.graceful_stop_timeout + server.finalization_timeout")
 
 	loaded.Server.ShutdownTimeout = config.Duration(time.Duration(loaded.Temporal.Worker.GracefulStopTimeout) + time.Duration(loaded.Server.FinalizationTimeout) + time.Second)
-	if err := loaded.Validate(); err != nil {
-		t.Fatalf("shutdown budget with one-second residual flush margin rejected: %v", err)
-	}
+	testassert.NoError(t, loaded.Validate(), "shutdown budget with one-second residual flush margin rejected")
 }
 
 func TestConfigExampleMatchesJSONSchema(t *testing.T) {
 	configData := exampleYAML(t)
 	loaded := mustLoadConfig(t, configData)
-	if err := validateConfigSchema(t, loaded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateConfigSchema(t, loaded))
 }
 
 func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
@@ -56,9 +52,7 @@ func TestConfigSchemaValidatesMRSCOptIn(t *testing.T) {
 
 func TestConfigSchemaAcceptsDevelopmentFileBlobStore(t *testing.T) {
 	loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
-	if err := validateConfigSchema(t, loaded); err != nil {
-		t.Fatalf("development file blob store schema error: %v", err)
-	}
+	testassert.NoError(t, validateConfigSchema(t, loaded), "development file blob store schema error")
 }
 
 func TestConfigSchemaAcceptsDevelopmentMemoryState(t *testing.T) {
@@ -70,9 +64,7 @@ func TestConfigSchemaAcceptsDevelopmentMemoryState(t *testing.T) {
 	loaded.BlobStore.Kind = "memory"
 	loaded.BlobStore.File = config.FileBlobConfig{}
 	loaded.BlobStore.S3 = config.S3Config{}
-	if err := validateConfigSchema(t, loaded); err != nil {
-		t.Fatalf("development memory state schema error: %v", err)
-	}
+	testassert.NoError(t, validateConfigSchema(t, loaded), "development memory state schema error")
 }
 
 func TestConfigSchemaRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
@@ -93,9 +85,7 @@ func TestConfigSchemaRejectsProductionRedisWithoutTLS(t *testing.T) {
 
 func TestConfigSchemaAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
 	loaded := mustLoadConfig(t, []byte(strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)))
-	if err := validateConfigSchema(t, loaded); err != nil {
-		t.Fatalf("development Redis without TLS schema error: %v", err)
-	}
+	testassert.NoError(t, validateConfigSchema(t, loaded), "development Redis without TLS schema error")
 }
 
 func TestConfigSchemaRejectsMixedBlobStoreBranches(t *testing.T) {
@@ -231,9 +221,7 @@ func TestConfigSchemaRequiresClosedAnthropicAWSGatewayIdentity(t *testing.T) {
 
 func TestConfigSchemaAcceptsEveryBudgetMatcher(t *testing.T) {
 	loaded := loadEveryBudgetMatcherExample(t)
-	if err := validateConfigSchema(t, loaded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateConfigSchema(t, loaded))
 }
 
 func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
@@ -241,9 +229,7 @@ func TestConfigAcceptsAzureOpenAIChatFamily(t *testing.T) {
 	if got := loaded.Endpoints["openai-prod"].Family; got != "azure_openai_chat" {
 		t.Fatalf("endpoint family = %q, want azure_openai_chat", got)
 	}
-	if err := validateConfigSchema(t, loaded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateConfigSchema(t, loaded))
 }
 
 func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
@@ -253,9 +239,7 @@ func TestConfigSchemaRequiresCloudAndRejectsSQL(t *testing.T) {
 	for _, variant := range []string{"missing-cloud", "obsolete-sql"} {
 		t.Run(variant, func(t *testing.T) {
 			var document map[string]any
-			if err := json.Unmarshal(encoded, &document); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, json.Unmarshal(encoded, &document))
 			state := document["state"].(map[string]any)
 			if variant == "missing-cloud" {
 				delete(state, "requests")

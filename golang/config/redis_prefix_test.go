@@ -6,14 +6,13 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func withoutRedisPrefixOverride(t *testing.T) {
 	t.Helper()
 	value, present := os.LookupEnv("LLMTW_REDIS_KEY_PREFIX")
-	if err := os.Unsetenv("LLMTW_REDIS_KEY_PREFIX"); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Unsetenv("LLMTW_REDIS_KEY_PREFIX"))
 	t.Cleanup(func() {
 		if present {
 			_ = os.Setenv("LLMTW_REDIS_KEY_PREFIX", value)

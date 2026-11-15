@@ -2,6 +2,7 @@ package contract
 
 import (
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"net/http"
 	"strings"
@@ -33,19 +34,13 @@ func TestRetryServerReturnsRetryableContractResponseAndCountsCalls(t *testing.T)
 	t.Cleanup(server.Close)
 	for attempt := 1; attempt <= 2; attempt++ {
 		request, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(`{"request":"payload"}`))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		request.Header.Set("Content-Type", "application/json")
 		response, err := server.HTTPClient.Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		body, err := io.ReadAll(response.Body)
 		response.Body.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if response.StatusCode != http.StatusInternalServerError || response.Header.Get("Content-Type") != "application/json" || string(body) != `{"error":{"message":"retryable contract failure"}}` {
 			t.Fatalf("response = status %d, headers %#v, body %q", response.StatusCode, response.Header, body)
 		}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -41,9 +42,7 @@ func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 	published = append(published, root)
 	head := Handle(root.Handle)
 	current, err := graph.Materialize("tenant-v1", head)
-	if err != nil {
-		t.Fatalf("materialize root: %v", err)
-	}
+	testassert.NoError(t, err, "materialize root")
 	var forkParent MaterializedState
 
 	for turn := 1; turn <= turns; turn++ {
@@ -74,9 +73,7 @@ func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 	}
 
 	final, err := graph.Materialize("tenant-v1", head)
-	if err != nil {
-		t.Fatalf("materialize final lineage: %v", err)
-	}
+	testassert.NoError(t, err, "materialize final lineage")
 	if got, want := len(final.Items), turns+1; got != want {
 		t.Fatalf("final item count = %d, want %d", got, want)
 	}
@@ -148,9 +145,7 @@ func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 		}
 	}
 	restoredFinal, err := restored.Materialize("tenant-v1", head)
-	if err != nil {
-		t.Fatalf("materialize restored final lineage: %v", err)
-	}
+	testassert.NoError(t, err, "materialize restored final lineage")
 	if !reflect.DeepEqual(final.Items, restoredFinal.Items) || !reflect.DeepEqual(final.Lineage, restoredFinal.Lineage) {
 		t.Fatal("restored final lineage diverged from original")
 	}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	redisclient "github.com/redis/go-redis/v9"
@@ -74,9 +75,7 @@ func TestComposeTwoWorkerReplicasShareTaskQueueAndRedis(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
 	workflowClient, err := client.Dial(client.Options{HostPort: temporalAddress, Namespace: settings.Namespace})
-	if err != nil {
-		t.Fatalf("dial Temporal: %v", err)
-	}
+	testassert.NoError(t, err, "dial Temporal")
 	t.Cleanup(workflowClient.Close)
 
 	waitForReplicaPollers(t, ctx, workflowClient, settings.TaskQueue, replicaIdentities)
@@ -91,9 +90,7 @@ func TestComposeTwoWorkerReplicasShareTaskQueueAndRedis(t *testing.T) {
 		WorkerStopTimeout:                      5 * time.Second,
 	})
 	orchestrator.RegisterWorkflowWithOptions(twoReplicaWorkflow, workflow.RegisterOptions{Name: twoReplicaWorkflowName})
-	if err := orchestrator.Start(); err != nil {
-		t.Fatalf("start two-replica orchestrator: %v", err)
-	}
+	testassert.NoError(t, orchestrator.Start(), "start two-replica orchestrator")
 	t.Cleanup(orchestrator.Stop)
 
 	redisClient := newLiveRedisClient(t, ctx)
@@ -166,9 +163,7 @@ func newLiveRedisClient(t *testing.T, ctx context.Context) *redisclient.Client {
 	}
 	value := redisclient.NewClient(&redisclient.Options{Addr: address, Username: username, Password: password})
 	t.Cleanup(func() { _ = value.Close() })
-	if err := value.Ping(ctx).Err(); err != nil {
-		t.Fatalf("ping Compose Redis: %v", err)
-	}
+	testassert.NoError(t, value.Ping(ctx).Err(), "ping Compose Redis")
 	return value
 }
 
@@ -179,9 +174,7 @@ func countRedisKeys(t *testing.T, ctx context.Context, value *redisclient.Client
 	for iterator.Next(ctx) {
 		count++
 	}
-	if err := iterator.Err(); err != nil {
-		t.Fatalf("scan Compose Redis keys: %v", err)
-	}
+	testassert.NoError(t, iterator.Err(), "scan Compose Redis keys")
 	return count
 }
 
@@ -196,15 +189,11 @@ type localTemporalSettings struct {
 func readLocalTemporalSettings(t *testing.T) localTemporalSettings {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "local", "config.yaml"))
-	if err != nil {
-		t.Fatalf("read local worker configuration: %v", err)
-	}
+	testassert.NoError(t, err, "read local worker configuration")
 	var document struct {
 		Temporal localTemporalSettings `yaml:"temporal"`
 	}
-	if err := yaml.Unmarshal(raw, &document); err != nil {
-		t.Fatalf("parse local worker configuration: %v", err)
-	}
+	testassert.NoError(t, yaml.Unmarshal(raw, &document), "parse local worker configuration")
 	settings := document.Temporal
 	if settings.Namespace == "" || settings.TaskQueue == "" || settings.IdentityPrefix == "" {
 		t.Fatalf("local worker Temporal settings = %#v, want namespace, task queue and identity prefix", settings)
@@ -263,9 +252,7 @@ func activityStartIdentities(t *testing.T, ctx context.Context, workflowClient c
 	history := workflowClient.GetWorkflowHistory(ctx, run.GetID(), run.GetRunID(), false, enumspb.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	for history.HasNext() {
 		event, err := history.Next()
-		if err != nil {
-			t.Fatalf("read workflow history: %v", err)
-		}
+		testassert.NoError(t, err, "read workflow history")
 		if started := event.GetActivityTaskStartedEventAttributes(); started != nil {
 			identities = append(identities, started.GetIdentity())
 		}

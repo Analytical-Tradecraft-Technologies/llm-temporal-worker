@@ -71,9 +71,7 @@ func TestRunRejectsUnknownOrIncompleteCommands(t *testing.T) {
 }
 
 func TestRejectAmbiguousJSONRequiresUniqueMembersAtEveryObjectDepth(t *testing.T) {
-	if err := rejectAmbiguousJSON("test document", []byte(`{"left":{"status":"ok"},"right":{"status":"ok"}}`)); err != nil {
-		t.Fatalf("same member name in separate objects rejected: %v", err)
-	}
+	testassert.NoError(t, rejectAmbiguousJSON("test document", []byte(`{"left":{"status":"ok"},"right":{"status":"ok"}}`)), "same member name in separate objects rejected")
 
 	tests := []struct {
 		name string
@@ -140,16 +138,12 @@ func TestValidateEvidenceMetadataEnforcesImmutableReleaseSubjects(t *testing.T) 
 			Image:         releaseImage("registry.example/project", "sha256:"+digest, amd64, arm64),
 		}
 	}
-	if err := validateEvidenceMetadata(newValid()); err != nil {
-		t.Fatalf("valid evidence metadata rejected: %v", err)
-	}
+	testassert.NoError(t, validateEvidenceMetadata(newValid()), "valid evidence metadata rejected")
 	legacy := newValid()
 	legacy.SchemaVersion = legacyEvidenceSchemaVersion
 	legacy.Image.MediaType = ""
 	legacy.Image.Platforms = nil
-	if err := validateEvidenceMetadata(legacy); err != nil {
-		t.Fatalf("valid single-manifest v1 evidence metadata rejected: %v", err)
-	}
+	testassert.NoError(t, validateEvidenceMetadata(legacy), "valid single-manifest v1 evidence metadata rejected")
 
 	tests := []struct {
 		name   string
@@ -220,9 +214,7 @@ func TestProvenanceAndSecretGuardsRejectUnsafeEvidence(t *testing.T) {
 			}
 		})
 	}
-	if err := rejectSecretLikeContent("redacted.json", []byte(`{"status":"ok"}`)); err != nil {
-		t.Fatalf("ordinary redacted evidence rejected: %v", err)
-	}
+	testassert.NoError(t, rejectSecretLikeContent("redacted.json", []byte(`{"status":"ok"}`)), "ordinary redacted evidence rejected")
 }
 
 func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) {
@@ -239,9 +231,7 @@ func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) 
 		}
 	}
 	valid := base("redis_log")
-	if err := validateRedactedLogArtifact("redis_log", mustJSON(t, valid)); err != nil {
-		t.Fatalf("valid Redis log rejected: %v", err)
-	}
+	testassert.NoError(t, validateRedactedLogArtifact("redis_log", mustJSON(t, valid)), "valid Redis log rejected")
 
 	tests := []struct {
 		name   string
@@ -269,15 +259,11 @@ func TestRunLayoutDigestSmoke(t *testing.T) {
 		SchemaVersion: 2,
 		Manifests:     []ociDescriptor{{MediaType: ociImageManifestMediaType, Digest: "sha256:" + manifestDigest, Size: int64(len(manifestData))}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	writeTestFile(t, filepath.Join(root, "index.json"), indexData)
 
 	var stdout bytes.Buffer
-	if err := run([]string{"layout-digest", "-layout", root}, &stdout); err != nil {
-		t.Fatalf("layout-digest smoke test failed: %v", err)
-	}
+	testassert.NoError(t, run([]string{"layout-digest", "-layout", root}, &stdout), "layout-digest smoke test failed")
 	if got := strings.TrimSpace(stdout.String()); got != "sha256:"+manifestDigest {
 		t.Fatalf("layout-digest = %q, want %q", got, "sha256:"+manifestDigest)
 	}
@@ -309,9 +295,7 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	schemaPath := releaseEvidenceSchemaPath(t)
 
 	var stdout bytes.Buffer
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), &stdout); err != nil {
-		t.Fatalf("record smoke test failed: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), &stdout), "record smoke test failed")
 	if got := strings.TrimSpace(stdout.String()); got != "release evidence recorded" {
 		t.Fatalf("record output = %q", got)
 	}
@@ -322,9 +306,7 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), &stdout); err != nil {
-		t.Fatalf("verify smoke test failed: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), &stdout), "verify smoke test failed")
 	if got := strings.TrimSpace(stdout.String()); got != "release evidence verified" {
 		t.Fatalf("verify output = %q", got)
 	}
@@ -534,9 +516,7 @@ func TestReleaseEvidenceVerifyAcceptsSingleManifestV1Bundle(t *testing.T) {
 	artifactDir, subjects := recordReleaseEvidenceBundle(t, schemaPath, "record")
 	record := downgradeToSingleManifestV1(t, artifactDir, subjects)
 	writeEvidenceRecord(t, artifactDir, record)
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
-		t.Fatalf("retained single-manifest v1 bundle was rejected: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard), "retained single-manifest v1 bundle was rejected")
 
 	// A v1 record must not smuggle multi-platform fields past the v1 rules.
 	record["image"].(map[string]any)["media_type"] = ociImageIndexMediaType
@@ -564,9 +544,7 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 	schemaPath := releaseEvidenceSchemaPath(t)
 	recordArgs := releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects)
 	recordArgs = append(recordArgs, "-artifact", "worker_error_summary="+canonicalArtifactPaths["worker_error_summary"])
-	if err := run(recordArgs, io.Discard); err != nil {
-		t.Fatalf("record rejected optional worker error summary: %v", err)
-	}
+	testassert.NoError(t, run(recordArgs, io.Discard), "record rejected optional worker error summary")
 	record := readEvidenceRecord(t, artifactDir)
 	artifacts, ok := record["artifacts"].(map[string]any)
 	if !ok {
@@ -575,9 +553,7 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 	if _, ok := artifacts["worker_error_summary"]; !ok {
 		t.Fatalf("evidence omitted optional worker summary: %#v", artifacts)
 	}
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
-		t.Fatalf("verify rejected optional worker error summary: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard), "verify rejected optional worker error summary")
 }
 
 func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
@@ -593,9 +569,7 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 
 	schemaPath := releaseEvidenceSchemaPath(t)
 	recordReleaseEvidence(t, schemaPath, artifactDir, subjects, "record rejected pre-target_status benchmark summary")
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
-		t.Fatalf("verify rejected pre-target_status benchmark summary: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard), "verify rejected pre-target_status benchmark summary")
 }
 
 // Bundles recorded before #1497 retain a summary of the legacy engine
@@ -655,9 +629,7 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	}
 	writeEvidenceRecord(t, artifactDir, record)
 
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
-		t.Fatalf("pre-benchmark v1 bundle was rejected: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard), "pre-benchmark v1 bundle was rejected")
 }
 
 func releaseEvidenceSchemaPath(t *testing.T) string {
@@ -682,13 +654,9 @@ type releaseEvidenceSubjects struct {
 func newReleaseEvidenceArtifactDirectory(t *testing.T) string {
 	t.Helper()
 	artifactDir := filepath.Join(t.TempDir(), "artifacts")
-	if err := os.Mkdir(artifactDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Mkdir(artifactDir, 0o700))
 	resolved, err := filepath.EvalSymlinks(artifactDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return resolved
 }
 
@@ -770,18 +738,14 @@ func releaseImage(repository, indexDigest, amd64Digest, arm64Digest string) imag
 func appendNewline(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	writeTestFile(t, path, append(data, '\n'))
 }
 
 // removeArtifactFile deletes the canonical file of the named artifact.
 func removeArtifactFile(t *testing.T, directory, name string) {
 	t.Helper()
-	if err := os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])))
 }
 
 func replaceArgument(arguments *[]string, flagName, value string) {
@@ -1056,9 +1020,7 @@ func TestValidateImageIndexAcceptsThePublishedBuildxIndex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "image-index.json")
 	writeTestFile(t, path, []byte(publishedBuildxImageIndex))
 	subject := releaseImage(repository, indexDigest, amd64Digest, arm64Digest)
-	if err := validateImageIndex(releaseEvidenceSchemaPath(t), path, subject); err != nil {
-		t.Fatalf("published Buildx image index rejected: %v", err)
-	}
+	testassert.NoError(t, validateImageIndex(releaseEvidenceSchemaPath(t), path, subject), "published Buildx image index rejected")
 
 	swapped := subject
 	swapped.Platforms = &imagePlatforms{LinuxAMD64: subject.Platforms.LinuxARM64, LinuxARM64: subject.Platforms.LinuxAMD64}
@@ -1093,9 +1055,7 @@ func TestReleaseEvidenceRecordsAndVerifiesTheOCIMergeIndex(t *testing.T) {
 	subjects := newReleaseEvidenceSubjects(repository, indexDigest, amd64Digest, arm64Digest)
 	schemaPath := releaseEvidenceSchemaPath(t)
 	recordReleaseEvidence(t, schemaPath, artifactDir, subjects, "record rejected the ocimerge index")
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
-		t.Fatalf("verify rejected the ocimerge index: %v", err)
-	}
+	testassert.NoError(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard), "verify rejected the ocimerge index")
 
 	// The container job reads the platform digests from this same index, so a
 	// platform digest that is not in it, or swapped platforms, fail closed.
@@ -1120,9 +1080,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 	valid := releaseEvidenceSBOM(image.Reference, image.Digest)
 	path := filepath.Join(t.TempDir(), "sbom.json")
 	writeTestFile(t, path, mustJSON(t, valid))
-	if err := validateCycloneDXSBOM(path, image); err != nil {
-		t.Fatalf("valid SBOM rejected: %v", err)
-	}
+	testassert.NoError(t, validateCycloneDXSBOM(path, image), "valid SBOM rejected")
 
 	tests := []struct {
 		name   string
@@ -1157,9 +1115,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 	valid := releaseEvidenceScan(image.Reference, image.Digest)
 	path := filepath.Join(t.TempDir(), "scan.json")
 	writeTestFile(t, path, mustJSON(t, valid))
-	if err := validateTrivyScan(path, image); err != nil {
-		t.Fatalf("valid Trivy report rejected: %v", err)
-	}
+	testassert.NoError(t, validateTrivyScan(path, image), "valid Trivy report rejected")
 
 	tests := []struct {
 		name   string
@@ -1200,9 +1156,7 @@ func TestSecureArtifactAndOutputPathsRejectTraversalAndSymlinks(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.json")
 	writeTestFile(t, outside, []byte(`{"outside":true}`))
 	link := filepath.Join(directory, "link.json")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Symlink(outside, link))
 	if _, err := secureArtifactPath(directory, "link.json"); err == nil {
 		t.Fatal("secureArtifactPath accepted a symlink")
 	}
@@ -1227,9 +1181,7 @@ func TestValidateFixtureManifestRejectsDuplicateProfilesAndUnsafeProvenance(t *t
 		}},
 	}
 	writeTestFile(t, path, mustJSON(t, valid))
-	if err := validateFixtureManifest(path); err != nil {
-		t.Fatalf("valid fixture manifest rejected: %v", err)
-	}
+	testassert.NoError(t, validateFixtureManifest(path), "valid fixture manifest rejected")
 	invalid := valid
 	invalid.Fixtures = append(invalid.Fixtures, valid.Fixtures[0])
 	writeTestFile(t, path, mustJSON(t, invalid))
@@ -1248,27 +1200,21 @@ func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
 func mustUnmarshalMap(t *testing.T, data []byte) map[string]any {
 	t.Helper()
 	var value map[string]any
-	if err := json.Unmarshal(data, &value); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &value))
 	return value
 }
 
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
 // writeTestFile writes data to path, failing the test on an error.
 func writeTestFile(t *testing.T, path string, data []byte) {
 	t.Helper()
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, data, 0o600))
 }
 
 // rewriteBenchmarkSummary lets mutate edit the benchmark summary artifact in
@@ -1295,9 +1241,7 @@ func writeOCILayoutManifest(t *testing.T, root string) (string, []byte) {
 		Config:        ociDescriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + configDigest, Size: int64(len(config))},
 		Layers:        []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + layerDigest, Size: int64(len(layer))}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return writeOCIBlob(t, root, manifestData), manifestData
 }
 
@@ -1305,9 +1249,7 @@ func writeOCIBlob(t *testing.T, root string, data []byte) string {
 	t.Helper()
 	digest := sha256Hex(data)
 	directory := filepath.Join(root, "blobs", "sha256")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(directory, 0o700))
 	writeTestFile(t, filepath.Join(directory, digest), data)
 	return digest
 }

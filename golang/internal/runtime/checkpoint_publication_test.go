@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -70,18 +71,14 @@ func publicationFixture(t *testing.T) (*CheckpointPublication, *CheckpointReplay
 	materializer := &state.DurableCheckpointMaterializer{Repository: store, Blobs: store, HandleVerifier: keys, Now: func() time.Time { return now }}
 	cap := V1RuntimeCapabilities{Checkpoints: CheckpointCapabilities{Repository: store, Blobs: store, BlobWriter: store, Materializer: materializer}}
 	p, err := cap.NewCheckpointPublication(keys, state.MaterializeLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	replay, err := cap.NewCheckpointReplay(func(_ context.Context, caller llm.RequestContext) (string, error) {
 		if caller.Tenant != "tenant" || caller.Project != "project" {
 			return "", errors.New("denied")
 		}
 		return "scope", nil
 	}, state.MaterializeLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	identity := CheckpointPublicationIdentity{Scope: "scope", OperationID: state.OperationID(uuid.NewString()), CheckpointID: state.CheckpointID(uuid.NewString()), CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
 	model := "reasoning"
 	decimal, _ := llm.NewDecimalV1("0.123456789012345678")
@@ -93,9 +90,7 @@ func publicationFixture(t *testing.T) (*CheckpointPublication, *CheckpointReplay
 func publishRoot(t *testing.T, p *CheckpointPublication, store *publicationStore, identity CheckpointPublicationIdentity, req llm.GenerateRequestV1, result llm.Response) (state.DurableCheckpoint, llm.GenerateResponseV1) {
 	t.Helper()
 	cp, response, err := p.Generate(context.Background(), identity, req, durable.GenerateReplay{}, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store.rows[cp.ID] = cp
 	return cp, response
 }
@@ -122,9 +117,7 @@ func TestCheckpointPublicationGenerationRoundTripAndFork(t *testing.T) {
 	result.OperationKey = request.OperationKey
 	result.OperationID = string(identity.OperationID)
 	child, out, err := p.Generate(context.Background(), identity, request, base, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if child.ParentID == nil || *child.ParentID != cp.ID || child.Depth != 1 {
 		t.Fatal("lost parent")
 	}
@@ -156,9 +149,7 @@ func TestCheckpointPublicationRetriesIdenticalBlobs(t *testing.T) {
 			}
 			store.failAt = 0
 			cp, a, err := p.Generate(context.Background(), id, req, durable.GenerateReplay{}, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			again, b, err := p.Generate(context.Background(), id, req, durable.GenerateReplay{}, result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
 			if err != nil || !reflect.DeepEqual(cp, again) || !reflect.DeepEqual(a, b) || len(store.blobs) != 3 {
 				t.Fatal("retry changed immutable publication", err)
@@ -179,9 +170,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			_, root := publishRoot(t, p, store, id, req, result)
 			compact := llm.CompactRequestV1{OperationKey: "compact", Context: req.Context, Parent: root.Checkpoint.Handle}
 			base, err := replay.Compact(context.Background(), compact)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			prepared := mustPrepareCompact(t, compact, base)
 			id = nextPublication(id)
 			result.OperationKey = compact.OperationKey
@@ -198,9 +187,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 				summary = &result
 			}
 			cp, out, err := p.Compact(context.Background(), id, compact, base, summary, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			store.rows[cp.ID] = cp
 			generate := llm.GenerateRequestV1{OperationKey: "after", Context: req.Context, Parent: &out.Checkpoint.Handle}
 			next := mustReplayGenerate(t, replay, generate)
@@ -226,9 +213,7 @@ func TestCheckpointPublicationCacheHitMakesDistinctZeroCostChild(t *testing.T) {
 	req.OperationKey = "cache-consumer"
 	result.OperationKey = req.OperationKey
 	child, out, err := p.Generate(context.Background(), id, req, durable.GenerateReplay{}, result, llm.CacheDispositionV1{Disposition: "hit"}, origin)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if child.ID == cp.ID || child.ParentID != nil || child.Kind != state.CheckpointCacheReplay || child.OriginCacheEntryID == nil || *child.OriginCacheEntryID != origin.ID || out.Cost.ActualCostUSD == nil || *out.Cost.ActualCostUSD != "0" || out.Cost.Method != "provider_reported" || out.Usage != nil {
 		t.Fatal("cache hit reused origin identity or charge")
 	}
@@ -246,15 +231,11 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	_, root := publishRoot(t, p, store, id, request, result)
 	compact := llm.CompactRequestV1{OperationKey: "compact-origin", Context: request.Context, Parent: root.Checkpoint.Handle}
 	base, err := replay.Compact(context.Background(), compact)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	id = nextPublication(id)
 	result.OperationKey, result.OperationID = compact.OperationKey, string(id.OperationID)
 	originCP, originResponse, err := p.Compact(context.Background(), id, compact, base, &result, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store.rows[originCP.ID] = originCP
 	originData, _ := json.Marshal(originResponse)
 	origin := &cache.ResponseEntry{ID: "summary-origin", Key: cache.ResponseKey{ScopeID: id.Scope, Operation: cache.OperationCompact}, OriginOperationID: id.OperationID, OriginCheckpointID: originCP.ID, CompletedAt: id.CreatedAt, Response: originData}
@@ -267,16 +248,12 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	consumerCP, consumerRoot := publishRoot(t, p, store, id, request, result)
 	compact.Parent, compact.OperationKey = consumerRoot.Checkpoint.Handle, "compact-consumer"
 	base, err = replay.Compact(context.Background(), compact)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	prepared := mustPrepareCompact(t, compact, base)
 	id = nextPublication(id)
 	result.OperationKey = compact.OperationKey
 	cp, response, err := p.Compact(context.Background(), id, compact, base, &result, llm.CacheDispositionV1{Disposition: "hit"}, origin)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if cp.ParentID == nil || *cp.ParentID != consumerCP.ID || cp.Kind != state.CheckpointCompaction || *cp.OriginCacheEntryID != origin.ID || response.Usage != nil || *response.Cost.ActualCostUSD != "0" || response.Cost.Method != "provider_reported" {
 		t.Fatal("cached compaction reused origin lineage or charge")
 	}
@@ -347,9 +324,7 @@ func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
 	request.Append = []llm.Item{llm.HumanText("follow up")}
 	base := mustReplayGenerate(t, replay, request)
 	transcript, err := state.CheckpointBlobCodec{}.EncodeDelta(append(append(append([]llm.Item(nil), base.State.Items...), request.Append...), result.Output...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result.OperationKey = request.OperationKey
 	for name, test := range map[string]struct {
 		limits   state.MaterializeLimits
@@ -363,9 +338,7 @@ func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			publication, err := capabilities.NewCheckpointPublication(p.keyring, test.limits)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			identity := nextPublication(identity)
 			result := result
 			result.OperationID = string(identity.OperationID)
@@ -392,18 +365,14 @@ func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
 func publishedSummaryText(t *testing.T, result llm.Response) string {
 	t.Helper()
 	summary, err := compaction.PlainTextSummary(result, 1<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return summary
 }
 
 func TestPublicationRetainsConfiguredRootClassInCheckpoint(t *testing.T) {
 	p, replay, store, identity, request, response := publicationFixture(t)
 	cp, published, err := p.Generate(context.Background(), identity, request, durable.GenerateReplay{DefaultServiceClass: llm.ServiceClassEconomy}, response, llm.CacheDispositionV1{Disposition: "disabled"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store.rows[cp.ID] = cp
 	request.Parent = &published.Checkpoint.Handle
 	request.OperationKey = "next"
@@ -420,8 +389,6 @@ func TestPublicationRetainsConfiguredRootClassInCheckpoint(t *testing.T) {
 func mustReplayGenerate(t *testing.T, replay *CheckpointReplay, request llm.GenerateRequestV1) durable.GenerateReplay {
 	t.Helper()
 	result, err := replay.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return result
 }

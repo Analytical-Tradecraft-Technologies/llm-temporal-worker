@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -107,9 +108,7 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 		"recursive tuple items": `{"type":"array","prefixItems":[{"$ref":"#"},{"type":"string"}],"items":{"$ref":"#"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := schema.Parse([]byte(data)); err != nil {
-				t.Fatalf("Parse = %v", err)
-			}
+			testassert.NoError(t, testassert.Err(schema.Parse([]byte(data))), "Parse")
 		})
 	}
 }
@@ -118,13 +117,9 @@ func TestParseAcceptsOrdinarySchemas(t *testing.T) {
 // work: an instance with too many values is refused rather than run (#1521).
 func TestValidateBoundsTotalWork(t *testing.T) {
 	compiled, err := schema.Parse([]byte(`{"type":"array","items":{"$ref":"#/$defs/l0"},"$defs":{` + dagFanoutDefs(20, 2) + `}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	small := "[" + strings.TrimSuffix(strings.Repeat(`1,`, 100), ",") + "]"
-	if err := compiled.Validate([]byte(small)); err != nil {
-		t.Fatalf("small instance: %v", err)
-	}
+	testassert.NoError(t, compiled.Validate([]byte(small)), "small instance")
 	var validation *schema.ValidationError
 	large := "[" + strings.TrimSuffix(strings.Repeat(`"s",`, schema.MaxValidationWork/800), ",") + "]"
 	started := time.Now()
@@ -136,12 +131,8 @@ func TestValidateBoundsTotalWork(t *testing.T) {
 		t.Fatalf("refusal took %v", elapsed)
 	}
 	simple, err := schema.Parse([]byte(`{"type":"array","items":{"type":"string"}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := simple.Validate([]byte(large)); err != nil {
-		t.Fatalf("a cheap schema refused the same instance: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, simple.Validate([]byte(large)), "a cheap schema refused the same instance")
 }
 
 // A long chain of in-place references is rejected in linear time and memory,

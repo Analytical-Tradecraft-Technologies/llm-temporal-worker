@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -66,9 +67,7 @@ func TestSnapshotExecutionLeaseSurvivesReload(t *testing.T) {
 			return &snapshotClients{v1Runtime: second}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer application.Close(context.Background())
 	proxy := &snapshotV1Runtime{application: application}
 	pollContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -98,26 +97,20 @@ func TestSnapshotExecutionLeaseSurvivesReload(t *testing.T) {
 	if closed.Load() != 0 {
 		t.Fatal("reload closed clients while poll was using them")
 	}
-	if _, err := proxy.AcquireBudgetV1(context.Background(), llm.ExecutionReferenceV1{}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(proxy.AcquireBudgetV1(context.Background(), llm.ExecutionReferenceV1{})))
 	if second.calls.Load() != 1 {
 		t.Fatal("new activity did not use reloaded snapshot")
 	}
 	close(first.release)
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("poll did not complete")
 	}
 	select {
 	case err := <-reloaded:
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("reload did not drain")
 	}

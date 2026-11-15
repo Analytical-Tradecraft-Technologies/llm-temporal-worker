@@ -16,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -61,9 +62,7 @@ func TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum(t *testing.T) {
 	}
 
 	workflowClient, err := client.NewLazyClient(client.Options{HostPort: "127.0.0.1:1", Namespace: "default"})
-	if err != nil {
-		t.Fatalf("create lazy Temporal client: %v", err)
-	}
+	testassert.NoError(t, err, "create lazy Temporal client")
 	t.Cleanup(workflowClient.Close)
 	if valueWorker := worker.New(workflowClient, "llmtw-live-recovery-construction", options); valueWorker == nil {
 		t.Fatal("construct live recovery worker: got nil")
@@ -88,9 +87,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 
 	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: liveRecoveryRequest()}
 	firstRun := fixture.startWorkflow(t, ctx, "llmtw-live-first", payload, "first recovery workflow")
-	if err := adapter.WaitAccepted(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, adapter.WaitAccepted(ctx))
 
 	// Start the replacement before stopping the accepted attempt. This is the
 	// rolling two-replica shape operators use during a worker restart; after
@@ -103,9 +100,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 		t.Fatal("ambiguous Activity error did not contain an operation ID")
 	}
 	operation, err := admissionStore.Get(ctx, firstDetails.OperationID)
-	if err != nil {
-		t.Fatalf("load shared admission operation: %v", err)
-	}
+	testassert.NoError(t, err, "load shared admission operation")
 	if operation.State != admission.StateAmbiguous || operation.Attempt.Dispatch != admission.Ambiguous {
 		t.Fatalf("operation after stopped accepted dispatch = %#v, want ambiguous terminal state", operation)
 	}
@@ -122,9 +117,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 		t.Fatalf("replayed ambiguous Activity details = %#v, want ambiguous admission refusal", secondDetails)
 	}
 	replayedOperation, err := admissionStore.Get(ctx, firstDetails.OperationID)
-	if err != nil {
-		t.Fatalf("reload shared admission operation after replay: %v", err)
-	}
+	testassert.NoError(t, err, "reload shared admission operation after replay")
 	if replayedOperation.State != admission.StateAmbiguous || replayedOperation.Attempt.Dispatch != admission.Ambiguous || replayedOperation.ResultRef != nil {
 		t.Fatalf("operation after ambiguous replay = %#v, want unchanged ambiguous operation without result", replayedOperation)
 	}
@@ -162,9 +155,7 @@ func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
 
 	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: liveKeepaliveRequest()}
 	run := fixture.startWorkflow(t, ctx, "llmtw-live-keepalive", payload, "keepalive workflow")
-	if err := run.Get(ctx, nil); err != nil {
-		t.Fatalf("long one-shot keepalive workflow: %v", err)
-	}
+	testassert.NoError(t, run.Get(ctx, nil), "long one-shot keepalive workflow")
 	if calls := adapter.Calls(); calls != 1 {
 		t.Fatalf("provider calls across completed Activity = %d, want one", calls)
 	}
@@ -201,17 +192,13 @@ func newLiveComposeFixture(t *testing.T, queuePrefix string) (liveComposeFixture
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	t.Cleanup(cancel)
 	workflowClient, err := client.Dial(client.Options{HostPort: temporalAddress, Namespace: "default"})
-	if err != nil {
-		t.Fatalf("dial Temporal: %v", err)
-	}
+	testassert.NoError(t, err, "dial Temporal")
 	t.Cleanup(func() { workflowClient.Close() })
 
 	queue := fmt.Sprintf("%s-%d", queuePrefix, time.Now().UnixNano())
 	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddress, Username: redisUsername, Password: redisPassword})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		t.Fatalf("ping Compose Redis: %v", err)
-	}
+	testassert.NoError(t, redisClient.Ping(ctx).Err(), "ping Compose Redis")
 	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{
 		Client:          redisClient,
 		Mode:            redisstore.AdmissionModeFunction,
@@ -224,9 +211,7 @@ func newLiveComposeFixture(t *testing.T, queuePrefix string) (liveComposeFixture
 		Clock:          time.Now,
 		MaxRecordBytes: 256 << 10,
 	})
-	if err != nil {
-		t.Fatalf("create shared Redis admission store: %v", err)
-	}
+	testassert.NoError(t, err, "create shared Redis admission store")
 	return liveComposeFixture{workflowClient: workflowClient, queue: queue, admissions: admissionStore}, ctx
 }
 
@@ -315,17 +300,13 @@ func newLiveRecoveryEngine(t *testing.T, admissions admission.AdmissionStore, re
 			}},
 		}}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	priceCatalog, err := pricing.CompileUSD("live-recovery-prices-v1", []pricing.Entry{{
 		Provider: "content-free-fixture", Family: string(provider.FamilyOpenAIResponses), EndpointID: "live-recovery-endpoint",
 		Region: "local", Model: "content-free-model", ProviderTier: "standard", Version: "live-recovery-prices-v1",
 		Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.000001"), OutputPerMillion: pricing.MustDecimalUSD("1")},
 	}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	value, err := engine.New(engine.Dependencies{
 		Snapshots: engine.StaticSnapshot{Value: engine.Snapshot{
 			Version: "live-recovery-snapshot-v1", Routes: routes, Prices: pricing.NewResolver(priceCatalog),
@@ -340,9 +321,7 @@ func newLiveRecoveryEngine(t *testing.T, admissions admission.AdmissionStore, re
 		Planner: routing.DeterministicPlanner{}, Adapters: engine.AdapterMap{"live-recovery-endpoint": adapter},
 		Admission: admissions, Results: results, Clock: time.Now, Estimator: budget.Estimator{MaxOutput: 1}, MaxAttempts: 1,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return value
 }
 
@@ -389,9 +368,7 @@ func waitForAmbiguousWorkflow(t *testing.T, ctx context.Context, run client.Work
 		t.Fatalf("workflow application error = type %q non-retryable %t, want %q true", application.Type(), application.NonRetryable(), activity.ErrorTypeAmbiguous)
 	}
 	var details activity.SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatalf("decode ambiguous error details: %v", err)
-	}
+	testassert.NoError(t, application.Details(&details), "decode ambiguous error details")
 	return details
 }
 

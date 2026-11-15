@@ -3,6 +3,7 @@ package bedrockmessages
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -18,9 +19,7 @@ func compileShared(t *testing.T, request llm.Request, strict bool) (provider.Cal
 	profile.Capabilities.Version = profile.CapabilityVersion
 	profile.ExpectedModel = request.Model
 	validated, err := NewProfile(profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter := &Adapter{endpointID: "bedrock-test", profile: validated}
 	return adaptertest.Compile(adapter, "bedrock-test", provider.FamilyBedrockMessages, request, strict)
 }

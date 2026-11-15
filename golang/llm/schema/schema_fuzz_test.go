@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -16,9 +17,7 @@ func FuzzSchemaCanonicalAndBounded(f *testing.F) {
 		filepath.Join("testdata", "valid", "enum-number.json"),
 	} {
 		data, err := os.ReadFile(path)
-		if err != nil {
-			f.Fatal(err)
-		}
+		testassert.NoError(f, err)
 		f.Add(data)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -31,9 +30,7 @@ func FuzzSchemaCanonicalAndBounded(f *testing.F) {
 		}
 		canonical := compiled.Canonical()
 		again, err := schema.Parse(canonical)
-		if err != nil {
-			t.Fatalf("canonical schema was rejected: %v", err)
-		}
+		testassert.NoError(t, err, "canonical schema was rejected")
 		if !bytes.Equal(canonical, again.Canonical()) {
 			t.Fatalf("schema canonicalization is not idempotent")
 		}

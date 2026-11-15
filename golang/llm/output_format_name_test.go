@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 )
@@ -39,7 +40,5 @@ func TestOutputFormatMarshalRejectsInvalidName(t *testing.T) {
 		t.Fatal("invalid output format name was marshalled")
 	}
 	format.Name = ""
-	if _, err := json.Marshal(format); err != nil {
-		t.Fatalf("nameless output format = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(json.Marshal(format)), "nameless output format")
 }

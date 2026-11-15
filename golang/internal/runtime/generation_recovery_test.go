@@ -8,6 +8,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -58,19 +59,13 @@ func TestGenerationRecoveryDoesNotOverwriteConflictingPlanOrBinding(t *testing.T
 			op := publicGenerationOperation(proof.original, f.now)
 			switch kind {
 			case "plan":
-				if _, err := f.repository.SaveGenerationPlan(context.Background(), op, cloudstate.GenerationPlan{}); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(f.repository.SaveGenerationPlan(context.Background(), op, cloudstate.GenerationPlan{})))
 			case "binding":
-				if _, err := f.repository.SaveGenerationPlan(context.Background(), op, cloudstate.GenerationPlan{CompactBeforeGenerate: true}); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(f.repository.SaveGenerationPlan(context.Background(), op, cloudstate.GenerationPlan{CompactBeforeGenerate: true})))
 				changed := proof.effective
 				changed.OperationKey = "changed"
 				manifest, _ := changed.MarshalJSON()
-				if err := f.repository.SaveGenerationBinding(context.Background(), op, manifest); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, f.repository.SaveGenerationBinding(context.Background(), op, manifest))
 			case "effective":
 				proof.effective.Append = []llm.Item{llm.HumanText("changed")}
 				proof.original.Append = proof.effective.Append
@@ -124,9 +119,7 @@ func TestGenerationRecoveryAuthorizesBeforeStorage(t *testing.T) {
 	denied := errors.New("denied")
 	// Nil store methods would panic if any storage access preceded authorization.
 	var store generationRecoveryStore = &unavailableGenerationRecoveryStore{}
-	if _, err := restoreGenerationRecovery(context.Background(), store, func(context.Context, llm.RequestContext) (string, error) { return "", denied }, proof, true, f.now); !errors.Is(err, denied) {
-		t.Fatalf("authorization ignored: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(restoreGenerationRecovery(context.Background(), store, func(context.Context, llm.RequestContext) (string, error) { return "", denied }, proof, true, f.now)), denied, "authorization ignored")
 }
 
 type unavailableGenerationRecoveryStore struct{ generationRecoveryStore }

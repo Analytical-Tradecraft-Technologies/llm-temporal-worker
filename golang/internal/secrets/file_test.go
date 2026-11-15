@@ -11,24 +11,16 @@ import (
 func TestReadSecretFileAcceptsProjectedVolumeSymlink(t *testing.T) {
 	volume := t.TempDir()
 	dataDirectory := filepath.Join(volume, "..2026_08_20_13_00_00.0000000000")
-	if err := os.Mkdir(dataDirectory, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDirectory, "api-key"), []byte("projected-secret"), 0400); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Mkdir(dataDirectory, 0700))
+	testassert.NoError(t, os.WriteFile(filepath.Join(dataDirectory, "api-key"), []byte("projected-secret"), 0400))
 	if err := os.Symlink(filepath.Base(dataDirectory), filepath.Join(volume, "..data")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	path := filepath.Join(volume, "api-key")
-	if err := os.Symlink(filepath.Join("..data", "api-key"), path); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Symlink(filepath.Join("..data", "api-key"), path))
 
 	value, err := ReadSecretFile(context.Background(), path, 64)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if string(value) != "projected-secret" {
 		t.Fatalf("secret = %q, want projected-secret", value)
 	}
@@ -42,9 +34,7 @@ func TestReadSecretFileRejectsNonRegularTargets(t *testing.T) {
 func TestReadSecretFileBoundsSymlinkTarget(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target")
-	if err := os.WriteFile(target, []byte("oversized"), 0400); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(target, []byte("oversized"), 0400))
 	path := filepath.Join(directory, "secret")
 	if err := os.Symlink(filepath.Base(target), path); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)

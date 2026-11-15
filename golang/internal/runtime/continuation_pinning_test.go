@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -96,13 +97,9 @@ func TestCompactedProvenanceFollowsRetainedItems(t *testing.T) {
 	// retained provider state in the child.
 	for turns := 0; turns <= 4; turns++ {
 		selection, err := compaction.SelectPrefix(items, turns)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		got, err := compactedProvenance(parent, selection, true)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		child := append([]llm.Item{llm.HumanText("summary")}, selection.Retained...)
 		retained := 0
 		for _, item := range child {

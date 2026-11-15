@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -79,26 +80,18 @@ func TestOperationCodecRoundTripPreservesUnixEpoch(t *testing.T) {
 		Updated:      "00:0",
 		Expires:      time.Unix(2, 0).UTC(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	first, err := decodeOperation(encodedInput)
-	if err != nil {
-		t.Fatalf("decode input: %v", err)
-	}
+	testassert.NoError(t, err, "decode input")
 	if got, want := first.UpdatedAt, time.Unix(0, 0).UTC(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("decoded updated time = %#v, want %#v", got, want)
 	}
 
 	encoded, err := encodeOperation(first)
-	if err != nil {
-		t.Fatalf("encode decoded operation: %v", err)
-	}
+	testassert.NoError(t, err, "encode decoded operation")
 	second, err := decodeOperation(encoded)
-	if err != nil {
-		t.Fatalf("decode re-encoded operation: %v", err)
-	}
+	testassert.NoError(t, err, "decode re-encoded operation")
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("operation codec changed semantic value:\nfirst=%#v\nsecond=%#v", first, second)
 	}
@@ -111,9 +104,7 @@ func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
 		llm.ToolCall{ID: "call-weather", Name: "weather", Arguments: json.RawMessage(`{"city":"Sydney"}`)},
 	}
 	_, digest, err := state.CanonicalTranscript(transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := state.Continuation{
 		ID:                 "continuation-handle",
 		Tenant:             "tenant-a",
@@ -154,13 +145,9 @@ func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
 	}
 	expected := want.Clone()
 	encoded, err := encodeContinuation(want)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got, err := decodeContinuation(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !reflect.DeepEqual(got, expected) {
 		t.Fatalf("continuation codec changed semantic value:\ngot=%#v\nwant=%#v", got, expected)
 	}
@@ -182,9 +169,7 @@ func TestContinuationCodecRejectsMalformedItemUnion(t *testing.T) {
 func TestContinuationCodecNormalizesNilTranscriptForPersistence(t *testing.T) {
 	value := state.Continuation{Tenant: "tenant-a"}
 	encoded, err := encodeContinuation(value)
-	if err != nil {
-		t.Fatalf("encode nil transcript: %v", err)
-	}
+	testassert.NoError(t, err, "encode nil transcript")
 	if strings.Contains(string(encoded), `"Transcript":null`) {
 		t.Fatalf("encoded continuation contains a null transcript: %s", encoded)
 	}
@@ -192,9 +177,7 @@ func TestContinuationCodecNormalizesNilTranscriptForPersistence(t *testing.T) {
 		t.Fatalf("encoded continuation does not contain an empty transcript array: %s", encoded)
 	}
 	decoded, err := decodeContinuation(encoded)
-	if err != nil {
-		t.Fatalf("decode normalized transcript: %v", err)
-	}
+	testassert.NoError(t, err, "decode normalized transcript")
 	if decoded.Transcript == nil || len(decoded.Transcript) != 0 {
 		t.Fatalf("decoded transcript = %#v, want non-nil empty array", decoded.Transcript)
 	}

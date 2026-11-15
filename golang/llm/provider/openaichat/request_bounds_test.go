@@ -3,6 +3,7 @@ package openaichat
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -22,7 +23,5 @@ func TestLowerPartsRejectsAnUnknownImageDetail(t *testing.T) {
 		t.Fatal("image detail ultra was accepted")
 	}
 	image.Detail = "original"
-	if _, err := lowerParts([]llm.Part{image}); err != nil {
-		t.Fatalf("image detail original rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(lowerParts([]llm.Part{image})), "image detail original rejected")
 }

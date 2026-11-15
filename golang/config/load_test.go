@@ -17,9 +17,7 @@ import (
 func exampleYAML(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile("../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -184,9 +182,7 @@ func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
 			} `json:"file"`
 		} `json:"blob_store"`
 	}
-	if err := json.Unmarshal(encoded, &document); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(encoded, &document))
 	if document.BlobStore.Kind != "file" || document.BlobStore.File.Root != "/var/lib/llmtw/blobs" {
 		t.Fatalf("development file blob store = %#v", document.BlobStore)
 	}
@@ -205,9 +201,7 @@ func TestLoadRejectsProductionRedisWithoutTLS(t *testing.T) {
 
 func TestLoadAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
 	data := strings.Replace(string(redisTLSDisabledYAML(t)), "environment: production", "environment: development", -1)
-	if _, err := config.Load([]byte(data)); err != nil {
-		t.Fatalf("development Redis without TLS error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load([]byte(data))), "development Redis without TLS error")
 }
 
 func redisTLSDisabledYAML(t *testing.T) []byte {
@@ -290,9 +284,7 @@ func TestLoadRejectsWildcardOnlyBudgetMatchers(t *testing.T) {
 }
 
 func TestLoadAcceptsWildcardAlongsideBudgetRestriction(t *testing.T) {
-	if _, err := config.Load(replaceExample(t, "match:\n        tenant: acme", "match:\n        tenant: \"*\"")); err != nil {
-		t.Fatalf("rejected wildcard with environment restriction: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load(replaceExample(t, "match:\n        tenant: acme", "match:\n        tenant: \"*\""))), "rejected wildcard with environment restriction")
 }
 
 func TestExampleDeclaresExplicitReadinessAndRedisExecutionPolicy(t *testing.T) {
@@ -556,9 +548,7 @@ func TestValidateMatchesRuntimeParsersForStartupSettings(t *testing.T) {
 	} {
 		assertExampleEditRejected(t, test.from, test.to, test.want)
 	}
-	if _, err := config.Load(replaceExample(t, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:8080")); err != nil {
-		t.Fatalf("identical shared listener rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load(replaceExample(t, "metrics_address: 0.0.0.0:9090", "metrics_address: 0.0.0.0:8080"))), "identical shared listener rejected")
 }
 
 func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
@@ -663,9 +653,7 @@ func TestLoadValidatesOperationKeyReuseHorizon(t *testing.T) {
 		return replaceExample(t, "    stream_trim_safety: 10m\n", "    stream_trim_safety: 10m\n    operation_key_reuse_horizon: "+horizon+"\n"+extra)
 	}
 	loaded, err := config.Load(withHorizon("100d", ""))
-	if err != nil {
-		t.Fatalf("100d horizon: %v", err)
-	}
+	testassert.NoError(t, err, "100d horizon")
 	if got, want := time.Duration(loaded.State.Redis.OperationKeyReuseHorizon), 100*24*time.Hour; got != want {
 		t.Fatalf("horizon = %v, want %v", got, want)
 	}

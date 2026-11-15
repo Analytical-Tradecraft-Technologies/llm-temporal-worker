@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -31,9 +32,7 @@ func TestPollSleepMapsOnlyContextStops(t *testing.T) {
 	if err := pollSleep(context.Background(), sleepReturning(other), time.Second); err != other {
 		t.Fatalf("other sleep error = %v", err)
 	}
-	if err := pollSleep(context.Background(), sleepReturning(nil), time.Second); err != nil {
-		t.Fatalf("completed sleep = %v", err)
-	}
+	testassert.NoError(t, pollSleep(context.Background(), sleepReturning(nil), time.Second), "completed sleep")
 }
 
 func TestHeartbeatFailedAndWithOperationID(t *testing.T) {

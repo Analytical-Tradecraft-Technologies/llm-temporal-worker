@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -26,9 +27,7 @@ func TestCloudModelProcessingFailureRetainsPaidClaim(t *testing.T) {
 		t.Fatalf("retry reused paid attempt: %v", err)
 	}
 	original, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertUnknownWorkCharged(t, original)
 	requireCount(t, &f.submits, 1, "budget acquisition resubmitted provider work")
 }

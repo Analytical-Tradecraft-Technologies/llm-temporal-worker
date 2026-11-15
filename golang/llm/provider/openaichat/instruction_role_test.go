@@ -8,6 +8,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -19,9 +20,7 @@ func wireMessages(t *testing.T, params openai.ChatCompletionNewParams) []map[str
 	var wire struct {
 		Messages []map[string]any `json:"messages"`
 	}
-	if err := json.Unmarshal(encoded, &wire); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(encoded, &wire))
 	return wire.Messages
 }
 
@@ -31,15 +30,11 @@ func TestEmptyLiftedAssistantReplyIsNotReplayed(t *testing.T) {
 		Choices: []openai.ChatCompletionChoice{{FinishReason: "content_filter", Message: openai.ChatCompletionMessage{}}},
 	}
 	lifted, err := liftStandard(&filtered)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	input := append([]llm.Item{llm.HumanText("question")}, lifted.Output...)
 	input = append(input, llm.HumanText("try again"))
 	params, err := lowerRequest(llm.Request{Model: "chat-model", Input: input}, testProfile(), "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, message := range wireMessages(t, params) {
 		if message["role"] == "assistant" && message["content"] == nil && message["tool_calls"] == nil {
 			t.Fatalf("replayed an empty assistant message: %#v", message)
@@ -53,9 +48,7 @@ func TestEmptyLiftedAssistantReplyIsNotReplayed(t *testing.T) {
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "ok"}}},
 	}}, testProfile(), "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if messages := wireMessages(t, params); len(messages) != 3 || messages[1]["tool_calls"] == nil {
 		t.Fatalf("tool-call assistant turn = %#v", messages)
 	}
@@ -65,18 +58,14 @@ func TestApplicationInstructionRoleFollowsProfile(t *testing.T) {
 	instructions := []llm.Instruction{{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "be brief"}}
 	direct := testProfile()
 	params, err := lowerRequest(llm.Request{Model: "chat-model", Instructions: instructions}, direct, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if role := wireMessages(t, params)[0]["role"]; role != "developer" {
 		t.Fatalf("default application role = %v, want developer", role)
 	}
 	compatible := testProfile()
 	compatible.ApplicationInstructionRole = "system"
 	params, err = lowerRequest(llm.Request{Model: "chat-model", Instructions: instructions}, compatible, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if role := wireMessages(t, params)[0]["role"]; role != "system" {
 		t.Fatalf("compatible application role = %v, want system", role)
 	}
@@ -114,7 +103,5 @@ func TestStrictCompileRejectsMixedLevelsWhenApplicationUsesSystemRole(t *testing
 	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: true}); err == nil || !strings.Contains(err.Error(), "instruction hierarchy") || !isUnsupportedCapability(err) {
 		t.Fatalf("strict mixed-level compile error = %v", err)
 	}
-	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: false}); err != nil {
-		t.Fatalf("best-effort mixed-level compile error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: false})), "best-effort mixed-level compile error")
 }

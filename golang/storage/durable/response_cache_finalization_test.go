@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 type finalizationResponseStore struct {
@@ -40,17 +41,13 @@ func TestResponseCacheFinalizationOrderForGenerateAndCompact(t *testing.T) {
 			events := []string{}
 			now := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
 			c, err := NewResponseCache(finalizationResponseStore{events: &events}, finalizationFillStore{events: &events}, func() time.Time { return now })
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			key := cache.ResponseKey{ScopeID: "scope", Operation: kind}
 			lease := cache.FillLease{Key: key, OperationID: "origin", Attempt: "attempt", AcquiredAt: now, ExpiresAt: now.Add(time.Minute)}
 			entry := cache.ResponseEntry{ID: "entry", Key: key, OriginOperationID: lease.OperationID, OriginCheckpointID: "origin-checkpoint", CompletedAt: now.Add(time.Second)}
 			completion := cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: entry.CompletedAt}
 			settle := func(context.Context) error { events = append(events, "settle"); return nil }
-			if err := c.CompleteAttempt(context.Background(), lease, completion, &entry, settle); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, c.CompleteAttempt(context.Background(), lease, completion, &entry, settle))
 			if !reflect.DeepEqual(events, []string{"publish", "settle", "complete"}) {
 				t.Fatalf("order: %v", events)
 			}

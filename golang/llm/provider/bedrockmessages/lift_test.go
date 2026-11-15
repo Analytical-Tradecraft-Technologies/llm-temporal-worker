@@ -5,6 +5,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -81,9 +82,7 @@ func TestLiftKeepsUnreportedTierUnclassifiedAndReadsHeaderTier(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			response := anthropic.Message{ID: "tier", Model: "claude-contract", StopReason: anthropic.StopReasonEndTurn, Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTier(test.body)}}
 			got, err := profile.liftResponseWithTier(call, &response, "req", test.header)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if got.Service.Attempted != llm.ServiceClassPriority || got.Service.ProviderValue != test.wantValue {
 				t.Fatalf("service facts = %+v", got.Service)
 			}

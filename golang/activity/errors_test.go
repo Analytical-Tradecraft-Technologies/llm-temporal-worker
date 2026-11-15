@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.temporal.io/sdk/temporal"
 )
@@ -21,9 +22,7 @@ func safeApplicationError(t *testing.T, err error) (*temporal.ApplicationError, 
 		t.Fatalf("error = %T %v, want *temporal.ApplicationError", err, err)
 	}
 	var details SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatalf("decode SafeErrorDetails: %v", err)
-	}
+	testassert.NoError(t, application.Details(&details), "decode SafeErrorDetails")
 	return application, details
 }
 
@@ -98,13 +97,9 @@ func TestErrorMappingSetsTemporalRetryDelay(t *testing.T) {
 }
 
 func TestErrorMappingPreservesCancellation(t *testing.T) {
-	if got := ToTemporalError(context.Canceled); !errors.Is(got, context.Canceled) {
-		t.Fatalf("mapped cancellation = %v", got)
-	}
+	testassert.ErrorIs(t, ToTemporalError(context.Canceled), context.Canceled, "mapped cancellation")
 	canceled := provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "canceled")
-	if got := ToTemporalError(canceled); !errors.Is(got, context.Canceled) {
-		t.Fatalf("provider cancellation = %v", got)
-	}
+	testassert.ErrorIs(t, ToTemporalError(canceled), context.Canceled, "provider cancellation")
 }
 
 // A certified pre-dispatch deadline is a non-retryable transient failure and
@@ -126,9 +121,7 @@ func TestErrorMappingHonorsCertifiedPreDispatchContextRetryNever(t *testing.T) {
 			mapped := ToTemporalError(failure)
 			application, details := safeApplicationError(t, mapped)
 			assertApplicationType(t, application, test.wantType, true)
-			if errors.Is(mapped, context.Canceled) {
-				t.Fatal("certified pre-dispatch failure must be a non-retryable failure, not Temporal task cancellation")
-			}
+			testassert.ErrorIsNot(t, mapped, context.Canceled, "certified pre-dispatch failure must be a non-retryable failure, not Temporal task cancellation")
 			if details.OperationID != failure.OperationID || details.Code != string(test.wantCode) || details.Dispatch != string(provider.DispatchNotDispatched) {
 				t.Fatalf("safe details = %#v", details)
 			}
@@ -160,9 +153,7 @@ func TestErrorMappingBoundsProviderControlledDetails(t *testing.T) {
 		t.Fatalf("sub-millisecond retry hint = %d, want one millisecond minimum", details.RetryAfterMillis)
 	}
 	encoded, err := json.Marshal(details)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(encoded) > 512 {
 		t.Fatalf("safe error details are not bounded: %d bytes", len(encoded))
 	}
@@ -182,9 +173,7 @@ func TestErrorMappingCollapsesUnknownProviderEnums(t *testing.T) {
 
 func TestOperationContentionRetriesOnlyBeforeDispatch(t *testing.T) {
 	options, err := validPolicy().TemporalOptions()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, dispatch := range []provider.DispatchCertainty{provider.DispatchNotDispatched, provider.DispatchRejected, provider.DispatchAccepted, provider.DispatchAmbiguous} {
 		for _, retry := range []provider.RetryDisposition{provider.RetrySameOperation, provider.RetryNever, provider.RetryNextRoute} {
 			original := provider.NewError(provider.CodeOperationConflict, provider.PhaseAdmission, dispatch, retry, "sensitive operation details")

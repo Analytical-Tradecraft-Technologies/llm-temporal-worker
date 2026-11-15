@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -153,9 +154,7 @@ func TestResponseCostStatus(t *testing.T) {
 func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 	for _, name := range []string{"generate-request.schema.json", "generate-response.schema.json"} {
 		data, err := os.ReadFile(filepath.Join("..", "api", "schema", "v1", name))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !json.Valid(data) {
 			t.Fatalf("schema %s is not valid JSON", name)
 		}
@@ -180,18 +179,14 @@ func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
 func mustMarshal(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 

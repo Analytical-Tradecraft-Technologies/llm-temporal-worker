@@ -5,6 +5,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -17,9 +18,7 @@ func TestEmptyToolArgumentsLiftAsEmptyObject(t *testing.T) {
 			body := `{"id":"empty-args","object":"chat.completion","created":1,"model":"chat-model","service_tier":"default","usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18},"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"ping","arguments":"` + arguments + `"}}]}}]}`
 			response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 			lifted, err := liftStandard(&response)
-			if err != nil {
-				t.Fatalf("empty tool arguments failed the response: %v", err)
-			}
+			testassert.NoError(t, err, "empty tool arguments failed the response")
 			if lifted.Status != llm.ResponseStatusToolCalls || len(lifted.Output) != 1 {
 				t.Fatalf("lifted = status %q output %#v", lifted.Status, lifted.Output)
 			}
@@ -32,9 +31,7 @@ func TestEmptyToolArgumentsLiftAsEmptyObject(t *testing.T) {
 			// so the cut-off call is still dropped there.
 			response.Choices[0].FinishReason = "length"
 			truncated, err := liftStandard(&response)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			for _, item := range truncated.Output {
 				if _, ok := item.(llm.ToolCall); ok {
 					t.Fatalf("cut-off tool call was kept: %#v", truncated.Output)

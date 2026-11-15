@@ -20,6 +20,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -58,13 +59,9 @@ func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			policy, err := newProviderEgressPolicy(providerEgressEndpoint(), &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP(address)}}}, nil, time.Second)
-			if err != nil {
-				t.Fatalf("newProviderEgressPolicy() error = %v", err)
-			}
+			testassert.NoError(t, err, "newProviderEgressPolicy() error")
 			_, err = policy.DialContext(context.Background(), "tcp", "provider.example:443")
-			if !errors.Is(err, ErrProviderEgressDenied) {
-				t.Fatalf("DialContext() error = %v, want ErrProviderEgressDenied", err)
-			}
+			testassert.ErrorIs(t, err, ErrProviderEgressDenied, "DialContext()")
 			if strings.Contains(err.Error(), address) {
 				t.Fatalf("DialContext() leaked blocked address: %q", err)
 			}
@@ -99,13 +96,9 @@ func TestProviderEgressPolicyDialsResolvedPublicAddressAndRechecksConnection(t *
 		dialed = address
 		return newEgressTestConn(net.ParseIP(publicAddress)), nil
 	}, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	connection, err := policy.DialContext(context.Background(), "tcp", "provider.example:443")
-	if err != nil {
-		t.Fatalf("DialContext() error = %v", err)
-	}
+	testassert.NoError(t, err, "DialContext() error")
 	firstConnection := connection
 	t.Cleanup(func() { _ = firstConnection.Close() })
 	if got, want := dialed, "8.8.8.8:443"; got != want {
@@ -115,17 +108,13 @@ func TestProviderEgressPolicyDialsResolvedPublicAddressAndRechecksConnection(t *
 	policy, err = newProviderEgressPolicy(providerEgressEndpoint(), &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP(publicAddress)}}}, func(context.Context, string, string) (net.Conn, error) {
 		return newEgressTestConn(net.ParseIP("169.254.169.254")), nil
 	}, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	connection, err = policy.DialContext(context.Background(), "tcp", "provider.example:443")
 	if connection != nil {
 		_ = connection.Close()
 		t.Fatal("DialContext() returned a connection after its remote address changed")
 	}
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("DialContext() error = %v, want ErrProviderEgressDenied", err)
-	}
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "DialContext()")
 	if strings.Contains(err.Error(), "169.254.169.254") {
 		t.Fatalf("DialContext() leaked rechecked address: %q", err)
 	}
@@ -142,17 +131,11 @@ func TestProviderEgressPolicyUsesOnlyConfiguredBasePort(t *testing.T) {
 		}
 		return newEgressTestConn(net.ParseIP("8.8.8.8")), nil
 	}, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = policy.DialContext(context.Background(), "tcp", "provider.example:443")
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("DialContext() unconfigured port error = %v, want ErrProviderEgressDenied", err)
-	}
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "DialContext() unconfigured port")
 	connection, err := policy.DialContext(context.Background(), "tcp", "provider.example:8443")
-	if err != nil {
-		t.Fatalf("DialContext() configured port error = %v", err)
-	}
+	testassert.NoError(t, err, "DialContext() configured port error")
 	t.Cleanup(func() { _ = connection.Close() })
 }
 
@@ -161,14 +144,10 @@ func TestProviderEgressPolicyBoundsDNSResolution(t *testing.T) {
 
 	resolver := &blockingEgressResolver{started: make(chan struct{})}
 	policy, err := newProviderEgressPolicy(providerEgressEndpoint(), resolver, nil, 25*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	start := time.Now()
 	_, err = policy.DialContext(context.Background(), "tcp", "provider.example:443")
-	if !errors.Is(err, provider.ErrProviderPreDispatch) {
-		t.Fatalf("DialContext() error = %v, want ErrProviderPreDispatch", err)
-	}
+	testassert.ErrorIs(t, err, provider.ErrProviderPreDispatch, "DialContext()")
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("DNS resolution exceeded the bounded connect timeout: %s", elapsed)
 	}
@@ -182,18 +161,14 @@ func TestProviderEgressPolicyBoundsDNSResolution(t *testing.T) {
 func TestProviderEgressTransportRecordsCallerDeadlineBeforeDispatch(t *testing.T) {
 	resolver := &blockingEgressResolver{started: make(chan struct{})}
 	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), resolver, nil, config.DefaultProviderResponseBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	deadlineContext, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 	ctx, outcome := provider.WithEgressOutcome(deadlineContext)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", strings.NewReader("prompt-secret"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = client.Transport.RoundTrip(request)
-	requireRoundTripError(t, err, context.DeadlineExceeded)
+	testassert.ErrorIs(t, err, context.DeadlineExceeded, "RoundTrip()")
 	if denial := outcome.Denial(); denial != nil {
 		t.Fatalf("recorded policy denial = %v, want nil for caller deadline", denial)
 	}
@@ -213,7 +188,7 @@ func TestProviderEgressRoundTripperClassifiesCallerCancellationBeforeGotConn(t *
 		cancel()
 		return nil, request.Context().Err()
 	})
-	requireRoundTripError(t, err, context.Canceled)
+	testassert.ErrorIs(t, err, context.Canceled, "RoundTrip()")
 	requireNotDispatched(t, provider.ClassifyEgressOutcome(outcome, err), provider.CodeCanceled, provider.RetryNever, "caller cancellation")
 }
 
@@ -222,7 +197,7 @@ func TestProviderEgressRoundTripperClassifiesClientDeadlineBeforeGotConnAsAvaila
 	_, err := roundTripGuard(t, ctx, 0, func(*http.Request) (*http.Response, error) {
 		return nil, context.DeadlineExceeded
 	})
-	requireRoundTripError(t, err, context.DeadlineExceeded)
+	testassert.ErrorIs(t, err, context.DeadlineExceeded, "RoundTrip()")
 	requireNotDispatched(t, provider.ClassifyEgressOutcome(outcome, err), provider.CodeProviderUnavailable, provider.RetryNextRoute, "client deadline")
 }
 
@@ -231,7 +206,7 @@ func TestProviderEgressRoundTripperClassifiesTLSFailureBeforeGotConnAsAvailabili
 	_, err := roundTripGuard(t, ctx, 0, func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("tls handshake failed")
 	})
-	requireRoundTripError(t, err, provider.ErrProviderPreDispatch)
+	testassert.ErrorIs(t, err, provider.ErrProviderPreDispatch, "RoundTrip()")
 	requireNotDispatched(t, provider.ClassifyEgressOutcome(outcome, err), provider.CodeProviderUnavailable, provider.RetryNextRoute, "TLS failure")
 }
 
@@ -246,7 +221,7 @@ func TestProviderEgressRoundTripperDoesNotLetLatePreflightPolicyOverwriteCallerC
 		cancel()
 		return nil, request.Context().Err()
 	})
-	requireRoundTripError(t, err, context.Canceled)
+	testassert.ErrorIs(t, err, context.Canceled, "RoundTrip()")
 	if finish == nil {
 		t.Fatal("RoundTrip did not start a preflight")
 	}
@@ -255,9 +230,7 @@ func TestProviderEgressRoundTripperDoesNotLetLatePreflightPolicyOverwriteCallerC
 	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
 		t.Fatalf("late preflight overwrote caller cancellation: %#v", mapped)
 	}
-	if errors.Is(mapped, provider.ErrProviderEgressDenied) {
-		t.Fatalf("late preflight policy leaked into caller cancellation: %v", mapped)
-	}
+	testassert.ErrorIsNot(t, mapped, provider.ErrProviderEgressDenied, "late preflight policy leaked into caller cancellation")
 }
 
 func TestProviderEgressRoundTripperDoesNotClassifyCanceledRequestAfterConnectionAcquired(t *testing.T) {
@@ -273,7 +246,7 @@ func TestProviderEgressRoundTripperDoesNotClassifyCanceledRequestAfterConnection
 		cancel()
 		return nil, request.Context().Err()
 	})
-	requireRoundTripError(t, err, context.Canceled)
+	testassert.ErrorIs(t, err, context.Canceled, "RoundTrip()")
 	if denial := outcome.Denial(); denial != nil {
 		t.Fatalf("recorded denial = %v, want nil after a connection was acquired", denial)
 	}
@@ -291,10 +264,8 @@ func TestProviderEgressRoundTripperRecordsCompletedPreflightDenialAfterCancellat
 		finish(deniedProviderEgress("unsafe_address"))
 		return nil, request.Context().Err()
 	})
-	requireRoundTripError(t, err, context.Canceled)
-	if !errors.Is(outcome.Denial(), provider.ErrProviderEgressDenied) {
-		t.Fatalf("recorded denial = %v, want ErrProviderEgressDenied", outcome.Denial())
-	}
+	testassert.ErrorIs(t, err, context.Canceled, "RoundTrip()")
+	testassert.ErrorIs(t, outcome.Denial(), provider.ErrProviderEgressDenied, "recorded denial")
 }
 
 func TestProviderEgressRoundTripperDoesNotReturnEgressDenialAfterConnectionAcquired(t *testing.T) {
@@ -329,7 +300,7 @@ func TestProviderEgressRoundTripperRejectsDeclaredOversizedResponseAndClosesBody
 	if response != nil {
 		t.Fatalf("RoundTrip() response = %#v, want nil", response)
 	}
-	requireRoundTripError(t, err, provider.ErrProviderResponseTooLarge)
+	testassert.ErrorIs(t, err, provider.ErrProviderResponseTooLarge, "RoundTrip()")
 	if got, want := err.Error(), "provider response exceeded configured byte limit"; got != want {
 		t.Fatalf("RoundTrip() error = %q, want %q", got, want)
 	}
@@ -349,19 +320,13 @@ func TestProviderEgressRoundTripperBoundsUnknownLengthResponseBody(t *testing.T)
 			response, err := roundTripGuard(t, context.Background(), 4, func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: status, ContentLength: -1, Body: upstream}, nil
 			})
-			if err != nil {
-				t.Fatalf("RoundTrip() error = %v", err)
-			}
+			testassert.NoError(t, err, "RoundTrip() error")
 			body, readErr := io.ReadAll(response.Body)
 			if got, want := string(body), "1234"; got != want {
 				t.Fatalf("bounded body = %q, want %q", got, want)
 			}
-			if !errors.Is(readErr, provider.ErrProviderResponseTooLarge) {
-				t.Fatalf("body read error = %v, want ErrProviderResponseTooLarge", readErr)
-			}
-			if err := response.Body.Close(); err != nil {
-				t.Fatalf("close bounded body: %v", err)
-			}
+			testassert.ErrorIs(t, readErr, provider.ErrProviderResponseTooLarge, "body read")
+			testassert.NoError(t, response.Body.Close(), "close bounded body")
 			if !upstream.closed {
 				t.Fatal("bounded body Close did not close upstream body")
 			}
@@ -379,17 +344,13 @@ func TestProviderEgressRoundTripperBoundsBodyWhenDeclaredLengthIsTooSmall(t *tes
 			Body:          io.NopCloser(strings.NewReader("12345")),
 		}, nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = response.Body.Close() })
 	body, readErr := io.ReadAll(response.Body)
 	if got, want := string(body), "1234"; got != want {
 		t.Fatalf("bounded body = %q, want %q", got, want)
 	}
-	if !errors.Is(readErr, provider.ErrProviderResponseTooLarge) {
-		t.Fatalf("body read error = %v, want ErrProviderResponseTooLarge", readErr)
-	}
+	testassert.ErrorIs(t, readErr, provider.ErrProviderResponseTooLarge, "body read")
 }
 
 func TestProviderEgressRoundTripperPreservesBoundedStreamingResponse(t *testing.T) {
@@ -405,19 +366,13 @@ func TestProviderEgressRoundTripperPreservesBoundedStreamingResponse(t *testing.
 			Body:          upstream,
 		}, nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	body, readErr := io.ReadAll(response.Body)
-	if readErr != nil {
-		t.Fatalf("read bounded streaming body: %v", readErr)
-	}
+	testassert.NoError(t, readErr, "read bounded streaming body")
 	if got := string(body); got != payload {
 		t.Fatalf("streaming body = %q, want %q", got, payload)
 	}
-	if err := response.Body.Close(); err != nil {
-		t.Fatalf("close bounded streaming body: %v", err)
-	}
+	testassert.NoError(t, response.Body.Close(), "close bounded streaming body")
 	if !upstream.closed {
 		t.Fatal("bounded streaming Close did not close upstream body")
 	}
@@ -500,18 +455,12 @@ func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionW
 		}
 	}
 	client, err := newProviderEgressHTTPClient(base, endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP(publicAddress)}}}, dial, config.DefaultProviderResponseBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	firstRequest, err := http.NewRequest(http.MethodGet, "https://example.com/first", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	firstResponse, err := client.Transport.RoundTrip(firstRequest)
-	if err != nil {
-		t.Fatalf("first RoundTrip() error = %v", err)
-	}
+	testassert.NoError(t, err, "first RoundTrip() error")
 	t.Cleanup(func() { _ = firstResponse.Body.Close() })
 	select {
 	case <-firstPartial:
@@ -528,9 +477,7 @@ func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionW
 	defer cancelSecond()
 	secondContext, outcome := provider.WithEgressOutcome(secondContext)
 	secondRequest, err := http.NewRequestWithContext(secondContext, http.MethodPost, "https://example.com/second", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	secondResult := make(chan error, 1)
 	go func() {
 		response, roundTripErr := client.Transport.RoundTrip(secondRequest)
@@ -548,15 +495,11 @@ func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionW
 	releaseFirstOnce.Do(func() { close(releaseFirst) })
 	select {
 	case readErr := <-firstRead:
-		if readErr != nil {
-			t.Fatalf("read first response body: %v", readErr)
-		}
+		testassert.NoError(t, readErr, "read first response body")
 	case <-time.After(2 * time.Second):
 		t.Fatal("first response did not complete")
 	}
-	if err := firstResponse.Body.Close(); err != nil {
-		t.Fatalf("close first response body: %v", err)
-	}
+	testassert.NoError(t, firstResponse.Body.Close(), "close first response body")
 	select {
 	case <-secondObserved:
 	case <-time.After(2 * time.Second):
@@ -566,9 +509,7 @@ func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionW
 	cancelSecond()
 	select {
 	case roundTripErr := <-secondResult:
-		if !errors.Is(roundTripErr, context.Canceled) {
-			t.Fatalf("second RoundTrip() error = %v, want context.Canceled", roundTripErr)
-		}
+		testassert.ErrorIs(t, roundTripErr, context.Canceled, "second RoundTrip()")
 	case <-time.After(2 * time.Second):
 		t.Fatal("canceled second request did not return")
 	}
@@ -592,13 +533,9 @@ func TestLocalProviderMockPolicyRemainsFailClosed(t *testing.T) {
 
 	endpoint := localProviderMockEndpoint(t)
 	policy, err := newProviderEgressPolicy(endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("172.20.0.10")}}}, nil, time.Second)
-	if err != nil {
-		t.Fatalf("newProviderEgressPolicy() error = %v", err)
-	}
+	testassert.NoError(t, err, "newProviderEgressPolicy() error")
 	_, err = policy.DialContext(context.Background(), "tcp", "provider-mock:8081")
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("local provider mock DialContext() error = %v, want ErrProviderEgressDenied", err)
-	}
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "local provider mock DialContext()")
 	if strings.Contains(err.Error(), "172.20.0.10") {
 		t.Fatalf("local provider mock error leaked Docker address: %q", err)
 	}
@@ -609,16 +546,12 @@ func TestProviderEgressTransportRejectsArbitraryRequestURL(t *testing.T) {
 
 	resolver := &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}
 	client, err := newProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint(), resolver, nil, config.DefaultProviderResponseBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request, err := http.NewRequest(http.MethodPost, "https://attacker.example/continuation-secret", strings.NewReader("prompt-secret"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request.Header.Set("Authorization", "Bearer api-key-secret")
 	_, err = client.Transport.RoundTrip(request)
-	requireRoundTripError(t, err, ErrProviderEgressDenied)
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "RoundTrip()")
 	for _, secret := range []string{"attacker.example", "continuation-secret", "prompt-secret", "api-key-secret"} {
 		if strings.Contains(err.Error(), secret) {
 			t.Fatalf("RoundTrip() leaked %q in %q", secret, err)
@@ -629,14 +562,10 @@ func TestProviderEgressTransportRejectsArbitraryRequestURL(t *testing.T) {
 	}
 
 	hostOverride, err := http.NewRequest(http.MethodGet, "https://provider.example/v1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	hostOverride.Host = "attacker.example"
 	_, err = client.Transport.RoundTrip(hostOverride)
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("RoundTrip() host override error = %v, want ErrProviderEgressDenied", err)
-	}
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "RoundTrip() host override")
 	if strings.Contains(err.Error(), "attacker.example") {
 		t.Fatalf("RoundTrip() leaked host override in %q", err)
 	}
@@ -679,13 +608,9 @@ func TestProviderEgressTransportDisablesRedirectsAndKeepsTLS(t *testing.T) {
 		}
 		return egressTestConn{Conn: connection, remote: &net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 443}}, nil
 	}, config.DefaultProviderResponseBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response, err := client.Get("https://example.com/redirect")
-	if err != nil {
-		t.Fatalf("GET through TLS mock: %v", err)
-	}
+	testassert.NoError(t, err, "GET through TLS mock")
 	t.Cleanup(func() { _ = response.Body.Close() })
 	if got, want := response.StatusCode, http.StatusFound; got != want {
 		t.Fatalf("response status = %d, want redirect response %d", got, want)
@@ -701,9 +626,7 @@ func TestProviderEgressTransportRejectsInsecureTLSVerification(t *testing.T) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // regression test for rejecting unsafe caller transport.
 	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), nil, nil, config.DefaultProviderResponseBytes)
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("newProviderEgressHTTPClient() error = %v, want ErrProviderEgressDenied", err)
-	}
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "newProviderEgressHTTPClient()")
 	if got, want := err.Error(), "provider egress blocked: invalid_transport"; got != want {
 		t.Fatalf("newProviderEgressHTTPClient() error = %q, want %q", got, want)
 	}
@@ -719,9 +642,7 @@ func TestCloneProviderTransportClearsCallerAlternateProtocol(t *testing.T) {
 		},
 	}
 	cloned, err := cloneProviderTransport(&http.Client{Transport: transport})
-	if err != nil {
-		t.Fatalf("cloneProviderTransport() error = %v", err)
-	}
+	testassert.NoError(t, err, "cloneProviderTransport() error")
 	if cloned.TLSNextProto != nil {
 		t.Fatalf("cloneProviderTransport() retained caller alternate protocols: %#v", cloned.TLSNextProto)
 	}
@@ -733,9 +654,7 @@ func TestProviderEgressTransportRejectsTLSHostnameOverride(t *testing.T) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{ServerName: "cohosted.example"}
 	_, err := newProviderEgressHTTPClient(&http.Client{Transport: transport}, providerEgressEndpoint(), nil, nil, config.DefaultProviderResponseBytes)
-	if !errors.Is(err, ErrProviderEgressDenied) {
-		t.Fatalf("newProviderEgressHTTPClient() error = %v, want ErrProviderEgressDenied", err)
-	}
+	testassert.ErrorIs(t, err, ErrProviderEgressDenied, "newProviderEgressHTTPClient()")
 	if got, want := err.Error(), "provider egress blocked: invalid_transport"; got != want {
 		t.Fatalf("newProviderEgressHTTPClient() error = %q, want %q", got, want)
 	}
@@ -753,9 +672,7 @@ func TestProviderEgressTransportBoundsConnectAndReadTimeouts(t *testing.T) {
 	}
 	baseTransport.DialTLS = func(string, string) (net.Conn, error) { return nil, errors.New("must not bypass egress dial policy") }
 	client, err := newProviderEgressHTTPClient(&http.Client{Transport: baseTransport}, endpoint, &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}}, nil, 8<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got, want := client.Timeout, 20*time.Second; got != want {
 		t.Fatalf("client timeout = %s, want %s", got, want)
 	}
@@ -809,9 +726,7 @@ func TestProviderEgressHTTPClientRejectsUnsafeResponseLimit(t *testing.T) {
 func TestModelSyncCatalogFetchHasItsOwnResponseLimit(t *testing.T) {
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{HTTPClient: &http.Client{}}}
 	client, err := factory.modelSyncHTTPClient(providerEgressEndpoint())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	guard, ok := client.Transport.(*providerEgressRoundTripper)
 	if !ok {
 		t.Fatalf("client transport = %T, want production provider egress guard", client.Transport)
@@ -823,9 +738,7 @@ func TestModelSyncCatalogFetchHasItsOwnResponseLimit(t *testing.T) {
 
 func TestNewProviderEgressHTTPClientUsesProductionPolicy(t *testing.T) {
 	client, err := NewProviderEgressHTTPClient(&http.Client{}, providerEgressEndpoint())
-	if err != nil {
-		t.Fatalf("NewProviderEgressHTTPClient() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProviderEgressHTTPClient() error")
 	if _, ok := client.Transport.(*providerEgressRoundTripper); !ok {
 		t.Fatalf("client transport = %T, want production provider egress guard", client.Transport)
 	}
@@ -920,9 +833,7 @@ func localProviderMockEndpoint(t *testing.T) config.EndpointConfig {
 	}
 	data := mustReadFile(t, filepath.Join(filepath.Dir(source), "..", "..", "deploy", "local", "config.yaml"))
 	loaded, err := config.Load(data)
-	if err != nil {
-		t.Fatalf("load local config: %v", err)
-	}
+	testassert.NoError(t, err, "load local config")
 	endpoint, ok := loaded.Endpoints["provider-mock"]
 	if !ok {
 		t.Fatal("local config is missing provider-mock endpoint")
@@ -953,9 +864,7 @@ func providerExamplePolicy() *providerEgressPolicy {
 func providerExampleRequest(t *testing.T, ctx context.Context) *http.Request {
 	t.Helper()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return request
 }
 
@@ -965,14 +874,6 @@ func roundTripGuard(t *testing.T, ctx context.Context, maxResponseBytes int64, n
 	t.Helper()
 	guard := &providerEgressRoundTripper{policy: providerExamplePolicy(), next: next, maxResponseBytes: maxResponseBytes}
 	return guard.RoundTrip(providerExampleRequest(t, ctx))
-}
-
-// requireRoundTripError fails the test unless err is want.
-func requireRoundTripError(t *testing.T, err, want error) {
-	t.Helper()
-	if !errors.Is(err, want) {
-		t.Fatalf("RoundTrip() error = %v, want %v", err, want)
-	}
 }
 
 // requireNotDispatched fails the test unless mapped is a not-dispatched

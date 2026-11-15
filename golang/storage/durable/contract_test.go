@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -24,9 +25,7 @@ func validIdentity() StateIdentity {
 
 func TestStateIdentityRejectsUnboundSnapshot(t *testing.T) {
 	identity := validIdentity()
-	if err := identity.Validate(); err != nil {
-		t.Fatalf("valid identity rejected: %v", err)
-	}
+	testassert.NoError(t, identity.Validate(), "valid identity rejected")
 	identity.ConfigDigest = [32]byte{}
 	if err := identity.Validate(); err == nil {
 		t.Fatal("zero configuration digest accepted")
@@ -61,9 +60,7 @@ func TestCompositionValidateRejectsTypedNilCapabilities(t *testing.T) {
 }
 
 func TestCompositionValidateAcceptsCompleteCapabilities(t *testing.T) {
-	if err := validComposition().Validate(); err != nil {
-		t.Fatalf("complete composition rejected: %v", err)
-	}
+	testassert.NoError(t, validComposition().Validate(), "complete composition rejected")
 }
 
 func validComposition() Composition {
@@ -146,9 +143,7 @@ func TestReserveResultRequiresEventsAfterAcceptance(t *testing.T) {
 		BucketStart: time.Now().UTC(), ReservationRevision: 1,
 		AmountUSD: pricing.MustUSD("0.01"), OccurredAt: time.Now().UTC(),
 	}}
-	if err := result.Validate(request); err != nil {
-		t.Fatalf("valid accepted reservation rejected: %v", err)
-	}
+	testassert.NoError(t, result.Validate(request), "valid accepted reservation rejected")
 	result.Accepted = false
 	if err := result.Validate(request); err == nil {
 		t.Fatal("denied reservation with journal event passed validation")
@@ -160,15 +155,9 @@ func TestLifecycleRequiresClaimBeforeDispatchAndReconcileLast(t *testing.T) {
 	if err := lifecycle.Advance(PhaseRedisAccepted); err == nil {
 		t.Fatal("lifecycle allowed Redis acceptance before operation replay")
 	}
-	if err := lifecycle.Advance(PhaseOperationReplay); err != nil {
-		t.Fatalf("advance operation replay: %v", err)
-	}
-	if err := lifecycle.Advance(PhaseRedisAccepted); err != nil {
-		t.Fatalf("advance Redis acceptance: %v", err)
-	}
-	if err := lifecycle.Advance(PhaseDispatched); !errors.Is(err, ErrClaimRequired) {
-		t.Fatalf("dispatch without Redis claim returned %v, want %v", err, ErrClaimRequired)
-	}
+	testassert.NoError(t, lifecycle.Advance(PhaseOperationReplay), "advance operation replay")
+	testassert.NoError(t, lifecycle.Advance(PhaseRedisAccepted), "advance Redis acceptance")
+	testassert.ErrorIs(t, lifecycle.Advance(PhaseDispatched), ErrClaimRequired, "dispatch without Redis claim returned")
 	for _, phase := range []Phase{PhaseOperationReplay, PhaseRedisAccepted, PhaseRedisClaimed, PhaseDispatched, PhaseResultFinalized, PhaseRedisReconciled} {
 		// The first two phases were already recorded above.
 		if phase <= PhaseRedisAccepted {
@@ -270,9 +259,7 @@ func TestCloudStateIdentityRequiresCloudBackend(t *testing.T) {
 	}
 	composition := validComposition()
 	composition.Identity.Cloud = cloud
-	if err := composition.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, composition.Validate())
 	if composition.BudgetBoundary().Identity != composition.Identity {
 		t.Fatal("budget boundary lost cloud identity")
 	}

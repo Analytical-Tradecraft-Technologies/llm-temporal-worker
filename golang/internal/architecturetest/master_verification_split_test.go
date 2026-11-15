@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -88,7 +89,7 @@ func TestWorkflowMasterSplitVerificationJobsGatePublication(t *testing.T) {
 	}
 	assertJobRunContains(t, master, "verify", "jq -e 'length == 6 and all(.[]; .result == \"success\")'")
 
-	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard")
+	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard", "container-build")
 	assertMasterJobNeedsEveryVerificationGate(t, master, "release-evidence", "fuzz-shard", "container")
 
 	for _, gate := range []struct {
@@ -106,7 +107,7 @@ func TestWorkflowMasterSplitVerificationJobsGatePublication(t *testing.T) {
 		{job: "verify-static", command: "make live-contract-verify"},
 		{job: "verify-static", command: "make redis-benchmark-compile"},
 		{job: "verify-static", command: "go build ./..."},
-		{job: "verify-race", command: "go test -race ./... -timeout 30m"},
+		{job: "verify-race", command: `bash scripts/run-race-shard.sh "$RACE_SHARD" "${{ strategy.job-total }}"`},
 		{job: "verify-race-repeat", command: "go test -race -count=1 -timeout 30m "},
 		{job: "verify-cloud-workflow", command: "make cloud-workflow-integration"},
 		{job: "verify-redis", command: "make redis-integration"},
@@ -123,7 +124,7 @@ func TestWorkflowMasterSplitVerificationJobsGatePublication(t *testing.T) {
 		job      string
 		artifact string
 	}{
-		{job: "verify-race", artifact: "verified-inputs-race"},
+		{job: "verify-race", artifact: "race-evidence-${{ matrix.shard }}"},
 		{job: "verify-image", artifact: "verified-inputs-compose"},
 	} {
 		step := artifactUploadStep(t, master, evidence.job, evidence.artifact)
@@ -163,7 +164,7 @@ func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
 	if got, want := scalarString(t, master.name, job, "if"), "failure() && github.event_name == 'schedule'"; got != want {
 		t.Fatalf("report-scheduled-failure if = %q, want %q", got, want)
 	}
-	if got, want := stringSequence(t, master.name, job, "needs"), []string{"verify", "ocaml", "ocaml-readme-install", "fuzz-shard", "container"}; !reflect.DeepEqual(got, want) {
+	if got, want := stringSequence(t, master.name, job, "needs"), []string{"verify", "ocaml", "ocaml-readme-install", "fuzz-shard", "container-build", "container"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("report-scheduled-failure needs = %v, want %v", got, want)
 	}
 	// actions: read lets the reporter name the failing jobs and tests (#1524).
@@ -182,9 +183,7 @@ func TestWorkflowMasterReportsScheduledFailures(t *testing.T) {
 // watches a scheduled run, so without the report a red run goes unnoticed.
 func TestWorkflowScheduledWorkflowsReportFailures(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join(repositoryRoot(t), ".github", "workflows", "*.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var scheduled []string
 	for _, path := range paths {
 		workflow := readWorkflow(t, filepath.Base(path))

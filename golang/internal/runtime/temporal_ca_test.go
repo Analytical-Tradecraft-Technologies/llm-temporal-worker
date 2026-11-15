@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/client"
 )
 
@@ -29,26 +30,16 @@ func TestTemporalFactoryReadsProjectedCA(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			volume := t.TempDir()
 			data := filepath.Join(volume, "..2026_09_20_00_00_00")
-			if err := os.Mkdir(data, 0700); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Mkdir(data, 0700))
 			target := filepath.Join(data, "temporal-ca.pem")
 			if tc.contents != nil {
-				if err := os.WriteFile(target, tc.contents, 0400); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(target, tc.contents, 0400))
 			} else if tc.name == "directory target" {
-				if err := os.Mkdir(target, 0700); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.Mkdir(target, 0700))
 			}
-			if err := os.Symlink(filepath.Base(data), filepath.Join(volume, "..data")); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Symlink(filepath.Base(data), filepath.Join(volume, "..data")))
 			path := filepath.Join(volume, "temporal-ca.pem")
-			if err := os.Symlink(filepath.Join("..data", "temporal-ca.pem"), path); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Symlink(filepath.Join("..data", "temporal-ca.pem"), path))
 			called := false
 			factory := DefaultTemporalClientFactory{DialContext: func(_ context.Context, options client.Options) (client.Client, error) {
 				called = true
@@ -69,9 +60,7 @@ func TestTemporalFactoryReadsProjectedCA(t *testing.T) {
 					t.Fatal("dial called with invalid CA")
 				}
 			} else {
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if !called {
 					t.Fatal("dial not called")
 				}

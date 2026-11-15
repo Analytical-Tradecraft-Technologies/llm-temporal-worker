@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -121,23 +122,17 @@ func TestAdmissionMutationTimeoutsResolveByRead(t *testing.T) {
 				RequestDigest: admission.Digest([]byte(test.name)), Reservation: 10,
 				Reservations: []admission.WindowReservation{reservation}, ExpiresAt: now.Add(time.Hour),
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
+			testassert.NoError(t, err)
+			testassert.NoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{
 				OperationID: result.Operation.ID, DispatchToken: result.Operation.DispatchToken,
 				Attempt: admission.AttemptFacts{RouteID: "before-timeout"}, LeaseUntil: now.Add(time.Minute),
-			}); err != nil {
-				t.Fatal(err)
-			}
+			}))
 			store.invoke = &timeoutAfterMutationFunctionInvoker{inner: harness}
 			if err := test.mutate(store, result.Operation, now); !errors.Is(err, ErrUnavailable) {
 				t.Fatalf("mutation error = %v, want unresolved shared state", err)
 			}
 			resolved, err := store.Get(context.Background(), result.Operation.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			test.assert(t, resolved)
 		})
 	}
@@ -155,13 +150,9 @@ func TestContinuationPutChildTimeoutResolvesByOperationIndex(t *testing.T) {
 		t.Fatalf("child mutation error = %v, want unresolved shared state", err)
 	}
 	resolved, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child, OperationKey: operationKey})
-	if err != nil {
-		t.Fatalf("child retry resolution = %v", err)
-	}
+	testassert.NoError(t, err, "child retry resolution")
 	loaded, err := store.Get(context.Background(), resolved)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if loaded.ParentID != parent.String() || loaded.Depth != 1 {
 		t.Fatalf("resolved child = %#v", loaded)
 	}

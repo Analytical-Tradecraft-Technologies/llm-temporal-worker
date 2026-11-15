@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -477,9 +478,7 @@ func TestGenerateV1RetriesPendingReconciliationWithoutDispatch(t *testing.T) {
 		return nil
 	}
 	response, err := GenerateV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 pending reconciliation error = %v", err)
-	}
+	testassert.NoError(t, err, "GenerateV1 pending reconciliation error")
 	if response.OperationID != string(route.OperationID) {
 		t.Fatalf("response operation id = %q", response.OperationID)
 	}
@@ -524,9 +523,7 @@ func TestGenerateV1CacheHitNeverDispatchesProvider(t *testing.T) {
 		return GenerateFinalization{Response: testGenerateCacheReplay(request)}, nil
 	}
 	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 cache hit error = %v", err)
-	}
+	testassert.NoError(t, err, "GenerateV1 cache hit error")
 	if response.OperationKey != "operation-1" || response.Checkpoint.Kind != "cache_replay" || response.Cache.Disposition != "hit" {
 		t.Fatalf("response = %#v", response)
 	}
@@ -788,9 +785,7 @@ func requireCompaction(ports *GeneratePorts, events *[]string) {
 func mustGenerateV1(t *testing.T, request llm.GenerateRequestV1, ports GeneratePorts) llm.GenerateResponseV1 {
 	t.Helper()
 	response, err := GenerateV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	testassert.NoError(t, err, "GenerateV1 error")
 	return response
 }
 

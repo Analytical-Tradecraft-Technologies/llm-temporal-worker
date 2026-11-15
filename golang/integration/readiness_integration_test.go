@@ -18,6 +18,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	runtimepkg "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
@@ -52,27 +53,19 @@ func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 	t.Cleanup(func() { _ = redisClient.Close() })
 	initialContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := redisClient.Ping(initialContext).Err(); err != nil {
-		t.Fatalf("ping isolated Redis: %v", err)
-	}
+	testassert.NoError(t, redisClient.Ping(initialContext).Err(), "ping isolated Redis")
 	// The test container is dedicated to this target. Provisioning here is
 	// explicit and happens before the runtime starts; the runtime itself only
 	// verifies the immutable identity and never loads or replaces it.
-	if err := redisClient.FunctionLoad(initialContext, redisstore.AdmissionFunctionSource()).Err(); err != nil {
-		t.Fatalf("provision isolated admission Function: %v", err)
-	}
+	testassert.NoError(t, redisClient.FunctionLoad(initialContext, redisstore.AdmissionFunctionSource()).Err(), "provision isolated admission Function")
 	redisProbe, err := runtimepkg.NewRedisDependencyProbe(redisClient, value.State.Redis)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result := redisProbe.Probe(initialContext); result.Status != runtimepkg.ProbeStatusReady {
 		t.Fatalf("isolated Redis preflight = %#v", result)
 	}
 	bucket := &readinessBucket{}
 	bucketProbe, err := runtimepkg.NewBlobDependencyProbe(bucket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	provider := &readinessNoProviderEngine{}
 	controllers := &readinessControllerFactory{}
 	runtime, err := runtimepkg.New(context.Background(), configuration, runtimepkg.Options{
@@ -87,13 +80,9 @@ func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 		WorkerFactory:    controllers.Build,
 		DependencyProbes: []runtimepkg.DependencyProbe{redisProbe, bucketProbe},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
-	if err := runtime.Start(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.Start())
 	assertReadinessStatus(t, runtime.HealthServer.Addr(), "/health/live", http.StatusOK)
 	assertReadinessStatus(t, runtime.HealthServer.Addr(), "/health/ready", http.StatusOK)
 	if starts := controllers.starts.Load(); starts != 1 {
@@ -124,9 +113,7 @@ func TestReadinessIntegrationRedisRecovery(t *testing.T) {
 func readinessIntegrationConfig(t *testing.T, redisAddress string) ([]byte, config.Config) {
 	t.Helper()
 	data, err := os.ReadFile("../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	value := string(data)
 	for _, replacement := range []struct{ old, new string }{
 		{"health_address: 0.0.0.0:8080", "health_address: 127.0.0.1:0"},
@@ -145,9 +132,7 @@ func readinessIntegrationConfig(t *testing.T, redisAddress string) ([]byte, conf
 		value = strings.Replace(value, replacement.old, replacement.new, 1)
 	}
 	configured, err := config.Load([]byte(value))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return []byte(value), configured
 }
 
@@ -183,9 +168,7 @@ func waitForReadinessStatus(t *testing.T, address, path string, want int) {
 func assertReadinessStatus(t *testing.T, address, path string, want int) {
 	t.Helper()
 	status, err := readinessStatus(address, path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if status != want {
 		t.Fatalf("%s status = %d, want %d", path, status, want)
 	}

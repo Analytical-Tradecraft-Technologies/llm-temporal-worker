@@ -3,6 +3,7 @@ package provider_test
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -17,9 +18,7 @@ func completeFeatures() map[provider.Feature]provider.Capability {
 }
 
 func TestValidateProfileFeaturesNamesTheFamily(t *testing.T) {
-	if err := provider.ValidateProfileFeatures("test family", "p", completeFeatures()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, provider.ValidateProfileFeatures("test family", "p", completeFeatures()))
 	for _, test := range []struct {
 		name string
 		edit func(map[provider.Feature]provider.Capability)

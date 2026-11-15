@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -59,9 +60,7 @@ func TestRequestRoundTripsEveryItemAndPartVariant(t *testing.T) {
 	}
 
 	data, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal all wire variants: %v", err)
-	}
+	testassert.NoError(t, err, "marshal all wire variants")
 	var decoded llm.Request
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("unmarshal all wire variants: %v\n%s", err, data)

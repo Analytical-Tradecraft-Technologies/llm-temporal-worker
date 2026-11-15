@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,7 +172,5 @@ func TestRequestMediaChecksNameEveryPartCarrier(t *testing.T) {
 	if err == nil || err.Error() != "item 1: part 1: document blob references are not supported; send inline bytes or a URL" {
 		t.Fatalf("RejectBlobMedia = %v", err)
 	}
-	if err := RejectBlobMedia([]Instruction{{Content: []Part{blocked}}}, []Item{Message{Actor: ActorHuman, Content: []Part{blocked}}}); err != nil {
-		t.Fatalf("RejectBlobMedia rejected URL media: %v", err)
-	}
+	testassert.NoError(t, RejectBlobMedia([]Instruction{{Content: []Part{blocked}}}, []Item{Message{Actor: ActorHuman, Content: []Part{blocked}}}), "RejectBlobMedia rejected URL media")
 }

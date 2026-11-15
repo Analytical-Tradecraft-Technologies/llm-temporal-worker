@@ -118,7 +118,11 @@ attempt before resubmitting. See [Redis budget leases](../reference/redis-budget
 There is no service cancellation API. Disconnected workflow contexts and child
 abandon policies protect already-paid work from caller cancellation. An
 administrator can terminate a workflow, so pending discovery remains independent
-of Temporal history; automatic orphan cleanup is deferred.
+of Temporal history. The operator `pending-list` and `pending-recover` commands
+find requests no workflow advances and finish them through the same poll,
+completion and settlement steps, without starting new paid work; see the
+[terminated-workflow runbook](../runbooks/terminated-workflow-pending-recovery.md).
+Recovery runs on demand; there is no automatic background reconciler.
 
 ## Heartbeats
 
@@ -306,6 +310,18 @@ of cancelling them after the graceful stop timeout, which only termination
 applies. The monitor does not start a replacement poller until that drain
 completes, so a transient dependency recovery cannot create overlapping
 pollers.
+
+## Workflow code changes
+
+Open runs replay on whichever build polls the task queue next, so a workflow
+change that alters the commands for an existing history is guarded with a
+`GetVersion` change ID, and its old branch is deleted only after a retention
+horizon. Pinned Worker Versioning is optional and complements the guard; it
+does not replace it. The
+[workflow versioning reference](../reference/workflow-versioning.md) lists
+every current change ID with its replay coverage, explains when to use
+`GetVersion` and when pinned versioning, gives the Temporal CLI promotion,
+ramp and rollback steps, and sets out the marker retirement procedure.
 
 ## Local Compose recovery proof
 

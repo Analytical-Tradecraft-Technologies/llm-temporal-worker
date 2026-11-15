@@ -35,9 +35,7 @@ func TestValidateResumableSequenceAcceptsPendingPollsAndTerminalCompletion(t *te
 			resumableCompleted("fixture-provider-operation"),
 		},
 	}
-	if err := ValidateResumableSequence(sequence); err != nil {
-		t.Fatalf("ValidateResumableSequence() = %v", err)
-	}
+	testassert.NoError(t, ValidateResumableSequence(sequence), "ValidateResumableSequence()")
 }
 
 func TestValidateResumableSequenceAllowsPendingPollPrefix(t *testing.T) {
@@ -45,9 +43,7 @@ func TestValidateResumableSequenceAllowsPendingPollPrefix(t *testing.T) {
 		Submit: provider.ResumableResult{State: provider.ResumablePending, ProviderOperationID: "fixture-provider-operation", Dispatch: provider.DispatchAccepted},
 		Poll:   []provider.ResumableResult{{State: provider.ResumablePending, ProviderOperationID: "fixture-provider-operation", Dispatch: provider.DispatchAccepted}},
 	}
-	if err := ValidateResumableSequence(sequence); err != nil {
-		t.Fatalf("pending sequence rejected: %v", err)
-	}
+	testassert.NoError(t, ValidateResumableSequence(sequence), "pending sequence rejected")
 }
 
 func TestValidateResumableSequenceRejectsUnsafeTransitions(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -36,9 +37,7 @@ func TestContextHeartbeatOverridesStaticEngineHeartbeat(t *testing.T) {
 	bound := &recordedHeartbeat{}
 	harness.engine.dependencies.Heartbeat = static
 
-	if _, err := harness.engine.Generate(WithHeartbeat(context.Background(), bound), baseRequest("context-heartbeat")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(harness.engine.Generate(WithHeartbeat(context.Background(), bound), baseRequest("context-heartbeat"))))
 	if got := static.phases(); len(got) != 0 {
 		t.Fatalf("static heartbeat received %v, want no progress when an Activity-scoped heartbeat is bound", got)
 	}
@@ -62,9 +61,7 @@ func TestGenerateDoesNotExposeProviderStreamingPhase(t *testing.T) {
 	harness := newHarness(t, adapter)
 	bound := &recordedHeartbeat{}
 
-	if _, err := harness.engine.Generate(WithHeartbeat(context.Background(), bound), baseRequest("one-shot-stream-progress")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(harness.engine.Generate(WithHeartbeat(context.Background(), bound), baseRequest("one-shot-stream-progress"))))
 	got := bound.phases()
 	if !containsPhase(got, "response_received") {
 		t.Fatalf("one-shot Generate heartbeat phases = %v, missing response_received", got)
@@ -79,9 +76,7 @@ func TestStreamRetainsStreamingHeartbeat(t *testing.T) {
 	bound := &recordedHeartbeat{}
 
 	stream, err := harness.engine.Stream(WithHeartbeat(context.Background(), bound), baseRequest("stream-heartbeat"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer stream.Close()
 	readTerminalStream(t, stream)
 	if got := bound.phases(); !containsPhase(got, "streaming") {

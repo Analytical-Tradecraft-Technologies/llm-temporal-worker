@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
@@ -29,14 +30,14 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 			}
 			t.Run("initialize and replay preserve existing spending", func(t *testing.T) {
 				i, value := fixture(t)
-				requireErrorIs(t, i.Check(ctx, value), ErrBudgetAuthorityUnavailable, "uninitialized check =")
-				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
+				testassert.ErrorIs(t, i.Check(ctx, value), ErrBudgetAuthorityUnavailable, "uninitialized check =")
+				testassert.NoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
 				value.Ready = true
-				mustNoError(t, i.Check(ctx, value))
+				testassert.NoError(t, i.Check(ctx, value))
 				spending := i.keys.space.durableBudgetKey("policy", "window")
-				mustNoError(t, client.HSet(ctx, spending, "sum:42", "250000000").Err())
+				testassert.NoError(t, client.HSet(ctx, spending, "sum:42", "250000000").Err())
 				for range 3 {
-					mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
+					testassert.NoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
 				}
 				if got := client.HGet(ctx, spending, "sum:42").Val(); got != "250000000" {
 					t.Fatalf("replay reset spending: %q", got)
@@ -55,12 +56,12 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 			})
 			t.Run("ready receipt never recreates lost authority", func(t *testing.T) {
 				i, value := fixture(t)
-				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
-				mustNoError(t, client.Del(ctx, i.keys.AuthorityKey(), i.keys.EventsKey()).Err())
+				testassert.NoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
+				testassert.NoError(t, client.Del(ctx, i.keys.AuthorityKey(), i.keys.EventsKey()).Err())
 				// Even a stale pending receipt has no creation permission on replay.
 				for _, ready := range []bool{false, true} {
 					value.Ready = ready
-					requireErrorIs(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}), ErrBudgetAuthorityUnavailable, "lost authority was recreated")
+					testassert.ErrorIs(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}), ErrBudgetAuthorityUnavailable, "lost authority was recreated")
 				}
 				if n := client.Exists(ctx, i.keys.AuthorityKey(), i.keys.EventsKey()).Val(); n != 0 {
 					t.Fatal("lost dataset received a new marker")
@@ -72,7 +73,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 				if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}); err == nil {
 					t.Fatal("expected lost reply")
 				}
-				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
+				testassert.NoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
 				if n := client.XLen(ctx, i.keys.EventsKey()).Val(); n != 1 {
 					t.Fatalf("lost reply duplicated events: %d", n)
 				}
@@ -89,7 +90,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 					})
 				}
 				wg.Wait()
-				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
+				testassert.NoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
 				if n := client.XLen(ctx, i.keys.EventsKey()).Val(); n != 1 {
 					t.Fatalf("concurrent initialization created %d events", n)
 				}
@@ -99,8 +100,8 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 					t.Run(kind, func(t *testing.T) {
 						i, value := fixture(t)
 						key := i.keys.space.admissionPrefix() + kind
-						mustNoError(t, client.Set(ctx, key, "preserve-me", 0).Err())
-						requireErrorIs(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}), ErrBudgetAuthorityUnavailable, "initialized occupied namespace")
+						testassert.NoError(t, client.Set(ctx, key, "preserve-me", 0).Err())
+						testassert.ErrorIs(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}), ErrBudgetAuthorityUnavailable, "initialized occupied namespace")
 						if got := client.Get(ctx, key).Val(); got != "preserve-me" {
 							t.Fatal("existing state overwritten")
 						}
@@ -119,7 +120,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 						}
 						t.Run(name, func(t *testing.T) {
 							i, value := fixture(t)
-							mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
+							testassert.NoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
 							value.Ready = true
 							m := mustCall(t, NewRedisBudgetMaterializer, RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: KeyOptions{Prefix: i.keys.space.prefix, HashTag: i.keys.space.tag, KeySecret: i.keys.space.secret}, GenerationID: "redis-budget-v1", IncarnationID: "redis-budget-v1", Initialization: &value, CoordinationStreamEnabled: stream})
 							req := durableTestRequest(time.Now().UTC())
@@ -134,7 +135,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 							}
 							claim := durable.ClaimRequest{OperationID: req.OperationID, GenerationID: req.GenerationID, IncarnationID: "redis-budget-v1"}
 							if action == "reconcile" {
-								mustNoError(t, errOf(m.Claim(ctx, claim)))
+								testassert.NoError(t, testassert.Err(m.Claim(ctx, claim)))
 							}
 							snapshot := func() []string {
 								t.Helper()
@@ -150,7 +151,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 							}
 							before := snapshot()
 							key := i.keys.AuthorityKey()
-							mustNoError(t, client.Del(ctx, key).Err())
+							testassert.NoError(t, client.Del(ctx, key).Err())
 							switch failure {
 							case "preparing":
 								err = client.Set(ctx, key, "preparing:"+value.Marker(), 0).Err()
@@ -163,9 +164,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 							case "wrong-type":
 								err = client.HSet(ctx, key, "ready", value.Marker()).Err()
 							}
-							if err != nil {
-								t.Fatal(err)
-							}
+							testassert.NoError(t, err)
 							switch action {
 							case "reserve":
 								_, err = m.Accept(ctx, req)

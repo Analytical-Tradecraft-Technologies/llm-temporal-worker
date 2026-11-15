@@ -111,13 +111,9 @@ func TestV1RequestContextRoundTripsClosedFields(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			encoded, err := json.Marshal(test.value)
-			if err != nil {
-				t.Fatalf("marshal: %v", err)
-			}
+			testassert.NoError(t, err, "marshal")
 			target := test.target()
-			if err := json.Unmarshal(encoded, target); err != nil {
-				t.Fatalf("unmarshal: %v", err)
-			}
+			testassert.NoError(t, json.Unmarshal(encoded, target), "unmarshal")
 			got := test.getContext(target)
 			if got.Tenant != context.Tenant || got.Project != context.Project || got.Actor != context.Actor || len(got.Tags) != 0 {
 				t.Fatalf("context = %#v, want %#v with no tags", got, context)
@@ -327,9 +323,7 @@ func TestQueryResponseRequiresCursorForIncompletePages(t *testing.T) {
 			incompleteWithCursor := validQueryResponse(kind)
 			incompleteWithCursor.Complete = false
 			incompleteWithCursor.NextCursor = stringPointer("page-2")
-			if _, err := json.Marshal(incompleteWithCursor); err != nil {
-				t.Fatalf("incomplete response with a cursor was rejected: %v", err)
-			}
+			testassert.NoError(t, testassert.Err(json.Marshal(incompleteWithCursor)), "incomplete response with a cursor was rejected")
 		})
 	}
 
@@ -520,9 +514,7 @@ func TestV1VariantBoundariesAndTemperature(t *testing.T) {
 		t.Fatal("positive variant with zero temperature rejected")
 	}
 	positive := 0.2
-	if err := llm.ValidateVariantTemperature(2147483647, &positive); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, llm.ValidateVariantTemperature(2147483647, &positive))
 }
 
 func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
@@ -565,17 +557,11 @@ func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
 			default:
 				value = new(llm.QueryRequestV1)
 			}
-			if err := json.Unmarshal(data, value); err != nil {
-				t.Fatalf("fixture decode: %v", err)
-			}
+			testassert.NoError(t, json.Unmarshal(data, value), "fixture decode")
 			encoded, err := json.Marshal(value)
-			if err != nil {
-				t.Fatalf("fixture encode: %v", err)
-			}
+			testassert.NoError(t, err, "fixture encode")
 			repeated, err := json.Marshal(value)
-			if err != nil {
-				t.Fatalf("fixture re-encode: %v", err)
-			}
+			testassert.NoError(t, err, "fixture re-encode")
 			if !bytes.Equal(encoded, repeated) {
 				t.Fatalf("fixture encoding was not deterministic: %s != %s", encoded, repeated)
 			}
@@ -585,17 +571,13 @@ func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
 
 func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 	unknown := readV1GenerateFixture(t, "generate-variant-unknown-temperature.json")
-	if err := llm.ValidateVariantTemperature(unknown.Cache.Variant, nil); err != nil {
-		t.Fatalf("positive variant with inherited temperature rejected: %v", err)
-	}
+	testassert.NoError(t, llm.ValidateVariantTemperature(unknown.Cache.Variant, nil), "positive variant with inherited temperature rejected")
 
 	positive := readV1GenerateFixture(t, "generate-variant-positive-temperature.json")
 	if positive.SettingsPatch.Temperature.Set == nil {
 		t.Fatal("positive-temperature fixture omitted the temperature patch")
 	}
-	if err := llm.ValidateVariantDecimalTemperature(positive.Cache.Variant, positive.SettingsPatch.Temperature.Set); err != nil {
-		t.Fatalf("positive temperature variant rejected: %v", err)
-	}
+	testassert.NoError(t, llm.ValidateVariantDecimalTemperature(positive.Cache.Variant, positive.SettingsPatch.Temperature.Set), "positive temperature variant rejected")
 
 	zero := readV1GenerateFixture(t, "generate-variant-zero-temperature.json")
 	if zero.SettingsPatch.Temperature.Set == nil {
@@ -653,9 +635,7 @@ type negativeFixture struct{ contract, field string }
 func readNegativeFixtureManifest(t *testing.T) map[string]negativeFixture {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "v1", "negative-fixtures.tsv"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	manifest := map[string]negativeFixture{}
 	for number, line := range strings.Split(string(data), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -679,9 +659,7 @@ func readNegativeFixtureManifest(t *testing.T) map[string]negativeFixture {
 func readV1Fixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "v1", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 

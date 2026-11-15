@@ -3,12 +3,12 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
@@ -22,9 +22,7 @@ func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
 			} else {
 				before, err = r.BeginOperation(context.Background(), op)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if state == StatusCompleted {
 				before = mustCompleteOperation(t, r, op.Scope, before.Request.ID, json.RawMessage(`{"version":1}`), op.Now)
 			}
@@ -40,7 +38,7 @@ func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
 			} {
 				changed := op
 				mutate(&changed)
-				requireErrorIs(t, errOf(r.VerifyOperation(context.Background(), changed)), contracts.ErrConflict, "changed input accepted")
+				testassert.ErrorIs(t, testassert.Err(r.VerifyOperation(context.Background(), changed)), contracts.ErrConflict, "changed input accepted")
 			}
 			for _, mutate := range []func(*Operation){
 				func(o *Operation) { o.Key += "-missing" },
@@ -49,7 +47,7 @@ func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
 			} {
 				changed := op
 				mutate(&changed)
-				requireErrorIs(t, errOf(r.VerifyOperation(context.Background(), changed)), contracts.ErrNotFound, "missing identity accepted")
+				testassert.ErrorIs(t, testassert.Err(r.VerifyOperation(context.Background(), changed)), contracts.ErrNotFound, "missing identity accepted")
 			}
 		})
 	}
@@ -62,16 +60,12 @@ func TestVerifyOperationRequiresMatchingDiscoveryBinding(t *testing.T) {
 			record := mustBeginOperation(t, r, op)
 			key := r.indexKey(record.Request.ID)
 			row, err := table.Get(context.Background(), key)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			index, err := r.decodeIndex(row)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			switch mode {
 			case "missing":
-				mustNoError(t, table.Delete(context.Background(), key, row.Version))
+				testassert.NoError(t, table.Delete(context.Background(), key, row.Version))
 			case "binding":
 				index.Binding = r.digest("different", []byte("input"))
 			case "scope":
@@ -84,7 +78,7 @@ func TestVerifyOperationRequiresMatchingDiscoveryBinding(t *testing.T) {
 				index.UpdatedAt = record.Request.CreatedAt
 			}
 			if mode != "missing" {
-				mustNoError(t, errOf(table.Replace(context.Background(), r.indexItem(index), row.Version)))
+				testassert.NoError(t, testassert.Err(table.Replace(context.Background(), r.indexItem(index), row.Version)))
 			}
 			table.hook = func(string, kv.KeyValueItem) (error, error) {
 				t.Error("verification repaired discovery index")
@@ -94,21 +88,13 @@ func TestVerifyOperationRequiresMatchingDiscoveryBinding(t *testing.T) {
 			_, err = r.VerifyOperation(context.Background(), op)
 			switch mode {
 			case "missing":
-				if !errors.Is(err, contracts.ErrNotFound) {
-					t.Fatalf("missing index: %v", err)
-				}
+				testassert.ErrorIs(t, err, contracts.ErrNotFound, "missing index")
 			case "binding", "scope":
-				if !errors.Is(err, contracts.ErrConflict) {
-					t.Fatalf("changed index: %v", err)
-				}
+				testassert.ErrorIs(t, err, contracts.ErrConflict, "changed index")
 			case "corrupt":
-				if !errors.Is(err, ErrCorrupt) {
-					t.Fatalf("corrupt index: %v", err)
-				}
+				testassert.ErrorIs(t, err, ErrCorrupt, "corrupt index")
 			case "lagging":
-				if err != nil {
-					t.Fatalf("valid lagging index: %v", err)
-				}
+				testassert.NoError(t, err, "valid lagging index")
 			}
 		})
 	}

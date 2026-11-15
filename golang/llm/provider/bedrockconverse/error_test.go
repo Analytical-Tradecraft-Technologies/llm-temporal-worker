@@ -12,6 +12,7 @@ import (
 
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -50,9 +51,7 @@ func TestModelProcessingFailuresRemainAmbiguous(t *testing.T) {
 			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
 				t.Fatalf("model failure became a rejection: %#v", mapped)
 			}
-			if !errors.Is(mapped, cause) {
-				t.Fatal("underlying error was lost")
-			}
+			testassert.ErrorIs(t, mapped, cause, "underlying error was lost")
 			if strings.Contains(mapped.SafeMessage, "sensitive") {
 				t.Fatal("provider details leaked")
 			}

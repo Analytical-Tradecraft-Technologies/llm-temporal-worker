@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -46,15 +47,11 @@ func hierarchyAWSConfig() aws.Config {
 // profile/v1 that sends through httpClient.
 func anthropicMessagesAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
 	client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://127.0.0.1", APIKey: "test-key", HTTPClient: httpClient})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := anthropicmessages.DefaultProfile("endpoint")
 	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
 	adapter, err := anthropicmessages.New(client, "endpoint", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -62,15 +59,11 @@ func anthropicMessagesAdapter(t *testing.T, httpClient *http.Client) provider.Ad
 // profile/v1 that sends through httpClient.
 func bedrockMessagesAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
 	client, err := bedrockmessages.NewClient(context.Background(), bedrockmessages.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: httpClient, AWSConfig: hierarchyAWSConfig()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := bedrockmessages.DefaultProfile("endpoint")
 	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
 	adapter, err := bedrockmessages.New(client, "endpoint", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -78,15 +71,11 @@ func bedrockMessagesAdapter(t *testing.T, httpClient *http.Client) provider.Adap
 // profile/v1 that sends through httpClient.
 func bedrockConverseAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
 	client, err := bedrockconverse.NewClient(context.Background(), bedrockconverse.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: httpClient, AWSConfig: hierarchyAWSConfig()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := bedrockconverse.DefaultProfile("endpoint")
 	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
 	adapter, err := bedrockconverse.New(client, "endpoint", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -103,9 +92,7 @@ func hierarchyRoutes() []hierarchyRoute {
 		}},
 		{name: "azure_chat", family: provider.FamilyOpenAIChat, tier: "default", adapter: func(t *testing.T) provider.Adapter {
 			client, err := openaichat.NewAzureClient(openaichat.AzureClientConfig{Endpoint: "https://127.0.0.1", APIVersion: "2025-01-01", APIKey: "test-key", HTTPClient: hierarchyHTTPClient()})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			features := map[provider.Feature]provider.Capability{}
 			for _, feature := range []provider.Feature{provider.FeatureText, provider.FeatureImage, provider.FeatureDocument, provider.FeatureToolCall,
 				provider.FeatureStructuredOutput, provider.FeatureReasoning, provider.FeatureContinuation, provider.FeatureStreaming, provider.FeatureUsage} {
@@ -118,9 +105,7 @@ func hierarchyRoutes() []hierarchyRoute {
 				BaseURL: "https://127.0.0.1", Deployment: "provider-model", Capabilities: provider.CapabilitySet{Version: "profile/v1", Features: features},
 				ServiceTiers:         map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"},
 				ActualServiceClasses: map[string]llm.ServiceClass{"default": llm.ServiceClassStandard, "priority": llm.ServiceClassPriority}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			return adapter
 		}},
 	}
@@ -173,9 +158,7 @@ func TestCompactionWithApplicationInstructionsSurvivesBudgetPlanningAndRecovery(
 			// The unflattened form passes the early input check but is not
 			// what this endpoint compiles, so it must not recover.
 			semantic, err := f.estimator.PrepareRequest(*summary.Request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			other := binding
 			other.RequestDigest, err = llm.RequestDigest(candidateRequest(semantic, providerStatePins{}, planned.Provider.Candidate))
 			if err != nil || other.RequestDigest == binding.RequestDigest {

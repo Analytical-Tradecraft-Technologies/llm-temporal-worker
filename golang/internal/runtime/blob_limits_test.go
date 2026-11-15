@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
@@ -25,13 +26,9 @@ func TestBlobStoreLimitAdmitsResponsesLargerThanRequestLimit(t *testing.T) {
 		t.Fatalf("blobMaxBytes = %d, want the larger request limit", got)
 	}
 	store, _, err := defaultBlobFactory(context.Background(), value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := bytes.Repeat([]byte("a"), 4096)
-	if _, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: result, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
-		t.Fatalf("result larger than request_bytes rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: result, ExpiresAt: time.Now().Add(time.Hour)})), "result larger than request_bytes rejected")
 }
 
 // TestBlobStoreLimitAdmitsEscapedResultOfAcceptedResponse stores the result
@@ -42,23 +39,15 @@ func TestBlobStoreLimitAdmitsEscapedResultOfAcceptedResponse(t *testing.T) {
 	limits := config.LimitsConfig{RequestBytes: 1 << 20, ProviderResponseBytes: config.DefaultProviderResponseBytes}
 	value := config.Config{BlobStore: config.BlobStoreConfig{Kind: "file", File: config.FileBlobConfig{Root: t.TempDir()}}, Limits: limits}
 	store, _, err := defaultBlobFactory(context.Background(), value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response := llm.Response{OperationKey: "operation", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.ModelText(strings.Repeat("<", int(limits.ProviderResponseBytes)))}}
 	// Encode exactly as BlobResultStore.Put does.
 	encoded, err := json.Marshal(response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	canonical, err := llm.CanonicalJSON(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if int64(len(canonical)) <= 2*limits.ProviderResponseBytes {
 		t.Fatalf("result is %d bytes; the case needs more than twice the %d-byte response limit", len(canonical), limits.ProviderResponseBytes)
 	}
-	if _, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: canonical, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
-		t.Fatalf("escaped result of an accepted response rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: canonical, ExpiresAt: time.Now().Add(time.Hour)})), "escaped result of an accepted response rejected")
 }

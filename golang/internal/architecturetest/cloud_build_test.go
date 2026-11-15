@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,10 +11,10 @@ import (
 
 func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
-	if strings.Count(master.raw, "${{ secrets.DOCKER_ACCESS_TOKEN }}") != 2 {
-		t.Fatal("registry token must appear only in the two protected cloud setup steps")
+	if strings.Count(master.raw, "${{ secrets.DOCKER_ACCESS_TOKEN }}") != 3 {
+		t.Fatal("registry token must appear only in the three protected cloud setup steps")
 	}
-	for _, jobName := range []string{"container", "verify-image"} {
+	for _, jobName := range []string{"container-build", "container", "verify-image"} {
 		job := workflowJob(t, master, jobName)
 		if job["environment"] != "docker_push" || !strings.Contains(scalarString(t, master.name, job, "if"), "github.ref == 'refs/heads/master'") {
 			t.Fatalf("%s must require master and docker_push", jobName)
@@ -64,25 +65,53 @@ func TestWorkflowMasterCloudPublicationBoundary(t *testing.T) {
 	}
 	for _, want := range []string{
 		`bash scripts/ci/build-scanned-image.sh "$RUNNER_TEMP/candidate.oci"`,
+		"date -u +%Y%m%d", "GITHUB_RUN_NUMBER",
+	} {
+		assertJobRunContains(t, master, "container-build", want)
+	}
+	for _, want := range []string{
+		`go run ./tools/ocimerge verify -layout "$RUNNER_TEMP/candidate.oci" -platform linux/amd64 -platform linux/arm64`,
+		`[[ "$verified" != "$CANDIDATE_DIGEST" ]]`,
 		"copy --all --preserve-digests", `"oci:$RUNNER_TEMP/candidate.oci"`,
 		`"docker://docker.io/analyticaltradecraft/llm-temporal-worker:$IMAGE_TAG"`,
-		"date -u +%Y%m%d", "GITHUB_RUN_NUMBER", `imagetools inspect "$image:$IMAGE_TAG" --raw`,
+		`imagetools inspect "$image:$IMAGE_TAG" --raw`,
 		`[[ "$published" != "$digest" ]]`, `sort == ["amd64", "arm64"]`,
 	} {
 		assertJobRunContains(t, master, "container", want)
 	}
 	// Both platforms are built and scanned before the exact scanned bytes are
-	// published; the job never pushes from the builder (#971).
-	assertJobRunPrecedesRunContains(t, master, "container", "bash scripts/ci/setup-build-cloud.sh", "bash scripts/ci/build-scanned-image.sh")
-	assertJobRunPrecedesRunContains(t, master, "container", "bash scripts/ci/setup-trivy.sh", "bash scripts/ci/build-scanned-image.sh")
-	assertJobRunPrecedesRunContains(t, master, "container", "bash scripts/ci/build-scanned-image.sh", "copy --all --preserve-digests")
+	// published; nothing pushes from the builder (#971). The build starts
+	// with the run and never publishes; publication re-verifies every blob of
+	// the scanned candidate against the scanned digest first (#1570).
+	assertJobRunPrecedesRunContains(t, master, "container-build", "bash scripts/ci/setup-build-cloud.sh", "bash scripts/ci/build-scanned-image.sh")
+	assertJobRunPrecedesRunContains(t, master, "container-build", "bash scripts/ci/setup-trivy.sh", "bash scripts/ci/build-scanned-image.sh")
+	assertJobRunPrecedesRunContains(t, master, "container", "go run ./tools/ocimerge verify", "copy --all --preserve-digests")
 	assertJobRunPrecedesRunContains(t, master, "container", "copy --all --preserve-digests", `imagetools inspect "$image:$IMAGE_TAG" --raw`)
-	for _, forbidden := range []string{"--push", "oci-archive:", "docker buildx build"} {
+	for _, forbidden := range []string{"--push", "oci-archive:", "docker buildx build", "build-scanned-image.sh"} {
 		if jobRunContains(workflowJob(t, master, "container"), forbidden) {
 			t.Fatalf("master container job runs %q instead of publishing the scanned layout", forbidden)
 		}
 	}
-	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard")
+	for _, forbidden := range []string{"skopeo", "docker://", "--push", "imagetools create", "oci-archive:"} {
+		if jobRunContains(workflowJob(t, master, "container-build"), forbidden) {
+			t.Fatalf("master container-build job runs %q; only the container job may publish", forbidden)
+		}
+	}
+	build := workflowJob(t, master, "container-build")
+	if _, ok := build["needs"]; ok {
+		t.Fatal("master container-build must start with the run rather than wait on the slowest gate")
+	}
+	assertJobActionInput(t, master, "container-build", uploadArtifactAction, "name", "image-candidate")
+	assertJobActionInput(t, master, "container", downloadArtifactAction, "name", "image-candidate")
+	for name, want := range map[string]string{
+		"digest":  "${{ steps.candidate.outputs.digest }}",
+		"version": "${{ steps.metadata.outputs.version }}",
+	} {
+		if got := nestedMapping(t, master.name, build, "outputs")[name]; got != want {
+			t.Fatalf("container-build output %s = %v, want %s", name, got, want)
+		}
+	}
+	assertMasterJobNeedsEveryVerificationGate(t, master, "container", "ocaml", "fuzz-shard", "container-build")
 	for _, forbidden := range []string{"setup-buildx.sh", "setup-multinode-buildx.sh", "type=gha", "setup-qemu", "--load"} {
 		if strings.Contains(master.raw, forbidden) {
 			t.Fatalf("master retains local/copying build configuration %q", forbidden)
@@ -143,7 +172,7 @@ func TestWorkflowMergeQueueBuildsAndScansLikeMaster(t *testing.T) {
 		}
 	}
 	master := readWorkflow(t, "master.yml")
-	assertJobRunContains(t, master, "container", `bash scripts/ci/build-scanned-image.sh "$RUNNER_TEMP/candidate.oci"`)
+	assertJobRunContains(t, master, "container-build", `bash scripts/ci/build-scanned-image.sh "$RUNNER_TEMP/candidate.oci"`)
 }
 
 // The shared build script builds each platform on its own (a single-platform
@@ -218,9 +247,7 @@ printf '{"Metadata":{"ImageID":"%s","ImageConfig":{"architecture":"%s"}}}' "$ima
 [[ "$SCENARIO" != "finding-$arch" ]]
 `)
 			runnerTemp := filepath.Join(dir, "runner")
-			if err := os.Mkdir(runnerTemp, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Mkdir(runnerTemp, 0o700))
 			output := filepath.Join(dir, "candidate.oci")
 			cmd := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "ci", "build-scanned-image.sh"), output)
 			cmd.Env = []string{
@@ -295,18 +322,14 @@ func TestWorkflowMultiNodeBuilderMatchesBuildCloudShape(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			dir, bin := newFakeCommandDirectory(t)
 			binfmt := filepath.Join(dir, "binfmt_misc")
-			if err := os.Mkdir(binfmt, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Mkdir(binfmt, 0o700))
 			if scenario != "no-emulation" {
 				flags := "POF"
 				if scenario == "no-fix-binary" {
 					flags = "PO"
 				}
 				registration := "enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: " + flags + "\noffset 0\n"
-				if err := os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte(registration), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte(registration), 0o600))
 			}
 			log := filepath.Join(dir, "calls")
 			envFile := filepath.Join(dir, "github-env")
@@ -390,9 +413,7 @@ func TestWorkflowCloudHelperFailsClosedAndKeepsTokenOutOfEnvironmentFile(t *test
 			envFile := filepath.Join(dir, "github-env")
 			fake := func(name, body string) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/usr/bin/env bash\nset -eu\n"+body), 0700); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte("#!/usr/bin/env bash\nset -eu\n"+body), 0700))
 			}
 			fake("curl", `printf 'download\n' >> "$CALL_LOG"
 while [[ "$1" != "--output" ]]; do shift; done

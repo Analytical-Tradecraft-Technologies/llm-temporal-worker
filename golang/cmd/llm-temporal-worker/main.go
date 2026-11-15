@@ -18,5 +18,7 @@ func main() {
 		RunWorkerFile:        workerruntime.RunWorkerFile,
 		RunBudgetInitialize:  workerruntime.RunBudgetInitialize,
 		RunGenerationRecover: workerruntime.RunGenerationRecover,
+		RunPendingList:       workerruntime.RunPendingList,
+		RunPendingRecover:    workerruntime.RunPendingRecover,
 	}))
 }

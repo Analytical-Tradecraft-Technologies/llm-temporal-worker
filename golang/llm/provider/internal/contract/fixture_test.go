@@ -3,6 +3,7 @@ package contract
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -21,9 +22,7 @@ func TestDecodeJSONRoundTripsMarshalJSON(t *testing.T) {
 func TestNormalizeRequestDefaultsTheServiceClass(t *testing.T) {
 	normalized, serviceClass := NormalizeRequest(t, llm.Request{OperationKey: "op", Model: "model"})
 	want, err := llm.NormalizeServiceClass("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if normalized.Model != "model" || serviceClass != want {
 		t.Fatalf("normalized = %#v, service class %q, want model and %q", normalized, serviceClass, want)
 	}

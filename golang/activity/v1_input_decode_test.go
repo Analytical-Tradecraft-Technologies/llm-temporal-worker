@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	commonpb "go.temporal.io/api/common/v1"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -48,13 +49,9 @@ func executeTestActivity(dataConverter converter.DataConverter, function any, na
 // the stub's pending result after exactly one runtime call.
 func assertPendingExecutionResult(t *testing.T, runtime *executionRuntimeStub, result converter.EncodedValue, err error) {
 	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var response llm.ExecutionResultV1
-	if err := result.Get(&response); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, result.Get(&response))
 	if response.State != llm.ExecutionPending || runtime.calls != 1 {
 		t.Fatalf("result=%#v calls=%d", response, runtime.calls)
 	}
@@ -63,18 +60,12 @@ func assertPendingExecutionResult(t *testing.T, runtime *executionRuntimeStub, r
 func generateV1JSON(t *testing.T, mutate func(map[string]any)) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(validGenerateV1Request())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(encoded, &fields))
 	mutate(fields)
 	encoded, err = json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded
 }
 
@@ -88,9 +79,7 @@ func assertTypedInvalidV1Input(t *testing.T, err error, secrets ...string) {
 		t.Fatalf("error %v has no SafeErrorDetails", err)
 	}
 	var details SafeErrorDetails
-	if detailsErr := applicationErr.Details(&details); detailsErr != nil {
-		t.Fatalf("decode SafeErrorDetails: %v", detailsErr)
-	}
+	testassert.NoError(t, applicationErr.Details(&details), "decode SafeErrorDetails")
 	if details.Code != "invalid_argument" || details.Phase != "decode" || details.Dispatch != "not_dispatched" {
 		t.Fatalf("details = %#v, want invalid_argument/decode/not_dispatched", details)
 	}

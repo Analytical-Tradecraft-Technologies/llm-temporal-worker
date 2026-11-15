@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,9 +43,7 @@ func TestDocumentDigestCoversContentOnly(t *testing.T) {
 	// A schema v2 body, which embedded fetched_at, is rejected rather than
 	// read under the new schema.
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(encoded, &fields))
 	fields["schema"], fields["fetched_at"] = json.RawMessage(`"openrouter-catalog/v2"`), json.RawMessage(`"2026-10-06T12:00:00Z"`)
 	legacy, _ := json.Marshal(fields)
 	if _, err := DecodeDocument(legacy); err == nil {
@@ -57,9 +56,7 @@ func TestSyncInstallsTheStoredFetchTime(t *testing.T) {
 	document := fetchFixture(t)
 	encoded, _ := document.Encode()
 	publishedAt := fixtureTime.Add(3 * time.Hour)
-	if _, err := store.Publish(context.Background(), Digest(encoded), publishedAt, encoded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(store.Publish(context.Background(), Digest(encoded), publishedAt, encoded)))
 	var installed Document
 	refresher := &Refresher{Store: store, Install: func(document Document) error { installed = document; return nil }}
 	if ok, err := refresher.Sync(context.Background()); !ok || err != nil {
@@ -157,9 +154,7 @@ func TestFetchRevalidatesUnchangedResponsesWithETags(t *testing.T) {
 	fetch := func(previous Document, cache *ResponseCache) Document {
 		t.Helper()
 		document, err := Fetcher{Client: server.Client(), BaseURL: server.URL, Cache: cache}.Fetch(context.Background(), previous)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return document
 	}
 	first := fetch(Document{}, cache)
@@ -254,9 +249,7 @@ func TestFetchCapsEndpointLookupsOfKnownModels(t *testing.T) {
 	// With no previous Document every model is new, so the cap does not
 	// apply and the first catalog is complete.
 	first, err := fetcher.Fetch(context.Background(), Document{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(first.Models) != 20 || len(lookups) != 20 {
 		t.Fatalf("first fetch kept %d models after %d lookups, want 20 and 20", len(first.Models), len(lookups))
 	}
@@ -270,9 +263,7 @@ func TestFetchCapsEndpointLookupsOfKnownModels(t *testing.T) {
 	zeroRetention = "openai/m10"
 	mu.Unlock()
 	second, err := fetcher.Fetch(context.Background(), first)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	mu.Lock()
 	defer mu.Unlock()
 	if len(lookups) != 6 || lookups["openai/m20"] != 1 || lookups["openai/m03"] != 1 {
@@ -302,17 +293,13 @@ func TestFetchCapsEndpointLookupsOfKnownModels(t *testing.T) {
 func encodeDocument(t *testing.T, document Document) []byte {
 	t.Helper()
 	encoded, err := document.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded
 }
 
 func decodeDocument(t *testing.T, encoded []byte) Document {
 	t.Helper()
 	document, err := DecodeDocument(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return document
 }

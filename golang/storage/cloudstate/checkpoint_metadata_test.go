@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -24,16 +25,12 @@ func TestCloudCheckpointCompactionAndOptionalMetadataRoundTrip(t *testing.T) {
 	expires := root.ExpiresAt.Add(time.Hour)
 	providerBytes := []byte("opaque private provider context")
 	ref, err := store.Write(ctx, root.ScopeID, providerBytes, "application/octet-stream")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	compacted.ProviderState = []state.CheckpointProviderState{{Provider: "example", EndpointID: "endpoint", EndpointAccountHMAC: [32]byte{7}, Region: "region", EndpointFamily: "family", ModelLineage: "model", StateKind: "context", StateBlob: ref, StateDigest: sha256.Sum256(providerBytes), Required: true, ImmutableForkSafe: true, CreatedAt: root.CreatedAt, ExpiresAt: &expires}}
 	compacted.Affinities = state.ProviderCacheAffinitySet{{Provider: "example", RouteID: "route", EndpointID: "endpoint", EndpointAccountHMAC: [32]byte{7}, Region: "region", EndpointFamily: "family", ModelLineage: "model", RouteModelRevision: "model-v1", CacheEpoch: "epoch", LastSuccessAt: root.CreatedAt, ExpiresAt: &expires}}
 	mustPublishCheckpoint(t, store, compacted)
 	got, err := reopen(t, table, blobs).Checkpoints().Get(ctx, root.ScopeID, compacted.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wantDigest, _ := compacted.CanonicalDigest()
 	gotDigest, _ := got.CanonicalDigest()
 	if wantDigest != gotDigest {
@@ -66,7 +63,7 @@ func TestCloudCheckpointCorruptPointersFailClosed(t *testing.T) {
 			key := s.key("id", s.identity(cp.ScopeID, "id", string(cp.ID)))
 			row := table.rows[key]
 			var pointer checkpointPointer
-			mustNoError(t, json.Unmarshal(row.Item.Fields["checkpoint"].(kv.KeyValueBytes), &pointer))
+			testassert.NoError(t, json.Unmarshal(row.Item.Fields["checkpoint"].(kv.KeyValueBytes), &pointer))
 			switch mode {
 			case "schema":
 				pointer.Version++

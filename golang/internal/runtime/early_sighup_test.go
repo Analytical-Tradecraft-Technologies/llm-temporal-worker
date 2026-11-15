@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"syscall"
 	"testing"
@@ -15,9 +16,7 @@ import (
 func TestRunWorkerFileSurvivesSIGHUPDuringStartup(t *testing.T) {
 	stop := errors.New("startup stopped by the test")
 	err := runWorkerFile(context.Background(), "unused.yaml", nil, func(context.Context, []byte) (*Runtime, error) {
-		if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGHUP))
 		// Give the runtime time to deliver the signal before startup ends.
 		time.Sleep(100 * time.Millisecond)
 		return nil, stop

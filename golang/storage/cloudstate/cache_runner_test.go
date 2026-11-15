@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -195,9 +196,7 @@ func TestCloudCacheWaitRemainsRetryableThroughTemporal(t *testing.T) {
 		c := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
 		var claims, submissions atomic.Int32
 		err := runCloudCacheGate(context.Background(), kind, c, waiter, &claims, &submissions)
-		if !errors.Is(err, durable.ErrCacheWait) {
-			t.Fatal(err)
-		}
+		testassert.ErrorIs(t, err, durable.ErrCacheWait)
 		var application *temporal.ApplicationError
 		if !errors.As(activity.ToTemporalError(err), &application) || application.NonRetryable() || application.NextRetryDelay() != cache.MaxFillLease {
 			t.Fatalf("cache wait lost retry hint: %v", application)
@@ -219,14 +218,14 @@ func TestCloudCacheRunnerNewAttemptAfterResolvedUnknownClaimsAgain(t *testing.T)
 		lease.Key.Operation = kind
 		var claims, submissions atomic.Int32
 		c := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return lease.AcquiredAt })
-		requireErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), errCacheRunnerSubmitted, "")
+		testassert.ErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), errCacheRunnerSubmitted)
 		// Simulate the recovery finalizer having durably charged the unknown
 		// attempt. The cache layer itself cannot infer or perform that settlement.
-		mustNoError(t, r.ResponseFills().Complete(context.Background(), lease, cache.FillCompletion{Outcome: cache.FillUnknown, CompletedAt: lease.AcquiredAt.Add(time.Second)}))
-		requireErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), durable.ErrCacheRecoveryRequired, "")
+		testassert.NoError(t, r.ResponseFills().Complete(context.Background(), lease, cache.FillCompletion{Outcome: cache.FillUnknown, CompletedAt: lease.AcquiredAt.Add(time.Second)}))
+		testassert.ErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), durable.ErrCacheRecoveryRequired)
 		lease.Attempt = "fresh-budget-generation"
 		lease.AcquiredAt, lease.ExpiresAt = lease.AcquiredAt.Add(2*time.Second), lease.ExpiresAt.Add(2*time.Second)
-		requireErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), errCacheRunnerSubmitted, "")
+		testassert.ErrorIs(t, runCloudCacheGate(context.Background(), kind, c, lease, &claims, &submissions), errCacheRunnerSubmitted)
 		if claims.Load() != 2 || submissions.Load() != 2 {
 			t.Fatalf("claims=%d submissions=%d", claims.Load(), submissions.Load())
 		}

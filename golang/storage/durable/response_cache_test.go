@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -56,9 +57,7 @@ func cacheRunnerFixture(t *testing.T, kind cache.OperationKind, events *[]string
 		},
 	}
 	c, err := NewResponseCache(responses, fills, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return c, lease, responses, fills
 }
 
@@ -118,9 +117,7 @@ func TestResponseCacheRunnerAdmissionOrder(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			events := []string{}
 			c, lease, _, _ := cacheRunnerFixture(t, kind, &events)
-			if err := runCacheFixture(context.Background(), kind, c, lease, &events, nil, false); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, runCacheFixture(context.Background(), kind, c, lease, &events, nil, false))
 			want := []string{"replay", "cache", "route", "reserve", "start", "claim", "dispatch", "finalize", "reconcile"}
 			if kind == cache.OperationGenerate {
 				want = append(want[:2], append([]string{"compaction"}, want[2:]...)...)
@@ -254,9 +251,7 @@ func cacheTemplate(t *testing.T, kind cache.OperationKind, lease cache.FillLease
 		value = testCompactFinalization(testCompactRequest()).Response
 	}
 	raw, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return cache.ResponseEntry{ID: "entry-1", Key: lease.Key, OriginOperationID: "operation-id", OriginCheckpointID: "origin", CompletedAt: lease.AcquiredAt, Response: raw}
 }
 
@@ -334,9 +329,7 @@ func TestResponseCacheRejectsMissingDependenciesAndChangedDecisions(t *testing.T
 		}
 	}
 	d, err := c.PrepareGenerate(context.Background(), lease, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	d.Disposition = CacheDisabled
 	if d.Validate() == nil {
 		t.Fatal("ownership bypassed")
@@ -382,9 +375,7 @@ func TestResponseCacheLookupReadsWithoutFills(t *testing.T) {
 		}
 		failure := errors.New("unavailable")
 		responses.lookup = func(context.Context, cache.ResponseLookup) (*cache.ResponseEntry, error) { return nil, failure }
-		if _, err := c.Lookup(context.Background(), lease.Key, nil); !errors.Is(err, failure) {
-			t.Fatal(err)
-		}
+		testassert.ErrorIs(t, testassert.Err(c.Lookup(context.Background(), lease.Key, nil)), failure)
 		for _, edit := range []func(*cache.ResponseEntry){
 			func(e *cache.ResponseEntry) { e.Key.ScopeID = "other" }, func(e *cache.ResponseEntry) { e.ID = "" },
 			func(e *cache.ResponseEntry) { e.CompletedAt = e.CompletedAt.Add(time.Hour) },
@@ -394,21 +385,15 @@ func TestResponseCacheLookupReadsWithoutFills(t *testing.T) {
 			corrupt := cacheTemplate(t, kind, lease)
 			edit(&corrupt)
 			responses.lookup = func(context.Context, cache.ResponseLookup) (*cache.ResponseEntry, error) { return &corrupt, nil }
-			if _, err := c.Lookup(context.Background(), lease.Key, &age); !errors.Is(err, ErrResponseCacheCorrupt) {
-				t.Fatalf("corrupt entry: %v", err)
-			}
+			testassert.ErrorIs(t, testassert.Err(c.Lookup(context.Background(), lease.Key, &age)), ErrResponseCacheCorrupt, "corrupt entry")
 		}
 		invalid := lease.Key
 		invalid.Route.Compiler = ""
 		zero := time.Duration(0)
 		for _, key := range []cache.ResponseKey{invalid, {}} {
-			if _, err := c.Lookup(context.Background(), key, nil); !errors.Is(err, ErrResponseCacheInvalid) {
-				t.Fatal(err)
-			}
+			testassert.ErrorIs(t, testassert.Err(c.Lookup(context.Background(), key, nil)), ErrResponseCacheInvalid)
 		}
-		if _, err := c.Lookup(context.Background(), lease.Key, &zero); !errors.Is(err, ErrResponseCacheInvalid) {
-			t.Fatal(err)
-		}
+		testassert.ErrorIs(t, testassert.Err(c.Lookup(context.Background(), lease.Key, &zero)), ErrResponseCacheInvalid)
 		if len(events) != 0 {
 			t.Fatal(events)
 		}

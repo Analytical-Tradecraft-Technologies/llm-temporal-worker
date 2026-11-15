@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,9 +76,7 @@ func TestWorkflowNativeOPAMSetupProvidesIsolatedCargoHomeBeforeOPAM(t *testing.T
 	if strings.Contains(cargoHome, "/home/runner/.cargo") {
 		t.Fatalf("CARGO_HOME retains the default HOME path: %q", cargoHome)
 	}
-	if err := os.WriteFile(filepath.Join(cargoHome, "cargo-write-probe"), []byte("ok"), 0o600); err != nil {
-		t.Fatalf("isolated CARGO_HOME is not writable: %v", err)
-	}
+	testassert.NoError(t, os.WriteFile(filepath.Join(cargoHome, "cargo-write-probe"), []byte("ok"), 0o600), "isolated CARGO_HOME is not writable")
 	for _, call := range strings.Split(strings.TrimSpace(calls), "\n") {
 		if strings.HasPrefix(call, "opam ") && !strings.Contains(call, "cargo_home="+cargoHome) {
 			t.Fatalf("OPAM call did not receive isolated CARGO_HOME %q:\n%s", cargoHome, calls)

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
@@ -19,13 +20,9 @@ func TestOpenRegularMapsEachFailure(t *testing.T) {
 		t.Fatalf("directory error = %v", err)
 	}
 	path := filepath.Join(root, "object")
-	if err := os.WriteFile(path, []byte("data"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, []byte("data"), 0600))
 	file, info, err := openRegular(path, "blob", notRegular)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer file.Close()
 	if info.Size() != 4 || !info.Mode().IsRegular() {
 		t.Fatalf("info = %v", info)

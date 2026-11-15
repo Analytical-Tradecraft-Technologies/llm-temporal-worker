@@ -16,6 +16,7 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	yaml "go.yaml.in/yaml/v4"
 )
@@ -118,9 +119,7 @@ type v1TraceabilityEvidence struct {
 
 func TestV1TraceabilityCatalog(t *testing.T) {
 	root := repositoryRoot(t)
-	if err := validateV1TraceabilityCatalog(root, readV1TraceabilityCatalog(t, root)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateV1TraceabilityCatalog(root, readV1TraceabilityCatalog(t, root)))
 }
 
 func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing.T) {
@@ -328,16 +327,12 @@ func TestV1TraceabilityCatalogRejectsDuplicateJSONKeys(t *testing.T) {
 
 func TestV1TraceabilityMakeTarget(t *testing.T) {
 	targets, err := readMakeTargets(moduleRoot(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, exists := targets["traceability-verify"]; !exists {
 		t.Fatal("Makefile must define traceability-verify")
 	}
 	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatalf("read Makefile: %v", err)
-	}
+	testassert.NoError(t, err, "read Makefile")
 	const want = "traceability-verify:\n\t$(GO) test ./internal/architecturetest -run '^TestV1Traceability' -count=1"
 	if !strings.Contains(string(makefile), want) {
 		t.Fatalf("traceability-verify must run the complete traceability suite; want %q", want)
@@ -425,9 +420,7 @@ func TestV1TraceabilityRejectsStaleOfflineEvidenceRevision(t *testing.T) {
 	if err != nil {
 		t.Skipf("git history is unavailable: %v", err)
 	}
-	if err := validateV1TraceabilityCatalog(root, record(strings.TrimSpace(string(head)))); err != nil {
-		t.Fatalf("catalog validator rejected evidence recorded at HEAD: %v", err)
-	}
+	testassert.NoError(t, validateV1TraceabilityCatalog(root, record(strings.TrimSpace(string(head)))), "catalog validator rejected evidence recorded at HEAD")
 }
 
 // validateEvidenceFreshness requires the evidence revision to be an ancestor
@@ -471,9 +464,7 @@ func v1TraceabilityRequirementWithGateSource(t *testing.T, id, quote string) *v1
 func readV1TraceabilityCatalog(t *testing.T, root string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(v1TraceabilityCatalogPath)))
-	if err != nil {
-		t.Fatalf("read v1 traceability catalog: %v", err)
-	}
+	testassert.NoError(t, err, "read v1 traceability catalog")
 	return data
 }
 
@@ -482,13 +473,9 @@ func readV1TraceabilityCatalog(t *testing.T, root string) []byte {
 func decodeV1TraceabilityCatalog(t *testing.T, raw []byte) v1TraceabilityCatalog {
 	t.Helper()
 	canonical, err := llm.CanonicalJSON(raw)
-	if err != nil {
-		t.Fatalf("canonicalize catalog: %v", err)
-	}
+	testassert.NoError(t, err, "canonicalize catalog")
 	var catalog v1TraceabilityCatalog
-	if err := json.Unmarshal(canonical, &catalog); err != nil {
-		t.Fatalf("decode catalog: %v", err)
-	}
+	testassert.NoError(t, json.Unmarshal(canonical, &catalog), "decode catalog")
 	return catalog
 }
 
@@ -497,14 +484,10 @@ func mutateV1TraceabilityCatalog(t *testing.T, raw []byte, mutate func(t *testin
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var document map[string]any
-	if err := decoder.Decode(&document); err != nil {
-		t.Fatalf("decode catalog mutation fixture: %v", err)
-	}
+	testassert.NoError(t, decoder.Decode(&document), "decode catalog mutation fixture")
 	mutate(t, document)
 	data, err := json.Marshal(document)
-	if err != nil {
-		t.Fatalf("encode catalog mutation fixture: %v", err)
-	}
+	testassert.NoError(t, err, "encode catalog mutation fixture")
 	return data
 }
 

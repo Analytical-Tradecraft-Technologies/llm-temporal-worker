@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
 	"github.com/google/uuid"
@@ -29,14 +30,10 @@ func TestCloudReferenceStepsRequireCapability(t *testing.T) {
 	// for its own ID, so its lookup really reaches the store.
 	unknownID := "llmtw_req_" + uuid.NewString()
 	unknownCapability, err := f.options.Keyring.IssueReferenceCapability("tenant", "project", unknownID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	unknown := llm.ExecutionReferenceV1{RequestID: unknownID, Context: f.request.Context, Capability: unknownCapability}
 	otherCapability, err := f.options.Keyring.IssueReferenceCapability("tenant", "other-project", root.RequestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	steps := map[string]func(llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error){
 		"acquire": func(ref llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
 			return f.runtime.AcquireBudgetV1(ctx, ref)

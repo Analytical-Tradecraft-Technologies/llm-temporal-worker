@@ -99,15 +99,11 @@ func TestInvokeSubmitsExactlyOnceAndLiftsResponse(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Request-Id", "req-1"), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileChatProdCall(t, client, "op-invoke")
 	observer := &adaptertest.Observer{}
 	result, err := adapter.Invoke(context.Background(), call, observer)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if calls != 1 || observer.Before != 1 || observer.Headers != 1 || observer.Progress != 1 {
 		t.Fatalf("transport/observer counts = %d %#v", calls, observer)
 	}
@@ -126,9 +122,7 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileChatProdCall(t, client, "chat-redirect")
 	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
@@ -137,9 +131,7 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 		t.Fatalf("transport/observer = calls=%d observer=%#v, want one request, one pre-write mark, and no headers", calls, observer)
 	}
 	encoded, marshalErr := json.Marshal(mapped)
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
-	}
+	testassert.NoError(t, marshalErr)
 	if strings.Contains(string(encoded), "redirect.example") || strings.Contains(mapped.Error(), "continuation-secret") {
 		t.Fatalf("safe adapter error leaked redirect target: %s", encoded)
 	}
@@ -152,9 +144,7 @@ func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 		APIKey:     "test-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileChatProdCall(t, client, "chat-pre-dial-deadline")
 	observer := &adaptertest.Observer{}
 	adaptertest.CallerDeadlineBeforeDial(t, transport, func(ctx context.Context) error {
@@ -200,9 +190,7 @@ func testProfile() Profile {
 func testAdapter(t *testing.T) *Adapter {
 	t.Helper()
 	validated, err := NewProfile(testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return &Adapter{endpointID: "chat-prod", profile: validated}
 }
 
@@ -212,8 +200,6 @@ func testAdapter(t *testing.T) *Adapter {
 func compileChatProdCall(t *testing.T, client *Client, operationKey string) (*Adapter, provider.Call) {
 	t.Helper()
 	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter, adaptertest.CompileStrict(t, adapter, "chat-prod", provider.FamilyOpenAIChat, llm.Request{OperationKey: operationKey, Model: "chat-model"})
 }

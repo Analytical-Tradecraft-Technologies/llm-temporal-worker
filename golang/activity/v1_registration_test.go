@@ -14,9 +14,7 @@ import (
 
 func TestV1ActivityDescriptorsAreClosedAndTaskQueueBound(t *testing.T) {
 	descriptors, err := V1ActivityDescriptors("llm-inference")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := []V1ActivityDescriptor{
 		{TaskQueue: "llm-inference", Name: GenerateActivityName, InputType: generateV1InputType, OutputType: generateV1OutputType},
 		{TaskQueue: "llm-inference", Name: CompactActivityName, InputType: compactV1InputType, OutputType: compactV1OutputType},
@@ -52,9 +50,7 @@ func TestV1ActivityDescriptorsRejectUnsafeTaskQueues(t *testing.T) {
 func TestRegisterForTaskQueueUsesTheV1SetWhenConfigured(t *testing.T) {
 	registry := &v1Registry{}
 	activities := &Activities{V1Runtime: &v1RuntimeStub{}}
-	if err := activities.RegisterForTaskQueue(registry, "queue-a"); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, activities.RegisterForTaskQueue(registry, "queue-a"))
 	if !reflect.DeepEqual(registry.names, v1ActivityNames) {
 		t.Fatalf("registered names = %v, want %v", registry.names, v1ActivityNames)
 	}

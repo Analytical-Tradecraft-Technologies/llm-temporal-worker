@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -42,9 +43,7 @@ func TestCloudUnreservedAdmissionPersistsExplicitModeWithoutRedis(t *testing.T) 
 				// Any unintended Accept/Claim/Reconcile call panics through the nil port.
 				f.helper.admit.boundary.Materializer = &executionLeaser{}
 				call, err := f.prepare(context.Background(), f.attempt)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				plan := call.Plan()
 				if plan.RequiresReservation() || plan.Unpriced != (mode == "unpriced") || (plan.Mode == cloudstate.BudgetFree) != (mode == "free") {
 					t.Fatal("lost explicit admission policy")
@@ -60,9 +59,7 @@ func TestCloudUnreservedAdmissionPersistsExplicitModeWithoutRedis(t *testing.T) 
 				f.source.value.RequireBudgetMatch = true
 				f.prices(t, nil)
 				f.helper, err = f.cap.NewCloudBudgetAdmission(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				recovered, err := f.prepare(context.Background(), f.attempt)
 				if err != nil || !reflect.DeepEqual(recovered.Plan(), plan) {
 					t.Fatal("changed saved policy", err)
@@ -80,9 +77,7 @@ func TestCloudUnreservedExecutionBothKindsSyncAndAsync(t *testing.T) {
 					f := newProviderExecutionFixture(t, kind, async, unreservedPlanning(t, mode))
 					f.helper.admit.boundary.Materializer = &executionLeaser{}
 					result, err := f.submit(context.Background())
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 					if async {
 						if result.Saved.Execution.Stage != cloudstate.ExecutionPending || f.polls.Load() != 0 {
 							t.Fatal("submit polled")

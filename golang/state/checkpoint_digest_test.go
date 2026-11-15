@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -16,21 +17,19 @@ func TestCheckpointGraphLargeCheckpointConflictIsDetected(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{})
 	first := rootCheckpoint("root", "tenant-a", "operation-root")
 	first.Delta = []llm.Item{llm.HumanText(strings.Repeat("a", 9<<20))}
-	assertErrIs(t, graph.PutRoot(first), nil, "put large root")
+	testassert.NoError(t, graph.PutRoot(first), "put large root")
 	assertMaterializeErr(t, graph, "tenant-a", "root", nil, "materialize large root")
 	stored, err := graph.Get("root")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if stored.RequestDigest == ([32]byte{}) {
 		t.Fatal("large checkpoint stored a zero request digest")
 	}
 
-	assertErrIs(t, graph.PutRoot(first), nil, "identical large retry")
+	testassert.NoError(t, graph.PutRoot(first), "identical large retry")
 
 	conflicting := rootCheckpoint("root", "tenant-a", "operation-root")
 	conflicting.Delta = []llm.Item{llm.HumanText(strings.Repeat("b", 9<<20))}
-	assertErrIs(t, graph.PutRoot(conflicting), ErrConflict, "conflicting large checkpoint")
+	testassert.ErrorIs(t, graph.PutRoot(conflicting), ErrConflict, "conflicting large checkpoint")
 	materialized := mustMaterialize(t, graph, "tenant-a", "root")
 	if got := materialized.Items[0].(llm.Message).Content[0].(llm.TextPart).Text[0]; got != 'a' {
 		t.Fatalf("retained content first byte = %q, want 'a'", got)
@@ -54,14 +53,14 @@ func TestCheckpointGraphAcceptsSeparatelyBoundedPartsBeyondCombinedLimit(t *test
 	}
 	graph := NewCheckpointGraph(MaterializeLimits{MaxBytes: limit})
 	first := withParts(strings.Repeat("a", 3<<10), strings.Repeat("i", 3<<10))
-	assertErrIs(t, graph.PutRoot(first), nil, "put separately bounded checkpoint")
+	testassert.NoError(t, graph.PutRoot(first), "put separately bounded checkpoint")
 	assertMaterializeErr(t, graph, "tenant-a", "root", nil, "materialize separately bounded checkpoint")
-	assertErrIs(t, graph.PutRoot(first), nil, "identical retry")
+	testassert.NoError(t, graph.PutRoot(first), "identical retry")
 	for name, conflicting := range map[string]Checkpoint{
 		"delta":    withParts(strings.Repeat("b", 3<<10), strings.Repeat("i", 3<<10)),
 		"settings": withParts(strings.Repeat("a", 3<<10), strings.Repeat("j", 3<<10)),
 	} {
-		assertErrIs(t, graph.PutRoot(conflicting), ErrConflict, "conflicting "+name)
+		testassert.ErrorIs(t, graph.PutRoot(conflicting), ErrConflict, "conflicting "+name)
 	}
 }
 
@@ -71,7 +70,7 @@ func TestCheckpointGraphRejectsRequestBeyondByteLimit(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxBytes: 1 << 10})
 	checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
 	checkpoint.Delta = []llm.Item{llm.HumanText(strings.Repeat("a", 2<<10))}
-	assertErrIs(t, graph.PutRoot(checkpoint), ErrLimitExceeded, "oversized checkpoint")
+	testassert.ErrorIs(t, graph.PutRoot(checkpoint), ErrLimitExceeded, "oversized checkpoint")
 	_, err := graph.Get("root")
-	assertErrIs(t, err, ErrNotFound, "get oversized checkpoint")
+	testassert.ErrorIs(t, err, ErrNotFound, "get oversized checkpoint")
 }

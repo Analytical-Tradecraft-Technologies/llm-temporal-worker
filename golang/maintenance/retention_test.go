@@ -2,7 +2,7 @@ package maintenance
 
 import (
 	"context"
-	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -21,15 +21,11 @@ func TestInMemoryRetentionProtectsActiveAndReferencedRows(t *testing.T) {
 		{ID: "operation-old", Kind: ResourceOperation, ExpiresAt: now.Add(-time.Hour)},
 		{ID: "query-old", Kind: ResourceQueryExecution, ExpiresAt: now.Add(-time.Hour)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, err := store.Prune(context.Background(), RetentionPolicy{
 		Now: now, Limit: 10, CacheUnusedBefore: now.Add(-24 * time.Hour), OperationExpiresBefore: now, QueryExecutionExpiresBefore: now,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Examined != 4 || result.Tombstoned != 2 || result.Deleted != 2 || result.Skipped != 0 {
 		t.Fatalf("unexpected retention result: %+v", result)
 	}
@@ -60,21 +56,15 @@ func TestInMemoryRetentionIsBoundedAndHonorsCancellation(t *testing.T) {
 		{ID: "b", Kind: ResourceStatus, ExpiresAt: now.Add(-2 * time.Hour)},
 		{ID: "c", Kind: ResourceStatus, ExpiresAt: now.Add(-time.Hour)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, err := store.Prune(context.Background(), RetentionPolicy{Now: now, Limit: 2, StatusExpiresBefore: now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Deleted != 2 || len(store.Snapshot()) != 1 {
 		t.Fatalf("retention exceeded its batch limit: result=%+v rows=%d", result, len(store.Snapshot()))
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Prune(canceled, RetentionPolicy{Now: now, Limit: 1, StatusExpiresBefore: now}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected cancellation, got %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Prune(canceled, RetentionPolicy{Now: now, Limit: 1, StatusExpiresBefore: now})), context.Canceled, "expected cancellation")
 }
 
 func TestRetentionPolicyRejectsFutureCutoff(t *testing.T) {

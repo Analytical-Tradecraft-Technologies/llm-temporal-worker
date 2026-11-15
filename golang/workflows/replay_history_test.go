@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 )
@@ -28,9 +29,7 @@ func TestRecordedHistoriesReplay(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			replayer := worker.NewWorkflowReplayer()
 			Register(replayer, activity.PayloadLimits{})
-			if err := replayer.ReplayWorkflowHistoryFromJSONFile(nil, filepath.Join("testdata", "replay", name+".json")); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, replayer.ReplayWorkflowHistoryFromJSONFile(nil, filepath.Join("testdata", "replay", name+".json")))
 		})
 	}
 }
@@ -50,9 +49,7 @@ func TestPinnedLimitHistoriesReplayUnderSmallerLimit(t *testing.T) {
 	for _, name := range []string{"pinned-limit-generate", "pinned-limit-request", "pinned-limit-generate-complete"} {
 		path := filepath.Join("testdata", "replay", name+".json")
 		history, err := client.HistoryFromJSON(mustOpen(t, path), client.HistoryJSONOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		input := history.Events[0].GetWorkflowExecutionStartedEventAttributes().GetInput().GetPayloads()[0].GetData()
 		// The completed history also returned a result over the smaller
 		// limits, so its replay re-encodes that result under the pinned limit.
@@ -73,13 +70,9 @@ func TestPinnedLimitHistoriesReplayUnderSmallerLimit(t *testing.T) {
 			t.Run(name+"/"+strconv.Itoa(limit), func(t *testing.T) {
 				limits := activity.PayloadLimits{MaxInlineBytes: limit}
 				replayer, err := worker.NewWorkflowReplayerWithOptions(worker.WorkflowReplayerOptions{DataConverter: activity.BoundedDataConverter(limits)})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				Register(replayer, limits)
-				if err := replayer.ReplayWorkflowHistoryFromJSONFile(nil, path); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, replayer.ReplayWorkflowHistoryFromJSONFile(nil, path))
 			})
 		}
 	}
@@ -88,9 +81,7 @@ func TestPinnedLimitHistoriesReplayUnderSmallerLimit(t *testing.T) {
 func mustOpen(t *testing.T, path string) *os.File {
 	t.Helper()
 	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = file.Close() })
 	return file
 }

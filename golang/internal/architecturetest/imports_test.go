@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 const modulePath = "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang"
@@ -37,9 +38,7 @@ func TestDomainImportBoundary(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !protectedDomain(packageInfo.ImportPath) {
 			continue
 		}

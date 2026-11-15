@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -74,18 +75,14 @@ func TestTemporalHeartbeaterRecordsAgeSinceMostRecentEvent(t *testing.T) {
 	}
 	environment.RegisterActivity(beat)
 	_, err := environment.ExecuteActivity(beat, engine.Progress{Phase: "planning", At: now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if metrics.age != 0 {
 		t.Fatalf("initial heartbeat age = %s, want zero", metrics.age)
 	}
 
 	now = now.Add(4 * time.Second)
 	_, err = environment.ExecuteActivity(beat, engine.Progress{Phase: "provider_wait", At: now.Add(-time.Second)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if metrics.age != time.Second {
 		t.Fatalf("most recent heartbeat age = %s, want 1s", metrics.age)
 	}

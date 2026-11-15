@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -27,9 +28,7 @@ func TestV1ContractFixturesValidate(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.fixture, func(t *testing.T) {
-			if err := readV1Schema(t, test.schemaName).Validate(readV1Fixture(t, test.fixture)); err != nil {
-				t.Fatalf("fixture rejected: %v", err)
-			}
+			testassert.NoError(t, readV1Schema(t, test.schemaName).Validate(readV1Fixture(t, test.fixture)), "fixture rejected")
 		})
 	}
 }
@@ -71,9 +70,7 @@ func TestV1ContractFixtureMatrix(t *testing.T) {
 	for _, test := range valid {
 		t.Run("valid/"+test.fixture, func(t *testing.T) {
 			compiled := readV1Schema(t, test.schemaName)
-			if err := compiled.Validate(readV1Fixture(t, test.fixture)); err != nil {
-				t.Fatalf("fixture rejected: %v", err)
-			}
+			testassert.NoError(t, compiled.Validate(readV1Fixture(t, test.fixture)), "fixture rejected")
 		})
 	}
 
@@ -180,9 +177,7 @@ func TestV1ContractCompactionPolicyBounds(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var document map[string]any
-			if err := json.Unmarshal(fixture, &document); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, json.Unmarshal(fixture, &document))
 			policy := document["settings_patch"].(map[string]any)["compaction_policy"].(map[string]any)["set"].(map[string]any)
 			if test.field != "" {
 				if test.value == nil {
@@ -192,9 +187,7 @@ func TestV1ContractCompactionPolicyBounds(t *testing.T) {
 				}
 			}
 			encoded, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			err = compiled.Validate(encoded)
 			if test.valid != (err == nil) {
 				t.Fatalf("schema validation error = %v, want valid=%t", err, test.valid)
@@ -206,9 +199,7 @@ func TestV1ContractCompactionPolicyBounds(t *testing.T) {
 func readV1Schema(t *testing.T, name string) *schema.Schema {
 	t.Helper()
 	compiled, err := schema.Parse(readV1SchemaFile(t, name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return compiled
 }
 
@@ -216,17 +207,13 @@ func readV1Schema(t *testing.T, name string) *schema.Schema {
 func readV1SchemaFile(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
 func readV1Fixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "testdata", "v1", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
@@ -48,9 +49,7 @@ func TestTracerAllowsOnlyPublicServiceClasses(t *testing.T) {
 	}
 	_, rejected := tracer.Start(ctx, "provider.attempt", attribute.String("service_class", "secret-token-value"))
 	rejected.End()
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Shutdown(ctx))
 
 	spans := exporter.Spans()
 	if got, want := len(spans), len(classes)+1; got != want {
@@ -80,15 +79,11 @@ func TestTracerContextUsesBoundTracerAndFlushes(t *testing.T) {
 	}
 	_, span := observability.FromContext(ctx).Start(ctx, "runtime.reload", attribute.String("outcome", "success"))
 	span.End()
-	if err := tracer.Flush(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Flush(ctx))
 	if len(exporter.Spans()) != 1 {
 		t.Fatalf("flushed span count = %d, want 1", len(exporter.Spans()))
 	}
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Shutdown(ctx))
 }
 
 func TestTracerRecordErrorDropsMalformedProviderFields(t *testing.T) {
@@ -154,12 +149,8 @@ func TestTracerBoundsSpanNamesAndNoopContextPaths(t *testing.T) {
 		t.Fatal("nil tracer changed context")
 	}
 	var nilExporter *observability.MemoryExporter
-	if err := nilExporter.ExportSpans(ctx, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := nilExporter.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, nilExporter.ExportSpans(ctx, nil))
+	testassert.NoError(t, nilExporter.Shutdown(ctx))
 	if got := nilExporter.Spans(); got != nil {
 		t.Fatalf("nil exporter spans = %v, want nil", got)
 	}
@@ -174,9 +165,7 @@ func TestTracerBoundsSpanNamesAndNoopContextPaths(t *testing.T) {
 		tracer.RecordError(span, nil)
 		span.End()
 	}
-	if err := tracer.Flush(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Flush(ctx))
 	spans := exporter.Spans()
 	if len(spans) != 5 {
 		t.Fatalf("span count = %d, want 5", len(spans))
@@ -189,9 +178,7 @@ func TestTracerBoundsSpanNamesAndNoopContextPaths(t *testing.T) {
 	if got := spans[4].Name(); got != "worker.event" {
 		t.Fatalf("safe span name = %q, want worker.event", got)
 	}
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Shutdown(ctx))
 }
 
 func TestDisabledTracerDoesNotRecordOrCreateTraceContext(t *testing.T) {
@@ -212,12 +199,8 @@ func TestDisabledTracerDoesNotRecordOrCreateTraceContext(t *testing.T) {
 			}
 			test.tracer.RecordError(span, context.Canceled)
 			span.End()
-			if err := test.tracer.Flush(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if err := test.tracer.Shutdown(ctx); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, test.tracer.Flush(ctx))
+			testassert.NoError(t, test.tracer.Shutdown(ctx))
 		})
 	}
 	if len(exporter.Spans()) != 0 {
@@ -251,9 +234,7 @@ func newMemoryTracer() (*observability.MemoryExporter, *observability.Tracer) {
 // shutdownSingleSpan shuts the tracer down and returns the only exported span.
 func shutdownSingleSpan(t *testing.T, ctx context.Context, tracer *observability.Tracer, exporter *observability.MemoryExporter) sdktrace.ReadOnlySpan {
 	t.Helper()
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Shutdown(ctx))
 	spans := exporter.Spans()
 	if len(spans) != 1 {
 		t.Fatalf("span count = %d", len(spans))

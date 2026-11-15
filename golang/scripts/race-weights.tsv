@@ -1,0 +1,89 @@
+# Seconds per race work item for scripts/run-race-shard.sh (#1570), measured
+# with go test -race -count=1 -p 4 -json ./... at 10368963 (2026-11-15).
+# Top-level tests slower than 60s are carved out as "<package> <Test>"; the
+# package item holds the rest of its time. Refresh from the "Race package"
+# timings every master verify-race shard prints and retains.
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity	2.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission	2.3
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget	4.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache	2.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cmd/llm-temporal-worker	5.4
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction	12.6
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config	60.3
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control	2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine	4.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/integration	10.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/integration/compose	2.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/integration/kubernetes	4.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app	31.4
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/architecturetest	141.4
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/buildinfo	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/catalog	2.3
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/diagnostic	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/documentationtest	20.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver	1.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync	5.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/netpolicy	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability	2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/qualitytest	8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/responsesapi	4.6
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime	215.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime TestCloudGenerateRefusesToExtendAParentPastTheExtendableBound	131.3
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/runtime TestCloudScreenshotLoopContinuesAcrossCompaction	286.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse	2.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm	63.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm TestNormalizeRequestCopyMatchesRoundTripRandomized	135.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages	5.6
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockconverse	2.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockmessages	3.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest	2.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire	1.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/awscredentials	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/azurecredentials	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaierror	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaiwire	2.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemawire	1.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamdecode	2.5
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/usage	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openaichat	4.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses	10.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema	10.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/maintenance	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state	34.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks	233.5
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate	65.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/conformance	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable	2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/fileblob	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/memory	1.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis	2.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/regional	1.8
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/s3blob	1.7
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/temporalcodec	2.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/deploymentpolicy	2.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/modelsyncdefaults	0.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/mutationverify	6.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/ocimerge	2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/releaseverify	12.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/sourceverify	2.4
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/sourceverify TestVerifyAllowsTestOutputAboveTheRepositoryFileLimit	68.1
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/sourceverify TestVerifyDetectsBase64FindingAtTheTailOfGoTestJSONStream	97.9
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/sourceverify TestVerifyDetectsFindingsNearTheTailOfLargeTestStream	193.4
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/tools/supplychainverify	8.2
+github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows	61.5

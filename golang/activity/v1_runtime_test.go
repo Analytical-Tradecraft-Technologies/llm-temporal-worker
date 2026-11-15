@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -145,15 +146,9 @@ func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 func TestV1ActivitiesDispatchTypedRecords(t *testing.T) {
 	runtime := &v1RuntimeStub{}
 	activities := &Activities{V1Runtime: runtime}
-	if _, err := activities.GenerateV1(context.Background(), validGenerateV1Request()); err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
-	if _, err := activities.CompactV1(context.Background(), validCompactV1Request()); err != nil {
-		t.Fatalf("CompactV1 error = %v", err)
-	}
-	if _, err := activities.QueryV1(context.Background(), validQueryV1Request()); err != nil {
-		t.Fatalf("QueryV1 error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(activities.GenerateV1(context.Background(), validGenerateV1Request())), "GenerateV1 error")
+	testassert.NoError(t, testassert.Err(activities.CompactV1(context.Background(), validCompactV1Request())), "CompactV1 error")
+	testassert.NoError(t, testassert.Err(activities.QueryV1(context.Background(), validQueryV1Request())), "QueryV1 error")
 	if runtime.generateCalls != 1 || runtime.compactCalls != 1 || runtime.queryCalls != 1 {
 		t.Fatalf("runtime calls = generate:%d compact:%d query:%d", runtime.generateCalls, runtime.compactCalls, runtime.queryCalls)
 	}
@@ -205,9 +200,7 @@ func TestV1GeneratePreservesHeartbeatLifecycleDuringRuntimeDispatch(t *testing.T
 	close(runtime.release)
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for v1 Activity completion")
 	}

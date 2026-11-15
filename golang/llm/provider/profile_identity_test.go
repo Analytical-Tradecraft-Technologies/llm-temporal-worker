@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -27,9 +28,7 @@ func TestValidateProfileIdentity(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			err := ValidateProfileIdentity("x", test.id, test.baseURL, test.model, test.decl, test.capabilities)
 			if test.want == "" {
-				if err != nil {
-					t.Fatalf("ValidateProfileIdentity() = %v", err)
-				}
+				testassert.NoError(t, err, "ValidateProfileIdentity()")
 				return
 			}
 			if err == nil || !strings.HasPrefix(err.Error(), test.want) {

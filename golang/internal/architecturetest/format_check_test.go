@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"bytes"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,9 +14,7 @@ import (
 func TestFormattingEntrypointsDelegateToCanonicalHelper(t *testing.T) {
 	root := repositoryRoot(t)
 	helper := filepath.Join(moduleRoot(t), "scripts", "check-go-format.sh")
-	if _, err := os.Stat(helper); err != nil {
-		t.Fatalf("canonical formatting helper: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(os.Stat(helper)), "canonical formatting helper")
 
 	for _, file := range []struct {
 		path string
@@ -151,9 +150,7 @@ func writeGoFixture(t *testing.T, path string) {
 func readNULPaths(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	parts := bytes.Split(data, []byte{0})
 	paths := make([]string, 0, len(parts)-1)
 	for _, part := range parts[:len(parts)-1] {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -21,9 +22,7 @@ func TestCompileSendsTheConfiguredProviderTier(t *testing.T) {
 		Strict:   true,
 		Metadata: provider.CallMetadata{ProviderTier: "auto"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	params, ok := call.SDKParams.(responses.ResponseNewParams)
 	if !ok {
 		t.Fatalf("SDK params type = %T", call.SDKParams)

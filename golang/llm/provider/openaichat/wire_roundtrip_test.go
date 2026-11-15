@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -54,9 +55,7 @@ func wireAuditProfiles(t *testing.T) []wireAuditProfile {
 	direct := testProfile()
 	direct.AllowedExtensions = wireAuditExtensions()
 	openAIProfile, err := NewProfile(direct)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	azureEndpoint := "https://127.0.0.1"
 	azureProfile, err := NewAzureProfile(AzureProfileConfig{
 		ID:                "azure-audit",
@@ -75,9 +74,7 @@ func wireAuditProfiles(t *testing.T) []wireAuditProfile {
 		},
 		AllowedExtensions: wireAuditExtensions(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	standardOnly := map[llm.ServiceClass]string{
 		llm.ServiceClassEconomy:  "",
 		llm.ServiceClassStandard: "standard",
@@ -97,9 +94,7 @@ func wireAuditProfiles(t *testing.T) []wireAuditProfile {
 		Upstreams:                 allModelsUpstreams{"ProviderA", "ProviderB"},
 		AllowedExtensions:         wireAuditExtensions(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	exaProfile, err := NewExaProfile(ExaProfileConfig{
 		ID:                        "exa-audit",
 		CapabilityVersion:         "exa-audit/v1",
@@ -110,9 +105,7 @@ func wireAuditProfiles(t *testing.T) []wireAuditProfile {
 		MissingActualServiceClass: llm.ServiceClassStandard,
 		AllowedExtensions:         wireAuditExtensions(),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return []wireAuditProfile{
 		{id: "openai", model: "chat-model", profile: openAIProfile, newClient: func(httpClient *http.Client) (*Client, error) {
 			return NewClient(ClientConfig{BaseURL: "https://127.0.0.1/v1", APIKey: "audit-key", HTTPClient: httpClient})
@@ -142,21 +135,15 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 		captured = body
 		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"chatcmpl-audit","object":"chat.completion","created":1700000000,"model":"`+profile.model+`","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, "X-Request-Id", "req-wire-audit"), nil
 	})})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "wire-audit", profile.profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: request,
 		Query:   provider.CapabilityQuery{EndpointID: "wire-audit", Family: provider.FamilyOpenAIChat, Model: profile.model},
 		Strict:  true,
 	})
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
+	testassert.NoError(t, err, "Compile() error")
 	// Only the request is under audit; the canned response need not satisfy
 	// the lift for every request shape.
 	_, invokeErr := adapter.Invoke(context.Background(), call, provider.NopObserver{})
@@ -176,17 +163,11 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	t.Helper()
 	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	tier, err := profile.profile.providerTier(serviceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	lowering, err := profile.profile.forRequest(normalized.Model, serviceClass, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	requestMap, err := lowerRequestMap(normalized, lowering, tier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return contract.JSONObject(t, requestMap)
 }
 

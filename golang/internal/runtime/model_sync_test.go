@@ -10,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/catalog"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -45,9 +46,7 @@ func modelSyncTestCatalogs(t *testing.T) loadedCatalogs {
 	configuredPrice := pricing.Entry{Provider: "openai", Family: "openai_responses", EndpointID: "configured", Region: "global", Model: "gpt-5.4", ProviderTier: "default",
 		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("9"), OutputPerMillion: pricing.MustDecimalUSD("9")}}
 	prices, err := pricing.CompileUSD("runtime-prices/config-v1", []pricing.Entry{configuredPrice})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	base := engine.Snapshot{Version: "config-v1", ConfigDigest: [32]byte{1}, ConfigEpoch: "config-v1",
 		Routes: routing.Catalog{Version: "llm-temporal-worker/v1", Models: map[string]routing.Model{"openai/gpt-5.4": {Name: "openai/gpt-5.4", Routes: []routing.Route{{
 			ID: "configured", EndpointID: "configured", Provider: "openai", Family: "openai_responses", Region: "global", Model: "gpt-5.4",
@@ -83,9 +82,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	document := modelSyncTestDocument()
 	mustInstall(t, syncRuntime, &document)
 	snapshot, err := syncRuntime.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if snapshot.ConfigDigest != loaded.snapshot.ConfigDigest || snapshot.ConfigEpoch != loaded.snapshot.ConfigEpoch || snapshot.Version != loaded.snapshot.Version {
 		t.Fatal("installing a synced catalog changed the configuration identity")
 	}
@@ -98,9 +95,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 		t.Fatalf("synced model routes = %+v, want only the enabled OpenRouter route", mini)
 	}
 	quote, err := snapshot.Prices.Resolve(openRouterMiniQuery())
-	if err != nil {
-		t.Fatalf("synced route has no price: %v", err)
-	}
+	testassert.NoError(t, err, "synced route has no price")
 	if got := quote.Entry.Prices.InputPerMillion.CanonicalString(); got != "0.8" {
 		t.Fatalf("OpenRouter input price = %s, want the 0.8 maximum over upstreams", got)
 	}
@@ -182,9 +177,7 @@ func syncedEndpointDigest(t *testing.T, change func(*config.EndpointConfig)) [32
 // changed one (#1340).
 func TestModelSyncRoutesCarryTheEndpointDigest(t *testing.T) {
 	want, err := endpointConfigDigest("openrouter", modelSyncTestConfig().Endpoints["openrouter"])
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := syncedEndpointDigest(t, nil)
 	if got == ([32]byte{}) || got != want {
 		t.Fatalf("synced endpoint digest = %x, want %x", got, want)
@@ -222,9 +215,7 @@ func TestModelSyncPublishesAllowedUpstreamsForEveryOpenRouterModel(t *testing.T)
 		t.Fatal("a US provider is allowed under the EU list")
 	}
 	snapshot, err := europe.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if routes := snapshot.Routes.Models["openai/gpt-5.4-mini"].Routes; len(routes) != 0 {
 		t.Fatalf("synced model routes = %+v, want none without an allowed upstream", routes)
 	}
@@ -236,9 +227,7 @@ func TestModelSyncPublishesAllowedUpstreamsForEveryOpenRouterModel(t *testing.T)
 func TestEndpointRecoveryIdentityMatchesTheRecoveryReference(t *testing.T) {
 	endpoint := modelSyncTestConfig().Endpoints["openrouter"]
 	base, err := endpointConfigDigest("openrouter", endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	changed := endpoint
 	changed.Timeout += config.Duration(time.Second)
 	changed.Optional = !changed.Optional
@@ -263,25 +252,19 @@ func TestEndpointRecoveryIdentityMatchesTheRecoveryReference(t *testing.T) {
 func enabledModelSync(t *testing.T, value config.Config, loaded loadedCatalogs, endpoints ...string) *modelSyncRuntime {
 	t.Helper()
 	syncRuntime, err := newModelSyncRuntime(value, loaded, catalog.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapters := map[string]provider.Adapter{}
 	for _, endpoint := range endpoints {
 		adapters[endpoint] = nil
 	}
-	if err := syncRuntime.enable(adapters); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, syncRuntime.enable(adapters))
 	return syncRuntime
 }
 
 // mustInstall installs document into syncRuntime or fails the test.
 func mustInstall(t *testing.T, syncRuntime *modelSyncRuntime, document *modelsync.Document) {
 	t.Helper()
-	if err := syncRuntime.install(document); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, syncRuntime.install(document))
 }
 
 // openRouterMiniQuery is a price query, as of now, for the synced OpenRouter

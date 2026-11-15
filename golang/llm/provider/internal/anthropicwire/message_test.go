@@ -7,15 +7,14 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 func TestResponseMetadataFallsBackToBodyRequestID(t *testing.T) {
 	var message anthropic.Message
-	if err := json.Unmarshal([]byte(`{"id":"msg","request_id":"body-req"}`), &message); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(`{"id":"msg","request_id":"body-req"}`), &message))
 	raw := &http.Response{StatusCode: 200, Header: http.Header{}}
 	if got := ResponseMetadata(&message, raw, "tier", "request-id"); got != (provider.ResponseMetadata{ResponseID: "msg", ProviderTier: "tier", Status: 200, RequestID: "body-req"}) {
 		t.Fatalf("ResponseMetadata(no header) = %+v", got)

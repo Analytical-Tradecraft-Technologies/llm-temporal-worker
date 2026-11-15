@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -29,9 +30,7 @@ func TestMalformedToolOutputReturnsAcceptedErrorWithoutPanic(t *testing.T) {
 		tests[name] = &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{block}}}
 	}
 	adapter, err := New(&Client{converse: &fakeConverse{}}, "endpoint", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for name, output := range tests {
 		t.Run(name, func(t *testing.T) {
 			_, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: output, StopReason: types.StopReasonMalformedToolUse, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
@@ -43,9 +42,7 @@ func TestMalformedToolOutputReturnsAcceptedErrorWithoutPanic(t *testing.T) {
 func TestToolDescriptionIsOmittedOnlyWhenEmpty(t *testing.T) {
 	for _, description := range []string{"", "Find a city"} {
 		tools, err := lowerTools([]llm.Tool{{Name: "lookup", Description: description, InputSchema: json.RawMessage(`{"type":"object"}`)}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		spec := tools[0].(*types.ToolMemberToolSpec).Value
 		if description == "" {
 			if spec.Description != nil {
@@ -59,9 +56,7 @@ func TestToolDescriptionIsOmittedOnlyWhenEmpty(t *testing.T) {
 
 func TestConversePreservesCacheUsage(t *testing.T) {
 	adapter, err := New(&Client{converse: &fakeConverse{}}, "endpoint", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, cached := range []bool{false, true} {
 		usage := &types.TokenUsage{InputTokens: aws.Int32(4), OutputTokens: aws.Int32(3)}
 		if cached {
@@ -69,9 +64,7 @@ func TestConversePreservesCacheUsage(t *testing.T) {
 			usage.CacheWriteInputTokens = aws.Int32(5)
 		}
 		result, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "answer"}}}}, StopReason: types.StopReasonEndTurn, Usage: usage, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		want := llm.Usage{InputTokens: 4, OutputTokens: 3}
 		if cached {
 			want.CacheReadTokens = 7

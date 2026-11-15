@@ -2,12 +2,13 @@ package schemaorder
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
 func TestOrderedFollowsRequiredOrderRecursively(t *testing.T) {
 	var schema any
-	if err := json.Unmarshal([]byte(`{
+	testassert.NoError(t, json.Unmarshal([]byte(`{
 		"type": "object",
 		"required": ["reasoning", "answer"],
 		"properties": {
@@ -16,30 +17,22 @@ func TestOrderedFollowsRequiredOrderRecursively(t *testing.T) {
 			"extra": {"type": "integer", "minimum": 1.50}
 		},
 		"additionalProperties": false
-	}`), &schema); err != nil {
-		t.Fatal(err)
-	}
+	}`), &schema))
 	got, err := Ordered(schema)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := `{"additionalProperties":false,"properties":{"reasoning":{"properties":{"steps":{"items":{"type":"string"},"type":"array"},"confidence":{"type":"number"}},"required":["steps","confidence"],"type":"object"},"answer":{"type":"string"},"extra":{"minimum":1.5,"type":"integer"}},"required":["reasoning","answer"],"type":"object"}`
 	if string(got) != want {
 		t.Fatalf("Ordered() =\n%s\nwant\n%s", got, want)
 	}
 	// A "properties" key that is a property name, not a keyword, keeps its
 	// schema intact.
-	if _, err := Ordered(map[string]any{"properties": map[string]any{"properties": map[string]any{"type": "string"}}, "required": []any{"properties", "missing"}}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(Ordered(map[string]any{"properties": map[string]any{"properties": map[string]any{"type": "string"}}, "required": []any{"properties", "missing"}})))
 }
 
 func TestDecodeRetainsNumbersAndRejectsTrailingValues(t *testing.T) {
 	for _, input := range []string{`{"value":9007199254740993}`, `{"value":0.100000000000000000001}`, `{"value":1.234567890123456789e+20}`} {
 		var value any
-		if err := Decode([]byte(input), &value); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, Decode([]byte(input), &value))
 		encoded, err := json.Marshal(value)
 		if err != nil || string(encoded) != input {
 			t.Fatalf("Decode changed numeric literal: %s, %v", encoded, err)

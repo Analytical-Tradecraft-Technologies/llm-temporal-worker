@@ -12,6 +12,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -37,13 +38,9 @@ func reserveExecutionPlan(t *testing.T, r *Repository, record Record, plan Budge
 		return plan, durable.ReserveResult{}
 	}
 	leaser, err := durable.NewReferenceBudgetMaterializer(plan.Route.GenerationID, "incarnation", func() time.Time { return plan.QuotedAt })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reservation, err := leaser.Accept(ctx, plan.Reservation)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return plan, reservation
 }
 
@@ -99,7 +96,7 @@ func advanceExecution(t *testing.T, r *Repository, record Record, saved SavedPro
 	update(&next)
 	next.Revision++
 	next.UpdatedAt = next.UpdatedAt.Add(time.Second)
-	mustNoError(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next))
+	testassert.NoError(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next))
 	saved.Execution = next
 	return saved
 }
@@ -137,8 +134,8 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	r, table, blobs, record, plan, reservation := executionFixture(t)
 	saved := startExecution(t, r, record, plan, reservation)
 	ctx := context.Background()
-	requireErrorIs(t, errOf(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "execution did not fence admission")
-	requireErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "execution allowed initial replanning")
+	testassert.ErrorIs(t, testassert.Err(r.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "execution did not fence admission")
+	testassert.ErrorIs(t, r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt), contracts.ErrConflict, "execution allowed initial replanning")
 	saved = markExecutionSubmitting(t, r, record, saved, reservation)
 	saved = markExecutionPending(t, r, record, saved, "sensitive-provider-job", plan.QuotedAt.Add(time.Minute))
 	restarted := reopen(t, table, blobs)
@@ -159,7 +156,7 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	}
 	wrong := record.Request.Scope
 	wrong.Project = "different"
-	requireErrorIs(t, errOf(restarted.LoadProviderExecution(ctx, wrong, record.Request.ID)), contracts.ErrNotFound, "scope leaked")
+	testassert.ErrorIs(t, testassert.Err(restarted.LoadProviderExecution(ctx, wrong, record.Request.ID)), contracts.ErrNotFound, "scope leaked")
 	// Even a replacement reservation or changed time cannot grant a second start.
 	_, fresh, err := restarted.BeginProviderExecution(ctx, record.Request.Scope, record.Request.ID, durable.ReserveResult{}, false, plan.QuotedAt.Add(time.Hour))
 	if err != nil || fresh {
@@ -175,12 +172,12 @@ func TestProviderExecutionFencesAdmissionAndRecoversEncryptedJob(t *testing.T) {
 	if err != nil || current.Status != StatusRunning {
 		t.Fatal("result is not ready for checkpoint finalization", err)
 	}
-	requireErrorIs(t, errOf(restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "saved result reopened admission")
+	testassert.ErrorIs(t, testassert.Err(restarted.LoadBudgetPlan(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "saved result reopened admission")
 	// Terminal provider output cannot be replaced, even before checkpoint publication.
 	next := saved.Execution
 	next.Revision++
 	next.Response = &llm.Response{OperationKey: "replacement", Status: llm.ResponseStatusCompleted}
-	requireErrorIs(t, restarted.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, next), contracts.ErrConflict, "terminal response replaced")
+	testassert.ErrorIs(t, restarted.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, next), contracts.ErrConflict, "terminal response replaced")
 }
 
 func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
@@ -238,9 +235,7 @@ func TestProviderExecutionToolCallDepth(t *testing.T) {
 	ctx := context.Background()
 	saved := startExecution(t, r, record, plan, reservation)
 	saved = markExecutionSubmitting(t, r, record, saved, reservation)
-	if err := r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, succeeded(saved, llm.MaxToolArgumentsDepth)); err != nil {
-		t.Fatalf("tool call at the adapter depth limit not saved: %v", err)
-	}
+	testassert.NoError(t, r.SaveProviderExecution(ctx, record.Request.Scope, record.Request.ID, saved.Execution.Revision, succeeded(saved, llm.MaxToolArgumentsDepth)), "tool call at the adapter depth limit not saved")
 
 	// Anything deeper is refused as a deterministic record limit, like an
 	// oversized response, so the paid attempt can still be closed.
@@ -260,7 +255,7 @@ func TestProviderExecutionConcurrentStartsAuthorizeOnlyOneWriter(t *testing.T) {
 	if winners != 1 {
 		t.Fatal("multiple fresh start permissions", winners)
 	}
-	mustNoError(t, errOf(r.LoadProviderExecution(context.Background(), record.Request.Scope, record.Request.ID)))
+	testassert.NoError(t, testassert.Err(r.LoadProviderExecution(context.Background(), record.Request.Scope, record.Request.ID)))
 }
 
 func TestProviderExecutionLostStartReplyNeverAuthorizesReplay(t *testing.T) {
@@ -317,7 +312,7 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 		next := saved.Execution
 		next.Revision++
 		mutation(&next)
-		requireErrorIs(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next), contracts.ErrConflict, "changed binding accepted")
+		testassert.ErrorIs(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, saved.Execution.Revision, next), contracts.ErrConflict, "changed binding accepted")
 	}
 	old := saved
 	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.PollAfter = e.PollAfter.Add(time.Second) })
@@ -326,7 +321,7 @@ func TestProviderExecutionRejectsChangedLeaseAndStalePoll(t *testing.T) {
 	next.Stage = ExecutionUnknown
 	next.PollAfter = time.Time{}
 	next.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-	requireErrorIs(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, old.Execution.Revision, next), contracts.ErrConflict, "stale poll overwrote newer state")
+	testassert.ErrorIs(t, r.SaveProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, old.Execution.Revision, next), contracts.ErrConflict, "stale poll overwrote newer state")
 	// Positive recovery after an unknown outcome can retain the original paid job.
 	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
 		e.Stage = ExecutionUnknown
@@ -368,9 +363,7 @@ func TestProviderExecutionKeepsUnknownCostReasonOutsideTheResponse(t *testing.T)
 	execution := ProviderExecution{StartToken: "token", Version: 1, Stage: ExecutionSucceeded,
 		Response: &llm.Response{APIVersion: llm.APIVersion, OperationKey: "op", Status: llm.ResponseStatusCompleted, Cost: llm.Cost{Status: llm.CostStatusUnknown, UnknownReason: llm.CostUnknownCatalogIncomplete}}}
 	encoded, err := json.Marshal(execution)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &fields); err != nil || string(fields["cost_unknown_reason"]) != `"catalog_incomplete"` || fields["start_token"] == nil {
 		t.Fatalf("encoded execution = %s, %v", encoded, err)
@@ -390,9 +383,7 @@ func TestProviderExecutionKeepsUnknownCostReasonOutsideTheResponse(t *testing.T)
 
 	delete(fields, "cost_unknown_reason")
 	stored, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var legacy ProviderExecution
 	if err := json.Unmarshal(stored, &legacy); err != nil || legacy.Response == nil || legacy.Response.Cost.Status != llm.CostStatusUnknown || legacy.Response.Cost.UnknownReason != "" {
 		t.Fatalf("stored execution without a reason = %#v, %v", legacy, err)

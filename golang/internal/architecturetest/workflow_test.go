@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -454,18 +455,10 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 		}
 	}
 
-	if err := validateReleaseMakeInvocationPolicy(master, pullRequest, release); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateReleaseEvidencePathOverridePolicy(master); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateReleaseEvidenceBindsImageIndex(master); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateReleaseMakeInvocationPolicy(master, pullRequest, release))
+	testassert.NoError(t, validateReleaseEvidencePathOverridePolicy(master))
+	testassert.NoError(t, validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master))
+	testassert.NoError(t, validateReleaseEvidenceBindsImageIndex(master))
 }
 
 func TestWorkflowReleaseEvidenceImageIndexPolicyRejectsSinglePlatformEvidence(t *testing.T) {
@@ -889,9 +882,19 @@ func assertRequiredOfflineGates(t *testing.T, workflow workflowDocument) {
 		"make docs-verify",
 		"make deployment-policy-verify",
 		"go vet ./...",
-		"go test -race ./...",
+		raceGateCommand(workflow),
 		"go build ./...",
 	)
+}
+
+// raceGateCommand is the full race-enabled suite each workflow must run.
+// Master runs it as package shards that together cover `go list ./...`
+// (#1570, pinned by TestWorkflowMasterShardsCoverEveryRaceAndFuzzItem).
+func raceGateCommand(workflow workflowDocument) string {
+	if workflow.name == "master.yml" {
+		return "bash scripts/run-race-shard.sh"
+	}
+	return "go test -race ./..."
 }
 
 func readWorkflow(t *testing.T, name string) workflowDocument {
@@ -1467,11 +1470,23 @@ func TestWorkflowRaceRunsSetExplicitPackageTimeouts(t *testing.T) {
 		command  string
 	}{
 		{workflow: "pull-request.yml", command: "go test -race ./... -timeout 30m"},
-		{workflow: "master.yml", command: "go test -race ./... -timeout 30m"},
 		{workflow: "master.yml", command: "go test -race -count=1 -timeout 30m "},
 	} {
 		if !strings.Contains(readWorkflow(t, test.workflow).raw, test.command) {
 			t.Errorf("%s race run %q must set an explicit package timeout", test.workflow, test.command)
 		}
+	}
+	// Master's sharded race suite sets the same timeout on every go test run.
+	shard := readRepositoryFile(t, repositoryRoot(t), "golang", "scripts", "run-race-shard.sh")
+	for _, command := range []string{
+		`"$GO" test -race "${whole[@]}" -timeout 30m`,
+		`"$GO" test -race "${selection[@]}" "$package" -timeout 30m`,
+	} {
+		if !strings.Contains(shard, command) {
+			t.Errorf("run-race-shard.sh race run %q must set an explicit package timeout", command)
+		}
+	}
+	if got := strings.Count(shard, `"$GO" test -race`); got != 3 {
+		t.Errorf("run-race-shard.sh has %d race invocations, want the two timed runs and one -list", got)
 	}
 }

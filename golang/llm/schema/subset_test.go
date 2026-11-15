@@ -3,6 +3,7 @@ package schema_test
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -16,9 +17,7 @@ func TestSupportedSubsetAcceptsCompositionAndLocalDefs(t *testing.T) {
   "additionalProperties":false,
   "allOf":[{"type":"object"}]
 }`)
-	if _, err := schema.Parse(data); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(schema.Parse(data)))
 }
 
 func TestSupportedSubsetRejectsProviderExecutionKeywords(t *testing.T) {

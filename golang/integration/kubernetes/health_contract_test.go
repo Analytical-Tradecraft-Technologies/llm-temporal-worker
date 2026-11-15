@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -63,9 +64,7 @@ func TestComposeAndKubernetesShareWorkerHealthContract(t *testing.T) {
 	healthPort := configuredHealthPort(t)
 	compose := readHealthFixture(t, "compose.yaml")
 	var composeDocument composeHealthDocument
-	if err := yaml.NewDecoder(bytes.NewReader(compose)).Decode(&composeDocument); err != nil {
-		t.Fatalf("decode Compose fixture: %v", err)
-	}
+	testassert.NoError(t, yaml.NewDecoder(bytes.NewReader(compose)).Decode(&composeDocument), "decode Compose fixture")
 	worker, ok := composeDocument.Services["worker"]
 	if !ok {
 		t.Fatal("Compose fixture is missing the worker service")
@@ -91,9 +90,7 @@ func TestComposeAndKubernetesShareWorkerHealthContract(t *testing.T) {
 
 	deploymentData := readHealthFixture(t, filepath.Join("deploy", "kubernetes", "base", "deployment.yaml"))
 	var deployment deploymentHealthManifest
-	if err := yaml.NewDecoder(bytes.NewReader(deploymentData)).Decode(&deployment); err != nil {
-		t.Fatalf("decode Kubernetes deployment: %v", err)
-	}
+	testassert.NoError(t, yaml.NewDecoder(bytes.NewReader(deploymentData)).Decode(&deployment), "decode Kubernetes deployment")
 	if len(deployment.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("Kubernetes worker containers = %d, want exactly one", len(deployment.Spec.Template.Spec.Containers))
 	}
@@ -121,9 +118,7 @@ func TestComposeAndKubernetesShareWorkerHealthContract(t *testing.T) {
 func TestKubernetesOverlaysInheritTheBaseHealthContract(t *testing.T) {
 	examplesDirectory := filepath.Join(moduleRoot(t), "deploy", "kubernetes", "examples")
 	entries, err := os.ReadDir(examplesDirectory)
-	if err != nil {
-		t.Fatalf("read Kubernetes examples directory: %v", err)
-	}
+	testassert.NoError(t, err, "read Kubernetes examples directory")
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -153,9 +148,7 @@ func TestKubernetesOverlaysInheritTheBaseHealthContract(t *testing.T) {
 				}
 				return nil
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 		})
 	}
 }

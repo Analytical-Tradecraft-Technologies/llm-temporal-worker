@@ -22,18 +22,14 @@ func primaryKey(id string, fill byte) Key {
 func testCodec(t *testing.T, keys ...Key) converter.PayloadCodec {
 	t.Helper()
 	codec, err := NewAESGCM(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return codec
 }
 
 func encodeValue(t *testing.T, codec converter.PayloadCodec, value any) *commonpb.Payload {
 	t.Helper()
 	payload, err := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), codec).ToPayload(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return payload
 }
 
@@ -149,17 +145,13 @@ func TestDecodeRejectsTamperedPayloads(t *testing.T) {
 func TestDecodePassesThroughUnencryptedPayloads(t *testing.T) {
 	codec := testCodec(t, primaryKey("k1", 1))
 	plain, err := converter.GetDefaultDataConverter().ToPayload(testPrompt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	requireDecodesPrompt(t, codec, plain, "decode of a plaintext payload")
 }
 
 func TestNewAESGCMRejectsInvalidKeys(t *testing.T) {
 	long := make([]byte, 64)
-	if _, err := rand.Read(long); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(rand.Read(long)))
 	for name, test := range map[string]struct {
 		keys []Key
 		want string
@@ -176,9 +168,7 @@ func TestNewAESGCMRejectsInvalidKeys(t *testing.T) {
 			t.Errorf("%s: NewAESGCM() = %v, want %q", name, err, test.want)
 		}
 	}
-	if _, err := NewAESGCM([]Key{{ID: "k1", Secret: long, Primary: true}}); err != nil {
-		t.Fatalf("64-byte secret rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(NewAESGCM([]Key{{ID: "k1", Secret: long, Primary: true}})), "64-byte secret rejected")
 }
 
 // Oversized ciphertext is rejected before decryption; payloads within the
@@ -188,9 +178,7 @@ func TestDecodeRejectsCiphertextAboveCeilingBeforeDecrypting(t *testing.T) {
 	unbounded := testCodec(t, keys...)
 	const limit = 64
 	bounded, err := NewAESGCMWithOptions(keys, Options{MaxPayloadBytes: limit})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	small := encodeValue(t, unbounded, strings.Repeat("a", limit-8))
 	if got, err := decodeValue(bounded, small); err != nil || got != strings.Repeat("a", limit-8) {

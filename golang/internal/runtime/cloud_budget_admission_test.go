@@ -13,6 +13,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -109,9 +110,7 @@ func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budg
 	f.store = &admissionPlanStore{record: cloudstate.Record{Request: cloudstate.CreateRequest{
 		ID: id, Scope: testRequestScope, Kind: kind, Manifest: data, CreatedAt: f.attempt.QuotedAt}, Status: cloudstate.StatusRunning}}
 	reference, err := durable.NewReferenceBudgetMaterializer(f.attempt.GenerationID, "incarnation-1", func() time.Time { return f.attempt.QuotedAt })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.leaser = &admissionLeaser{BudgetLeaser: reference}
 	composition := validCapabilityComposition()
 	composition.Identity.ConfigDigest = f.cap.ConfigDigest
@@ -121,9 +120,7 @@ func newCloudAdmissionFixture(t *testing.T, kind string, configure ...func(*budg
 	f.cap.RedisIdentity, f.cap.Budgets = composition.Identity.Redis, f.leaser
 	f.cap.Requests, f.cap.BudgetEstimator, f.cap.MaxBudgetBucketsPerWindow = f.store, f.estimator, 100
 	f.helper, err = f.cap.NewCloudBudgetAdmission(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return f
 }
 func (f *cloudAdmissionFixture) prepare(ctx context.Context, attempt BudgetAttempt) (*CloudBudgetCall, error) {
@@ -152,9 +149,7 @@ func TestCloudBudgetAdmissionBothKindsPersistBeforeAcceptanceAndClaim(t *testing
 				return f.leaser.BudgetLeaser.Accept(ctx, req)
 			}
 			call, err := f.prepare(context.Background(), f.attempt)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if accepts != 0 || f.store.saves != 1 || f.source.reads != 1 {
 				t.Fatal("preparation acquired budget or recaptured snapshot")
 			}
@@ -178,9 +173,7 @@ func TestCloudBudgetAdmissionRestartAfterLostRedisReplyRetainsExactPlan(t *testi
 	f := newCloudAdmissionFixture(t, "generate")
 	ctx := context.Background()
 	call, err := f.prepare(ctx, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	original := call.Plan()
 	f.leaser.accept = func(ctx context.Context, r durable.ReserveRequest) (durable.ReserveResult, error) {
 		_, err := f.leaser.BudgetLeaser.Accept(ctx, r)
@@ -200,9 +193,7 @@ func TestCloudBudgetAdmissionRestartAfterLostRedisReplyRetainsExactPlan(t *testi
 	changed.Prices.InputPerMillion = pricing.MustDecimalUSD("99")
 	f.prices(t, []pricing.Entry{changed})
 	f.helper, err = f.cap.NewCloudBudgetAdmission(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	replacement := f.attempt
 	replacement.OperationID = "must-not-use"
 	replacement.QuotedAt = replacement.QuotedAt.Add(time.Minute)
@@ -236,25 +227,17 @@ func TestCloudBudgetAdmissionSaveAcknowledgementAndCompetingWinner(t *testing.T)
 				f.store.saveAfter = nil
 			} else {
 				prepared, err := PrepareGenerateInput(ctx, f.gen, durable.GenerateReplay{})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				winner := f.attempt
 				winner.OperationID = "winning-attempt"
 				planned, err := f.helper.planning.Generate(ctx, prepared, winner)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				plan, err := planned.BudgetPlan("generate")
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				f.store.winner, _ = json.Marshal(plan)
 			}
 			call, err := f.prepare(ctx, f.attempt)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if scenario == "competing plan" && call.Plan().Route.OperationID != "winning-attempt" {
 				t.Fatal("loser's identity survived durable CAS")
 			}
@@ -319,15 +302,11 @@ func TestCloudBudgetAdmissionRechecksPlanBeforeReserveAndClaim(t *testing.T) {
 				f := newCloudAdmissionFixture(t, "generate")
 				ctx := context.Background()
 				call, err := f.prepare(ctx, f.attempt)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				var accepted durable.ReserveResult
 				if phase == "claim" {
 					accepted, err = f.helper.Reserve(ctx, call)
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 				}
 				f.leaser.accept = forbidReserve(t, "invalid reserve reached Redis")
 				f.leaser.claim = forbidClaim(t, "invalid claim reached Redis")
@@ -412,9 +391,7 @@ func TestCloudBudgetAdmissionWaitAndLeaseExpiryDoNotBecomeDispatchGrants(t *test
 	f := newCloudAdmissionFixture(t, "generate")
 	ctx := context.Background()
 	call, err := f.prepare(ctx, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Saturate the same budget windows with another operation first.
 	busy := call.Plan().Reservation
 	busy.OperationID = "other-operation"
@@ -434,13 +411,9 @@ func TestCloudBudgetAdmissionWaitAndLeaseExpiryDoNotBecomeDispatchGrants(t *test
 	// A separate fixture proves the accepted claim's start deadline expires.
 	f = newCloudAdmissionFixture(t, "generate")
 	call, err = f.prepare(ctx, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	accepted, err := f.helper.Reserve(ctx, call)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.attempt.QuotedAt = f.attempt.QuotedAt.Add(16 * time.Minute)
 	_, err = f.helper.Claim(ctx, call, accepted)
 	assertBudgetAdmissionError(t, err, provider.CodeBudgetDenied, provider.DispatchNotDispatched, provider.RetryAfter)
@@ -451,14 +424,10 @@ func TestCloudBudgetAdmissionWaitAndLeaseExpiryDoNotBecomeDispatchGrants(t *test
 // step's replay is not counted again (#1359).
 func TestCloudBudgetAdmissionCountsRecoveredAcquireButNotDispatchReplay(t *testing.T) {
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Outcomes: []string{"accepted", "denied"}, OperationStates: []string{"reserved"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f := newCloudAdmissionFixture(t, "generate")
 	call, err := f.prepare(context.Background(), f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Redis commits the acceptance without the worker recording it.
 	if result, err := f.leaser.Accept(context.Background(), call.Plan().Reservation); err != nil || !result.Accepted {
 		t.Fatalf("commit: %+v %v", result, err)
@@ -496,9 +465,7 @@ func TestCloudBudgetAdmissionIndependentAttemptsUseDifferentProviderKeys(t *test
 					t.Fatal("wrong attempt identity persisted a plan", err)
 				}
 				call, err := f.prepare(context.Background(), attempt)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				key := call.Provider().Call.OperationKey
 				if key == previousKey || key == f.gen.OperationKey || key == f.compact.OperationKey {
 					t.Fatal("paid attempts shared provider idempotency key")

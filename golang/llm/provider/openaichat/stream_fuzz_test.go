@@ -5,14 +5,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 func FuzzDecodeStream(f *testing.F) {
 	fixture, err := os.ReadFile("testdata/contracts/events.wire")
-	if err != nil {
-		f.Fatal(err)
-	}
+	testassert.NoError(f, err)
 	f.Add(fixture)
 	f.Add([]byte("data: {\"choices\":[]}\n\ndata: [DONE]\n\n"))
 	f.Fuzz(func(t *testing.T, wire []byte) {
@@ -36,9 +35,7 @@ func assertDecodedEventsAssemble(t *testing.T, events []provider.Event) {
 		}
 	}
 	response, err := assembler.Result()
-	if err != nil {
-		t.Fatalf("decoded terminal stream did not assemble: %v", err)
-	}
+	testassert.NoError(t, err, "decoded terminal stream did not assemble")
 	if response.OperationKey != "openai-chat-fuzz" || !response.Status.Valid() {
 		t.Fatalf("assembled response is not semantic: %#v", response)
 	}

@@ -28,9 +28,7 @@ func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 		t.Fatalf("exa auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.DecodeJSON[map[string]any](t, body)
 	if wire["text"] != true {
 		t.Fatalf("exa text = %#v", wire["text"])
@@ -56,9 +54,7 @@ func TestExaRejectsNegativeReportedCost(t *testing.T) {
 	lifted := &llm.Response{Provider: llm.ProviderFacts{Raw: map[string]json.RawMessage{}}, Usage: llm.Usage{ProviderRaw: map[string]json.RawMessage{}}}
 	response := &openai.ChatCompletion{}
 	responseJSON := `{"id":"exa","choices":[] ,"costDollars":{"total":"-0.1"}}`
-	if err := json.Unmarshal([]byte(responseJSON), response); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(responseJSON), response))
 	testassert.ErrorContains(t, profile.ResponseAugment(provider.Call{}, response, lifted), "negative")
 }
 
@@ -104,9 +100,7 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 	}
 	first := llm.Request{OperationKey: "exa-turn-1", Model: "exa", Input: []llm.Item{human("question")}}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: first, Query: query, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := adaptertest.Invoke(t, adapter, call)
 	if len(result.Response.Output) != 3 {
 		t.Fatalf("exa output = %#v", result.Response.Output)
@@ -121,9 +115,7 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 	for name, strict := range map[string]bool{"strict": true, "best effort": false} {
 		t.Run(name, func(t *testing.T) {
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: second, Query: query, Strict: strict})
-			if err != nil {
-				t.Fatalf("compile follow-up turn: %v", err)
-			}
+			testassert.NoError(t, err, "compile follow-up turn")
 			wire := contract.JSONObject(t, call.SDKParams)
 			messages := wire["messages"].([]any)
 			roles := make([]string, 0, len(messages))
@@ -152,9 +144,7 @@ func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "found"}}},
 	}}
 	params, err := lowerRequest(request, testProfile(), "")
-	if err != nil {
-		t.Fatalf("lower replayed references: %v", err)
-	}
+	testassert.NoError(t, err, "lower replayed references")
 	wire := contract.JSONObject(t, params)
 	messages := wire["messages"].([]any)
 	if len(messages) != 3 {
@@ -174,9 +164,7 @@ func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 
 func TestExaCitationLoneSurrogateIsSanitizedInOutput(t *testing.T) {
 	items, err := exaReferences(json.RawMessage(`[{"url":"https://example.com/a","id":"r1","title":"Emoji cut \ud83d","score":0.5}]`), "citations")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	encoded := mustMarshal(t, llm.SanitizeOutputSurrogates(items)[0])
 	if strings.Contains(encoded, `\ud83d`) || !strings.Contains(encoded, `"title":"Emoji cut \ufffd"`) {
 		t.Fatalf("sanitized citation = %s", encoded)
@@ -206,13 +194,9 @@ func exaBody(body string) http.RoundTripper {
 func newExaTestAdapter(t *testing.T, transport http.RoundTripper) *Adapter {
 	t.Helper()
 	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewExaAdapter(client, "exa-a", exaTestConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -220,9 +204,7 @@ func newExaTestAdapter(t *testing.T, transport http.RoundTripper) *Adapter {
 func invokeExa(t *testing.T, adapter *Adapter, request llm.Request, strict bool) provider.Result {
 	t.Helper()
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}, Strict: strict})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := adaptertest.Invoke(t, adapter, call)
 	return result
 }

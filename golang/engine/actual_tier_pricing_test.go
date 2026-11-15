@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -13,9 +14,7 @@ import (
 // (#765): priority output $10/M, standard $1/M, 10 output tokens.
 func TestGeneratePricesTheServiceClassTheProviderReported(t *testing.T) {
 	result, err := generatePriorityServedAtStandard(t, "actual-tier", outputPriceEntry("economy-tier", "1"), outputPriceEntry("standard-tier", "1"), outputPriceEntry("priority-tier", "10"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Cost.ActualCostUSD == nil || result.Cost.ActualCostUSD.Cmp(pricing.MustUSD("0.00001")) != 0 {
 		t.Fatalf("actual cost = %v, want 0.00001 at the standard rate", result.Cost.ActualCostUSD)
 	}

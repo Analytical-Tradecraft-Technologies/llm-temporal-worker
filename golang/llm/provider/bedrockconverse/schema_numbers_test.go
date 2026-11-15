@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -24,13 +25,9 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, `{}`), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	params, err := lowerRequest(llm.Request{Model: bedrockFixtureModel, Input: []llm.Item{llm.HumanText("lookup")}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(schema)}}}, mustBedrockConverseProfile(t), "default", false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Serialize through the real AWS SDK with a synthetic HTTP transport.
 	_, invokeErr := client.converse.Converse(context.Background(), &params)
 	if len(wire) == 0 {
@@ -47,9 +44,7 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 			} `json:"tools"`
 		} `json:"toolConfig"`
 	}
-	if err := json.Unmarshal(wire, &body); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(wire, &body))
 	if len(body.ToolConfig.Tools) != 1 {
 		t.Fatalf("tool schema missing: %s", wire)
 	}

@@ -12,15 +12,14 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestSDKRetriesDisabled(t *testing.T) {
 	server := contract.NewRetryServer(t)
 	client, err := NewClient(ClientConfig{BaseURL: server.URL, APIKey: "test-key", HTTPClient: server.HTTPClient})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{
 		Model: shared.ResponsesModel("gpt-contract"),
 		Input: responses.ResponseNewParamsInputUnion{OfString: param.NewOpt("hello")},
@@ -55,9 +54,7 @@ func TestClientHonorsInjectedRedirectPolicy(t *testing.T) {
 	httpClient := server.Client()
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client, err := NewClient(ClientConfig{BaseURL: server.URL, APIKey: "test-key", HTTPClient: httpClient})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-contract")})
 	if err == nil {
 		t.Fatal("expected the SDK to surface the redirect response")

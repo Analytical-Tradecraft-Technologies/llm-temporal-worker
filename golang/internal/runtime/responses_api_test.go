@@ -14,6 +14,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/responsesapi"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -159,9 +160,7 @@ func TestLookupGenerateResultDecodesTheOperationRecord(t *testing.T) {
 	if lookup.got.Scope != (cloudstate.Scope{Tenant: "acme", Project: "search"}) || lookup.got.Kind != "generate" || lookup.got.Key != "resp_a" {
 		t.Fatalf("lookup used %+v", lookup.got)
 	}
-	if _, err := lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_other"); !errors.Is(err, responsesapi.ErrResultStoreUnavailable) {
-		t.Fatalf("a record for another key was accepted: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_other")), responsesapi.ErrResultStoreUnavailable, "a record for another key was accepted")
 
 	lookup.record = cloudstate.Record{Request: request, Status: cloudstate.StatusFailed, Progress: failed}
 	result, err = lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_a")
@@ -177,13 +176,9 @@ func TestLookupGenerateResultDecodesTheOperationRecord(t *testing.T) {
 	}
 
 	lookup.err = contracts.ErrNotFound
-	if _, err := lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_a"); !errors.Is(err, responsesapi.ErrResultNotFound) {
-		t.Fatalf("missing record = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_a")), responsesapi.ErrResultNotFound, "missing record")
 	lookup.err = errors.New("throttled")
-	if _, err := lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_a"); !errors.Is(err, responsesapi.ErrResultStoreUnavailable) {
-		t.Fatalf("read failure = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(lookupGenerateResult(context.Background(), lookup, "acme", "search", "resp_a")), responsesapi.ErrResultStoreUnavailable, "read failure")
 }
 
 func TestRuntimeServesTheResponsesAPIOnlyWhenConfigured(t *testing.T) {
@@ -207,9 +202,7 @@ func TestRuntimeServesTheResponsesAPIOnlyWhenConfigured(t *testing.T) {
 	if got := runtimeHealthStatus(t, address, "/health/live"); got != http.StatusNotFound {
 		t.Fatalf("the API listener serves probes: %d", got)
 	}
-	if err := runtime.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.Shutdown(context.Background()))
 	if _, err := http.Get("http://" + address + "/v1/responses/resp_x"); err == nil {
 		t.Fatal("the API listener is still accepting connections after shutdown")
 	}
@@ -262,9 +255,7 @@ func TestResponseResultIndexOnlyServesConfiguredResponsesAPI(t *testing.T) {
 	client := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1"})
 	defer client.Close()
 	keys, err := redisstore.NewKeyOptions("worker", "admission", bytes.Repeat([]byte{1}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var value config.Config
 	repository := &recordingCloudRequests{}
 	if index, err := responseResultIndex(value, repository, client, keys); err != nil || index != nil {

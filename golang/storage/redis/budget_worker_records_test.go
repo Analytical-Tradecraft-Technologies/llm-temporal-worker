@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestListWorkerRecordsFiltersPrefixAndKeep(t *testing.T) {
 		t.Fatalf("kept = %q, %v", kept, err)
 	}
 	failed := errors.New("decode failed")
-	requireErrorIs(t, errOf(listWorkerRecords(context.Background(), store, "generation-a", budgetWorkerRosterFieldPrefix, "test records", func(string) (string, error) { return "", failed }, func(string) bool { return true })), failed, "decode error =")
+	testassert.ErrorIs(t, testassert.Err(listWorkerRecords(context.Background(), store, "generation-a", budgetWorkerRosterFieldPrefix, "test records", func(string) (string, error) { return "", failed }, func(string) bool { return true })), failed, "decode error =")
 	if _, err := listWorkerRecords(context.Background(), nil, "generation-a", budgetWorkerLeaseFieldPrefix, "test records", identity, func(string) bool { return true }); err == nil || err.Error() != "Redis budget worker lease store is nil" {
 		t.Fatalf("nil store error = %v", err)
 	}
@@ -37,7 +38,7 @@ func TestRegisteredAtKeepsExistingRosterOrFallback(t *testing.T) {
 	if got, err := store.registeredAt(context.Background(), fallback, "read roster"); err != nil || !got.Equal(fallback) {
 		t.Fatalf("missing roster = %v, %v; want fallback", got, err)
 	}
-	mustNoError(t, errOf(store.Register(context.Background(), "generation-a", "", time.Minute)))
+	testassert.NoError(t, testassert.Err(store.Register(context.Background(), "generation-a", "", time.Minute)))
 	if got, err := store.registeredAt(context.Background(), fallback, "read roster"); err != nil || !got.Equal(now) {
 		t.Fatalf("existing roster = %v, %v; want %v", got, err, now)
 	}

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"testing"
+)
 
 func TestValidateKeyRingHandleKeyMessages(t *testing.T) {
 	secret := SecretRef{Kind: SecretEnv, Name: "HANDLE_KEY"}
@@ -20,7 +23,5 @@ func TestValidateKeyRingHandleKeyMessages(t *testing.T) {
 		}
 	}
 	valid := []HandleKey{{ID: "k1", Primary: true, Secret: secret}, {ID: "k2", Secret: secret}}
-	if err := validateKeyRing(valid, "continuation.handle_keys", continuationHandleKeyIDPattern, "1-32 characters from [A-Za-z0-9_-]"); err != nil {
-		t.Fatalf("valid key ring rejected: %v", err)
-	}
+	testassert.NoError(t, validateKeyRing(valid, "continuation.handle_keys", continuationHandleKeyIDPattern, "1-32 characters from [A-Za-z0-9_-]"), "valid key ring rejected")
 }

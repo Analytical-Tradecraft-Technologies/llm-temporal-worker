@@ -23,9 +23,7 @@ func TestVerifyAcceptsReviewedInventoryAndApprovedFinding(t *testing.T) {
 		testBaselineWith(testVulnerabilityException("GO-2099-0001", "module_only")),
 		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}`,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if report.Status != "pass" {
 		t.Fatalf("report status = %q, want pass", report.Status)
 	}
@@ -123,14 +121,10 @@ func TestReportDoesNotRetainRawScannerTrace(t *testing.T) {
 		testBaselineWith(testVulnerabilityException("GO-2099-0001", "reachable")),
 		`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"raw-provider-response.txt"}}}]}}`,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	var output bytes.Buffer
-	if err := writeReport(&output, report); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, writeReport(&output, report))
 	for _, forbidden := range []string{"raw-provider-response.txt", "trace", "filename"} {
 		if strings.Contains(output.String(), forbidden) {
 			t.Fatalf("redacted report contains scanner detail %q: %s", forbidden, output.String())
@@ -142,9 +136,7 @@ func TestReadGoModExcludesIndirectRequirements(t *testing.T) {
 	t.Parallel()
 
 	requirements, err := readGoMod(strings.NewReader(`{"Require":[{"Path":"example.test/direct","Version":"v1.2.3"},{"Path":"example.test/indirect","Version":"v1.2.3","Indirect":true}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !reflect.DeepEqual(requirements, []moduleRequirement{{Path: "example.test/direct", Version: "v1.2.3"}}) {
 		t.Fatalf("requirements = %#v", requirements)
 	}
@@ -157,9 +149,7 @@ func TestReadGoModIncludesReviewedToolModules(t *testing.T) {
 		"Require":[{"Path":"golang.org/x/vuln","Version":"v1.7.0","Indirect":true}],
 		"Tool":[{"Path":"golang.org/x/vuln/cmd/govulncheck"}]
 	}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := []moduleRequirement{{Path: "golang.org/x/vuln", Version: "v1.7.0"}}
 	if !reflect.DeepEqual(requirements, want) {
 		t.Fatalf("requirements = %#v, want %#v", requirements, want)
@@ -220,9 +210,7 @@ func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.
 		strings.NewReader(base),
 		julyNow,
 	)
-	if err != nil {
-		t.Fatalf("unchanged finding failed PR verification: %v", err)
-	}
+	testassert.NoError(t, err, "unchanged finding failed PR verification")
 	if len(report.IntroducedFindings) != 0 {
 		t.Fatalf("introduced findings = %#v, want none", report.IntroducedFindings)
 	}
@@ -257,9 +245,7 @@ func TestTrustedModuleRootsAreVersionIndependentAndBoundaryAware(t *testing.T) {
 	t.Parallel()
 
 	roots := []moduleRecord{{Path: "example.test/publisher", License: "MIT", Source: "https://example.test/publisher"}}
-	if err := validateInventory(roots, []moduleRequirement{{Path: "example.test/publisher/module", Version: "v99.0.0"}}); err != nil {
-		t.Fatalf("approved-root version bump failed: %v", err)
-	}
+	testassert.NoError(t, validateInventory(roots, []moduleRequirement{{Path: "example.test/publisher/module", Version: "v99.0.0"}}), "approved-root version bump failed")
 	for _, path := range []string{"example.test/unreviewed", "example.test/publisher-typosquat/module"} {
 		if err := validateInventory(roots, []moduleRequirement{{Path: path, Version: "v1.0.0"}}); err == nil {
 			t.Fatalf("unapproved module %q passed trusted-root validation", path)
@@ -271,26 +257,16 @@ func TestRepositoryDirectModulesHaveReviewedTrustedRoots(t *testing.T) {
 	t.Parallel()
 
 	policyJSON, err := os.ReadFile(filepath.Join(moduleRoot(t), "tools", "supplychainverify", "baseline.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var policy baseline
-	if err := json.Unmarshal(policyJSON, &policy); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(policyJSON, &policy))
 	command := exec.Command("go", "mod", "edit", "-json")
 	command.Dir = moduleRoot(t)
 	inventoryJSON, err := command.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	requirements, err := readGoMod(bytes.NewReader(inventoryJSON))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateInventory(policy.TrustedModuleRoots, requirements); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, validateInventory(policy.TrustedModuleRoots, requirements))
 }
 
 func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
@@ -332,9 +308,7 @@ func TestReadFindingsMergesDuplicatesAndRejectsMalformedStreams(t *testing.T) {
 {"finding":{"osv":" GO-2099-0002 ","trace":[]}}
 {"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}
 {"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"},{"package":"example.test/one/vulnerable"}]}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := []vulnerabilityFinding{{ID: "GO-2099-0001", HasReachableTrace: true}, {ID: "GO-2099-0002"}}
 	if !reflect.DeepEqual(findings, want) {
 		t.Fatalf("findings = %#v, want %#v", findings, want)
@@ -474,13 +448,9 @@ func TestWriteReportFileCreatesPrivateNestedReport(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "nested", "security-verify.json")
-	if err := writeReportFile(path, verificationReport{Version: baselineVersion, Status: "fail", Findings: []string{}, ApprovedFindings: []string{}}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, writeReportFile(path, verificationReport{Version: baselineVersion, Status: "fail", Findings: []string{}, ApprovedFindings: []string{}}))
 	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if permission := info.Mode().Perm(); permission != 0o600 {
 		t.Fatalf("report permissions = %o, want 600", permission)
 	}
@@ -498,9 +468,7 @@ const minimalBaselineJSON = `{"version":2,"allowed_licenses":["MIT"],"trusted_mo
 func writeTestFile(t *testing.T, root, name string, contents []byte) string {
 	t.Helper()
 	path := filepath.Join(root, name)
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, contents, 0o600))
 	return path
 }
 
@@ -508,9 +476,7 @@ func TestCommandSmokeWritesRedactedReport(t *testing.T) {
 	root := t.TempDir()
 	writeJSON := func(name string, value any) string {
 		contents, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return writeTestFile(t, root, name, contents)
 	}
 	baselinePath := writeJSON("baseline.json", testBaselineWith(testVulnerabilityException("GO-2099-0001", "reachable")))
@@ -593,9 +559,7 @@ func TestReleaseTagVerificationAppliesExceptionScopesWithoutRequiringUse(t *test
 	}, "\n")
 
 	report, err := verifyReleaseTag(baseline, strings.NewReader(output), octoberNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if report.Status != "pass" {
 		t.Fatalf("report status = %q, want pass", report.Status)
 	}
@@ -783,9 +747,7 @@ func assertFailedReport(t *testing.T, label string, report verificationReport, e
 func readTestFile(t *testing.T, path string) string {
 	t.Helper()
 	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return string(contents)
 }
 
@@ -795,9 +757,7 @@ func readReport(t *testing.T, path string) (verificationReport, string) {
 	t.Helper()
 	contents := readTestFile(t, path)
 	var report verificationReport
-	if err := json.Unmarshal([]byte(contents), &report); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(contents), &report))
 	return report, contents
 }
 
@@ -806,9 +766,7 @@ func readReport(t *testing.T, path string) (verificationReport, string) {
 func buildSupplyChainVerify(t *testing.T, root string, env ...string) string {
 	t.Helper()
 	moduleDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	binaryPath := filepath.Join(root, "supplychainverify")
 	build := exec.Command("go", "build", "-o", binaryPath, ".")
 	build.Dir = moduleDirectory

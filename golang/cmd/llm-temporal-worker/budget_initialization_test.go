@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"os"
 	"strings"
@@ -14,9 +14,7 @@ import (
 func TestBudgetInitializeCommandIsExplicitAndBounded(t *testing.T) {
 	path := exampleConfigPath(t)
 	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, apply := range []bool{false, true} {
 		var output, stderr bytes.Buffer
 		called := false
@@ -69,9 +67,7 @@ func TestBudgetInitializeCommandPropagatesDeadlineAndReturnsFailure(t *testing.T
 		ErrOut: &stderr,
 		RunBudgetInitialize: func(ctx context.Context, _ []byte, _, _ bool, _ io.Writer) error {
 			<-ctx.Done()
-			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				t.Fatalf("context error = %v", ctx.Err())
-			}
+			testassert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded, "context")
 			return ctx.Err()
 		},
 	})
