@@ -255,11 +255,7 @@ func openRouterProfile(config OpenRouterProfileConfig, baseURL string, routing o
 }
 
 func NewOpenRouterAdapter(client *Client, endpointID string, config OpenRouterProfileConfig) (*Adapter, error) {
-	profile, err := NewOpenRouterProfile(config)
-	if err != nil {
-		return nil, err
-	}
-	return New(client, endpointID, profile)
+	return newConfiguredAdapter(client, endpointID, config, NewOpenRouterProfile)
 }
 
 func augmentOpenRouter(call provider.Call, response *openai.ChatCompletion, lifted *llm.Response) error {

@@ -53,6 +53,16 @@ func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	return &Adapter{client: client, endpointID: endpointID, profile: validated}, nil
 }
 
+// newConfiguredAdapter builds the profile of a compatible endpoint from its
+// config and an adapter for it.
+func newConfiguredAdapter[C any](client *Client, endpointID string, config C, newProfile func(C) (Profile, error)) (*Adapter, error) {
+	profile, err := newProfile(config)
+	if err != nil {
+		return nil, err
+	}
+	return New(client, endpointID, profile)
+}
+
 // NewAdapter is an explicit alias used by route construction code.
 func NewAdapter(client *Client, endpointID string, profile Profile) (*Adapter, error) {
 	return New(client, endpointID, profile)
@@ -161,20 +171,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err != nil {
 		return provider.Call{}, openaiwire.LowerError(err)
 	}
-	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, providerTier)
-	if err != nil {
-		return provider.Call{}, err
-	}
-	return provider.Call{
-		EndpointID:   adapter.endpointID,
-		Family:       provider.FamilyOpenAIChat,
-		Model:        normalized.Model,
-		OperationKey: normalized.OperationKey,
-		ServiceClass: serviceClass,
-		SDKParams:    params,
-		OutputSchema: provider.OutputSchema(normalized),
-		Metadata:     metadata,
-	}, nil
+	return provider.NewCall(adapter.endpointID, provider.FamilyOpenAIChat, normalized, serviceClass, params, input.Metadata, set.Version, providerTier)
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {

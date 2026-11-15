@@ -82,11 +82,7 @@ func (resolution *GenerationResolutionV1) UnmarshalJSON(data []byte) error {
 		}
 		candidate.Result = &result
 	}
-	if err := candidate.validate(); err != nil {
-		return err
-	}
-	*resolution = candidate
-	return nil
+	return storeValid(resolution, candidate, candidate.validate())
 }
 
 func (resolution GenerationResolutionV1) MarshalJSON() ([]byte, error) {

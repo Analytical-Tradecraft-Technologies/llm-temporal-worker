@@ -265,11 +265,7 @@ func (result *ExecutionResultV1) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("execution field is not valid in this state")
 		}
 	}
-	if err := candidate.Validate(); err != nil {
-		return err
-	}
-	*result = candidate
-	return nil
+	return storeValid(result, candidate, candidate.Validate())
 }
 
 // safeExecutionToken accepts a bounded lowercase identifier such as a

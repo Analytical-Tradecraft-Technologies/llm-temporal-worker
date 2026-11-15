@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -43,8 +42,7 @@ func (r *Repository) indexKey(id RequestID) kv.KeyValueKey {
 
 func (r *Repository) indexItem(value indexRecord) kv.KeyValueItem {
 	key := r.indexKey(value.ID)
-	data, _ := json.Marshal(value)
-	return kv.KeyValueItem{PartitionKey: key.PartitionKey, SortKey: key.SortKey, Fields: kv.KeyValueDocument{"request": kv.Bytes(data)}}
+	return jsonItem(key, "request", value)
 }
 
 func (r *Repository) decodeIndex(record kv.KeyValueRecord) (indexRecord, error) {
@@ -64,10 +62,7 @@ func hexDigest(value string) bool {
 func (r *Repository) ensureIndex(ctx context.Context, request CreateRequest) error {
 	value := indexRecord{Schema: 1, ID: request.ID, ScopeTag: r.scopeTag(request.Scope), Binding: r.binding(request), Status: StatusPending, UpdatedAt: request.CreatedAt}
 	_, err := r.table.Create(ctx, r.indexItem(value))
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, contracts.ErrAlreadyExists) {
+	if !definitely(err, contracts.ErrAlreadyExists) {
 		return err
 	}
 	stored, err := r.table.Get(ctx, r.indexKey(request.ID))
@@ -109,10 +104,7 @@ func (r *Repository) advanceIndex(ctx context.Context, record Record) error {
 		}
 		previous.Revision, previous.Status, previous.UpdatedAt = record.Revision, record.Status, record.UpdatedAt
 		_, err = r.table.Replace(ctx, r.indexItem(previous), stored.Version)
-		if err == nil {
-			return nil
-		}
-		if errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, contracts.ErrConflict) {
+		if !definitely(err, contracts.ErrConflict) {
 			return err
 		}
 	}

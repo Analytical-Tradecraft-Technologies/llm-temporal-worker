@@ -198,20 +198,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err := adapter.enforceStoragePolicy(&params); err != nil {
 		return provider.Call{}, provider.NewCompileError(err.Error())
 	}
-	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, tier)
-	if err != nil {
-		return provider.Call{}, err
-	}
-	return provider.Call{
-		EndpointID:   adapter.endpointID,
-		Family:       provider.FamilyOpenAIResponses,
-		Model:        normalized.Model,
-		OperationKey: normalized.OperationKey,
-		ServiceClass: serviceClass,
-		SDKParams:    params,
-		OutputSchema: provider.OutputSchema(normalized),
-		Metadata:     metadata,
-	}, nil
+	return provider.NewCall(adapter.endpointID, provider.FamilyOpenAIResponses, normalized, serviceClass, params, input.Metadata, set.Version, tier)
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {

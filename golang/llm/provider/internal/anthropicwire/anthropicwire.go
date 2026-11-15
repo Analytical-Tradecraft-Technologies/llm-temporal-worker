@@ -8,10 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 )
 
 // Family names one Anthropic Messages endpoint in error messages.
@@ -242,6 +247,23 @@ func (family Family) LowerOutput(output llm.OutputSpec, target map[string]any, s
 	default:
 		return fmt.Errorf("output format %q is not supported by %s", output.Format.Kind, family.Name)
 	}
+}
+
+// Params checks the thinking settings of the lowered body and carries it into
+// the SDK parameters. The exact validated wire document is kept as the SDK
+// override: this retains opaque thinking signatures and redacted blocks
+// byte-for-byte while the concrete typed fields remain available to callers
+// and tests.
+func (family Family) Params(body map[string]any) (anthropic.MessageNewParams, error) {
+	if err := thinkingwire.Validate(body, family.Name); err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
+	params, encoded, err := provider.DecodeWireParams[anthropic.MessageNewParams](body, strings.ToLower(family.Name))
+	if err != nil {
+		return anthropic.MessageNewParams{}, err
+	}
+	param.SetJSON(encoded, &params)
+	return params, nil
 }
 
 // LowerToolPolicy lowers the tool policy to tool_choice.

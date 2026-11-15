@@ -2,7 +2,6 @@ package anthropicmessages
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
@@ -20,7 +19,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		return llm.Response{}, provider.NewInvalidResponseError(call, requestID, "provider returned an empty response")
 	}
 	actual := profile.actualClass(responseTier(response))
-	output, states, status, err := anthropicwire.LiftMessage(call, requestID, response, "anthropic", contentStateBlocks, liftStatus)
+	output, states, status, err := anthropicwire.LiftMessage(call, requestID, response, "anthropic", contentStateBlocks, true)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -140,34 +139,6 @@ func webSearchCallCount(response *anthropic.Message) json.RawMessage {
 		}
 	}
 	return json.RawMessage("0")
-}
-
-func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) (llm.ResponseStatus, error) {
-	switch stopReason {
-	case anthropic.StopReasonPauseTurn:
-		return llm.ResponseStatusPaused, nil
-	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence:
-		if hasRefusal {
-			return llm.ResponseStatusRefused, nil
-		}
-		if hasToolCalls {
-			return llm.ResponseStatusToolCalls, nil
-		}
-		return llm.ResponseStatusCompleted, nil
-	case anthropic.StopReasonToolUse:
-		if !hasToolCalls {
-			return "", fmt.Errorf("provider stop reason tool_use did not contain a tool call")
-		}
-		return llm.ResponseStatusToolCalls, nil
-	case anthropic.StopReasonMaxTokens, anthropic.StopReasonModelContextWindowExceeded:
-		// Context-window exhaustion is a length truncation: keep the partial
-		// output and usage rather than discarding a paid response.
-		return llm.ResponseStatusLength, nil
-	case anthropic.StopReasonRefusal:
-		return llm.ResponseStatusRefused, nil
-	default:
-		return "", fmt.Errorf("provider returned unknown stop reason %q", stopReason)
-	}
 }
 
 // responseTier names the provider tier that served the response. Fast mode is

@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -520,14 +521,8 @@ func canonicalReferenceReservations(values []admission.WindowReservation) ([]can
 		windowExpires := referenceWindowExpiry(time.Unix(0, bucketStart), value.BucketNanos, value.DurationNanos)
 		result = append(result, canonicalReferenceReservation{policyID: value.PolicyID, windowID: value.WindowID, bucket: value.Bucket, amountUSD: amount, limitUSD: limit, bucketNanos: value.BucketNanos, durationNanos: value.DurationNanos, bucketStartNanos: bucketStart, windowExpiresAt: windowExpires})
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].policyID != result[j].policyID {
-			return result[i].policyID < result[j].policyID
-		}
-		if result[i].windowID != result[j].windowID {
-			return result[i].windowID < result[j].windowID
-		}
-		return result[i].bucket < result[j].bucket
+	slices.SortFunc(result, func(a, b canonicalReferenceReservation) int {
+		return cmp.Or(cmp.Compare(a.policyID, b.policyID), cmp.Compare(a.windowID, b.windowID), cmp.Compare(a.bucket, b.bucket))
 	})
 	return result, nil
 }

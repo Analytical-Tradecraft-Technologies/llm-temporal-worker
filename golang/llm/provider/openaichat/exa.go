@@ -88,11 +88,7 @@ func NewExaProfile(config ExaProfileConfig) (Profile, error) {
 }
 
 func NewExaAdapter(client *Client, endpointID string, config ExaProfileConfig) (*Adapter, error) {
-	profile, err := NewExaProfile(config)
-	if err != nil {
-		return nil, err
-	}
-	return New(client, endpointID, profile)
+	return newConfiguredAdapter(client, endpointID, config, NewExaProfile)
 }
 
 func augmentExa(call provider.Call, response *openai.ChatCompletion, lifted *llm.Response) error {

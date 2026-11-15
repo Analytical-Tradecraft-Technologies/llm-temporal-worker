@@ -98,6 +98,26 @@ func CompileMetadata(metadata CallMetadata, normalized llm.Request, capabilityVe
 	return metadata, nil
 }
 
+// NewCall completes metadata as CompileMetadata does and returns the call
+// that carries params for the normalized request on endpointID, with the
+// request's json_schema output schema.
+func NewCall(endpointID string, family Family, normalized llm.Request, serviceClass llm.ServiceClass, params any, metadata CallMetadata, capabilityVersion, providerTier string) (Call, error) {
+	metadata, err := CompileMetadata(metadata, normalized, capabilityVersion, providerTier)
+	if err != nil {
+		return Call{}, err
+	}
+	return Call{
+		EndpointID:   endpointID,
+		Family:       family,
+		Model:        normalized.Model,
+		OperationKey: normalized.OperationKey,
+		ServiceClass: serviceClass,
+		SDKParams:    params,
+		OutputSchema: OutputSchema(normalized),
+		Metadata:     metadata,
+	}, nil
+}
+
 // Clone returns a copy of set whose feature map can be changed without
 // touching the original.
 func (set CapabilitySet) Clone() CapabilitySet {
