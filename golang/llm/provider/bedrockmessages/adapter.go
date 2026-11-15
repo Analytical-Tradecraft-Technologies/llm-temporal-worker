@@ -105,12 +105,8 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 		}
 		return provider.Call{}, anthropicwire.LowerError(err)
 	}
-	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, providerTier)
-	if err != nil {
-		return provider.Call{}, err
-	}
-	metadata.ExtensionsDropped = !input.Strict && len(normalized.Extensions) > 0
-	return provider.Call{EndpointID: adapter.endpointID, Family: provider.FamilyBedrockMessages, Model: normalized.Model, OperationKey: normalized.OperationKey, ServiceClass: serviceClass, SDKParams: params, OutputSchema: provider.OutputSchema(normalized), Metadata: metadata}, nil
+	input.Metadata.ExtensionsDropped = !input.Strict && len(normalized.Extensions) > 0
+	return provider.NewCall(adapter.endpointID, provider.FamilyBedrockMessages, normalized, serviceClass, params, input.Metadata, set.Version, providerTier)
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
