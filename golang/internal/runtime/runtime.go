@@ -293,6 +293,13 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	if metrics != nil {
 		liveMetrics.Store(metrics)
 	}
+	// abortStart releases what has been started so far when a later
+	// construction step fails.
+	abortStart := func() {
+		_ = tracer.Shutdown(context.Background())
+		temporalClient.Close()
+		_ = application.Close(context.Background())
+	}
 	exportCatalogPriceExpiry(metrics, application)
 	dynamic := &snapshotEngine{application: application}
 	identity := options.Identity
@@ -323,9 +330,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		Factory:           options.WorkerFactory,
 	})
 	if err != nil {
-		_ = tracer.Shutdown(context.Background())
-		temporalClient.Close()
-		_ = application.Close(context.Background())
+		abortStart()
 		return nil, err
 	}
 	healthServerOptions := httpserver.Options{
@@ -337,9 +342,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 	}
 	healthServer, err := httpserver.New(healthServerOptions)
 	if err != nil {
-		_ = tracer.Shutdown(context.Background())
-		temporalClient.Close()
-		_ = application.Close(context.Background())
+		abortStart()
 		return nil, fmt.Errorf("construct health server: %w", err)
 	}
 	var metricsServer *httpserver.Server
@@ -350,9 +353,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			Metrics: metrics.Handler(),
 		})
 		if err != nil {
-			_ = tracer.Shutdown(context.Background())
-			temporalClient.Close()
-			_ = application.Close(context.Background())
+			abortStart()
 			return nil, fmt.Errorf("construct metrics server: %w", err)
 		}
 	}
@@ -378,9 +379,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 			})
 		}
 		if err != nil {
-			_ = tracer.Shutdown(context.Background())
-			temporalClient.Close()
-			_ = application.Close(context.Background())
+			abortStart()
 			return nil, fmt.Errorf("construct responses API server: %w", err)
 		}
 	}
@@ -398,9 +397,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		Timeout: timeout,
 	})
 	if err != nil {
-		_ = tracer.Shutdown(context.Background())
-		temporalClient.Close()
-		_ = application.Close(context.Background())
+		abortStart()
 		return nil, err
 	}
 	return &Runtime{
@@ -682,8 +679,7 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 				continue
 			}
 			if err != nil {
-				shutdownErr := runtime.gracefulShutdown()
-				return errors.Join(err, shutdownErr)
+				return errors.Join(err, runtime.gracefulShutdown())
 			}
 		case err, ok := <-metricsErrors:
 			if !ok {
@@ -691,8 +687,7 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 				continue
 			}
 			if err != nil {
-				shutdownErr := runtime.gracefulShutdown()
-				return errors.Join(err, shutdownErr)
+				return errors.Join(err, runtime.gracefulShutdown())
 			}
 		case err, ok := <-responsesErrors:
 			if !ok {
@@ -700,8 +695,7 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 				continue
 			}
 			if err != nil {
-				shutdownErr := runtime.gracefulShutdown()
-				return errors.Join(err, shutdownErr)
+				return errors.Join(err, runtime.gracefulShutdown())
 			}
 		}
 	}
@@ -948,29 +942,32 @@ func (runtime *Runtime) leasedDependencyProbes() (*app.Lease, []DependencyProbe,
 // would let a reload publish an unconfigured runtime while readiness remained
 // true.
 func (runtime *Runtime) currentV1RuntimeConfigured() bool {
-	if runtime == nil || runtime.App == nil {
+	current := runtime.currentSnapshot()
+	if current == nil {
 		return false
 	}
-	current := runtime.App.Current()
-	if current == nil || current.Config == nil {
-		return false
-	}
-	configuration := current.Config.Config()
-	if !v1RuntimeRequired(configuration) {
+	if !v1RuntimeRequired(current.Config.Config()) {
 		return true
 	}
 	return isV1RuntimeConfigured(v1RuntimeForSnapshot(current, nil))
 }
 
 func (runtime *Runtime) currentV1RuntimeRequired() bool {
+	current := runtime.currentSnapshot()
+	return current != nil && v1RuntimeRequired(current.Config.Config())
+}
+
+// currentSnapshot returns the active configuration snapshot, or nil when the
+// runtime has no application or the snapshot carries no configuration.
+func (runtime *Runtime) currentSnapshot() *app.RuntimeSnapshot {
 	if runtime == nil || runtime.App == nil {
-		return false
+		return nil
 	}
 	current := runtime.App.Current()
 	if current == nil || current.Config == nil {
-		return false
+		return nil
 	}
-	return v1RuntimeRequired(current.Config.Config())
+	return current
 }
 
 // syncDependencyReadiness applies the fail-closed state transition in one

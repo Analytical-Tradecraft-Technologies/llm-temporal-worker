@@ -57,19 +57,11 @@ func ApplySettingsPatchV1(base ModelState, wire llm.SettingsPatchV1) (ModelState
 	if _, err := wire.MarshalJSON(); err != nil {
 		return ModelState{}, err
 	}
-	if wire.Temperature.Set != nil {
-		canonical, err := llm.NewDecimalV1(wire.Temperature.Set.String())
-		if err != nil {
-			return ModelState{}, err
-		}
-		wire.Temperature.Set = &canonical
+	if err := canonicalizeDecimal(&wire.Temperature.Set); err != nil {
+		return ModelState{}, err
 	}
-	if wire.TopP.Set != nil {
-		canonical, err := llm.NewDecimalV1(wire.TopP.Set.String())
-		if err != nil {
-			return ModelState{}, err
-		}
-		wire.TopP.Set = &canonical
+	if err := canonicalizeDecimal(&wire.TopP.Set); err != nil {
+		return ModelState{}, err
 	}
 	patch, err := settingsPatchFromWire(wire)
 	if err != nil {
@@ -133,6 +125,19 @@ func (state ModelState) Validate() error {
 	return nil
 }
 
+// canonicalizeDecimal rewrites a set decimal in its canonical v1 form.
+func canonicalizeDecimal(value **llm.DecimalV1) error {
+	if *value == nil {
+		return nil
+	}
+	canonical, err := llm.NewDecimalV1((*value).String())
+	if err != nil {
+		return err
+	}
+	*value = &canonical
+	return nil
+}
+
 // ApplySettingsPatch applies each leaf independently. Collection Set values
 // replace the complete collection; Clear returns that leaf to its root value.
 func ApplySettingsPatch(base ModelState, patch SettingsPatch) (ModelState, error) {
@@ -140,41 +145,13 @@ func ApplySettingsPatch(base ModelState, patch SettingsPatch) (ModelState, error
 		return ModelState{}, err
 	}
 	result := base.Clone()
-	if patch.Model.Set != nil {
-		result.Model = *patch.Model.Set
-	} else if patch.Model.Clear {
-		result.Model = ""
-	}
-	if patch.ServiceClass.Set != nil {
-		result.ServiceClass = *patch.ServiceClass.Set
-	} else if patch.ServiceClass.Clear {
-		result.ServiceClass = llm.ServiceClassStandard
-	}
-	if patch.ServiceClassFallbacks.Set != nil {
-		result.ServiceClassFallbacks = append([]llm.ServiceClass(nil), (*patch.ServiceClassFallbacks.Set)...)
-	} else if patch.ServiceClassFallbacks.Clear {
-		result.ServiceClassFallbacks = nil
-	}
-	if patch.Portability.Set != nil {
-		result.Portability = *patch.Portability.Set
-	} else if patch.Portability.Clear {
-		result.Portability = llm.PortabilityStrict
-	}
-	if patch.Instructions.Set != nil {
-		result.Instructions = cloneInstructions(*patch.Instructions.Set)
-	} else if patch.Instructions.Clear {
-		result.Instructions = nil
-	}
-	if patch.Tools.Set != nil {
-		result.Tools = cloneTools(*patch.Tools.Set)
-	} else if patch.Tools.Clear {
-		result.Tools = nil
-	}
-	if patch.ToolPolicy.Set != nil {
-		result.ToolPolicy = *patch.ToolPolicy.Set
-	} else if patch.ToolPolicy.Clear {
-		result.ToolPolicy = llm.ToolPolicy{}
-	}
+	patch.Model.apply(&result.Model, "")
+	patch.ServiceClass.apply(&result.ServiceClass, llm.ServiceClassStandard)
+	patch.ServiceClassFallbacks.applyClone(&result.ServiceClassFallbacks, cloneSlice)
+	patch.Portability.apply(&result.Portability, llm.PortabilityStrict)
+	patch.Instructions.applyClone(&result.Instructions, cloneInstructions)
+	patch.Tools.applyClone(&result.Tools, cloneTools)
+	patch.ToolPolicy.apply(&result.ToolPolicy, llm.ToolPolicy{})
 	if patch.Output.Set != nil {
 		result.Output = cloneOutput(patch.Output.Set)
 	} else if patch.Output.Clear {
@@ -200,69 +177,18 @@ func ApplySettingsPatch(base ModelState, patch SettingsPatch) (ModelState, error
 		result.Temperature = nil
 		result.TemperatureDecimal = nil
 	}
-	if patch.TopP.Set != nil {
-		value := *patch.TopP.Set
-		result.TopP = &value
-	} else if patch.TopP.Clear {
-		result.TopP = nil
-	}
-	if patch.StopSequences.Set != nil {
-		result.StopSequences = append([]string(nil), (*patch.StopSequences.Set)...)
-	} else if patch.StopSequences.Clear {
-		result.StopSequences = nil
-	}
-	if patch.Seed.Set != nil {
-		value := *patch.Seed.Set
-		result.Seed = &value
-	} else if patch.Seed.Clear {
-		result.Seed = nil
-	}
-	if patch.ReasoningMode.Set != nil {
-		result.ReasoningMode = *patch.ReasoningMode.Set
-	} else if patch.ReasoningMode.Clear {
-		result.ReasoningMode = ""
-	}
-	if patch.ReasoningTokenBudget.Set != nil {
-		value := *patch.ReasoningTokenBudget.Set
-		result.ReasoningTokenBudget = &value
-	} else if patch.ReasoningTokenBudget.Clear {
-		result.ReasoningTokenBudget = nil
-	}
-	if patch.ReasoningEffort.Set != nil {
-		result.ReasoningEffort = *patch.ReasoningEffort.Set
-	} else if patch.ReasoningEffort.Clear {
-		result.ReasoningEffort = ""
-	}
-	if patch.ReasoningSummary.Set != nil {
-		result.ReasoningSummary = *patch.ReasoningSummary.Set
-	} else if patch.ReasoningSummary.Clear {
-		result.ReasoningSummary = ""
-	}
-	if patch.CompactionPolicy.Set != nil {
-		result.CompactionPolicy = append(json.RawMessage(nil), (*patch.CompactionPolicy.Set)...)
-	} else if patch.CompactionPolicy.Clear {
-		result.CompactionPolicy = nil
-	}
-	if patch.WebFetch.Set != nil {
-		result.WebFetch = *patch.WebFetch.Set
-	} else if patch.WebFetch.Clear {
-		result.WebFetch = false
-	}
-	if patch.CodeExecution.Set != nil {
-		result.CodeExecution = *patch.CodeExecution.Set
-	} else if patch.CodeExecution.Clear {
-		result.CodeExecution = false
-	}
-	if patch.WebSearch.Set != nil {
-		result.WebSearch = *patch.WebSearch.Set
-	} else if patch.WebSearch.Clear {
-		result.WebSearch = false
-	}
-	if patch.Extensions.Set != nil {
-		result.Extensions = cloneRawMap(*patch.Extensions.Set)
-	} else if patch.Extensions.Clear {
-		result.Extensions = nil
-	}
+	patch.TopP.applyPointer(&result.TopP)
+	patch.StopSequences.applyClone(&result.StopSequences, cloneSlice)
+	patch.Seed.applyPointer(&result.Seed)
+	patch.ReasoningMode.apply(&result.ReasoningMode, "")
+	patch.ReasoningTokenBudget.applyPointer(&result.ReasoningTokenBudget)
+	patch.ReasoningEffort.apply(&result.ReasoningEffort, "")
+	patch.ReasoningSummary.apply(&result.ReasoningSummary, "")
+	patch.CompactionPolicy.applyClone(&result.CompactionPolicy, cloneSlice)
+	patch.WebFetch.apply(&result.WebFetch, false)
+	patch.CodeExecution.apply(&result.CodeExecution, false)
+	patch.WebSearch.apply(&result.WebSearch, false)
+	patch.Extensions.applyClone(&result.Extensions, cloneRawMap)
 	if result.ServiceClass == "" {
 		result.ServiceClass = llm.ServiceClassStandard
 	}

@@ -479,18 +479,26 @@ func endpointFamily(value string) provider.Family {
 // provider profile and are not silently widened into routing behavior.
 func routingCapabilities(value provider.CapabilitySet) routing.CapabilitySet {
 	result := routing.CapabilitySet{Version: value.Version, Features: make(map[routing.Feature]routing.Capability)}
-	for source, target := range map[provider.Feature]routing.Feature{
-		provider.FeatureText:             routing.FeatureText,
-		provider.FeatureToolCall:         routing.FeatureToolCall,
-		provider.FeatureStructuredOutput: routing.FeatureStructuredOutput,
-		provider.FeatureReasoning:        routing.FeatureReasoning,
-		provider.FeatureContinuation:     routing.FeatureContinuation,
-	} {
-		if capability, ok := value.Features[source]; ok {
-			result.Features[target] = routing.Capability{State: routing.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
+	for _, pair := range routingFeatures {
+		if capability, ok := value.Features[pair.provider]; ok {
+			result.Features[pair.routing] = routing.Capability{State: routing.CapabilityState(capability.State), Transform: capability.Transform, Reason: capability.Reason}
 		}
 	}
 	return result
+}
+
+// routingFeatures pairs each provider feature that route planning consumes
+// with its routing name; routingCapabilities and providerCapabilities convert
+// between the two capability sets through it.
+var routingFeatures = []struct {
+	provider provider.Feature
+	routing  routing.Feature
+}{
+	{provider.FeatureText, routing.FeatureText},
+	{provider.FeatureToolCall, routing.FeatureToolCall},
+	{provider.FeatureStructuredOutput, routing.FeatureStructuredOutput},
+	{provider.FeatureReasoning, routing.FeatureReasoning},
+	{provider.FeatureContinuation, routing.FeatureContinuation},
 }
 
 // adapterCapabilities preserves every provider feature declared by the

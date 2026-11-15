@@ -105,31 +105,60 @@ func newCloudFinalizer(repository CloudRequestRepository, responses cache.Respon
 // SaveGenerate persists a typed handoff bound to every input of this operation.
 // CheckpointScope and CheckpointID are trusted internal values, never handles.
 func (f *CloudFinalizer) SaveGenerate(ctx context.Context, request llm.GenerateRequestV1, checkpointScope string, checkpointID state.CheckpointID, response llm.GenerateResponseV1, effects FinalizationEffects) error {
-	input, err := json.Marshal(request)
+	return f.saveGenerate(ctx, request, checkpointScope, checkpointID, response, effects, nil, nil)
+}
+
+func (f *CloudFinalizer) SaveCompact(ctx context.Context, request llm.CompactRequestV1, checkpointScope string, checkpointID state.CheckpointID, response llm.CompactResponseV1, effects FinalizationEffects) error {
+	return f.saveCompact(ctx, request, checkpointScope, checkpointID, response, effects, nil, nil)
+}
+
+// saveGenerate encodes a Generate handoff and saves it; checkpoint and known
+// are passed through to save.
+func (f *CloudFinalizer) saveGenerate(ctx context.Context, request llm.GenerateRequestV1, checkpointScope string, checkpointID state.CheckpointID, response llm.GenerateResponseV1, effects FinalizationEffects, checkpoint *state.DurableCheckpoint, known *cloudValidatedPreparation) error {
+	input, data, err := marshalHandoff(request, response)
 	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, false)
+		return err
 	}
 	index := int64(0)
 	if request.Cache != nil {
 		index = int64(request.Cache.Variant)
 	}
-	data, err := json.Marshal(response)
-	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, true)
-	}
-	return f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpointScope, checkpointID, data, effects, nil, nil)
+	return f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpointScope, checkpointID, data, effects, checkpoint, known)
 }
 
-func (f *CloudFinalizer) SaveCompact(ctx context.Context, request llm.CompactRequestV1, checkpointScope string, checkpointID state.CheckpointID, response llm.CompactResponseV1, effects FinalizationEffects) error {
+// saveCompact is saveGenerate for Compact.
+func (f *CloudFinalizer) saveCompact(ctx context.Context, request llm.CompactRequestV1, checkpointScope string, checkpointID state.CheckpointID, response llm.CompactResponseV1, effects FinalizationEffects, checkpoint *state.DurableCheckpoint, known *cloudValidatedPreparation) error {
+	input, data, err := marshalHandoff(request, response)
+	if err != nil {
+		return err
+	}
+	return f.save(ctx, request.Context, "compact", request.OperationKey, request.Cache.SampleIndex(), input, checkpointScope, checkpointID, data, effects, checkpoint, known)
+}
+
+// marshalHandoff encodes a handoff's request and response. A request that
+// cannot be encoded is a permanent invalid input; a response is retryable.
+func marshalHandoff(request, response any) (json.RawMessage, json.RawMessage, error) {
 	input, err := json.Marshal(request)
 	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, false)
+		return nil, nil, cloudRuntimeError(cloudstate.ErrInvalid, false)
 	}
 	data, err := json.Marshal(response)
 	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, true)
+		return nil, nil, cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	return f.save(ctx, request.Context, "compact", request.OperationKey, request.Cache.SampleIndex(), input, checkpointScope, checkpointID, data, effects, nil, nil)
+	return input, data, nil
+}
+
+// finishSaved runs the finalization effects after a successful save, or
+// returns saveErr.
+func (f *CloudFinalizer) finishSaved(ctx context.Context, effects FinalizationEffects, saveErr error) error {
+	if saveErr != nil {
+		return saveErr
+	}
+	if err := f.finish(ctx, effects); err != nil {
+		return cloudRuntimeError(err, true)
+	}
+	return nil
 }
 
 func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, kind, key string, index int64, input json.RawMessage, checkpointScope string, checkpointID state.CheckpointID, response json.RawMessage, effects FinalizationEffects, checkpoint *state.DurableCheckpoint, known *cloudValidatedPreparation) error {
@@ -248,25 +277,7 @@ func (f *CloudFinalizer) CommitGenerate(ctx context.Context, request llm.Generat
 // commitGenerate is CommitGenerate with the root's preparation as the
 // calling step validated it, when known.
 func (f *CloudFinalizer) commitGenerate(ctx context.Context, request llm.GenerateRequestV1, checkpoint state.DurableCheckpoint, response llm.GenerateResponseV1, effects FinalizationEffects, known *cloudValidatedPreparation) error {
-	input, err := json.Marshal(request)
-	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, false)
-	}
-	data, err := json.Marshal(response)
-	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, true)
-	}
-	index := int64(0)
-	if request.Cache != nil {
-		index = int64(request.Cache.Variant)
-	}
-	if err := f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpoint.ScopeID, checkpoint.ID, data, effects, &checkpoint, known); err != nil {
-		return err
-	}
-	if err := f.finish(ctx, effects); err != nil {
-		return cloudRuntimeError(err, true)
-	}
-	return nil
+	return f.finishSaved(ctx, effects, f.saveGenerate(ctx, request, checkpoint.ScopeID, checkpoint.ID, response, effects, &checkpoint, known))
 }
 
 // CommitCompact is the publication/reconciliation boundary for compaction.
@@ -276,44 +287,18 @@ func (f *CloudFinalizer) CommitCompact(ctx context.Context, request llm.CompactR
 
 // commitCompact is commitGenerate for CommitCompact.
 func (f *CloudFinalizer) commitCompact(ctx context.Context, request llm.CompactRequestV1, checkpoint state.DurableCheckpoint, response llm.CompactResponseV1, effects FinalizationEffects, known *cloudValidatedPreparation) error {
-	input, err := json.Marshal(request)
-	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, false)
-	}
-	data, err := json.Marshal(response)
-	if err != nil {
-		return cloudRuntimeError(cloudstate.ErrInvalid, true)
-	}
-	if err := f.save(ctx, request.Context, "compact", request.OperationKey, request.Cache.SampleIndex(), input, checkpoint.ScopeID, checkpoint.ID, data, effects, &checkpoint, known); err != nil {
-		return err
-	}
-	if err := f.finish(ctx, effects); err != nil {
-		return cloudRuntimeError(err, true)
-	}
-	return nil
+	return f.finishSaved(ctx, effects, f.saveCompact(ctx, request, checkpoint.ScopeID, checkpoint.ID, response, effects, &checkpoint, known))
 }
 
 // CompleteGenerate saves the handoff before running the finalization effects.
 // Bind this to the phase's reconciliation callback after checkpoint commit.
 func (f *CloudFinalizer) CompleteGenerate(ctx context.Context, request llm.GenerateRequestV1, scope string, checkpoint state.CheckpointID, response llm.GenerateResponseV1, effects FinalizationEffects) error {
-	if err := f.SaveGenerate(ctx, request, scope, checkpoint, response, effects); err != nil {
-		return err
-	}
-	if err := f.finish(ctx, effects); err != nil {
-		return cloudRuntimeError(err, true)
-	}
-	return nil
+	return f.finishSaved(ctx, effects, f.SaveGenerate(ctx, request, scope, checkpoint, response, effects))
 }
 
 // CompleteCompact is the equivalent boundary for the compaction finalizer.
 func (f *CloudFinalizer) CompleteCompact(ctx context.Context, request llm.CompactRequestV1, scope string, checkpoint state.CheckpointID, response llm.CompactResponseV1, effects FinalizationEffects) error {
-	if err := f.SaveCompact(ctx, request, scope, checkpoint, response, effects); err != nil {
-		return err
-	}
-	if err := f.finish(ctx, effects); err != nil {
-		return cloudRuntimeError(err, true)
-	}
-	return nil
+	return f.finishSaved(ctx, effects, f.SaveCompact(ctx, request, scope, checkpoint, response, effects))
 }
 
 func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects) error {

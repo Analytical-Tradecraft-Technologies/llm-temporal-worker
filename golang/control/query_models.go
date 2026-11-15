@@ -267,18 +267,21 @@ type BudgetWindow struct {
 	RetryAfter       *time.Duration `json:"retry_after_seconds,omitempty"`
 }
 
+// budgetWindowWire is BudgetWindow's JSON shape, with retry_after carried as
+// whole seconds.
+type budgetWindowWire struct {
+	PolicyKey        PolicyKey  `json:"policy_key"`
+	WindowKey        WindowKey  `json:"window_key"`
+	CoverageStart    time.Time  `json:"coverage_start"`
+	CoverageEnd      time.Time  `json:"coverage_end"`
+	LimitUSD         DecimalUSD `json:"limit_usd"`
+	ReservedCostUSD  DecimalUSD `json:"reserved_cost_usd"`
+	AccountedCostUSD DecimalUSD `json:"accounted_cost_usd"`
+	AvailableUSD     DecimalUSD `json:"available_usd"`
+	RetryAfter       *int64     `json:"retry_after_seconds,omitempty"`
+}
+
 func (window BudgetWindow) MarshalJSON() ([]byte, error) {
-	type wire struct {
-		PolicyKey        PolicyKey  `json:"policy_key"`
-		WindowKey        WindowKey  `json:"window_key"`
-		CoverageStart    time.Time  `json:"coverage_start"`
-		CoverageEnd      time.Time  `json:"coverage_end"`
-		LimitUSD         DecimalUSD `json:"limit_usd"`
-		ReservedCostUSD  DecimalUSD `json:"reserved_cost_usd"`
-		AccountedCostUSD DecimalUSD `json:"accounted_cost_usd"`
-		AvailableUSD     DecimalUSD `json:"available_usd"`
-		RetryAfter       *int64     `json:"retry_after_seconds,omitempty"`
-	}
 	var retry *int64
 	if window.RetryAfter != nil {
 		if int64(*window.RetryAfter/time.Second) > maxDurationSeconds {
@@ -290,21 +293,11 @@ func (window BudgetWindow) MarshalJSON() ([]byte, error) {
 		}
 		retry = &seconds
 	}
-	return json.Marshal(wire{window.PolicyKey, window.WindowKey, window.CoverageStart, window.CoverageEnd, window.LimitUSD, window.ReservedCostUSD, window.AccountedCostUSD, window.AvailableUSD, retry})
+	return json.Marshal(budgetWindowWire{window.PolicyKey, window.WindowKey, window.CoverageStart, window.CoverageEnd, window.LimitUSD, window.ReservedCostUSD, window.AccountedCostUSD, window.AvailableUSD, retry})
 }
 
 func (window *BudgetWindow) UnmarshalJSON(data []byte) error {
-	var value struct {
-		PolicyKey        PolicyKey  `json:"policy_key"`
-		WindowKey        WindowKey  `json:"window_key"`
-		CoverageStart    time.Time  `json:"coverage_start"`
-		CoverageEnd      time.Time  `json:"coverage_end"`
-		LimitUSD         DecimalUSD `json:"limit_usd"`
-		ReservedCostUSD  DecimalUSD `json:"reserved_cost_usd"`
-		AccountedCostUSD DecimalUSD `json:"accounted_cost_usd"`
-		AvailableUSD     DecimalUSD `json:"available_usd"`
-		RetryAfter       *int64     `json:"retry_after_seconds"`
-	}
+	var value budgetWindowWire
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
@@ -426,65 +419,51 @@ func DecodeQueryRequest(wire llm.QueryRequestV1) (QueryRequest, error) {
 }
 
 func encodeFilter(filter QueryFilter) ([]byte, error) {
-	var value any
+	// Pointers are accepted for ergonomic parity with value filters; a typed
+	// nil pointer carries no filter.
+	var err error
+	switch typed := filter.(type) {
+	case *ProviderStatusQuery:
+		filter, err = derefFilter(typed)
+	case *ModelInventoryQuery:
+		filter, err = derefFilter(typed)
+	case *CreditStatusQuery:
+		filter, err = derefFilter(typed)
+	case *BudgetStatusQuery:
+		filter, err = derefFilter(typed)
+	case *SpendSummaryQuery:
+		filter, err = derefFilter(typed)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var value requestWire
+	var refresh time.Duration
 	switch typed := filter.(type) {
 	case ProviderStatusQuery:
-		if err := validateRefreshDuration(typed.RefreshIfOlderThan); err != nil {
-			return nil, err
-		}
-		value = providerRequestWire(typed)
+		value, refresh = providerRequestWire(typed), typed.RefreshIfOlderThan
 	case ModelInventoryQuery:
-		if err := validateRefreshDuration(typed.RefreshIfOlderThan); err != nil {
-			return nil, err
-		}
-		value = modelRequestWire(typed)
+		value, refresh = modelRequestWire(typed), typed.RefreshIfOlderThan
 	case CreditStatusQuery:
-		if err := validateRefreshDuration(typed.RefreshIfOlderThan); err != nil {
-			return nil, err
-		}
-		value = creditRequestWire(typed)
+		value, refresh = creditRequestWire(typed), typed.RefreshIfOlderThan
 	case BudgetStatusQuery:
 		value = budgetRequestWire(typed)
 	case SpendSummaryQuery:
 		value = spendRequestWire(typed)
-	case *ProviderStatusQuery:
-		if typed == nil {
-			return nil, fmt.Errorf("nil typed query filter")
-		}
-		if err := validateRefreshDuration(typed.RefreshIfOlderThan); err != nil {
-			return nil, err
-		}
-		value = providerRequestWire(*typed)
-	case *ModelInventoryQuery:
-		if typed == nil {
-			return nil, fmt.Errorf("nil typed query filter")
-		}
-		if err := validateRefreshDuration(typed.RefreshIfOlderThan); err != nil {
-			return nil, err
-		}
-		value = modelRequestWire(*typed)
-	case *CreditStatusQuery:
-		if typed == nil {
-			return nil, fmt.Errorf("nil typed query filter")
-		}
-		if err := validateRefreshDuration(typed.RefreshIfOlderThan); err != nil {
-			return nil, err
-		}
-		value = creditRequestWire(*typed)
-	case *BudgetStatusQuery:
-		if typed == nil {
-			return nil, fmt.Errorf("nil typed query filter")
-		}
-		value = budgetRequestWire(*typed)
-	case *SpendSummaryQuery:
-		if typed == nil {
-			return nil, fmt.Errorf("nil typed query filter")
-		}
-		value = spendRequestWire(*typed)
 	default:
 		return nil, fmt.Errorf("unknown typed query filter")
 	}
+	if err := validateRefreshDuration(refresh); err != nil {
+		return nil, err
+	}
 	return json.Marshal(value)
+}
+
+func derefFilter[T QueryFilter](value *T) (QueryFilter, error) {
+	if value == nil {
+		return nil, fmt.Errorf("nil typed query filter")
+	}
+	return *value, nil
 }
 
 func providerRequestWire(value ProviderStatusQuery) requestWire {
@@ -587,7 +566,7 @@ func EncodeQueryResponse(response QueryResponse) (llm.QueryResponseV1, error) {
 	if err != nil {
 		return llm.QueryResponseV1{}, err
 	}
-	wire := llm.QueryResponseV1{APIVersion: llm.QueryAPIVersion, OperationKey: string(response.OperationKey), QueryExecutionID: string(response.ExecutionID), Kind: response.Kind, ObservedAt: response.Provenance.ObservedAt.UTC().Format(time.RFC3339Nano), Source: string(response.Provenance.Source), Freshness: string(response.Provenance.Freshness), Complete: response.Complete, NextCursor: stringPtr(response.NextCursor), Result: result, Cost: llm.CostV1{Status: string(response.Cost.Status), ActualCostUSD: decimalPtr(response.Cost.ActualUSD), Method: string(response.Cost.Method), UnknownReason: string(response.Cost.UnknownReason)}}
+	wire := llm.QueryResponseV1{APIVersion: llm.QueryAPIVersion, OperationKey: string(response.OperationKey), QueryExecutionID: string(response.ExecutionID), Kind: response.Kind, ObservedAt: response.Provenance.ObservedAt.UTC().Format(time.RFC3339Nano), Source: string(response.Provenance.Source), Freshness: string(response.Provenance.Freshness), Complete: response.Complete, NextCursor: stringPtr(response.NextCursor), Result: result, Cost: llm.CostV1{Status: string(response.Cost.Status), ActualCostUSD: stringPtr(response.Cost.ActualUSD), Method: string(response.Cost.Method), UnknownReason: string(response.Cost.UnknownReason)}}
 	if _, err := json.Marshal(wire); err != nil {
 		return llm.QueryResponseV1{}, fmt.Errorf("typed query response: %w", err)
 	}
@@ -647,38 +626,32 @@ func encodeResult(kind llm.QueryKind, value QueryResult) (llm.QueryResult, error
 	}
 	switch kind {
 	case llm.QueryProviderStatus:
-		var rows struct {
-			Routes []json.RawMessage `json:"routes"`
-		}
-		if err := json.Unmarshal(raw, &rows); err != nil {
+		page, err := unmarshalAs[routesPage](raw)
+		if err != nil {
 			return nil, err
 		}
-		return llm.ProviderStatusPage{Routes: rows.Routes}, nil
+		return llm.ProviderStatusPage{Routes: page.Routes}, nil
 	case llm.QueryModelInventory:
-		var rows struct {
-			Models []json.RawMessage `json:"models"`
-		}
-		if err := json.Unmarshal(raw, &rows); err != nil {
+		page, err := unmarshalAs[modelsPage](raw)
+		if err != nil {
 			return nil, err
 		}
-		return llm.ModelInventoryPage{Models: rows.Models}, nil
+		return llm.ModelInventoryPage{Models: page.Models}, nil
 	case llm.QueryCreditStatus:
-		var rows struct {
-			Endpoints []json.RawMessage `json:"endpoints"`
-		}
-		if err := json.Unmarshal(raw, &rows); err != nil {
+		page, err := unmarshalAs[endpointsPage](raw)
+		if err != nil {
 			return nil, err
 		}
-		return llm.CreditStatusPage{Endpoints: rows.Endpoints}, nil
+		return llm.CreditStatusPage{Endpoints: page.Endpoints}, nil
 	case llm.QueryBudgetStatus:
-		var value llm.BudgetStatus
-		if err := json.Unmarshal(raw, &value); err != nil {
+		value, err := unmarshalAs[llm.BudgetStatus](raw)
+		if err != nil {
 			return nil, err
 		}
 		return value, nil
 	case llm.QuerySpendSummary:
-		var value llm.SpendSummary
-		if err := json.Unmarshal(raw, &value); err != nil {
+		value, err := unmarshalAs[llm.SpendSummary](raw)
+		if err != nil {
 			return nil, err
 		}
 		return value, nil
@@ -690,37 +663,19 @@ func encodeResult(kind llm.QueryKind, value QueryResult) (llm.QueryResult, error
 func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) {
 	switch kind {
 	case llm.QueryProviderStatus:
-		var page struct {
-			Routes []json.RawMessage `json:"routes"`
-		}
-		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, err
-		}
-		rows, err := decodeRows[ProviderStatusRow](page.Routes, "route")
+		rows, err := decodePageRows[ProviderStatusRow, routesPage](raw, "route")
 		if err != nil {
 			return nil, err
 		}
 		return ProviderStatusResult{Routes: rows}, nil
 	case llm.QueryModelInventory:
-		var page struct {
-			Models []json.RawMessage `json:"models"`
-		}
-		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, err
-		}
-		rows, err := decodeRows[ModelInventoryRow](page.Models, "model")
+		rows, err := decodePageRows[ModelInventoryRow, modelsPage](raw, "model")
 		if err != nil {
 			return nil, err
 		}
 		return ModelInventoryResult{Models: rows}, nil
 	case llm.QueryCreditStatus:
-		var page struct {
-			Endpoints []json.RawMessage `json:"endpoints"`
-		}
-		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, err
-		}
-		rows, err := decodeRows[CreditStatusRow](page.Endpoints, "endpoint")
+		rows, err := decodePageRows[CreditStatusRow, endpointsPage](raw, "endpoint")
 		if err != nil {
 			return nil, err
 		}
@@ -758,6 +713,39 @@ func decodeResult(kind llm.QueryKind, raw json.RawMessage) (QueryResult, error) 
 	default:
 		return nil, fmt.Errorf("unknown query result kind %q", kind)
 	}
+}
+
+// The paged result families carry their rows under one family-specific key.
+// Each page type keeps that key as an ordinary struct tag so encoding/json's
+// key matching is unchanged.
+type routesPage struct {
+	Routes []json.RawMessage `json:"routes"`
+}
+type modelsPage struct {
+	Models []json.RawMessage `json:"models"`
+}
+type endpointsPage struct {
+	Endpoints []json.RawMessage `json:"endpoints"`
+}
+
+func (page routesPage) rawRows() []json.RawMessage    { return page.Routes }
+func (page modelsPage) rawRows() []json.RawMessage    { return page.Models }
+func (page endpointsPage) rawRows() []json.RawMessage { return page.Endpoints }
+
+// unmarshalAs decodes raw into a new T.
+func unmarshalAs[T any](raw []byte) (T, error) {
+	var value T
+	err := json.Unmarshal(raw, &value)
+	return value, err
+}
+
+// decodePageRows decodes a page P and then each of its raw rows into a T.
+func decodePageRows[T any, P interface{ rawRows() []json.RawMessage }](raw []byte, label string) ([]T, error) {
+	page, err := unmarshalAs[P](raw)
+	if err != nil {
+		return nil, err
+	}
+	return decodeRows[T](page.rawRows(), label)
 }
 
 // decodeRows unmarshals each raw row into a T. label names one row in errors,
@@ -848,14 +836,7 @@ func filterKind(filter QueryFilter) (llm.QueryKind, bool) {
 func resultKind(result QueryResult) (llm.QueryKind, bool) {
 	return queryKindOf(result)
 }
-func stringPtr(value *QueryCursor) *string {
-	if value == nil {
-		return nil
-	}
-	v := string(*value)
-	return &v
-}
-func decimalPtr(value *DecimalUSD) *string {
+func stringPtr[T ~string](value *T) *string {
 	if value == nil {
 		return nil
 	}

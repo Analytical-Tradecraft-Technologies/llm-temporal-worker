@@ -304,9 +304,9 @@ func (handler *persistedQueryHandler) budgetStatus(ctx context.Context, request 
 	if handler.budget == nil {
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "Redis budget status reader is not configured")
 	}
-	query, ok := request.Filter.(control.BudgetStatusQuery)
-	if !ok {
-		return control.QueryResponse{}, fmt.Errorf("budget status filter has unexpected type")
+	query, err := queryFilterAs[control.BudgetStatusQuery](request, "budget status")
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
 	activeAt := now
 	if query.ActiveAt != nil {
@@ -332,9 +332,9 @@ func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request 
 	if handler.resolveScope == nil {
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "spend summary scope resolver is not configured")
 	}
-	query, ok := request.Filter.(control.SpendSummaryQuery)
-	if !ok {
-		return control.QueryResponse{}, fmt.Errorf("spend summary filter has unexpected type")
+	query, err := queryFilterAs[control.SpendSummaryQuery](request, "spend summary")
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
 	scopeID, err := handler.resolveScope(ctx, request.Scope)
 	if err != nil {
@@ -358,15 +358,11 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 	if handler.provider == nil {
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "provider status repository is not configured")
 	}
-	query, ok := request.Filter.(control.ProviderStatusQuery)
-	if !ok {
-		return control.QueryResponse{}, fmt.Errorf("provider status filter has unexpected type")
+	query, err := queryFilterAs[control.ProviderStatusQuery](request, "provider status")
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
-	horizon := now
-	after := ""
-	if claims != nil {
-		horizon, after = claims.Horizon, claims.Position
-	}
+	horizon, after := claimedPosition(claims, now)
 	var availability control.Availability
 	if query.Availability != nil {
 		availability = control.Availability(*query.Availability)
@@ -392,13 +388,9 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 			freshness = control.QueryFreshStale
 		}
 	}
-	var cursor *control.QueryCursor
-	if page.NextRouteID != "" {
-		signed, signErr := handler.sign(request, page.NextRouteID, horizon, now)
-		if signErr != nil {
-			return control.QueryResponse{}, signErr
-		}
-		cursor = &signed
+	cursor, err := handler.nextCursor(request, page.NextRouteID, horizon, now)
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
 	return handler.response(request, control.ProviderStatusResult{Routes: rows}, freshness, control.QuerySourcePersisted, horizon, cursor), nil
 }
@@ -407,15 +399,14 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 	if handler.inventory == nil {
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "model inventory repository is not configured")
 	}
-	query, ok := request.Filter.(control.ModelInventoryQuery)
-	if !ok {
-		return control.QueryResponse{}, fmt.Errorf("model inventory filter has unexpected type")
+	query, err := queryFilterAs[control.ModelInventoryQuery](request, "model inventory")
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
 	horizon := time.Time{}
 	position := control.InventoryModelPosition{}
 	if claims != nil {
 		horizon = claims.Horizon
-		var err error
 		position, err = decodeInventoryPosition(claims.Position)
 		if err != nil {
 			return control.QueryResponse{}, fmt.Errorf("inventory cursor: %w", err)
@@ -451,14 +442,13 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 		lifecycle := control.QueryLifecycle(record.Model.Lifecycle)
 		rows = append(rows, control.ModelInventoryRow{Provider: control.ProviderID(record.Snapshot.Provider), Endpoint: control.EndpointID(record.Snapshot.EndpointID), ProviderModelID: control.ProviderModelID(record.Model.ProviderModelID), DisplayName: display, Lifecycle: lifecycle, Capabilities: []string{}, CompleteSnapshot: record.Snapshot.Complete})
 	}
-	var cursor *control.QueryCursor
+	next := ""
 	if page.Next != nil {
-		position := encodeInventoryPosition(*page.Next)
-		signed, signErr := handler.sign(request, position, page.SnapshotHorizon, now)
-		if signErr != nil {
-			return control.QueryResponse{}, signErr
-		}
-		cursor = &signed
+		next = encodeInventoryPosition(*page.Next)
+	}
+	cursor, err := handler.nextCursor(request, next, page.SnapshotHorizon, now)
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
 	return handler.response(request, control.ModelInventoryResult{Models: rows}, freshness, control.QuerySourcePersisted, page.SnapshotHorizon, cursor), nil
 }
@@ -467,14 +457,11 @@ func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request 
 	if handler.provider == nil {
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "credit status repository is not configured")
 	}
-	query, ok := request.Filter.(control.CreditStatusQuery)
-	if !ok {
-		return control.QueryResponse{}, fmt.Errorf("credit status filter has unexpected type")
+	query, err := queryFilterAs[control.CreditStatusQuery](request, "credit status")
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
-	horizon, after := now, ""
-	if claims != nil {
-		horizon, after = claims.Horizon, claims.Position
-	}
+	horizon, after := claimedPosition(claims, now)
 	page, err := handler.provider.ListCreditStatuses(ctx, control.CreditStatusListOptions{ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), IncludeOK: boolValue(query.IncludeOK), SnapshotHorizon: horizon, AfterEndpointKey: after, Limit: query.Page.Size})
 	if err != nil {
 		return control.QueryResponse{}, err
@@ -500,13 +487,9 @@ func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request 
 			freshness = control.QueryFreshStale
 		}
 	}
-	var cursor *control.QueryCursor
-	if page.NextEndpointKey != "" {
-		signed, signErr := handler.sign(request, page.NextEndpointKey, horizon, now)
-		if signErr != nil {
-			return control.QueryResponse{}, signErr
-		}
-		cursor = &signed
+	cursor, err := handler.nextCursor(request, page.NextEndpointKey, horizon, now)
+	if err != nil {
+		return control.QueryResponse{}, err
 	}
 	return handler.response(request, control.CreditStatusResult{Endpoints: rows}, freshness, control.QuerySourcePersisted, horizon, cursor), nil
 }
@@ -514,6 +497,19 @@ func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request 
 func (handler *persistedQueryHandler) response(request control.QueryRequest, result control.QueryResult, freshness control.QueryFreshness, source control.QuerySource, observed time.Time, cursor *control.QueryCursor) control.QueryResponse {
 	zero := control.DecimalUSD("0")
 	return control.QueryResponse{OperationKey: request.OperationKey, ExecutionID: executionID(request), Kind: request.Kind, Provenance: control.QueryProvenance{Source: source, Freshness: freshness, ObservedAt: observed.UTC()}, Complete: cursor == nil, NextCursor: cursor, Result: result, Cost: control.QueryCost{Status: control.QueryCostExact, ActualUSD: &zero, Method: control.QueryCostControlZero}}
+}
+
+// nextCursor signs a continuation for position, or returns nil when the page
+// was the last one (position is empty).
+func (handler *persistedQueryHandler) nextCursor(request control.QueryRequest, position string, horizon, now time.Time) (*control.QueryCursor, error) {
+	if position == "" {
+		return nil, nil
+	}
+	signed, err := handler.sign(request, position, horizon, now)
+	if err != nil {
+		return nil, err
+	}
+	return &signed, nil
 }
 
 func (handler *persistedQueryHandler) sign(request control.QueryRequest, position string, horizon, issuedAt time.Time) (control.QueryCursor, error) {
@@ -561,6 +557,25 @@ func refreshRequested(filter control.QueryFilter) bool {
 	default:
 		return false
 	}
+}
+
+// queryFilterAs returns the request filter as the family's concrete filter
+// type, or an error naming the family when the decoded filter differs.
+func queryFilterAs[T control.QueryFilter](request control.QueryRequest, family string) (T, error) {
+	query, ok := request.Filter.(T)
+	if !ok {
+		return query, fmt.Errorf("%s filter has unexpected type", family)
+	}
+	return query, nil
+}
+
+// claimedPosition returns the snapshot horizon and page position a bound
+// cursor resumes from, or now and the first page when there is no cursor.
+func claimedPosition(claims *control.BoundCursorClaims, now time.Time) (time.Time, string) {
+	if claims == nil {
+		return now, ""
+	}
+	return claims.Horizon, claims.Position
 }
 
 func staleAt(now, staleAfter time.Time) bool { return !staleAfter.IsZero() && !now.Before(staleAfter) }

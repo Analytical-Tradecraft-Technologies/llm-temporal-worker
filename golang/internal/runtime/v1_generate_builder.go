@@ -28,20 +28,10 @@ var (
 // and the factory then drains the rejected snapshot clients before returning.
 func NewGenerateV1RuntimeBuilder() V1RuntimeBuilder {
 	return func(ctx context.Context, snapshot *config.Snapshot, _ llm.Engine, clients app.ClientSet) (activity.V1Runtime, error) {
-		if ctx == nil {
-			return nil, fmt.Errorf("%w: context is nil", ErrGenerateV1Composition)
+		capabilities, err := snapshotV1RuntimeCapabilities(ctx, snapshot, clients, ErrGenerateV1Composition)
+		if err != nil {
+			return nil, err
 		}
-		if snapshot == nil {
-			return nil, fmt.Errorf("%w: configuration snapshot is nil", ErrGenerateV1Composition)
-		}
-		if isNilCapability(clients) {
-			return nil, fmt.Errorf("%w: snapshot client set is nil", ErrGenerateV1Composition)
-		}
-		source, ok := clients.(V1RuntimeCapabilitiesSource)
-		if !ok || isNilCapability(source) {
-			return nil, fmt.Errorf("%w: snapshot client set does not expose V1RuntimeCapabilitiesSource", ErrGenerateV1Composition)
-		}
-		capabilities := source.V1RuntimeCapabilities()
 		if err := capabilities.ValidateGenerate(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrGenerateV1Composition, err)
 		}
@@ -55,4 +45,24 @@ func NewGenerateV1RuntimeBuilder() V1RuntimeBuilder {
 		}
 		return runtime, nil
 	}
+}
+
+// snapshotV1RuntimeCapabilities checks the inputs every V1RuntimeBuilder
+// receives and returns the snapshot client set's capability bundle. Every
+// error wraps composition, the calling builder's sentinel.
+func snapshotV1RuntimeCapabilities(ctx context.Context, snapshot *config.Snapshot, clients app.ClientSet, composition error) (V1RuntimeCapabilities, error) {
+	if ctx == nil {
+		return V1RuntimeCapabilities{}, fmt.Errorf("%w: context is nil", composition)
+	}
+	if snapshot == nil {
+		return V1RuntimeCapabilities{}, fmt.Errorf("%w: configuration snapshot is nil", composition)
+	}
+	if isNilCapability(clients) {
+		return V1RuntimeCapabilities{}, fmt.Errorf("%w: snapshot client set is nil", composition)
+	}
+	source, ok := clients.(V1RuntimeCapabilitiesSource)
+	if !ok || isNilCapability(source) {
+		return V1RuntimeCapabilities{}, fmt.Errorf("%w: snapshot client set does not expose V1RuntimeCapabilitiesSource", composition)
+	}
+	return source.V1RuntimeCapabilities(), nil
 }

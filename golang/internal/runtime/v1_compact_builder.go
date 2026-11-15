@@ -18,20 +18,10 @@ var ErrCompactV1Composition = errors.New("v1 Compact composition is unavailable"
 // Generate and Query are never inferred from the legacy engine.
 func NewCompactV1RuntimeBuilder() V1RuntimeBuilder {
 	return func(ctx context.Context, snapshot *config.Snapshot, _ llm.Engine, clients app.ClientSet) (activity.V1Runtime, error) {
-		if ctx == nil {
-			return nil, fmt.Errorf("%w: context is nil", ErrCompactV1Composition)
+		capabilities, err := snapshotV1RuntimeCapabilities(ctx, snapshot, clients, ErrCompactV1Composition)
+		if err != nil {
+			return nil, err
 		}
-		if snapshot == nil {
-			return nil, fmt.Errorf("%w: configuration snapshot is nil", ErrCompactV1Composition)
-		}
-		if isNilCapability(clients) {
-			return nil, fmt.Errorf("%w: snapshot client set is nil", ErrCompactV1Composition)
-		}
-		source, ok := clients.(V1RuntimeCapabilitiesSource)
-		if !ok || isNilCapability(source) {
-			return nil, fmt.Errorf("%w: snapshot client set does not expose V1RuntimeCapabilitiesSource", ErrCompactV1Composition)
-		}
-		capabilities := source.V1RuntimeCapabilities()
 		if err := capabilities.ValidateCompact(); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrCompactV1Composition, err)
 		}

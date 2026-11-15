@@ -339,22 +339,15 @@ func (capabilities V1RuntimeCapabilities) validateShared(phase string) error {
 // its dynamic type, so a capability consumer cannot mutate the legacy engine's
 // map through a type assertion or retain an alias to the factory input.
 type snapshotAdapterRegistry struct {
-	adapters map[string]provider.Adapter
+	adapters engine.AdapterMap
 }
 
 func (registry snapshotAdapterRegistry) Adapter(ctx context.Context, candidate routing.Candidate) (provider.Adapter, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	adapter := registry.adapters[candidate.EndpointID]
-	if adapter == nil {
-		return nil, fmt.Errorf("no adapter configured for endpoint %q", candidate.EndpointID)
-	}
-	return adapter, nil
+	return registry.adapters.Adapter(ctx, candidate)
 }
 
 func newSnapshotAdapterRegistry(adapters map[string]provider.Adapter) engine.AdapterRegistry {
-	owned := make(map[string]provider.Adapter, len(adapters))
+	owned := make(engine.AdapterMap, len(adapters))
 	for endpointID, adapter := range adapters {
 		owned[endpointID] = adapter
 	}

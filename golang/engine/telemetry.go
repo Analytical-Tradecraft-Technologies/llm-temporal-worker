@@ -18,6 +18,12 @@ func (engine *Engine) recordTraceError(ctx context.Context, span oteltrace.Span,
 	observability.FromContext(ctx).RecordError(span, err)
 }
 
+// endTraceError records err on span and ends it.
+func (engine *Engine) endTraceError(ctx context.Context, span oteltrace.Span, err error) {
+	engine.recordTraceError(ctx, span, err)
+	span.End()
+}
+
 func requestTraceAttrs(request llm.Request) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{attribute.String("service_class", string(request.ServiceClass))}
 	if request.Context.Tenant != "" {

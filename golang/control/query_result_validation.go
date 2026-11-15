@@ -1,6 +1,7 @@
 package control
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,98 +17,82 @@ import (
 func validateQueryResultOrdering(kind llm.QueryKind, result QueryResult) error {
 	switch value := result.(type) {
 	case ProviderStatusResult:
-		if kind != llm.QueryProviderStatus {
-			return fmt.Errorf("query result kind %q does not match provider status rows", kind)
-		}
-		previous := ""
-		for index, row := range value.Routes {
-			key := string(row.RouteID)
-			if key == "" || (index > 0 && key <= previous) {
-				return fmt.Errorf("provider status rows must be sorted and unique by route_id")
+		const unsorted = "provider status rows must be sorted and unique by route_id"
+		return validateResultRows(kind, llm.QueryProviderStatus, "provider status rows", unsorted, value.Routes, func(row ProviderStatusRow) (string, error) {
+			if row.RouteID == "" {
+				return "", errors.New(unsorted)
 			}
-			previous = key
-		}
-	case *ProviderStatusResult:
-		if value == nil {
-			return fmt.Errorf("query result is nil")
-		}
-		return validateQueryResultOrdering(kind, *value)
+			return string(row.RouteID), nil
+		})
 	case ModelInventoryResult:
-		if kind != llm.QueryModelInventory {
-			return fmt.Errorf("query result kind %q does not match model inventory rows", kind)
-		}
-		previous := ""
-		for _, row := range value.Models {
+		const unsorted = "model inventory rows must be sorted and unique by provider, endpoint, and model"
+		return validateResultRows(kind, llm.QueryModelInventory, "model inventory rows", unsorted, value.Models, func(row ModelInventoryRow) (string, error) {
 			key := modelInventoryResultKey(row)
-			if key == "" || (previous != "" && key <= previous) {
-				return fmt.Errorf("model inventory rows must be sorted and unique by provider, endpoint, and model")
+			if key == "" {
+				return "", errors.New(unsorted)
 			}
-			previous = key
-		}
-	case *ModelInventoryResult:
-		if value == nil {
-			return fmt.Errorf("query result is nil")
-		}
-		return validateQueryResultOrdering(kind, *value)
+			return key, nil
+		})
 	case CreditStatusResult:
-		if kind != llm.QueryCreditStatus {
-			return fmt.Errorf("query result kind %q does not match credit status rows", kind)
-		}
-		previous := ""
-		for _, row := range value.Endpoints {
+		return validateResultRows(kind, llm.QueryCreditStatus, "credit status rows", "credit status rows must be sorted and unique by provider and endpoint", value.Endpoints, func(row CreditStatusRow) (string, error) {
 			if row.Provider == "" || row.Endpoint == "" {
-				return fmt.Errorf("credit status rows require provider and endpoint")
+				return "", errors.New("credit status rows require provider and endpoint")
 			}
-			key := joinQueryResultKey(string(row.Provider), string(row.Endpoint))
-			if previous != "" && key <= previous {
-				return fmt.Errorf("credit status rows must be sorted and unique by provider and endpoint")
-			}
-			previous = key
-		}
-	case *CreditStatusResult:
-		if value == nil {
-			return fmt.Errorf("query result is nil")
-		}
-		return validateQueryResultOrdering(kind, *value)
+			return joinQueryResultKey(string(row.Provider), string(row.Endpoint)), nil
+		})
 	case BudgetStatusResult:
-		if kind != llm.QueryBudgetStatus {
-			return fmt.Errorf("query result kind %q does not match budget windows", kind)
-		}
-		previous := ""
-		for _, row := range value.Windows {
+		return validateResultRows(kind, llm.QueryBudgetStatus, "budget windows", "budget windows must be sorted and unique by policy and window", value.Windows, func(row BudgetWindow) (string, error) {
 			if row.PolicyKey == "" || row.WindowKey == "" {
-				return fmt.Errorf("budget windows require policy and window")
+				return "", errors.New("budget windows require policy and window")
 			}
-			key := joinQueryResultKey(string(row.PolicyKey), string(row.WindowKey))
-			if previous != "" && key <= previous {
-				return fmt.Errorf("budget windows must be sorted and unique by policy and window")
-			}
-			previous = key
-		}
-	case *BudgetStatusResult:
-		if value == nil {
-			return fmt.Errorf("query result is nil")
-		}
-		return validateQueryResultOrdering(kind, *value)
+			return joinQueryResultKey(string(row.PolicyKey), string(row.WindowKey)), nil
+		})
 	case SpendSummaryResult:
-		if kind != llm.QuerySpendSummary {
-			return fmt.Errorf("query result kind %q does not match spend buckets", kind)
-		}
-		previous := ""
-		for _, row := range value.Buckets {
-			key := spendBucketResultKey(row)
-			if previous != "" && key <= previous {
-				return fmt.Errorf("spend buckets must be sorted and unique by operation, provider, and model")
-			}
-			previous = key
-		}
+		return validateResultRows(kind, llm.QuerySpendSummary, "spend buckets", "spend buckets must be sorted and unique by operation, provider, and model", value.Buckets, func(row SpendBucket) (string, error) {
+			return spendBucketResultKey(row), nil
+		})
+	case *ProviderStatusResult:
+		return validateResultPointer(kind, value)
+	case *ModelInventoryResult:
+		return validateResultPointer(kind, value)
+	case *CreditStatusResult:
+		return validateResultPointer(kind, value)
+	case *BudgetStatusResult:
+		return validateResultPointer(kind, value)
 	case *SpendSummaryResult:
-		if value == nil {
-			return fmt.Errorf("query result is nil")
-		}
-		return validateQueryResultOrdering(kind, *value)
+		return validateResultPointer(kind, value)
 	default:
 		return fmt.Errorf("unknown typed query result")
+	}
+}
+
+// validateResultPointer validates the result a pointer refers to; a typed nil
+// pointer is rejected.
+func validateResultPointer[T QueryResult](kind llm.QueryKind, value *T) error {
+	if value == nil {
+		return fmt.Errorf("query result is nil")
+	}
+	return validateQueryResultOrdering(kind, *value)
+}
+
+// validateResultRows checks that the result family matches kind (noun names
+// the family's rows in the mismatch error) and that rows are strictly
+// increasing by key. key reports a row that cannot be keyed; unsorted is the
+// error for a row whose key does not sort after the previous row's.
+func validateResultRows[R any](kind, want llm.QueryKind, noun, unsorted string, rows []R, key func(R) (string, error)) error {
+	if kind != want {
+		return fmt.Errorf("query result kind %q does not match %s", kind, noun)
+	}
+	previous := ""
+	for index, row := range rows {
+		current, err := key(row)
+		if err != nil {
+			return err
+		}
+		if index > 0 && current <= previous {
+			return errors.New(unsorted)
+		}
+		previous = current
 	}
 	return nil
 }
@@ -130,19 +115,12 @@ func spendBucketResultKey(bucket SpendBucket) string {
 	// order here so the common typed boundary uses absent dimensions first
 	// ordering regardless of which dimensions the caller selected.
 	return strings.Join([]string{
-		spendGroupValue(bucket.Group.Model),
-		spendGroupValue(bucket.Group.OperationKind),
-		spendGroupValue(bucket.Group.Provider),
+		stringValue(bucket.Group.Model),
+		stringValue(bucket.Group.OperationKind),
+		stringValue(bucket.Group.Provider),
 	}, "\x00")
 }
 
 func joinQueryResultKey(values ...string) string {
 	return strings.Join(values, "\x00")
-}
-
-func spendGroupValue[T ~string](value *T) string {
-	if value == nil {
-		return ""
-	}
-	return string(*value)
 }

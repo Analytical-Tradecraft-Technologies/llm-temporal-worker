@@ -89,11 +89,8 @@ func (options *ProviderStatusListOptions) Normalize() error {
 	if !options.SnapshotHorizon.IsZero() {
 		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
 	}
-	if options.Limit == 0 {
-		options.Limit = DefaultProviderStatusPageSize
-	}
-	if options.Limit < 1 || options.Limit > MaxProviderStatusPageSize {
-		return fmt.Errorf("provider status page size must be between 1 and %d", MaxProviderStatusPageSize)
+	if err := normalizePageLimit(&options.Limit, DefaultProviderStatusPageSize, MaxProviderStatusPageSize, "provider status"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -144,13 +141,7 @@ type InventorySnapshotInfo struct {
 }
 
 func (snapshot InventorySnapshotInfo) ProvenanceAt(now time.Time) Provenance {
-	if snapshot.Source == InventoryUnsupported {
-		return ProvenanceUnsupported
-	}
-	if now.IsZero() || !now.Before(snapshot.ExpiresAt) {
-		return ProvenanceStale
-	}
-	return ProvenanceCurrent
+	return inventoryProvenanceAt(snapshot.Source, snapshot.ExpiresAt, now)
 }
 
 // InventoryModelRecord combines one normalized model row with its immutable
@@ -196,11 +187,8 @@ func (options *InventoryModelListOptions) Normalize() error {
 	if options.Lifecycle != "" && !validInventoryLifecycle(options.Lifecycle) {
 		return fmt.Errorf("inventory model lifecycle %q is invalid", options.Lifecycle)
 	}
-	if options.Limit == 0 {
-		options.Limit = DefaultInventoryPageSize
-	}
-	if options.Limit < 1 || options.Limit > MaxInventoryPageSize {
-		return fmt.Errorf("inventory model page size must be between 1 and %d", MaxInventoryPageSize)
+	if err := normalizePageLimit(&options.Limit, DefaultInventoryPageSize, MaxInventoryPageSize, "inventory model"); err != nil {
+		return err
 	}
 	if options.SnapshotHorizon.IsZero() && (options.After != InventoryModelPosition{}) {
 		return errors.New("inventory model continuation requires a snapshot horizon")
@@ -267,11 +255,20 @@ func (options *CreditStatusListOptions) Normalize() error {
 	if !options.SnapshotHorizon.IsZero() {
 		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
 	}
-	if options.Limit == 0 {
-		options.Limit = DefaultCreditStatusPageSize
+	if err := normalizePageLimit(&options.Limit, DefaultCreditStatusPageSize, MaxCreditStatusPageSize, "credit status"); err != nil {
+		return err
 	}
-	if options.Limit < 1 || options.Limit > MaxCreditStatusPageSize {
-		return fmt.Errorf("credit status page size must be between 1 and %d", MaxCreditStatusPageSize)
+	return nil
+}
+
+// normalizePageLimit defaults an unset page size and rejects one outside
+// 1..maxSize; family names the query in the error.
+func normalizePageLimit(limit *int, defaultSize, maxSize int, family string) error {
+	if *limit == 0 {
+		*limit = defaultSize
+	}
+	if *limit < 1 || *limit > maxSize {
+		return fmt.Errorf("%s page size must be between 1 and %d", family, maxSize)
 	}
 	return nil
 }

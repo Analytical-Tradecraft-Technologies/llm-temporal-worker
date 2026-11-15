@@ -26,39 +26,27 @@ type snapshotV1Runtime struct {
 var _ activity.V1Runtime = (*snapshotV1Runtime)(nil)
 
 func (runtime *snapshotV1Runtime) GenerateV1(ctx context.Context, request llm.GenerateRequestV1) (llm.GenerateResponseV1, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var response llm.GenerateResponseV1
-	err := runtime.with(ctx, func(current activity.V1Runtime) error {
-		var err error
-		response, err = current.GenerateV1(ctx, request)
-		return err
-	})
-	return response, err
+	return callSnapshotV1(runtime, ctx, request, activity.V1Runtime.GenerateV1)
 }
 
 func (runtime *snapshotV1Runtime) CompactV1(ctx context.Context, request llm.CompactRequestV1) (llm.CompactResponseV1, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var response llm.CompactResponseV1
-	err := runtime.with(ctx, func(current activity.V1Runtime) error {
-		var err error
-		response, err = current.CompactV1(ctx, request)
-		return err
-	})
-	return response, err
+	return callSnapshotV1(runtime, ctx, request, activity.V1Runtime.CompactV1)
 }
 
 func (runtime *snapshotV1Runtime) QueryV1(ctx context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
+	return callSnapshotV1(runtime, ctx, request, activity.V1Runtime.QueryV1)
+}
+
+// callSnapshotV1 runs one v1 phase method against the runtime resolved from
+// the leased snapshot.
+func callSnapshotV1[Request, Response any](runtime *snapshotV1Runtime, ctx context.Context, request Request, call func(activity.V1Runtime, context.Context, Request) (Response, error)) (Response, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	var response llm.QueryResponseV1
+	var response Response
 	err := runtime.with(ctx, func(current activity.V1Runtime) error {
 		var err error
-		response, err = current.QueryV1(ctx, request)
+		response, err = call(current, ctx, request)
 		return err
 	})
 	return response, err

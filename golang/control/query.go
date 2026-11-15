@@ -477,29 +477,29 @@ func validateResponsePageSize(request llm.QueryRequestV1, response llm.QueryResp
 	return nil
 }
 
+// pointerRowCount counts the rows of the page a pointer result refers to; a
+// typed nil pointer is rejected.
+func pointerRowCount[T any](page *T, rows func(T) int) (int, error) {
+	if page == nil {
+		return 0, fmt.Errorf("query response result is nil")
+	}
+	return rows(*page), nil
+}
+
 func queryResponseRowCount(response llm.QueryResponseV1) (int, error) {
 	switch result := response.Result.(type) {
 	case llm.ProviderStatusPage:
 		return len(result.Routes), nil
-	case *llm.ProviderStatusPage:
-		if result == nil {
-			return 0, fmt.Errorf("query response result is nil")
-		}
-		return len(result.Routes), nil
 	case llm.ModelInventoryPage:
-		return len(result.Models), nil
-	case *llm.ModelInventoryPage:
-		if result == nil {
-			return 0, fmt.Errorf("query response result is nil")
-		}
 		return len(result.Models), nil
 	case llm.CreditStatusPage:
 		return len(result.Endpoints), nil
+	case *llm.ProviderStatusPage:
+		return pointerRowCount(result, func(page llm.ProviderStatusPage) int { return len(page.Routes) })
+	case *llm.ModelInventoryPage:
+		return pointerRowCount(result, func(page llm.ModelInventoryPage) int { return len(page.Models) })
 	case *llm.CreditStatusPage:
-		if result == nil {
-			return 0, fmt.Errorf("query response result is nil")
-		}
-		return len(result.Endpoints), nil
+		return pointerRowCount(result, func(page llm.CreditStatusPage) int { return len(page.Endpoints) })
 	default:
 		return 0, fmt.Errorf("query response result has unexpected type")
 	}
