@@ -122,11 +122,15 @@ issue" alert.
      for that `endpoint` before the hold.
   2. Credit or billing: the provider account owner tops up or fixes billing.
      An insufficient-credit hold lasts 15 minutes or until the configuration
-     changes, and a top-up made in place recovers after one probe request.
+     digest changes, and a top-up made in place recovers after one probe
+     request.
   3. Authentication or invalid configuration: fix the credential or
-     configuration. That hold lasts until a replacement configuration
-     snapshot is published (bounded at 24 hours); a successful reload clears
-     it for planning.
+     configuration. The hold lasts 24 hours from the rejection unless a
+     configuration with a different digest is published. Replacing a secret
+     value, restarting, or reloading an unchanged file keeps the same digest
+     and does not release it; see
+     [provider credential rotation](configuration-and-credentials.md#provider-credential-rotation)
+     for the trade-offs of releasing it early.
   4. Transient failures: wait for the half-open probe. The
      `route circuit closed` info log and
      `llmtw_route_health_transition_total{to="circuit_closed"}` confirm

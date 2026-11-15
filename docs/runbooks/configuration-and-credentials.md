@@ -81,9 +81,29 @@ must accept both until every replica uses the new one.
   4. Verify: `configuration reloaded` (for `SIGHUP`) or a clean start (for a
      restart) on every replica, no new `error_code=authentication` warnings for
      the endpoint, and `llmtw_provider_attempt_total{endpoint,outcome="success"}`
-     rising. Publishing a replacement configuration snapshot also clears an
-     authentication hold on the route for planning; otherwise that hold lasts
-     until the configuration changes, bounded at 24 hours.
+     rising.
+  5. If the provider already rejected the old credential, the route is held,
+     and replacing the secret does not release it. Shared route health is
+     keyed by the configuration digest, which covers only the non-secret
+     configuration: secret references count, secret values do not. A restart
+     with the same YAML, or a `SIGHUP` reload of an unchanged file, publishes
+     a snapshot with the same digest, so planning keeps skipping the route
+     until 24 hours after the last rejection. Only then does one request probe
+     it, and a success closes the circuit. There is no command that clears a
+     route health record. To resume sooner:
+     - if other routes serve the model, wait out the hold;
+     - otherwise escalate to the service owner. The only supported way to
+       release the hold early is a configuration change that changes the
+       digest, for example rotating by reference: put the new key in a new
+       environment variable, point the endpoint's `auth.name` at it, and roll
+       out. Every digest change resets every route's shared health, and
+       unfinished requests prepared under the old configuration that have
+       nothing paid wait 15 minutes and then fail with `configuration`, so
+       callers must resubmit them under a new operation key. Changing an
+       endpoint's auth reference also makes that endpoint's in-flight paid
+       attempts wait for a worker with the old reference, so do it only when
+       the endpoint has no pending provider jobs (see
+       [reload behaviour for unfinished work](../reference/mvp-v1-status.md#storage-and-callers)).
 - **Forbidden:** rotating key material that names state, not access:
   `state.redis.key_secret`, `state.requests.secret` and
   `continuation.handle_keys` entries still in use. Changing them selects a

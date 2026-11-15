@@ -28,8 +28,27 @@ every incident.
   3. To raise a limit, change only that window's `limit_usd` and reload. The
      window keeps its identity and its recorded spend. Confirm
      `llmtw_config_reload_total{outcome="success"}` and the
-     `configuration reloaded` log, then watch denials fall.
-  4. If denials appear with no matching spend (for example right after a Redis
+     `configuration reloaded` log, then watch denials fall for new requests.
+  4. A raised limit does **not** release requests that are already waiting.
+     Each one keeps the budget plan saved on its first acquisition, and that
+     plan's reservation carries the limit in force when it was planned, so
+     its retries are still judged against the old limit. The reload also
+     changes the configuration digest, so a waiting request, which has nothing
+     paid yet, is now work prepared under a configuration no worker serves:
+     it returns a retryable wait for 15 minutes after the reload and then
+     fails with the non-retryable `configuration` error (counted in
+     `llmtw_activity_failure_total{origin="worker"}`). See
+     [reload behaviour for unfinished work](../reference/mvp-v1-status.md#storage-and-callers).
+     Before raising a limit to unblock waiting traffic:
+     - tell the owning callers that requests waiting at the time of the reload
+       will fail within about 15 minutes and must be submitted again under a
+       new operation key; the waiting attempt holds no claimed reservation,
+       so resubmitting does not pay twice for it;
+     - if many requests are waiting, or callers cannot resubmit, escalate to
+       the service owner before reloading instead of reloading repeatedly;
+     - do not revert the reload to "rescue" waiting requests: restoring the
+       old configuration resumes them only on the old limit.
+  5. If denials appear with no matching spend (for example right after a Redis
      restore), check readiness and follow
      [Redis readiness failures](state-stores.md#redis-readiness-failures).
 - **Forbidden:** changing a window's `id`, `duration` or `bucket` to clear
