@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 )
 
@@ -40,9 +41,7 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, path := range files {
 		text := readText(t, path)
 		if strings.Contains(text, "TBD") || strings.Contains(text, "TODO") || strings.Contains(text, "FIXME") || strings.Contains(text, "PLACEHOLDER") {
@@ -56,9 +55,7 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 			}
 			target := strings.SplitN(raw, "#", 2)[0]
 			resolved, err := filepath.Abs(filepath.Join(filepath.Dir(path), target))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if _, err := os.Stat(resolved); err != nil {
 				t.Fatalf("%s links to missing target %s: %s", path, raw, err)
 			}
@@ -77,9 +74,7 @@ func TestConfigurationReferenceCompleteShapeLoads(t *testing.T) {
 	data := readText(t, path)
 
 	example := fencedYAMLForSection(t, data, "## Complete shape")
-	if _, err := config.Load([]byte(example)); err != nil {
-		t.Fatalf("complete configuration example must pass the strict loader: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load([]byte(example))), "complete configuration example must pass the strict loader")
 }
 
 func fencedYAMLForSection(t *testing.T, document, heading string) string {
@@ -153,9 +148,7 @@ func TestFixtureMatrixListsEveryEnforcedProfile(t *testing.T) {
 	matrix := readText(t, matrixPath)
 
 	report, err := contracttest.ValidateRepository(moduleRoot(t))
-	if err != nil {
-		t.Fatalf("validate provider fixture manifests: %v", err)
-	}
+	testassert.NoError(t, err, "validate provider fixture manifests")
 	if len(report.Enforced) == 0 {
 		t.Fatal("no enforced provider fixture manifests found")
 	}
@@ -342,9 +335,7 @@ var (
 
 func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 	baselineBytes, err := os.ReadFile(filepath.Join(moduleRoot(t), "tools", "supplychainverify", "baseline.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var baseline struct {
 		VulnerabilityExceptions []struct {
 			ID      string `json:"id"`
@@ -353,9 +344,7 @@ func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 			Scope   string `json:"scope"`
 		} `json:"vulnerability_exceptions"`
 	}
-	if err := json.Unmarshal(baselineBytes, &baseline); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(baselineBytes, &baseline))
 	docBytes := readText(t, repositoryRoot(t), "docs", "reference", "dependency-baseline.md")
 	documented := 0
 	for _, line := range strings.Split(docBytes, "\n") {
@@ -387,17 +376,13 @@ func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 // documentation edit while an added or removed direct module does (#1571).
 func TestDependencyBaselineListsDirectModulesWithoutVersions(t *testing.T) {
 	goMod, err := os.ReadFile(filepath.Join(moduleRoot(t), "go.mod"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	direct := directRequirements(string(goMod))
 	if len(direct) == 0 {
 		t.Fatal("go.mod declares no direct requirements")
 	}
 	docBytes, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "reference", "dependency-baseline.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	doc := string(docBytes)
 	start := strings.Index(doc, "\n## Direct modules\n")
 	if start < 0 {

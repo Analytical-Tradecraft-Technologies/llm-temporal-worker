@@ -50,12 +50,8 @@ func TestValidateFinalJSONOnlyChecksCompletedText(t *testing.T) {
 	call := provider.Call{OutputSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`)}
 	invalid := []llm.Item{llm.ModelText(`{}`)}
 	testassert.ErrorContains(t, ValidateFinalJSON(call, invalid, llm.ResponseStatusCompleted, false, false), "does not satisfy schema")
-	if err := ValidateFinalJSON(call, invalid, llm.ResponseStatusLength, false, false); err != nil {
-		t.Fatalf("ValidateFinalJSON(truncated) = %v", err)
-	}
-	if err := ValidateFinalJSON(call, invalid, llm.ResponseStatusCompleted, true, false); err != nil {
-		t.Fatalf("ValidateFinalJSON(tool calls) = %v", err)
-	}
+	testassert.NoError(t, ValidateFinalJSON(call, invalid, llm.ResponseStatusLength, false, false), "ValidateFinalJSON(truncated)")
+	testassert.NoError(t, ValidateFinalJSON(call, invalid, llm.ResponseStatusCompleted, true, false), "ValidateFinalJSON(tool calls)")
 }
 
 func TestLowerErrorClassifiesLoweringFailures(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -80,9 +81,7 @@ func TestLowerSamplingAndReasoningMergesEffortIntoOutputConfig(t *testing.T) {
 		Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortHigh},
 	}
 	target := map[string]any{"output_config": map[string]any{"format": "kept"}}
-	if err := Anthropic.LowerSamplingAndReasoning(request, target, false); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, Anthropic.LowerSamplingAndReasoning(request, target, false))
 	if target["temperature"] != temperature {
 		t.Fatalf("temperature = %v", target["temperature"])
 	}

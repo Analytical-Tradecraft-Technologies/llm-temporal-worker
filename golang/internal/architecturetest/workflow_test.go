@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -454,18 +455,10 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 		}
 	}
 
-	if err := validateReleaseMakeInvocationPolicy(master, pullRequest, release); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateReleaseEvidencePathOverridePolicy(master); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateReleaseEvidenceBindsImageIndex(master); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateReleaseMakeInvocationPolicy(master, pullRequest, release))
+	testassert.NoError(t, validateReleaseEvidencePathOverridePolicy(master))
+	testassert.NoError(t, validateReleaseEvidenceTemporaryOCIDirectoryPolicy(master))
+	testassert.NoError(t, validateReleaseEvidenceBindsImageIndex(master))
 }
 
 func TestWorkflowReleaseEvidenceImageIndexPolicyRejectsSinglePlatformEvidence(t *testing.T) {

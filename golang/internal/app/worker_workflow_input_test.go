@@ -10,6 +10,7 @@ import (
 
 	domainactivity "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -33,18 +34,12 @@ func (registry *workflowEnvironmentRegistry) RegisterWorkflowWithOptions(fn inte
 func generateWorkflowWire(t *testing.T, text string) json.RawMessage {
 	t.Helper()
 	data, err := os.ReadFile("../../llm/testdata/v1/generate-root.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var fields map[string]any
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &fields))
 	fields["append"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] = text
 	encoded, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded
 }
 
@@ -64,9 +59,7 @@ func TestWorkerRegisteredWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testi
 				return &fakeWorker{}, &workflowEnvironmentRegistry{env: env}, nil
 			},
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		env.ExecuteWorkflow(workflows.GenerateWorkflowName, input)
 		if !env.IsWorkflowCompleted() {
 			t.Fatal("workflow did not complete")

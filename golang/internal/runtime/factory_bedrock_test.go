@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockconverse"
@@ -70,9 +71,7 @@ func TestProductionFactoryBuildsBedrockAdaptersWithAWSRegion(t *testing.T) {
 				},
 			}}
 			adapter, err := buildBedrockAdapter(factory, test.family, test.endpointID, test.wantRegion, config.AuthConfig{Kind: "aws_default_chain"}, nil)
-			if err != nil {
-				t.Fatalf("buildAdapter() error = %v", err)
-			}
+			testassert.NoError(t, err, "buildAdapter() error")
 			if adapter == nil || adapter.Name() != test.wantName {
 				t.Fatalf("adapter = %#v, want %s", adapter, test.wantName)
 			}
@@ -103,9 +102,7 @@ func TestProductionFactoryRejectsNonDefaultBedrockAuthBeforeDependencies(t *test
 				},
 			}}
 			_, err := buildBedrockAdapter(factory, family, "bedrock", "us-east-1", config.AuthConfig{Kind: "bearer_env", Name: "BEDROCK_KEY"}, nil)
-			if !errors.Is(err, ErrUnsupportedProviderAuth) {
-				t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
-			}
+			testassert.ErrorIs(t, err, ErrUnsupportedProviderAuth, "buildAdapter()")
 			if resolverCalled {
 				t.Fatal("unsupported Bedrock auth attempted provider-secret resolution")
 			}
@@ -164,9 +161,7 @@ func buildGeneratedBedrockAdapter(t *testing.T, family, endpointID, region strin
 		},
 	}}
 	adapter, err := buildBedrockAdapter(factory, family, endpointID, region, config.AuthConfig{Kind: "aws_default_chain"}, bedrockTestTiers)
-	if err != nil {
-		t.Fatalf("buildAdapter() error = %v", err)
-	}
+	testassert.NoError(t, err, "buildAdapter() error")
 	return adapter, bedrockTestBaseURL, awsConfigCalled
 }
 

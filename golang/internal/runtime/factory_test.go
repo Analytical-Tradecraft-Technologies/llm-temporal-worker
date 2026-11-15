@@ -30,9 +30,7 @@ func TestRedisKeyOptionsUseConfiguredPrefix(t *testing.T) {
 	value.State.Redis.KeyPrefix = "worker-a.v1"
 	value.State.Redis.AdmissionHashTag = "admission"
 	options, err := redisKeyOptions(value, []byte("01234567890123456789012345678901"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if options.Prefix != "worker-a.v1" {
 		t.Fatalf("Redis key prefix = %q, want worker-a.v1", options.Prefix)
 	}
@@ -49,9 +47,7 @@ func TestComposeBudgetStatusReaderBindsSnapshotOwnedRedisCapabilities(t *testing
 		HashTag:   "budget",
 		KeySecret: []byte("01234567890123456789012345678901"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	generation := &fakeBudgetGenerationProbe{}
 	snapshot := &config.Snapshot{}
 	var observed redisstore.BudgetStatusReaderOptions
@@ -65,9 +61,7 @@ func TestComposeBudgetStatusReaderBindsSnapshotOwnedRedisCapabilities(t *testing
 		return &fakeBudgetStatus{}, nil
 	}
 	reader, err := composeBudgetStatusReader(context.Background(), snapshot, time.Now, string(redisstore.AdmissionModeFunction), client, generation, keys, factory)
-	if err != nil {
-		t.Fatalf("composeBudgetStatusReader() error = %v", err)
-	}
+	testassert.NoError(t, err, "composeBudgetStatusReader() error")
 	if reader == nil || calls != 1 {
 		t.Fatalf("reader=%T calls=%d, want one snapshot reader", reader, calls)
 	}
@@ -99,9 +93,7 @@ func TestProductionFactoryAttachesSnapshotV1RuntimeAfterClientConstruction(t *te
 	clients := &productionClientSet{}
 	engineValue := testEngine{}
 	gotEngineValue, gotClientSet, err := factory.attachV1Runtime(context.Background(), snapshot, engineValue, clients)
-	if err != nil {
-		t.Fatalf("attachV1Runtime() error = %v", err)
-	}
+	testassert.NoError(t, err, "attachV1Runtime() error")
 	if gotSnapshot != snapshot || gotEngine != engineValue || gotClients != clients {
 		t.Fatalf("builder inputs snapshot=%p engine=%T clients=%T", gotSnapshot, gotEngine, gotClients)
 	}
@@ -211,9 +203,7 @@ func requireSnapshotCapabilities(t *testing.T, set *productionClientSet, version
 		t.Fatalf("%s snapshot capability bundle is incomplete: %#v", version, got)
 	}
 	snapshot, err := got.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if snapshot.Version != version || got.Clock() != clock().UTC() {
 		t.Fatalf("%s snapshot capabilities = %#v, snapshot=%#v", version, got, snapshot)
 	}
@@ -274,9 +264,7 @@ func TestSnapshotAdapterRegistryOwnsPrivateMap(t *testing.T) {
 
 	input["endpoint"] = nil
 	got, err := registry.Adapter(context.Background(), routing.Candidate{EndpointID: "endpoint"})
-	if err != nil {
-		t.Fatalf("snapshot adapter registry lost copied adapter after input mutation: %v", err)
-	}
+	testassert.NoError(t, err, "snapshot adapter registry lost copied adapter after input mutation")
 	if got != adapter {
 		t.Fatalf("snapshot adapter registry adapter = %p, want %p", got, adapter)
 	}
@@ -319,9 +307,7 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 		Continuation: config.ContinuationConfig{HandleKeys: []config.HandleKey{{ID: "key-2026-07", Primary: true, Secret: config.SecretRef{Kind: config.SecretEnv, Name: "CONTINUATION_KEY"}}}},
 	}
 	engineValue, clients, err := factory.buildMemory(context.Background(), value, engine.StaticSnapshot{}, nil, nil, [32]byte{})
-	if err != nil {
-		t.Fatalf("buildMemory() error = %v", err)
-	}
+	testassert.NoError(t, err, "buildMemory() error")
 	if engineValue == nil || clients == nil {
 		t.Fatalf("buildMemory() returned engine=%#v clients=%#v", engineValue, clients)
 	}
@@ -348,18 +334,14 @@ func TestBuildMemoryUsesOnlyProcessLocalState(t *testing.T) {
 	if clients.(*productionClientSet).V1RuntimeCapabilities().BudgetEstimator.SafetyRatio.RatString() != "1" {
 		t.Fatal("returned capabilities mutated snapshot-owned budget estimation")
 	}
-	if err := clients.Close(context.Background()); err != nil {
-		t.Fatalf("memory client close = %v", err)
-	}
+	testassert.NoError(t, clients.Close(context.Background()), "memory client close")
 }
 
 func nowFunc(now time.Time) func() time.Time { return func() time.Time { return now } }
 
 func TestDefaultRedisFactoryDisablesClientRetries(t *testing.T) {
 	client, err := defaultRedisFactory(context.Background(), config.RedisConfig{Addresses: []string{"127.0.0.1:6379"}}, "", "")
-	if err != nil {
-		t.Fatalf("defaultRedisFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "defaultRedisFactory() error")
 	t.Cleanup(func() { _ = client.Close() })
 
 	standalone, ok := client.(*redisclient.Client)
@@ -383,9 +365,7 @@ func TestProductionFactoryProviderSecretFailsClosed(t *testing.T) {
 		}),
 	}}
 	_, err := factory.providerSecret(context.Background(), config.AuthConfig{Kind: "workload_identity", Audience: "provider"}, "endpoint")
-	if !errors.Is(err, ErrUnsupportedProviderAuth) {
-		t.Fatalf("error = %v, want ErrUnsupportedProviderAuth", err)
-	}
+	testassert.ErrorIs(t, err, ErrUnsupportedProviderAuth)
 	if called {
 		t.Fatal("unsupported auth attempted secret resolution")
 	}
@@ -398,9 +378,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 	}}
 	snapshot := singleRouteSnapshot("model", "openai", "cap-v1")
 	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai", nil)
-	if err != nil {
-		t.Fatalf("buildAdapter() error = %v", err)
-	}
+	testassert.NoError(t, err, "buildAdapter() error")
 	if adapter == nil || adapter.Name() != "openai.responses" {
 		t.Fatalf("adapter = %#v, want openai.responses adapter", adapter)
 	}
@@ -414,9 +392,7 @@ func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
 		value.Endpoints["openai"] = endpoint
 		value.Continuation.AllowProviderHostedState = test.global
 		adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		_, err = adapter.Compile(context.Background(), provider.CompileInput{
 			Request: llm.Request{OperationKey: "policy", Model: "model", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)}},
 			Query:   provider.CapabilityQuery{EndpointID: "openai", Family: provider.FamilyOpenAIResponses, Model: "model"},
@@ -458,9 +434,7 @@ func TestProductionFactoryBuildsAnthropicAWSGatewayAdapterWithoutSecretResolutio
 			return anthropicmessages.NewAWSClient(ctx, value)
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
 		"anthropic-aws": {
 			Family: "anthropic_aws_messages", BaseURL: "https://aws-external-anthropic.us-east-1.api.aws", OutboundHosts: []string{"aws-external-anthropic.us-east-1.api.aws"},
@@ -470,9 +444,7 @@ func TestProductionFactoryBuildsAnthropicAWSGatewayAdapterWithoutSecretResolutio
 	}}
 	snapshot := singleRouteSnapshot("model", "anthropic-aws", "cap-v1")
 	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws", nil)
-	if err != nil {
-		t.Fatalf("buildAdapter() error = %v", err)
-	}
+	testassert.NoError(t, err, "buildAdapter() error")
 	if adapter == nil || adapter.Name() != "anthropic.messages/anthropic-aws" {
 		t.Fatalf("adapter = %#v, want Anthropic AWS messages adapter", adapter)
 	}
@@ -494,9 +466,7 @@ func TestProductionFactoryRejectsSecretAuthForAnthropicAWSGateway(t *testing.T) 
 	}}
 	snapshot := singleRouteSnapshot("model", "anthropic-aws", "cap-v1")
 	_, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws", nil)
-	if !errors.Is(err, ErrUnsupportedProviderAuth) {
-		t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
-	}
+	testassert.ErrorIs(t, err, ErrUnsupportedProviderAuth, "buildAdapter()")
 }
 
 func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
@@ -537,9 +507,7 @@ func TestProductionFactoryBuildsAzureOpenAIChatAdapter(t *testing.T) {
 	factory := envSecretFactory(t, "AZURE_OPENAI_API_KEY")
 	value := azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"})
 	adapter, err := factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if adapter == nil || adapter.Name() != "openai.chat/azure-chat" {
 		t.Fatalf("adapter = %#v, want Azure OpenAI Chat adapter", adapter)
 	}
@@ -578,9 +546,7 @@ func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *te
 				SnapshotLoader: emptySnapshotLoader,
 				HTTPClient:     &http.Client{},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			value := azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"})
 			endpoint := value.Endpoints["azure-chat"]
 			test.mutate(&endpoint)
@@ -640,9 +606,7 @@ func envSecretFactory(t *testing.T, name string) *ProductionEngineFactory {
 		SnapshotLoader: emptySnapshotLoader,
 		HTTPClient:     &http.Client{},
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	return factory
 }
 

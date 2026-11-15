@@ -8,6 +8,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -22,9 +23,7 @@ func storagePolicyAdapter(t *testing.T, permitted bool, body []byte) *ModelListe
 	t.Helper()
 	fixture := newFixtureAdapterWithTransport(t, body, nil)
 	adapter, err := NewOpenAIAdapter(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(permitted), allowSupportedExtensions)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -32,9 +31,7 @@ func compileWire(t *testing.T, adapter *ModelListerAdapter, request llm.Request,
 	t.Helper()
 	request.Model = "gpt-contract"
 	call, err := adaptertest.Compile(adapter, "openai-prod", provider.FamilyOpenAIResponses, request, strict)
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
+	testassert.NoError(t, err, "Compile() error")
 	return call, contract.JSONObject(t, call.SDKParams.(responses.ResponseNewParams))
 }
 
@@ -123,9 +120,7 @@ func TestStorageDeniedReplaysLiftedEncryptedReasoning(t *testing.T) {
 	first := llm.Request{OperationKey: "first-turn", Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}, Input: []llm.Item{llm.HumanText("question")}}
 	call, _ := compileWire(t, adapter, first, true)
 	result, err := adapter.Invoke(context.Background(), call, nil)
-	if err != nil {
-		t.Fatalf("Invoke() error = %v", err)
-	}
+	testassert.NoError(t, err, "Invoke() error")
 
 	input := append([]llm.Item{llm.HumanText("question")}, result.Response.Output...)
 	input = append(input, llm.HumanText("follow-up"))

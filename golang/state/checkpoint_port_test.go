@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -38,22 +39,16 @@ func validCheckpointBlob(id string) CheckpointBlobReference {
 
 func TestDurableCheckpointValidateAndCanonicalDigest(t *testing.T) {
 	checkpoint := validDurableCheckpoint()
-	if err := checkpoint.Validate(time.Now()); err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
+	testassert.NoError(t, checkpoint.Validate(time.Now()), "Validate() error")
 	first, err := checkpoint.CanonicalDigest()
-	if err != nil {
-		t.Fatalf("CanonicalDigest() error = %v", err)
-	}
+	testassert.NoError(t, err, "CanonicalDigest() error")
 	second, err := checkpoint.CanonicalDigest()
 	if err != nil || first != second {
 		t.Fatalf("CanonicalDigest() is not stable: first=%x second=%x err=%v", first, second, err)
 	}
 	checkpoint.ResponseBlob.ID = "different-response"
 	third, err := checkpoint.CanonicalDigest()
-	if err != nil {
-		t.Fatalf("changed CanonicalDigest() error = %v", err)
-	}
+	testassert.NoError(t, err, "changed CanonicalDigest() error")
 	if first == third {
 		t.Fatal("CanonicalDigest() ignored an immutable blob reference")
 	}
@@ -128,13 +123,9 @@ func TestDurableCheckpointCanonicalDigestNormalizesEmptyChildren(t *testing.T) {
 	emptyChildren.Affinities = ProviderCacheAffinitySet{}
 
 	nilDigest, err := nilChildren.CanonicalDigest()
-	if err != nil {
-		t.Fatalf("nil child digest error = %v", err)
-	}
+	testassert.NoError(t, err, "nil child digest error")
 	emptyDigest, err := emptyChildren.CanonicalDigest()
-	if err != nil {
-		t.Fatalf("empty child digest error = %v", err)
-	}
+	testassert.NoError(t, err, "empty child digest error")
 	if nilDigest != emptyDigest {
 		t.Fatalf("nil and empty child slices produced different digests: nil=%x empty=%x", nilDigest, emptyDigest)
 	}
@@ -176,18 +167,14 @@ func (unit *checkpointPortUnit) Rollback(context.Context) error {
 
 func TestWithCheckpointUnitOfWorkCommitsAndRollsBack(t *testing.T) {
 	repository := &checkpointPortRepository{}
-	if err := WithCheckpointUnitOfWork(context.Background(), repository, func(ctx context.Context, unit CheckpointUnitOfWork) error {
+	testassert.NoError(t, WithCheckpointUnitOfWork(context.Background(), repository, func(ctx context.Context, unit CheckpointUnitOfWork) error {
 		return unit.PutCheckpoint(ctx, CheckpointWrite{Checkpoint: validDurableCheckpoint()})
-	}); err != nil {
-		t.Fatalf("committing unit of work error = %v", err)
-	}
+	}), "committing unit of work error")
 	if repository.unit.putCount != 1 || repository.unit.commitCount != 1 || repository.unit.rollbackCount != 0 {
 		t.Fatalf("committing lifecycle = %#v", repository.unit)
 	}
 	callbackErr := errors.New("write failed")
-	if err := WithCheckpointUnitOfWork(context.Background(), repository, func(context.Context, CheckpointUnitOfWork) error { return callbackErr }); !errors.Is(err, callbackErr) {
-		t.Fatalf("callback error = %v, want %v", err, callbackErr)
-	}
+	testassert.ErrorIs(t, WithCheckpointUnitOfWork(context.Background(), repository, func(context.Context, CheckpointUnitOfWork) error { return callbackErr }), callbackErr, "callback")
 	if repository.unit.rollbackCount != 1 {
 		t.Fatalf("rollback count = %d, want 1", repository.unit.rollbackCount)
 	}

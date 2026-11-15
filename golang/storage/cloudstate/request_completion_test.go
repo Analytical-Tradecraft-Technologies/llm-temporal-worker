@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -98,7 +99,7 @@ func TestRequestCompletionCannotHideUnfinishedPaidChild(t *testing.T) {
 			startExecution(t, r, child, plan, budget)
 			now := plan.QuotedAt.Add(time.Minute)
 			commitCompletionHandoff(t, r, root, checkpoint, handoff, now)
-			requireErrorIs(t, errOf(r.CompleteOperation(context.Background(), root.Request.Scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), now)), contracts.ErrConflict, "unfinished paid child was hidden")
+			testassert.ErrorIs(t, testassert.Err(r.CompleteOperation(context.Background(), root.Request.Scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), now)), contracts.ErrConflict, "unfinished paid child was hidden")
 			for _, id := range []RequestID{root.Request.ID, a.ID} {
 				page := firstPendingPage(t, r, id)
 				found := false
@@ -126,9 +127,7 @@ func TestCacheCompletionPreservesPreviousUnknownPaidChild(t *testing.T) {
 	count := 0
 	for shard := range PendingShards {
 		page, err := r.ListPending(ctx, shard, 100, "")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		for _, pending := range page.Requests {
 			if pending.ID != first.ID || pending.Status != StatusOutcomeUnknown {
 				t.Fatal("unexpected pending request")
@@ -176,7 +175,7 @@ func TestCacheCompletionAcceptsAttemptRetiredByConcurrentRenewal(t *testing.T) {
 				t.Fatal("attempt was not retired", err)
 			}
 			commitCompletionHandoff(t, r, root, checkpoint, handoff, renewAt)
-			requireErrorIs(t, errOf(reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt)), contracts.ErrConflict, "renewal replaced an attempt after its handoff")
+			testassert.ErrorIs(t, testassert.Err(reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt)), contracts.ErrConflict, "renewal replaced an attempt after its handoff")
 			result := json.RawMessage(`{"version":1,"response":{}}`)
 			if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, renewAt); err != nil {
 				t.Fatal("retired cache attempt wedged completion", err)
@@ -205,7 +204,7 @@ func TestProviderCompletionRejectsRetiredAttempt(t *testing.T) {
 	ctx, scope := context.Background(), root.Request.Scope
 	_, plan, _ := saveAttemptPlan(t, r, scope, first, template)
 	renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
-	mustNoError(t, r.retireRequestAttempt(ctx, scope, first, renewAt))
+	testassert.NoError(t, r.retireRequestAttempt(ctx, scope, first, renewAt))
 	commitCompletionHandoff(t, r, root, checkpoint, handoff, renewAt)
-	requireErrorIs(t, errOf(r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), renewAt)), contracts.ErrConflict, "provider handoff completed without a provider execution")
+	testassert.ErrorIs(t, testassert.Err(r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), renewAt)), contracts.ErrConflict, "provider handoff completed without a provider execution")
 }

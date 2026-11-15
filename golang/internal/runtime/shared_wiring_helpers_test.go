@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -39,9 +40,7 @@ func TestProviderEgressConnectError(t *testing.T) {
 	caller, cancelCaller := context.WithCancel(context.Background())
 	cancelCaller()
 
-	if err := providerEgressConnectError(live, live, &providerEgressCallState{callerContext: caller}, "connection_failed"); !errors.Is(err, context.Canceled) {
-		t.Fatalf("caller cancellation error = %v", err)
-	}
+	testassert.ErrorIs(t, providerEgressConnectError(live, live, &providerEgressCallState{callerContext: caller}, "connection_failed"), context.Canceled, "caller cancellation")
 	if err := providerEgressConnectError(live, expired, nil, "connection_failed"); err == nil || err.Error() != preDispatchProviderFailure("connection_timeout").Error() {
 		t.Fatalf("connect timeout error = %v", err)
 	}

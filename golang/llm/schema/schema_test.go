@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -21,9 +22,7 @@ func TestParseAndValidateFixtures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			compiled := parseFixture(t, filepath.Join("valid", test.name+".json"))
-			if err := compiled.Validate([]byte(test.instance)); err != nil {
-				t.Fatalf("valid instance rejected: %v", err)
-			}
+			testassert.NoError(t, compiled.Validate([]byte(test.instance)), "valid instance rejected")
 			if len(compiled.Canonical()) == 0 {
 				t.Fatal("compiled schema has no canonical form")
 			}
@@ -109,17 +108,13 @@ func TestGenerateResponseSchemaAcceptsExactUSDWithoutLegacyMoneyFields(t *testin
   "cache": {"disposition": "disabled", "variant": 0},
   "cost": {"status": "exact", "actual_cost_usd": "0.000000000000000001", "method": "catalog_usage", "catalog_version": "v1"}
 }`)
-	if err := compiled.Validate(instance); err != nil {
-		t.Fatalf("exact-only response rejected: %v", err)
-	}
+	testassert.NoError(t, compiled.Validate(instance), "exact-only response rejected")
 }
 
 func parseFixture(t *testing.T, name string) *schema.Schema {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	compiled, err := schema.Parse(data)
 	if err != nil {
 		t.Fatalf("parse %s: %v", name, err)

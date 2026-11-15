@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -37,7 +38,5 @@ func TestOpenRouterMapsBodyLevelErrorsThroughTheStatusTable(t *testing.T) {
 			}
 		})
 	}
-	if err := invokeOpenRouterWithBody(t, `{"id":"gen-1","model":"router-model","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`); err != nil {
-		t.Fatalf("successful response rejected: %v", err)
-	}
+	testassert.NoError(t, invokeOpenRouterWithBody(t, `{"id":"gen-1","model":"router-model","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`), "successful response rejected")
 }

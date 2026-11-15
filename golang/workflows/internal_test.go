@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
@@ -44,12 +45,8 @@ type workflowFixture struct {
 func workflowJSON(t *testing.T, name string, target any) {
 	t.Helper()
 	data, err := os.ReadFile("../llm/testdata/v1/" + name + ".json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, target); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, json.Unmarshal(data, target))
 }
 func workflowTest(t *testing.T, kind string, steps ...workflowStep) *workflowFixture {
 	t.Helper()
@@ -168,9 +165,7 @@ func newWorkflowEnv() *testsuite.TestWorkflowEnvironment {
 
 func requireNoWorkflowError(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
 	t.Helper()
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, env.GetWorkflowError())
 }
 
 // requireWorkflowResult requires the workflow to have succeeded and decodes
@@ -178,9 +173,7 @@ func requireNoWorkflowError(t *testing.T, env *testsuite.TestWorkflowEnvironment
 func requireWorkflowResult(t *testing.T, env *testsuite.TestWorkflowEnvironment, result any) {
 	t.Helper()
 	requireNoWorkflowError(t, env)
-	if err := env.GetWorkflowResult(result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, env.GetWorkflowResult(result))
 }
 
 func TestExecuteRequestRoutesBoundedSteps(t *testing.T) {
@@ -408,9 +401,7 @@ func TestFailureDetailsWireShape(t *testing.T) {
 			`{"code":"provider_rate_limited","phase":"dispatch","dispatch":"not_dispatched","retry_after_ms":1500}`},
 	} {
 		payload, err := converter.GetDefaultDataConverter().ToPayload(tc.value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if encoding := string(payload.GetMetadata()["encoding"]); encoding != "json/plain" || string(payload.GetData()) != tc.want {
 			t.Fatalf("payload = %s %s, want json/plain %s", encoding, payload.GetData(), tc.want)
 		}

@@ -18,9 +18,7 @@ func TestBudgetWindowIdentityDerivesFromGeometryOrExplicitID(t *testing.T) {
 		`{"duration":"90s","bucket":"1500ms","limit_usd":"1"}`,
 		`{"id":"0","duration":"24h","bucket":"5m","limit_usd":"100"}`,
 		`{"id":"monthly.v2_a-b","duration":"7d","bucket":"1h","limit_usd":"1000"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	policy := budgets.Policies[0]
 	want := []string{"acme/1h-1m", "acme/36h-1h30m", "acme/1m30s-1.5s", "acme/0", "acme/monthly.v2_a-b"}
 	for index, window := range policy.Windows {
@@ -63,10 +61,6 @@ func TestBudgetWindowIdentityValidation(t *testing.T) {
 	}
 	// Same geometry is fine once the windows are told apart, and the longest
 	// identity that fits is accepted.
-	if _, err := ParseBudgetsJSON(budgetsJSONWithWindows("acme", hour, `{"id":"second","duration":"1h","bucket":"1m","limit_usd":"20"}`)); err != nil {
-		t.Fatalf("explicit id did not separate same-geometry windows: %v", err)
-	}
-	if _, err := ParseBudgetsJSON(budgetsJSONWithWindows(strings.Repeat("p", 122), hour)); err != nil {
-		t.Fatalf("128-byte identity rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(ParseBudgetsJSON(budgetsJSONWithWindows("acme", hour, `{"id":"second","duration":"1h","bucket":"1m","limit_usd":"20"}`))), "explicit id did not separate same-geometry windows")
+	testassert.NoError(t, testassert.Err(ParseBudgetsJSON(budgetsJSONWithWindows(strings.Repeat("p", 122), hour))), "128-byte identity rejected")
 }

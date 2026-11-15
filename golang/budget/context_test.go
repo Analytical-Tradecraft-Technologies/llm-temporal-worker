@@ -5,6 +5,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -43,29 +44,21 @@ func TestValidateContextUsesResolvedModelAndReservedTokens(t *testing.T) {
 		}
 		return 10, nil
 	}}
-	if err := estimator.ValidateContext(request, candidate); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, estimator.ValidateContext(request, candidate))
 	candidate.ContextTokens--
-	if err := estimator.ValidateContext(request, candidate); !errors.Is(err, ErrContextLimit) {
-		t.Fatalf("got %v", err)
-	}
+	testassert.ErrorIs(t, estimator.ValidateContext(request, candidate), ErrContextLimit)
 	estimator.Tokenizer = func(llm.Request, routing.Candidate) (int64, error) { return 0, errors.New("counter unavailable") }
 	if err := estimator.ValidateContext(request, candidate); err == nil || errors.Is(err, ErrContextLimit) {
 		t.Fatalf("tokenizer failure hidden: %v", err)
 	}
 	candidate.ContextTokens = 0
-	if err := estimator.ValidateContext(request, candidate); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, estimator.ValidateContext(request, candidate))
 }
 
 func TestEstimateCandidateCannotSkipContextValidation(t *testing.T) {
 	estimator := Estimator{MaxOutput: 20, Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return 10, nil }}
 	_, err := estimator.EstimateCandidate(llm.Request{}, routing.Candidate{ContextTokens: 29}, pricing.Entry{})
-	if !errors.Is(err, ErrContextLimit) {
-		t.Fatalf("got %v", err)
-	}
+	testassert.ErrorIs(t, err, ErrContextLimit)
 }
 
 // Thinking is generated inside the output cap for every supported family
@@ -91,24 +84,16 @@ func TestValidateContextCountsReasoningInsideOutputCap(t *testing.T) {
 		t.Run(tc.family, func(t *testing.T) {
 			request := llm.Request{OperationKey: "op", Model: "logical", Reasoning: tc.reasoning, Output: &llm.OutputSpec{MaxTokens: intPointer(20)}}
 			candidate := routing.Candidate{ID: "c", Family: tc.family, Model: "physical", AttemptedClass: llm.ServiceClassStandard, ContextTokens: 30}
-			if err := tc.estimator.ValidateContext(request, candidate); err != nil {
-				t.Fatalf("reasoning inside the output cap rejected: %v", err)
-			}
+			testassert.NoError(t, tc.estimator.ValidateContext(request, candidate), "reasoning inside the output cap rejected")
 			estimate, err := tc.estimator.EstimateCandidate(request, candidate, pricing.Entry{Family: tc.family})
-			if err != nil {
-				t.Fatalf("reservation rejected a request that fits: %v", err)
-			}
+			testassert.NoError(t, err, "reservation rejected a request that fits")
 			// The reservation still carries the reasoning component.
 			if estimate.InputTokens != 10 || estimate.OutputTokens != 20 || estimate.ReasoningTokens != 16 {
 				t.Fatalf("estimate = %#v", estimate)
 			}
 			candidate.ContextTokens--
-			if err := tc.estimator.ValidateContext(request, candidate); !errors.Is(err, ErrContextLimit) {
-				t.Fatalf("input plus output cap over the window: %v", err)
-			}
-			if _, err := tc.estimator.EstimateCandidate(request, candidate, pricing.Entry{Family: tc.family}); !errors.Is(err, ErrContextLimit) {
-				t.Fatalf("reservation over the window: %v", err)
-			}
+			testassert.ErrorIs(t, tc.estimator.ValidateContext(request, candidate), ErrContextLimit, "input plus output cap over the window")
+			testassert.ErrorIs(t, testassert.Err(tc.estimator.EstimateCandidate(request, candidate, pricing.Entry{Family: tc.family})), ErrContextLimit, "reservation over the window")
 		})
 	}
 }

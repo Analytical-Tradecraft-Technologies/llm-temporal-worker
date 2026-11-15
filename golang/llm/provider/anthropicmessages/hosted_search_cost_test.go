@@ -5,6 +5,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -52,9 +53,7 @@ func TestHostedSearchUsageDistinguishesUnusedFromUnreported(t *testing.T) {
 				OperationKey: "search-cost", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard,
 				Metadata: provider.CallMetadata{WebSearch: true, WebFetch: true},
 			}, &message, "req-synthetic")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if calls := string(got.Usage.ProviderRaw["web_search_calls"]); calls != tc.calls {
 				t.Fatalf("search usage = %s, want %s", calls, tc.calls)
 			}

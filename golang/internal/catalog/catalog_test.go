@@ -244,9 +244,7 @@ entries:
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cost, err := pricing.CostFromUsage(entry, test.usage)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if want := pricing.MustUSD(test.want); cost.USD.Cmp(want) != 0 {
 				t.Fatalf("cost = %s, want %s", cost.USD, want)
 			}
@@ -334,13 +332,9 @@ entries:
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			at, err := time.Parse(time.RFC3339, test.at)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			quote, err := loaded.Catalog.Resolve(pricing.Query{Provider: "openai", Family: "openai_responses", EndpointID: "openai-production", Region: "global", Model: "gpt-example", ProviderTier: "standard", At: at})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if quote.Entry.Provenance != test.want || quote.Entry.Prices.InputPerMillion.String() != test.cost {
 				t.Fatalf("quote = (%q, %s), want (%q, %s)", quote.Entry.Provenance, quote.Entry.Prices.InputPerMillion.String(), test.want, test.cost)
 			}
@@ -505,9 +499,7 @@ func TestEndpointFamilyMapsAnthropicAWSWithoutConflatingBedrock(t *testing.T) {
 func writeCatalog(t *testing.T, body string) config.CatalogRef {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "catalog.yaml")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	digest := sha256.Sum256([]byte(body))
 	return config.CatalogRef{File: path, SHA256: hex.EncodeToString(digest[:])}
 }
@@ -515,18 +507,14 @@ func writeCatalog(t *testing.T, body string) config.CatalogRef {
 func loadCapabilities(t *testing.T, body string) CapabilityCatalog {
 	t.Helper()
 	catalog, err := LoadCapabilities(writeCatalog(t, body))
-	if err != nil {
-		t.Fatalf("LoadCapabilities() error = %v", err)
-	}
+	testassert.NoError(t, err, "LoadCapabilities() error")
 	return catalog
 }
 
 func loadPricing(t *testing.T, body string) PricingCatalog {
 	t.Helper()
 	catalog, err := LoadPricing(writeCatalog(t, body))
-	if err != nil {
-		t.Fatalf("LoadPricing() error = %v", err)
-	}
+	testassert.NoError(t, err, "LoadPricing() error")
 	return catalog
 }
 
@@ -569,9 +557,7 @@ entries:
     output_per_million: "10.000000"
     source: operator-verified
 `
-	if _, err := LoadPricing(writeCatalog(t, body)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(LoadPricing(writeCatalog(t, body))))
 	for name, trailing := range map[string]string{
 		"second document":          "---\nversion: llmtw-prices/v1\nid: other\nentries: []\n",
 		"garbage after end marker": "...\n}} not yaml [\n",
@@ -589,7 +575,5 @@ func TestLoadCapabilitiesRequiresAContextWindowForDocumentInput(t *testing.T) {
 		return "version: local-mock-v1\nprofiles:\n  local-mock-v1:\n    family: openai_chat\n    model: demo-model\n    input: [text, document]\n    output: [text]\n" + context + "    max_output_tokens: 4096\n"
 	}
 	testassert.ErrorContains(t, testassert.Err(LoadCapabilities(writeCatalog(t, profile("")))), "context window")
-	if _, err := LoadCapabilities(writeCatalog(t, profile("    max_context_tokens: 32768\n"))); err != nil {
-		t.Fatalf("document profile with a context window rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(LoadCapabilities(writeCatalog(t, profile("    max_context_tokens: 32768\n")))), "document profile with a context window rejected")
 }

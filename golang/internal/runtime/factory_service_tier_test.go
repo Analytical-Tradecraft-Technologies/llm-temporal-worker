@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"math/big"
 	"net"
@@ -263,9 +264,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 			})}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	features := map[string]routing.Capability{}
 	for _, feature := range provider.AllFeatures() {
 		features[string(feature)] = routing.Capability{State: routing.CapabilityNative}
@@ -282,9 +281,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 	syncRuntime := &modelSyncRuntime{upstreams: &openRouterUpstreamTable{}}
 	syncRuntime.upstreams.store(map[string]modelsync.Upstream{family.model: {Tags: []string{"ProviderA"}}})
 	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, syncRuntime)
-	if err != nil {
-		t.Fatalf("buildAdapter() error = %v", err)
-	}
+	testassert.NoError(t, err, "buildAdapter() error")
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{OperationKey: "tier-test", Model: family.model, ServiceClass: family.class, Input: []llm.Item{
 			llm.HumanText("hello"),
@@ -292,13 +289,9 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 		Query:  provider.CapabilityQuery{EndpointID: endpointID, Family: family.family, Model: family.model},
 		Strict: true,
 	})
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
+	testassert.NoError(t, err, "Compile() error")
 	result, err := adapter.Invoke(context.Background(), call, nil)
-	if err != nil {
-		t.Fatalf("Invoke() error = %v", err)
-	}
+	testassert.NoError(t, err, "Invoke() error")
 	mu.Lock()
 	defer mu.Unlock()
 	var request map[string]any
@@ -314,9 +307,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 func newTierTestProvider(t *testing.T, hosts []string, handler http.Handler) (*httptest.Server, *http.Client) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "tier test provider"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
@@ -324,13 +315,9 @@ func newTierTestProvider(t *testing.T, hosts []string, handler http.Handler) (*h
 		BasicConstraintsValid: true, IsCA: true, DNSNames: hosts,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	certificate, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("test environment does not allow a loopback listener: %v", err)

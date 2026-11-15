@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -52,9 +53,7 @@ func TestOpenRouterLiftFailuresNameTheirCause(t *testing.T) {
 			}
 		})
 	}
-	if err := invokeOpenRouterRequest(t, llm.Request{OperationKey: "or-op", Model: "router-model", Output: output}, choice("stop", "\n\n{\"url\":\"https://example.com\"}")); err != nil {
-		t.Fatalf("valid JSON with leading whitespace rejected: %v", err)
-	}
+	testassert.NoError(t, invokeOpenRouterRequest(t, llm.Request{OperationKey: "or-op", Model: "router-model", Output: output}, choice("stop", "\n\n{\"url\":\"https://example.com\"}")), "valid JSON with leading whitespace rejected")
 }
 
 func invokeOpenRouterRequest(t *testing.T, request llm.Request, body string) error {
@@ -63,9 +62,7 @@ func invokeOpenRouterRequest(t *testing.T, request llm.Request, body string) err
 		return adaptertest.JSONResponse(httpRequest, http.StatusOK, body), nil
 	})
 	client, err := NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "or-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{
 		ID: "openrouter-lift", CapabilityVersion: "openrouter/v1", BaseURL: openRouterBaseURL, Model: "router-model",
 		Capabilities:              profileTestCapabilities("openrouter/v1"),
@@ -76,13 +73,9 @@ func invokeOpenRouterRequest(t *testing.T, request llm.Request, body string) err
 		RequireParameters:         true,
 		Upstreams:                 allModelsUpstreams{"ProviderA"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "openrouter-a", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "openrouter-a", provider.FamilyOpenAIChat, request)
 	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	return err

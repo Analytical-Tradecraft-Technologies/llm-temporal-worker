@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -34,9 +35,7 @@ func TestCacheOriginCostPreservesReceiptAndUnknowns(t *testing.T) {
 		origin := cache.ResponseEntry{OriginOperationID: "origin-public-operation", Response: []byte(`{"api_version":"llm.temporal/v1","operation_id":"origin-public-operation","cost":` + cost + `}`)}
 		before := append([]byte(nil), origin.Response...)
 		diagnostic, err := cacheOriginCost(origin)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !bytes.Equal(before, origin.Response) {
 			t.Fatal("origin receipt mutated")
 		}

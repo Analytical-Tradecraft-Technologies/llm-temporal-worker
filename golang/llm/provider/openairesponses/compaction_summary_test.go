@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -31,9 +32,7 @@ func TestCompactionSummaryIgnoresLiftedReasoning(t *testing.T) {
 			adapter := newFixtureAdapter(t, []byte(test.body))
 			input := []llm.Item{llm.HumanText("a long conversation")}
 			request, err := compaction.PrepareRequest(llm.Request{OperationKey: "op", Model: "gpt-contract", Input: input}, "op/compact", input, compaction.DefaultPolicy())
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, request)
 			result := adaptertest.Invoke(t, adapter, call)
 			if len(result.Response.Output) != 2 {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -55,9 +56,7 @@ func newBudgetAdmissionFixture(t *testing.T) *budgetAdmissionFixture {
 	f.route = durable.RoutePlan{OperationID: "operation-1", GenerationID: "generation-1", RouteID: "route-1", EndpointID: "endpoint-1", Provider: "provider", Model: "model"}
 	f.plan = durable.ReserveRequest{OperationID: f.route.OperationID, GenerationID: f.route.GenerationID, Reservations: []admission.WindowReservation{{PolicyID: "policy", WindowID: "window", Bucket: f.now.UnixNano() / int64(time.Hour), BucketNanos: int64(time.Hour), DurationNanos: int64(2 * time.Hour), AmountUSD: pricing.MustUSD("0.25"), LimitUSD: pricing.MustUSD("1")}}}
 	reference, err := durable.NewReferenceBudgetMaterializer(f.route.GenerationID, "incarnation-1", func() time.Time { return f.now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.leaser = &admissionLeaser{BudgetLeaser: reference}
 	composition := validCapabilityComposition()
 	composition.Identity.Cloud = durable.CloudIdentity{Provider: "aws", Namespace: "requests-v1", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}}
@@ -77,9 +76,7 @@ func newBudgetAdmissionFixture(t *testing.T) *budgetAdmissionFixture {
 			return f.plan, nil
 		},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return f
 }
 
@@ -206,9 +203,7 @@ func TestBudgetAdmissionRejectsInvalidInputsBeforeRedis(t *testing.T) {
 				_, err = f.helper.ReserveGenerate(ctx, f.gen, f.route)
 			}
 			if name == "canceled" {
-				if !errors.Is(err, context.Canceled) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, context.Canceled)
 			} else {
 				assertBudgetAdmissionError(t, err, code, provider.DispatchNotDispatched, provider.RetryNever)
 			}
@@ -221,9 +216,7 @@ func TestBudgetAdmissionValidatesReservationBeforeClaiming(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newBudgetAdmissionFixture(t)
 			result, err := f.helper.ReserveGenerate(context.Background(), f.gen, f.route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			f.leaser.claim = forbidClaim(t, "invalid reservation reached Redis claim")
 			switch name {
 			case "wait":
@@ -281,9 +274,7 @@ func TestBudgetAdmissionClaimLossAndCanceledReplyNeverGrantPermission(t *testing
 		t.Run(map[bool]string{false: "lost reply", true: "canceled reply"}[cancelReply], func(t *testing.T) {
 			f := newBudgetAdmissionFixture(t)
 			result, err := f.helper.ReserveGenerate(context.Background(), f.gen, f.route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			f.leaser.claim = func(ctx context.Context, request durable.ClaimRequest) (durable.ClaimReceipt, error) {
@@ -319,9 +310,7 @@ func TestBudgetAdmissionClaimLossAndCanceledReplyNeverGrantPermission(t *testing
 func TestBudgetAdmissionConcurrentClaimsGrantOnePermission(t *testing.T) {
 	f := newBudgetAdmissionFixture(t)
 	reservation, err := f.helper.ReserveGenerate(context.Background(), f.gen, f.route)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var successes atomic.Int64
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
@@ -351,9 +340,7 @@ func TestBudgetAdmissionCapturesCompositionLeaserAcrossReload(t *testing.T) {
 	if err != nil || !result.Accepted {
 		t.Fatalf("old adapter lost snapshot = %+v, %v", result, err)
 	}
-	if _, err := f.helper.ClaimCompact(context.Background(), f.compact, f.route, result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(f.helper.ClaimCompact(context.Background(), f.compact, f.route, result)))
 }
 
 func TestBudgetAdmissionBothRunnersRequireAdmissionAndClaimBeforeDispatch(t *testing.T) {
@@ -431,9 +418,7 @@ func TestBudgetAdmissionBothRunnersRequireAdmissionAndClaimBeforeDispatch(t *tes
 				wantDispatches := 0
 				if name == "acquired" {
 					wantDispatches = 1
-					if !errors.Is(err, reachedDispatch) {
-						t.Fatal(err)
-					}
+					testassert.ErrorIs(t, err, reachedDispatch)
 				} else {
 					assertBudgetAdmissionError(t, err, code, certainty, retry)
 				}
@@ -453,9 +438,7 @@ func TestBudgetAdmissionStartDeadlineAndShorterPlannerExpiry(t *testing.T) {
 				f.plan.ExpiresAt = f.now.Add(time.Minute)
 			}
 			result, err := f.helper.ReserveCompact(context.Background(), f.compact, f.route)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if name == "shorter expiry" {
 				f.now = f.plan.ExpiresAt
 			} else {
@@ -466,9 +449,7 @@ func TestBudgetAdmissionStartDeadlineAndShorterPlannerExpiry(t *testing.T) {
 			}
 			_, err = f.helper.ClaimCompact(context.Background(), f.compact, f.route, result)
 			if name == "just before deadline" {
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 			} else {
 				assertBudgetAdmissionError(t, err, provider.CodeBudgetDenied, provider.DispatchNotDispatched, provider.RetryAfter)
 			}

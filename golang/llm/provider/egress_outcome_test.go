@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -89,9 +90,7 @@ func TestEgressOutcomeClassifiesOversizedResponseWithoutUnsafeDiagnostics(t *tes
 	if mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever {
 		t.Fatalf("oversized-response result = %#v, want accepted non-retryable invalid response", mapped)
 	}
-	if !errors.Is(mapped, provider.ErrProviderResponseTooLarge) {
-		t.Fatalf("oversized-response cause = %v, want ErrProviderResponseTooLarge", mapped)
-	}
+	testassert.ErrorIs(t, mapped, provider.ErrProviderResponseTooLarge, "oversized-response cause")
 	encoded := contract.MarshalJSON(t, mapped)
 	for _, unsafe := range []string{"provider.example", "raw-provider-body"} {
 		if strings.Contains(mapped.Error(), unsafe) || strings.Contains(string(encoded), unsafe) {
@@ -129,7 +128,5 @@ func TestEgressOutcomeDoesNotLetLatePreflightOverwriteCallerCancellation(t *test
 	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
 		t.Fatalf("late preflight overwrote cancellation: %#v", mapped)
 	}
-	if errors.Is(mapped, provider.ErrProviderEgressDenied) {
-		t.Fatalf("late policy result overwrote cancellation: %v", mapped)
-	}
+	testassert.ErrorIsNot(t, mapped, provider.ErrProviderEgressDenied, "late policy result overwrote cancellation")
 }

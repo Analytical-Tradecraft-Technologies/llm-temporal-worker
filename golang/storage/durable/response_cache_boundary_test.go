@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -25,9 +26,7 @@ func TestResponseCacheHitsReachOnlyZeroCostFinalization(t *testing.T) {
 				origin := testFinalization(testGenerateRequest()).Response
 				origin.OperationID, origin.OperationKey, origin.Checkpoint.Handle = "origin-operation", "origin-key", "origin-checkpoint"
 				entry.Response, err = json.Marshal(origin)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				ports := testGeneratePorts(&events, "")
 				ports.CacheLookup = func(ctx context.Context, _ llm.GenerateRequestV1, _ GenerateReplay) (CacheDecision, error) {
 					events = append(events, "cache")
@@ -47,9 +46,7 @@ func TestResponseCacheHitsReachOnlyZeroCostFinalization(t *testing.T) {
 				origin := testCompactFinalization(testCompactRequest()).Response
 				origin.OperationID, origin.OperationKey, origin.Checkpoint.Handle = "origin-operation", "origin-key", "origin-checkpoint"
 				entry.Response, err = json.Marshal(origin)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				ports := testCompactPorts(&events, "")
 				ports.CacheLookup = func(ctx context.Context, _ llm.CompactRequestV1, _ CompactReplay) (CompactCacheDecision, error) {
 					events = append(events, "cache")
@@ -68,9 +65,7 @@ func TestResponseCacheHitsReachOnlyZeroCostFinalization(t *testing.T) {
 				}
 				_, err = CompactV1(context.Background(), testCompactRequest(), ports)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !reflect.DeepEqual(events, []string{"replay", "cache", "cache-finalize"}) {
 				t.Fatal(events)
 			}
@@ -146,9 +141,7 @@ func TestResponseCacheRejectsIncompleteAndAcceptsToolCalls(t *testing.T) {
 		}
 		var err error
 		entry.Response, err = json.Marshal(response)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		responses.lookup = func(context.Context, cache.ResponseLookup) (*cache.ResponseEntry, error) { return &entry, nil }
 		d, err := c.PrepareGenerate(context.Background(), lease, nil)
 		if status != llm.ResponseStatusCompleted && status != llm.ResponseStatusToolCalls {
@@ -200,9 +193,7 @@ func TestResponseCacheRejectsInvalidInputBeforeStorage(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.PrepareGenerate(ctx, lease, nil); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(c.PrepareGenerate(ctx, lease, nil)), context.Canceled)
 	lease.Key.Operation, lease.Key.RequestIndex = cache.OperationCompact, -1
 	if _, err := c.PrepareCompact(context.Background(), lease, nil); err == nil {
 		t.Fatal("negative compact sample accepted")

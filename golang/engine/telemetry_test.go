@@ -4,15 +4,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestGenerateEmitsSafeLifecycleSpans(t *testing.T) {
 	harness := newHarness(t, &fakeAdapter{name: "telemetry", response: successfulResponse()})
 	trace := newTestTrace()
-	if _, err := harness.engine.Generate(trace.ctx, baseRequest("telemetry-span")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(harness.engine.Generate(trace.ctx, baseRequest("telemetry-span"))))
 	trace.shutdown(t)
 	spans := trace.exporter.Spans()
 	names := make(map[string]struct{}, len(spans))
@@ -77,9 +76,7 @@ func TestGenerateEmitsContinuationWriteSpan(t *testing.T) {
 	harness := newHarness(t, &fakeAdapter{name: "telemetry-continuation", response: response})
 	harness.useMemoryContinuations(t, 1)
 	trace := newTestTrace()
-	if _, err := harness.engine.Generate(trace.ctx, baseRequest("continuation-span")); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(harness.engine.Generate(trace.ctx, baseRequest("continuation-span"))))
 	trace.shutdown(t)
 	for _, span := range trace.exporter.Spans() {
 		if span.Name() == "llmtw.continuation_write" {
@@ -93,13 +90,9 @@ func TestStreamUsesAdmissionTraceContextForProviderAttempt(t *testing.T) {
 	harness := newHarness(t, newStreamingAdapter("telemetry-stream", okStreamEvents()...))
 	trace := newTestTrace()
 	stream, err := harness.engine.Stream(trace.ctx, baseRequest("stream-trace-parent"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	readTerminalStream(t, stream)
-	if err := stream.Close(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, stream.Close())
 	trace.shutdown(t)
 	var admissionID, providerParentID string
 	for _, span := range trace.exporter.Spans() {

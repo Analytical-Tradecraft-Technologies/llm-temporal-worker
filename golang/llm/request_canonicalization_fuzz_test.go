@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -58,37 +59,23 @@ func FuzzRequestCanonicalizesClosedServiceClasses(f *testing.F) {
 		}
 
 		encoded, err := json.Marshal(normalized)
-		if err != nil {
-			t.Fatalf("marshal normalized request: %v", err)
-		}
+		testassert.NoError(t, err, "marshal normalized request")
 		canonical, err := llm.CanonicalJSON(encoded)
-		if err != nil {
-			t.Fatalf("canonicalize normalized request: %v", err)
-		}
+		testassert.NoError(t, err, "canonicalize normalized request")
 		again, err := llm.NormalizeRequest(normalized)
-		if err != nil {
-			t.Fatalf("repeat normalization: %v", err)
-		}
+		testassert.NoError(t, err, "repeat normalization")
 		againEncoded, err := json.Marshal(again)
-		if err != nil {
-			t.Fatalf("marshal repeat normalized request: %v", err)
-		}
+		testassert.NoError(t, err, "marshal repeat normalized request")
 		againCanonical, err := llm.CanonicalJSON(againEncoded)
-		if err != nil {
-			t.Fatalf("canonicalize repeat normalized request: %v", err)
-		}
+		testassert.NoError(t, err, "canonicalize repeat normalized request")
 		if !bytes.Equal(canonical, againCanonical) {
 			t.Fatalf("normalization changed canonical bytes:\nfirst:  %s\nsecond: %s", canonical, againCanonical)
 		}
 
 		firstDigest, err := llm.RequestDigest(request)
-		if err != nil {
-			t.Fatalf("first request digest: %v", err)
-		}
+		testassert.NoError(t, err, "first request digest")
 		secondDigest, err := llm.RequestDigest(again)
-		if err != nil {
-			t.Fatalf("second request digest: %v", err)
-		}
+		testassert.NoError(t, err, "second request digest")
 		if firstDigest != secondDigest {
 			t.Fatalf("normalization changed request digest: %x != %x", firstDigest, secondDigest)
 		}

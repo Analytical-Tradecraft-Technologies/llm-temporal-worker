@@ -67,10 +67,6 @@ func TestV1RequestsRejectEmptyContent(t *testing.T) {
 		Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.child", Kind: "generation"}, Cache: llm.CacheDispositionV1{Disposition: "disabled"},
 		Cost:   llm.CostV1{Status: "unknown", UnknownReason: "provider_did_not_report_cost"},
 		Output: []llm.Item{llm.Message{Actor: llm.ActorModel}, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := generateResponse.Validate(response); err != nil {
-		t.Fatalf("response schema rejects empty model output: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, generateResponse.Validate(response), "response schema rejects empty model output")
 }

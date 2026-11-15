@@ -34,9 +34,7 @@ func TestEndpointProfilesRejectExtensionNamespacesSharingAWireField(t *testing.T
 	}
 	for name, build := range map[string]func(map[string]map[string]any) error{"chat": chat, "anthropic": anthropic} {
 		t.Run(name, func(t *testing.T) {
-			if err := build(distinct); err != nil {
-				t.Fatalf("nonoverlapping extensions rejected: %v", err)
-			}
+			testassert.NoError(t, build(distinct), "nonoverlapping extensions rejected")
 			testassert.ErrorContains(t, build(colliding), `both map to wire field "value"`)
 		})
 	}

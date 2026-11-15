@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -19,9 +20,7 @@ func TestCloudRequestLimitsRejectRequestsOverEachConfiguredBound(t *testing.T) {
 		return llm.PrepareExecutionV1{Generate: &request}
 	}
 	tools := func(values ...llm.Tool) *[]llm.Tool { return &values }
-	if err := limits.validate(generate(func(*llm.GenerateRequestV1) {})); err != nil {
-		t.Fatalf("request within limits rejected: %v", err)
-	}
+	testassert.NoError(t, limits.validate(generate(func(*llm.GenerateRequestV1) {})), "request within limits rejected")
 	for name, input := range map[string]llm.PrepareExecutionV1{
 		"items": generate(func(r *llm.GenerateRequestV1) {
 			r.Append = []llm.Item{message(text("a")), message(text("b")), message(text("c"))}
@@ -45,11 +44,9 @@ func TestCloudRequestLimitsRejectRequestsOverEachConfiguredBound(t *testing.T) {
 			t.Fatalf("%s: error = %v, want a non-retryable invalid_argument", name, err)
 		}
 	}
-	if err := (CloudRequestLimits{}).validate(generate(func(r *llm.GenerateRequestV1) {
+	testassert.NoError(t, (CloudRequestLimits{}).validate(generate(func(r *llm.GenerateRequestV1) {
 		r.Append = []llm.Item{message(text("a"), text("b"), text("c"))}
-	})); err != nil {
-		t.Fatalf("zero limits must be unbounded: %v", err)
-	}
+	})), "zero limits must be unbounded")
 }
 
 // A caller's tool call is held to the same depth as one an adapter accepts,

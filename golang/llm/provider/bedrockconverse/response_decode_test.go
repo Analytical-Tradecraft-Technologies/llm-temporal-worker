@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -43,27 +44,19 @@ func invokeRealConverse(t *testing.T, transport http.RoundTripper, credentials f
 		HTTPClient: &http.Client{Transport: transport},
 		AWSConfig:  aws.Config{Region: "us-east-1", Credentials: aws.CredentialsProviderFunc(credentials)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "endpoint", DefaultProfile("nova"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := llm.Request{OperationKey: "op-decode", Model: "amazon.nova-pro-v1:0",
 		Input: []llm.Item{llm.HumanText("Hello")}}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter.Invoke(context.Background(), call, provider.NopObserver{})
 }
 
 func TestCannedConverseTextResponseDecodes(t *testing.T) {
 	result, err := invokeCannedConverse(t, `{"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},"stopReason":"end_turn","usage":{"inputTokens":4,"outputTokens":3,"totalTokens":7}}`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Response.Status != llm.ResponseStatusCompleted || len(result.Response.Output) != 1 || result.Response.Provider.RequestID != "request-decode" {
 		t.Fatalf("response = %#v", result.Response)
 	}
@@ -115,9 +108,7 @@ func TestConverseSDKPanicIsClassifiedByDispatchEvidence(t *testing.T) {
 		"outside the middleware stack": {
 			invoke: func(t *testing.T) error {
 				adapter, err := New(&Client{converse: panickingConverse{}}, "endpoint", DefaultProfile("nova"))
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				_, err = adapter.Invoke(context.Background(), provider.Call{EndpointID: "endpoint", Family: provider.FamilyBedrockConverse, OperationKey: "op-decode", SDKParams: bedrockruntime.ConverseInput{}}, provider.NopObserver{})
 				return err
 			},

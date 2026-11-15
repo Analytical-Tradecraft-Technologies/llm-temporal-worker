@@ -53,9 +53,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 		Schema: json.RawMessage(`{"type":"object","properties":{"total":{"type":"number"},"note":{"type":"string","minLength":1}},"required":["total"]}`),
 	}}}
 	requestMap, _, err := lowerRequestMap(request, llm.ServiceClassStandard, false, supportedExtensionFields)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, requestMap["text"])
 	want := `{"format":{"name":"invoice","schema":{"additionalProperties":false,"properties":{"note":{"description":"{minLength: 1}","type":"string"},"total":{"type":"number"}},"required":["total","note"],"type":"object"},"strict":true,"type":"json_schema"}}`
 	if string(got) != want {
@@ -68,9 +66,7 @@ func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 	adaptertest.StrictOutputValidation(t, func(t *testing.T, schema, text string) error {
 		call, err := adaptertest.Compile(newFixtureAdapter(t, []byte(`{"id":"unused"}`)), "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}}, false)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return validateFinalJSON(call, []llm.Item{llm.ModelText(text)}, llm.ResponseStatusCompleted, false, false)
 	})
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -29,9 +30,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 	settings := make(map[string]string)
 	for _, name := range []string{"maxmemory", "maxmemory-policy", "save", "appendonly"} {
 		values, err := client.ConfigGet(ctx, name).Result()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		settings[name] = values[name]
 	}
 	if settings["maxmemory-policy"] != "volatile-lru" || settings["save"] != "" || settings["appendonly"] != "no" {
@@ -47,15 +46,13 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 	initializer := mustBudgetInitializer(t, client, keys, AdmissionModeFunction, AdmissionFunctionVersion)
 	receipt := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(),
 		Epoch: "00000000-0000-4000-8000-000000000001", CreatedAt: time.Now().UTC()}
-	mustNoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}))
+	testassert.NoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}))
 	receipt.Ready = true
 	m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
 		Client: client, Mode: AdmissionModeFunction, Keys: keys, GenerationID: "eviction-gen", IncarnationID: "eviction-inc",
 		Initialization: &receipt, CoordinationStreamEnabled: true,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	now := time.Now().UTC()
 	request := durable.ReserveRequest{OperationID: "protected", GenerationID: "eviction-gen",
 		Reservations: []admission.WindowReservation{liveMinuteReservation("tenant", now, "0.8", "1")}}
@@ -63,7 +60,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("accept = %#v, %v", accepted, err)
 	}
-	mustNoError(t, errOf(m.Claim(ctx, claimOf(accepted))))
+	testassert.NoError(t, testassert.Err(m.Claim(ctx, claimOf(accepted))))
 	pending := request
 	pending.OperationID = "not-yet-dispatched"
 	pending.Reservations = append([]admission.WindowReservation(nil), request.Reservations...)
@@ -92,18 +89,14 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 		before[key] = client.Dump(ctx, key).Val()
 	}
 	stats, err := client.Info(ctx, "stats").Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	evictedBefore := evictionInfoNumber(t, stats, "evicted_keys")
 	memory, err := client.Info(ctx, "memory").Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	limit := evictionInfoNumber(t, memory, "used_memory") + 512*1024
-	mustNoError(t, client.ConfigSet(ctx, "maxmemory", strconv.FormatInt(limit, 10)).Err())
+	testassert.NoError(t, client.ConfigSet(ctx, "maxmemory", strconv.FormatInt(limit, 10)).Err())
 	for i := range 256 {
-		mustNoError(t, client.Set(ctx, fmt.Sprintf("%s:cache:%d", keys.Prefix, i), strings.Repeat("x", 16*1024), time.Hour).Err())
+		testassert.NoError(t, client.Set(ctx, fmt.Sprintf("%s:cache:%d", keys.Prefix, i), strings.Repeat("x", 16*1024), time.Hour).Err())
 	}
 	stats, err = client.Info(ctx, "stats").Result()
 	if err != nil || evictionInfoNumber(t, stats, "evicted_keys") <= evictedBefore {
@@ -114,7 +107,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 			t.Fatalf("eviction modified accounting key %s: %v", key, err)
 		}
 	}
-	requireErrorIs(t, errOf(m.Claim(ctx, claimOf(accepted))), durable.ErrAlreadyClaimed, "eviction reopened provider dispatch")
+	testassert.ErrorIs(t, testassert.Err(m.Claim(ctx, claimOf(accepted))), durable.ErrAlreadyClaimed, "eviction reopened provider dispatch")
 	blocked := request
 	blocked.OperationID = "still-over-limit"
 	blocked.Reservations = append([]admission.WindowReservation(nil), request.Reservations...)
@@ -127,7 +120,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 		before[key] = client.Dump(ctx, key).Val()
 	}
 	// If protected data itself fills RAM, fail closed instead of discarding it.
-	mustNoError(t, client.ConfigSet(ctx, "maxmemory", "1").Err())
+	testassert.NoError(t, client.ConfigSet(ctx, "maxmemory", "1").Err())
 	blocked.OperationID = "memory-exhausted"
 	if result, err := m.Accept(ctx, blocked); err == nil || result.Accepted {
 		t.Fatalf("protected-data exhaustion admitted spending: %#v, %v", result, err)

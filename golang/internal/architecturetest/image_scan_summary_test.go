@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -27,9 +28,7 @@ func TestFailedImageScanSummaryDoesNotExposePayloads(t *testing.T) {
 			HasFix   bool   `json:"has_fix"`
 		} `json:"vulnerabilities"`
 	}
-	if err := json.Unmarshal(output, &summary); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(output, &summary))
 	if len(summary.Vulnerabilities) != 2 || summary.Vulnerabilities[0].ID != "CVE-2026-12345" || !summary.Vulnerabilities[0].HasFix || summary.Vulnerabilities[1].ID != "unlisted" || summary.Vulnerabilities[1].Severity != "UNKNOWN" {
 		t.Fatalf("unexpected summary: %s", output)
 	}

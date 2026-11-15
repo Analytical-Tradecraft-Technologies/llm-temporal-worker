@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -13,9 +14,7 @@ func TestPlannerEvaluatesPriceAvailabilityAtPlanTime(t *testing.T) {
 		ID: "route", EndpointID: "endpoint", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1",
 		Model: "provider-model", ModelLineage: "lineage", PriceAvailable: false, PricedWindows: []PriceWindow{{From: start}},
 	})}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := llm.Request{OperationKey: "op", Model: "model", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{llm.HumanText("hi")}}
 	for now, want := range map[time.Time]bool{start.Add(-time.Minute): false, start.Add(time.Minute): true} {
 		if got := mustPlan(t, Input{Request: request, Catalog: catalog, Now: now}).Candidates[0].PriceAvailable; got != want {

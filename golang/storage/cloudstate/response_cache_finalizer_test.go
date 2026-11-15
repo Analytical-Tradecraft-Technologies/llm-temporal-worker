@@ -13,6 +13,7 @@ import (
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -35,9 +36,7 @@ func TestCloudResponseCacheCompactionOriginAndReplay(t *testing.T) {
 	entry.ID, entry.Key.Operation = "compact-entry", cache.OperationCompact
 	entry.OriginOperationID, entry.OriginCheckpointID = cp.OriginOperationID, cp.ID
 	entry.Response, err = json.Marshal(response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	mustPublishResponse(t, r, entry)
 	r = reopen(t, table, blobs)
 	requireResponseHit(t, r, entry, entry.CompletedAt.Add(365*24*time.Hour), "lost compaction artifact")
@@ -68,7 +67,7 @@ func TestCloudResponseCacheLargeAndToolResponses(t *testing.T) {
 			r, table, blobs, entry, parent := responseCacheFixture(t)
 			ctx := context.Background()
 			var response llm.GenerateResponseV1
-			mustNoError(t, json.Unmarshal(entry.Response, &response))
+			testassert.NoError(t, json.Unmarshal(entry.Response, &response))
 			response.Output = []llm.Item{llm.ModelText(strings.Repeat("large answer ", 30000))}
 			if tools {
 				response.Status = llm.ResponseStatusToolCalls
@@ -76,20 +75,14 @@ func TestCloudResponseCacheLargeAndToolResponses(t *testing.T) {
 			}
 			child := childCheckpoint(parent, "new-result")
 			data, err := (state.CheckpointBlobCodec{MaxBytes: maxPayloadBytes}).EncodeResponse(response.Output)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			child.ResponseBlob, err = r.Checkpoints().Write(ctx, child.ScopeID, data, "application/json")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			mustPublishCheckpoint(t, r.Checkpoints(), child)
 			parentHandle := llm.CheckpointHandle("ckp_v1.parent")
 			response.OperationID, response.Checkpoint.Depth, response.Checkpoint.Parent = string(child.OriginOperationID), child.Depth, &parentHandle
 			entry.Response, err = json.Marshal(response)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			entry.OriginOperationID, entry.OriginCheckpointID = child.OriginOperationID, child.ID
 			mustPublishResponse(t, r, entry)
 			got := lookupResponse(t, reopen(t, table, blobs), entry.Key, entry.CompletedAt)
@@ -151,12 +144,10 @@ func TestCloudResponseCacheReceiptFailureBoundaries(t *testing.T) {
 						return nil, nil
 					}
 				}
-				requireErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrOutcomeUnknown, "")
+				testassert.ErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrOutcomeUnknown)
 				_, err := r.Responses().ReadUse(ctx, use.ScopeID, use.OperationID)
 				if phase == "row" && committed {
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 				} else if !errors.Is(err, contracts.ErrNotFound) {
 					t.Fatalf("partial receipt: %v", err)
 				}

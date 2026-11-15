@@ -2,10 +2,10 @@ package provider_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -35,9 +35,7 @@ func (lister *inventoryLister) ListModels(_ context.Context, query provider.Mode
 
 func TestModelListPageRequiresBoundedCompleteOrCursor(t *testing.T) {
 	valid := provider.ModelListPage{Complete: true, Models: []provider.Model{{ProviderModelID: "model-a", Lifecycle: provider.ModelUnknown}}}
-	if err := valid.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, valid.Validate())
 	for name, page := range map[string]provider.ModelListPage{
 		"missing cursor":    {Models: valid.Models},
 		"complete cursor":   {Complete: true, NextCursor: "next", Models: valid.Models},
@@ -80,9 +78,7 @@ func TestCollectModelInventoryFollowsCursorsAndPreservesOrder(t *testing.T) {
 		"next": {Complete: true, Models: []provider.Model{{ProviderModelID: "model-b", Lifecycle: provider.ModelAvailable}}},
 	}}
 	models, err := provider.CollectModelInventory(context.Background(), lister, provider.ModelListQuery{EndpointID: "endpoint", Limit: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(models) != 2 || models[0].ProviderModelID != "model-a" || models[1].ProviderModelID != "model-b" {
 		t.Fatalf("collected models = %#v", models)
 	}
@@ -92,9 +88,7 @@ func TestCollectModelInventoryFollowsCursorsAndPreservesOrder(t *testing.T) {
 }
 
 func TestCollectModelInventoryRejectsUnsupportedAndCursorLoops(t *testing.T) {
-	if _, err := provider.CollectModelInventory(context.Background(), nil, provider.ModelListQuery{EndpointID: "endpoint", Limit: 1}); !errors.Is(err, provider.ErrModelInventoryUnsupported) {
-		t.Fatalf("nil lister error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(provider.CollectModelInventory(context.Background(), nil, provider.ModelListQuery{EndpointID: "endpoint", Limit: 1})), provider.ErrModelInventoryUnsupported, "nil lister")
 	lister := &inventoryLister{pages: map[string]provider.ModelListPage{
 		"":     {NextCursor: "same", Models: []provider.Model{{ProviderModelID: "model-a", Lifecycle: provider.ModelUnknown}}},
 		"same": {NextCursor: "same", Models: []provider.Model{{ProviderModelID: "model-b", Lifecycle: provider.ModelUnknown}}},
@@ -118,9 +112,7 @@ func TestCollectModelInventoryHonorsCancellationBeforeFetch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	lister := &inventoryLister{}
-	if _, err := provider.CollectModelInventory(ctx, lister, provider.ModelListQuery{EndpointID: "endpoint", Limit: 1}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled inventory error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(provider.CollectModelInventory(ctx, lister, provider.ModelListQuery{EndpointID: "endpoint", Limit: 1})), context.Canceled, "canceled inventory")
 	if len(lister.queries) != 0 {
 		t.Fatal("canceled inventory called provider")
 	}

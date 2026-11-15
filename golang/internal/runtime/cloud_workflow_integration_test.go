@@ -16,6 +16,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -124,15 +125,11 @@ func newLiveCloudWorkflow(t *testing.T, async, aws bool) *liveCloudWorkflow {
 	t.Cleanup(cancel)
 	var err error
 	h.client, err = client.DialContext(h.ctx, client.Options{HostPort: address, Namespace: "default"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(h.client.Close)
 	h.redis = redisclient.NewClient(&redisclient.Options{Addr: redisAddress, Username: os.Getenv("LLMTW_REDIS_USERNAME"), Password: os.Getenv("LLMTW_REDIS_PASSWORD")})
 	t.Cleanup(func() { _ = h.redis.Close() })
-	if err := h.redis.Ping(h.ctx).Err(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, h.redis.Ping(h.ctx).Err())
 	// Only the isolated Makefile harness provisions shared code. An operator's
 	// externally provisioned Redis must already have the exact library.
 	if os.Getenv("LLMTW_CLOUD_TEST_PROVISION") == "1" {
@@ -170,9 +167,7 @@ func newLiveCloudWorkflow(t *testing.T, async, aws bool) *liveCloudWorkflow {
 		}
 		cfg.Namespace = h.queue
 		f.repository, err = cloudstate.Open(h.ctx, cfg, bytes.Repeat([]byte{7}, 32))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		// The synthetic encrypted records are intentionally retained for inspection;
 		// an operator deletes the disposable resources after the gate. No general
 		// table/bucket deletion permission is needed by this test.
@@ -183,13 +178,9 @@ func newLiveCloudWorkflow(t *testing.T, async, aws bool) *liveCloudWorkflow {
 	f.cap.Responses, f.cap.ResponseFills = f.repository.Responses(), f.repository.ResponseFills()
 	f.cap.Checkpoints = CheckpointCapabilities{Repository: checkpoints, Blobs: checkpoints, BlobWriter: checkpoints, Materializer: &state.DurableCheckpointMaterializer{Repository: checkpoints, Blobs: checkpoints, HandleVerifier: f.options.Keyring, Now: time.Now}}
 	f.cap.Budgets, err = redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{Client: h.redis, Mode: redisstore.AdmissionModeFunction, Keys: redisstore.KeyOptions{Prefix: base, HashTag: h.queue, KeySecret: bytes.Repeat([]byte{9}, 32)}, GenerationID: "generation-1", IncarnationID: "incarnation-1", Clock: time.Now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.cap.Finalizer, err = newCloudFinalizer(f.repository, f.cap.Responses, f.cap.ResponseFills, f.cap.Budgets, time.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	original := f.adapter.poll
 	f.adapter.poll = func(ctx context.Context, call provider.Call, id string, observer provider.Observer) (provider.ResumableResult, error) {
 		if !h.complete.Load() {
@@ -213,18 +204,12 @@ func (h *liveCloudWorkflow) startWorkerWithOptions(t *testing.T, queue string, o
 	t.Helper()
 	// Reconstruct all invocation-local execution state from the retained stores.
 	runtime, err := h.fixture.cap.NewCloudExecutionRuntime(h.ctx, h.fixture.options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	w := worker.New(h.client, queue, options)
 	workflows.Register(w, activity.PayloadLimits{})
 	a := &activity.Activities{V1Runtime: &observedCloudRuntime{cloudV1Runtime: &cloudV1Runtime{CloudExecutionRuntime: runtime}, harness: h}}
-	if err := a.RegisterForTaskQueue(w, queue); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Start(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, a.RegisterForTaskQueue(w, queue))
+	testassert.NoError(t, w.Start())
 	stop := sync.OnceFunc(w.Stop)
 	t.Cleanup(stop)
 	return stop
@@ -236,17 +221,13 @@ func (h *liveCloudWorkflow) start(t *testing.T, name string, input any) client.W
 func (h *liveCloudWorkflow) startOnQueue(t *testing.T, queue, name string, input any) client.WorkflowRun {
 	t.Helper()
 	run, err := h.client.ExecuteWorkflow(h.ctx, client.StartWorkflowOptions{ID: h.queue + "-" + uuid.NewString(), TaskQueue: queue, WorkflowExecutionTimeout: 2 * time.Minute}, name, input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return run
 }
 func (h *liveCloudWorkflow) generate(t *testing.T, request llm.GenerateRequestV1) llm.GenerateResponseV1 {
 	t.Helper()
 	var result llm.GenerateResponseV1
-	if err := h.start(t, workflows.GenerateWorkflowName, request).Get(h.ctx, &result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, h.start(t, workflows.GenerateWorkflowName, request).Get(h.ctx, &result))
 	if result.OperationKey != request.OperationKey || result.Checkpoint.Handle == "" {
 		t.Fatal("lost response identity or checkpoint")
 	}
@@ -255,9 +236,7 @@ func (h *liveCloudWorkflow) generate(t *testing.T, request llm.GenerateRequestV1
 func (h *liveCloudWorkflow) compact(t *testing.T, request llm.CompactRequestV1) llm.CompactResponseV1 {
 	t.Helper()
 	var result llm.CompactResponseV1
-	if err := h.start(t, workflows.CompactWorkflowName, request).Get(h.ctx, &result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, h.start(t, workflows.CompactWorkflowName, request).Get(h.ctx, &result))
 	if result.OperationKey != request.OperationKey || result.Checkpoint.Handle == "" {
 		t.Fatal("lost compaction identity or checkpoint")
 	}
@@ -296,9 +275,7 @@ func exerciseCloudWorkflowLifecycle(t *testing.T, async, aws bool) {
 		h.startWorker(t)
 	}
 	var original llm.GenerateResponseV1
-	if err := run.Get(h.ctx, &original); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, run.Get(h.ctx, &original))
 	if original.OperationKey != request.OperationKey || original.Checkpoint.Handle == "" {
 		t.Fatal("invalid initial result")
 	}
@@ -361,9 +338,7 @@ func (h *liveCloudWorkflow) assertSettled(t *testing.T, expected int) {
 			continue
 		}
 		raw, err := h.redis.Get(h.ctx, it.Val()).Result()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		var record struct {
 			OperationID  string `json:"operation_id"`
 			Status       string `json:"status"`
@@ -387,9 +362,7 @@ func (h *liveCloudWorkflow) assertSettled(t *testing.T, expected int) {
 		}
 		count++
 	}
-	if err := it.Err(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, it.Err())
 	if count != expected {
 		t.Fatalf("Redis has %d paid leases, want %d", count, expected)
 	}
@@ -405,9 +378,7 @@ func TestCloudWorkflowLiveBudgetWait(t *testing.T) {
 	prepared := f.prepare(t, h.ctx, llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionBudgetRequired)
 	_, scope, attempt := f.firstAttempt(t, h.ctx, prepared)
 	plan, err := f.repository.LoadBudgetPlan(h.ctx, scope, attempt.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	blocker := plan.Reservation
 	blocker.OperationID = "budget-blocker"
 	for i := range blocker.Reservations {
@@ -427,21 +398,15 @@ func TestCloudWorkflowLiveBudgetWait(t *testing.T) {
 	}
 	requireCount(t, &f.submits, 0, "provider called before budget became available")
 	leaser := f.cap.Budgets.(durable.BudgetLeaser)
-	if _, err := leaser.Claim(h.ctx, durable.ClaimRequest{OperationID: blocker.OperationID, GenerationID: blocker.GenerationID, IncarnationID: reserved.IncarnationID}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(leaser.Claim(h.ctx, durable.ClaimRequest{OperationID: blocker.OperationID, GenerationID: blocker.GenerationID, IncarnationID: reserved.IncarnationID})))
 	zero := pricing.MustUSD("0")
 	release := durable.ReconcileRequest{OperationID: blocker.OperationID, GenerationID: blocker.GenerationID, IncarnationID: reserved.IncarnationID}
 	for i, event := range reserved.Events {
 		release.Events = append(release.Events, budget.CompletionEvent{EventID: fmt.Sprintf("blocker-release-%d", i), OperationID: string(blocker.OperationID), GenerationID: string(blocker.GenerationID), WindowID: event.WindowID, BucketStart: event.BucketStart, ReservationRevision: event.ReservationRevision + 1, Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: event.AmountUSD, AccountedIncreaseUSD: zero, ActualCostUSD: &zero, CostStatus: budget.CostExact, OccurredAt: time.Now()})
 	}
-	if err := f.cap.Budgets.Reconcile(h.ctx, release); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, f.cap.Budgets.Reconcile(h.ctx, release))
 	var result llm.GenerateResponseV1
-	if err := run.Get(h.ctx, &result); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, run.Get(h.ctx, &result))
 	if f.submits.Load() != 1 || result.Checkpoint.Handle == "" {
 		t.Fatal("workflow did not resume exactly once")
 	}

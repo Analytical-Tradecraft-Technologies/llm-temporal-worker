@@ -8,6 +8,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
@@ -17,9 +18,7 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 	blobs.open = func(blob.BlobKey) error { opens++; return nil }
 	ctx := WithRecordReuse(context.Background())
 	first, err := r.Read(ctx, request.Scope, request.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	first.Request.Manifest[0] = '!'
 	first.Progress[0] = '!'
 	second, err := r.Read(ctx, request.Scope, request.ID)
@@ -39,10 +38,10 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 	if opens != 1 {
 		t.Fatalf("new revision opened %d times", opens)
 	}
-	requireErrorIs(t, errOf(r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "another"}, request.ID)), contracts.ErrNotFound, "scope bypass")
+	testassert.ErrorIs(t, testassert.Err(r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "another"}, request.ID)), contracts.ErrNotFound, "scope bypass")
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	requireErrorIs(t, errOf(r.Read(cancelled, request.Scope, request.ID)), context.Canceled, "cancellation bypass")
+	testassert.ErrorIs(t, testassert.Err(r.Read(cancelled, request.Scope, request.ID)), context.Canceled, "cancellation bypass")
 	// Removing the event stream must not make the reused record authority.
 	table.mu.Lock()
 	for key := range table.rows {
@@ -51,7 +50,7 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 		}
 	}
 	table.mu.Unlock()
-	requireErrorIs(t, errOf(r.Read(ctx, request.Scope, request.ID)), contracts.ErrNotFound, "removed authority bypass")
+	testassert.ErrorIs(t, testassert.Err(r.Read(ctx, request.Scope, request.ID)), contracts.ErrNotFound, "removed authority bypass")
 }
 
 // reusedRecordFixture creates the fixture record and reads it once in a
@@ -61,7 +60,7 @@ func reusedRecordFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs,
 	r, table, blobs, request := fixture(t)
 	mustCreate(t, r, request)
 	ctx := WithRecordReuse(context.Background())
-	mustNoError(t, errOf(r.Read(ctx, request.Scope, request.ID)))
+	testassert.NoError(t, testassert.Err(r.Read(ctx, request.Scope, request.ID)))
 	return r, table, blobs, request, ctx
 }
 
@@ -72,9 +71,7 @@ func TestRecordReuseDoesNotCrossInvocationOrRepository(t *testing.T) {
 	blobs.mu.Lock()
 	clear(blobs.values)
 	blobs.mu.Unlock()
-	if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
-		t.Fatalf("validated immutable record was not reused: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(r.Read(ctx, request.Scope, request.ID)), "validated immutable record was not reused")
 	for name, read := range map[string]func() error{
 		"new invocation":     func() error { _, err := r.Read(WithRecordReuse(ctx), request.Scope, request.ID); return err },
 		"plain context":      func() error { _, err := r.Read(context.Background(), request.Scope, request.ID); return err },
@@ -101,7 +98,7 @@ func TestRecordReuseConcurrentCopies(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	mustNoError(t, errOf(r.Read(ctx, request.Scope, request.ID)))
+	testassert.NoError(t, testassert.Err(r.Read(ctx, request.Scope, request.ID)))
 }
 
 func TestRecordReuseDoesNotTreatPublicationAsReadableStorage(t *testing.T) {
@@ -114,19 +111,17 @@ func TestRecordReuseDoesNotTreatPublicationAsReadableStorage(t *testing.T) {
 			r, _, blobs, request := fixture(t)
 			ctx := WithRecordReuse(context.Background())
 			record, err := r.Create(ctx, request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if update {
-				mustNoError(t, errOf(r.Read(ctx, request.Scope, request.ID)))
-				mustNoError(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "published"))))
+				testassert.NoError(t, testassert.Err(r.Read(ctx, request.Scope, request.ID)))
+				testassert.NoError(t, testassert.Err(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "published"))))
 			}
 			// An acknowledged publication does not prove that its bytes can
 			// still be read. The old revision must not hide this new loss.
 			blobs.mu.Lock()
 			clear(blobs.values)
 			blobs.mu.Unlock()
-			requireErrorIs(t, errOf(r.Read(ctx, request.Scope, request.ID)), ErrCorrupt, "published revision bypassed storage validation")
+			testassert.ErrorIs(t, testassert.Err(r.Read(ctx, request.Scope, request.ID)), ErrCorrupt, "published revision bypassed storage validation")
 		})
 	}
 }
@@ -134,9 +129,7 @@ func TestRecordReuseDoesNotTreatPublicationAsReadableStorage(t *testing.T) {
 func TestRecordReuseRequiresEntireValidatedPointer(t *testing.T) {
 	r, _, _, request, ctx := reusedRecordFixture(t)
 	state, err := r.events.ReadState(ctx, r.stream(request.ID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for name, mutate := range map[string]func(*recordPointer){
 		"revision": func(p *recordPointer) { p.Revision++ },
 		"scope":    func(p *recordPointer) { p.ScopeTag = r.scopeTag(Scope{Tenant: "other", Project: "other"}) },
@@ -147,7 +140,7 @@ func TestRecordReuseRequiresEntireValidatedPointer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pointer := state.Value
 			mutate(&pointer)
-			requireErrorIs(t, errOf(r.loadRecord(ctx, pointer)), ErrCorrupt, "changed pointer used a validated record")
+			testassert.ErrorIs(t, testassert.Err(r.loadRecord(ctx, pointer)), ErrCorrupt, "changed pointer used a validated record")
 		})
 	}
 }
@@ -160,9 +153,7 @@ func TestRecordReuseBoundsRetainedPayloads(t *testing.T) {
 	// payload allowance. A rejected entry must remain a normal storage miss.
 	for range 3 {
 		id, err := NewRequestID()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		pointer := recordPointer{ID: id}
 		record := Record{Request: CreateRequest{Manifest: make([]byte, maxPayloadBytes)}}
 		reuse.remember(r, pointer, record)

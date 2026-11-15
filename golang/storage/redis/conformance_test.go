@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/redis/go-redis/v9"
 )
@@ -122,7 +123,7 @@ func TestContinuationStoreFailsClosedForUnavailableRedisState(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	requireErrorIs(t, errOf(store.Get(ctx, handle)), context.Canceled, "canceled continuation read =")
+	testassert.ErrorIs(t, testassert.Err(store.Get(ctx, handle)), context.Canceled, "canceled continuation read =")
 }
 
 func TestContinuationStoreTreatsExpiryRaceAsNotFound(t *testing.T) {

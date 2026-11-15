@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -125,9 +126,7 @@ func TestPrepareRejectsInvalidOrCancelledBeforeIO(t *testing.T) {
 	fills := prepareFills{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Prepare(ctx, responses, fills, lookup, lease); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(Prepare(ctx, responses, fills, lookup, lease)), context.Canceled)
 	if _, err := Prepare(nil, responses, fills, lookup, lease); err == nil {
 		t.Fatal("nil context")
 	}
@@ -241,9 +240,7 @@ func TestPrepareAfterMissSkipsOnlyTheRepeatedLookup(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := PrepareAfterMiss(ctx, responses, prepareFills{}, lookup, lease); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	testassert.ErrorIs(t, testassert.Err(PrepareAfterMiss(ctx, responses, prepareFills{}, lookup, lease)), context.Canceled)
 }
 
 // noIOResponses fails the test on any response lookup.

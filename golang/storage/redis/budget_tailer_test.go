@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"testing"
 	"time"
@@ -78,9 +79,7 @@ func TestBudgetStreamTailerReloadsOnDisabledConsumptionGapAndGenerationSwitch(t 
 		Enabled:   true,
 		Reload:    reloadTailerTo("generation-a", "9-0"),
 	})
-	if _, err := withoutCursor.Poll(context.Background()); !errors.Is(err, ErrBudgetStreamCursorUnavailable) {
-		t.Fatalf("gap without current cursor = %v, want ErrBudgetStreamCursorUnavailable", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(withoutCursor.Poll(context.Background())), ErrBudgetStreamCursorUnavailable, "gap without current cursor")
 
 	// A generation-switch event is never applied to the old local plan.
 	switchPort := new(MemoryBudgetEventPort)
@@ -205,7 +204,7 @@ func reloadTailerTo(generation, cursor string) func(context.Context) (BudgetStre
 func appendTailerEvents(t *testing.T, port *MemoryBudgetEventPort, generation string, count int64) {
 	t.Helper()
 	for index := int64(1); index <= count; index++ {
-		mustNoError(t, errOf(port.Append(context.Background(), testTailerEvent(generation, index))))
+		testassert.NoError(t, testassert.Err(port.Append(context.Background(), testTailerEvent(generation, index))))
 	}
 }
 

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -74,44 +74,26 @@ func TestBlobResultStoreReplaysAfterRestart(t *testing.T) {
 		LeaseUntil:    now.Add(time.Minute),
 		ExpiresAt:     now.Add(time.Hour),
 	})
-	if err != nil {
-		t.Fatalf("Begin() error = %v", err)
-	}
-	if err := admissions.MarkDispatching(ctx, admission.DispatchRequest{OperationID: begin.Operation.ID, DispatchToken: begin.Operation.DispatchToken, LeaseUntil: now.Add(time.Minute)}); err != nil {
-		t.Fatalf("MarkDispatching() error = %v", err)
-	}
+	testassert.NoError(t, err, "Begin() error")
+	testassert.NoError(t, admissions.MarkDispatching(ctx, admission.DispatchRequest{OperationID: begin.Operation.ID, DispatchToken: begin.Operation.DispatchToken, LeaseUntil: now.Add(time.Minute)}), "MarkDispatching() error")
 	blobStore := newTestBlobStore()
 	resolver, err := NewContentAddressedBlobRefResolver("memory", "results")
-	if err != nil {
-		t.Fatalf("NewContentAddressedBlobRefResolver() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewContentAddressedBlobRefResolver() error")
 	first, err := NewBlobResultStore(blobStore, admissions, resolver, func() time.Time { return now })
-	if err != nil {
-		t.Fatalf("NewBlobResultStore(first) error = %v", err)
-	}
+	testassert.NoError(t, err, "NewBlobResultStore(first) error")
 	want := llm.Response{OperationKey: "request-1", Status: llm.ResponseStatusCompleted}
 	stateRef, err := first.Put(ctx, begin.Operation.ID, want)
-	if err != nil {
-		t.Fatalf("Put() error = %v", err)
-	}
-	if err := admissions.Complete(ctx, admission.CompleteRequest{OperationID: begin.Operation.ID, DispatchToken: begin.Operation.DispatchToken, Actual: pricing.MicroUSD(0), ResultRef: &stateRef}); err != nil {
-		t.Fatalf("Complete() error = %v", err)
-	}
+	testassert.NoError(t, err, "Put() error")
+	testassert.NoError(t, admissions.Complete(ctx, admission.CompleteRequest{OperationID: begin.Operation.ID, DispatchToken: begin.Operation.DispatchToken, Actual: pricing.MicroUSD(0), ResultRef: &stateRef}), "Complete() error")
 	got, err := first.Get(ctx, begin.Operation.ID)
-	if err != nil {
-		t.Fatalf("Get(first) error = %v", err)
-	}
+	testassert.NoError(t, err, "Get(first) error")
 	if got.OperationKey != want.OperationKey || got.Status != want.Status {
 		t.Fatalf("first response = %#v, want %#v", got, want)
 	}
 	second, err := NewBlobResultStore(blobStore, admissions, resolver, func() time.Time { return now })
-	if err != nil {
-		t.Fatalf("NewBlobResultStore(second) error = %v", err)
-	}
+	testassert.NoError(t, err, "NewBlobResultStore(second) error")
 	got, err = second.Get(ctx, begin.Operation.ID)
-	if err != nil {
-		t.Fatalf("Get(second) error = %v", err)
-	}
+	testassert.NoError(t, err, "Get(second) error")
 	if got.OperationKey != want.OperationKey || got.Status != want.Status {
 		t.Fatalf("replayed response = %#v, want %#v", got, want)
 	}
@@ -119,30 +101,20 @@ func TestBlobResultStoreReplaysAfterRestart(t *testing.T) {
 
 func TestBlobResultStoreMissingReferenceIsNotFound(t *testing.T) {
 	store, err := NewBlobResultStore(newTestBlobStore(), memoryadmission.NewAdmissionStore(memoryadmission.AdmissionOptions{}), nil, time.Now)
-	if err != nil {
-		t.Fatalf("NewBlobResultStore() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewBlobResultStore() error")
 	_, err = store.Get(context.Background(), "missing")
-	if !errors.Is(err, engine.ErrResultNotFound) {
-		t.Fatalf("error = %v, want ErrResultNotFound", err)
-	}
+	testassert.ErrorIs(t, err, engine.ErrResultNotFound)
 }
 
 func TestContentAddressedFileBlobResolverUsesTenantRelativeLocator(t *testing.T) {
 	resolver, err := NewContentAddressedBlobRefResolver("file", "")
-	if err != nil {
-		t.Fatalf("NewContentAddressedBlobRefResolver() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewContentAddressedBlobRefResolver() error")
 	value := state.BlobRef{Digest: [32]byte{1}, Size: 42, Media: "application/json"}
 	expiresAt := time.Now().Add(time.Hour)
 	ref, err := resolver(context.Background(), "tenant-a", value, expiresAt)
-	if err != nil {
-		t.Fatalf("resolver() error = %v", err)
-	}
+	testassert.NoError(t, err, "resolver() error")
 	prefix, err := blob.TenantPrefix("tenant-a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if ref.Store != "file" || ref.Locator != prefix+"/"+value.DigestHex() {
 		t.Fatalf("file ref = %#v", ref)
 	}
@@ -187,9 +159,7 @@ func TestBlobResultStoreReferenceCacheDropsExpiredAndMissingOperations(t *testin
 	now := time.Now().UTC()
 	operations := &resultOperationsFake{operations: make(map[string]admission.Operation)}
 	store, err := NewBlobResultStore(newTestBlobStore(), operations, nil, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	putAll := func(prefix string, count int) {
 		t.Helper()
 		for i := 0; i < count; i++ {
@@ -207,9 +177,7 @@ func TestBlobResultStoreReferenceCacheDropsExpiredAndMissingOperations(t *testin
 	}
 	operations.clear()
 	for i := 0; i < 100; i++ {
-		if _, err := store.Get(ctx, fmt.Sprintf("missing-%d", i)); !errors.Is(err, engine.ErrResultNotFound) {
-			t.Fatalf("Get(missing) error = %v, want ErrResultNotFound", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(store.Get(ctx, fmt.Sprintf("missing-%d", i))), engine.ErrResultNotFound, "Get(missing)")
 	}
 	if got := cachedResultRefCount(store); got != 0 {
 		t.Fatalf("cached refs after missing-operation reads = %d, want 0", got)
@@ -228,13 +196,9 @@ func TestBlobResultStoreReferenceCacheIsCappedWhenResolvable(t *testing.T) {
 	now := time.Now().UTC()
 	operations := &resultOperationsFake{operations: make(map[string]admission.Operation)}
 	resolver, err := NewContentAddressedBlobRefResolver("memory", "results")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store, err := NewBlobResultStore(newTestBlobStore(), operations, resolver, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for i := 0; i < maxCachedResultRefs+10; i++ {
 		id := fmt.Sprintf("operation-%d", i)
 		operations.put(id, now.Add(time.Hour))

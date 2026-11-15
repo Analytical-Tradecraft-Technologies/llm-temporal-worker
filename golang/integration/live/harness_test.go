@@ -102,9 +102,7 @@ func TestRequestOmitsServiceClassAndBoundsTheCall(t *testing.T) {
 				t.Fatalf("service class = %q, want omission so the public default is exercised", request.ServiceClass)
 			}
 			class, err := llm.NormalizeServiceClass(request.ServiceClass)
-			if err != nil {
-				t.Fatalf("normalize omitted service class: %v", err)
-			}
+			testassert.NoError(t, err, "normalize omitted service class")
 			if class != llm.ServiceClassStandard {
 				t.Fatalf("omitted service class = %q, want %q", class, llm.ServiceClassStandard)
 			}
@@ -151,9 +149,7 @@ func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 	}
 
 	evidence, err := validateResponse(profile, response)
-	if err != nil {
-		t.Fatalf("validate response: %v", err)
-	}
+	testassert.NoError(t, err, "validate response")
 	if evidence.Profile != profile.ID || evidence.Tenant != profile.Tenant {
 		t.Fatalf("evidence profile = %#v, want %q/%q", evidence, profile.ID, profile.Tenant)
 	}
@@ -175,9 +171,7 @@ func TestValidateResponseRecordsUnreportedAndImplicitProviderCost(t *testing.T) 
 
 		t.Run(profileID+"/unreported", func(t *testing.T) {
 			evidence, err := validateResponse(profile, response)
-			if err != nil {
-				t.Fatalf("validate unreported cost: %v", err)
-			}
+			testassert.NoError(t, err, "validate unreported cost")
 			if evidence.ActualSpendKnown || evidence.ActualMicroUSD != 0 || evidence.CostMethod != "not_reported" {
 				t.Fatalf("unreported cost evidence = %#v", evidence)
 			}
@@ -188,9 +182,7 @@ func TestValidateResponseRecordsUnreportedAndImplicitProviderCost(t *testing.T) 
 			value := pricing.MustUSD("0.000017")
 			response.Cost = llm.Cost{ActualCostUSD: &value, Method: "provider_reported"}
 			evidence, err := validateResponse(profile, response)
-			if err != nil {
-				t.Fatalf("validate implicit known cost: %v", err)
-			}
+			testassert.NoError(t, err, "validate implicit known cost")
 			if !evidence.ActualSpendKnown || evidence.ActualMicroUSD != 17 || evidence.CostMethod != "provider_reported" {
 				t.Fatalf("implicit known cost evidence = %#v", evidence)
 			}
@@ -203,9 +195,7 @@ func TestValidateResponseAllowsBedrockConverseWithoutResponseID(t *testing.T) {
 	response := completedResponse()
 	response.Provider = llm.ProviderFacts{RequestID: "bedrock-request-123"}
 	evidence, err := validateResponse(profile, response)
-	if err != nil {
-		t.Fatalf("validate Bedrock Converse response: %v", err)
-	}
+	testassert.NoError(t, err, "validate Bedrock Converse response")
 	if evidence.RequestID != response.Provider.RequestID || evidence.ResponseID != "" {
 		t.Fatalf("evidence provider facts = %#v, want request ID and no response ID", evidence)
 	}
@@ -215,9 +205,7 @@ func TestValidateResponseAllowsTextOnlyResponseForConditionalContinuationProfile
 	profile := profileForTest(t, "anthropic-direct")
 
 	evidence, err := validateResponse(profile, completedResponse())
-	if err != nil {
-		t.Fatalf("validate text-only response: %v", err)
-	}
+	testassert.NoError(t, err, "validate text-only response")
 	if evidence.ContinuationVerified {
 		t.Fatalf("continuation verification = %t, want false", evidence.ContinuationVerified)
 	}

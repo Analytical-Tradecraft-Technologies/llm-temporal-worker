@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -134,9 +135,7 @@ func replayRequest(t *testing.T, history *historypb.History) {
 	t.Helper()
 	replayer := worker.NewWorkflowReplayer()
 	RegisterInternal(replayer, activity.PayloadLimits{})
-	if err := replayer.ReplayWorkflowHistory(nil, history); err != nil {
-		t.Fatalf("history does not replay: %v", err)
-	}
+	testassert.NoError(t, replayer.ReplayWorkflowHistory(nil, history), "history does not replay")
 }
 
 // The request workflow completes once the export child has started; its

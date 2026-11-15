@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -15,15 +16,11 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 	documents := map[string]string{}
 	for _, name := range []string{"generate-request", "compact-request", "generate-response", "compact-response", "execution-reference", "prepare-execution", "execution-result"} {
 		data, err := os.ReadFile(filepath.Join("..", "api", "schema", "v1", name+".schema.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		document := mustUnmarshal[map[string]any](t, data, "decode "+name+" schema")
 		id := document["$id"].(string)
 		documents[name] = id
-		if err := compiler.AddResource(id, document); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, compiler.AddResource(id, document))
 	}
 	cases := []struct {
 		name   string
@@ -57,9 +54,7 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 	}
 	for _, test := range cases {
 		compiled, err := compiler.Compile(documents[test.name])
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		for _, value := range test.values {
 			t.Run(test.name+"/"+value, func(t *testing.T) {
 				schemaErr := compiled.Validate(mustUnmarshal[any](t, []byte(value), "decode instance"))

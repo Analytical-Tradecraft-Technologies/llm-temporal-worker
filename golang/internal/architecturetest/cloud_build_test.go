@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -218,9 +219,7 @@ printf '{"Metadata":{"ImageID":"%s","ImageConfig":{"architecture":"%s"}}}' "$ima
 [[ "$SCENARIO" != "finding-$arch" ]]
 `)
 			runnerTemp := filepath.Join(dir, "runner")
-			if err := os.Mkdir(runnerTemp, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Mkdir(runnerTemp, 0o700))
 			output := filepath.Join(dir, "candidate.oci")
 			cmd := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts", "ci", "build-scanned-image.sh"), output)
 			cmd.Env = []string{
@@ -295,18 +294,14 @@ func TestWorkflowMultiNodeBuilderMatchesBuildCloudShape(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			dir, bin := newFakeCommandDirectory(t)
 			binfmt := filepath.Join(dir, "binfmt_misc")
-			if err := os.Mkdir(binfmt, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, os.Mkdir(binfmt, 0o700))
 			if scenario != "no-emulation" {
 				flags := "POF"
 				if scenario == "no-fix-binary" {
 					flags = "PO"
 				}
 				registration := "enabled\ninterpreter /usr/bin/qemu-aarch64\nflags: " + flags + "\noffset 0\n"
-				if err := os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte(registration), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(filepath.Join(binfmt, "qemu-aarch64"), []byte(registration), 0o600))
 			}
 			log := filepath.Join(dir, "calls")
 			envFile := filepath.Join(dir, "github-env")
@@ -390,9 +385,7 @@ func TestWorkflowCloudHelperFailsClosedAndKeepsTokenOutOfEnvironmentFile(t *test
 			envFile := filepath.Join(dir, "github-env")
 			fake := func(name, body string) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/usr/bin/env bash\nset -eu\n"+body), 0700); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte("#!/usr/bin/env bash\nset -eu\n"+body), 0700))
 			}
 			fake("curl", `printf 'download\n' >> "$CALL_LOG"
 while [[ "$1" != "--output" ]]; do shift; done

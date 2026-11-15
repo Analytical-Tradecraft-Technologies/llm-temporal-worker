@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func providerTestEvent(t *testing.T, at time.Time, route string, mutate func(*control.StatusObservation)) control.StatusEvent {
@@ -17,9 +18,7 @@ func providerTestEvent(t *testing.T, at time.Time, route string, mutate func(*co
 		mutate(&observation)
 	}
 	event, err := control.NewStatusEvent(observation)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return event
 }
 
@@ -49,9 +48,7 @@ func TestProviderProjectionPreservesSeparateIncidentEvidence(t *testing.T) {
 		}
 		raw, _ := json.Marshal(record)
 		var decoded providerStatusRecord
-		if err := decodeProviderStatus(string(raw), incident.ConfigDigest, &decoded); err != nil {
-			t.Fatalf("decode sticky projection: %v", err)
-		}
+		testassert.NoError(t, decodeProviderStatus(string(raw), incident.ConfigDigest, &decoded), "decode sticky projection")
 	}
 	// Authoritative credit clearance must not lose a separate billing incident.
 	clear := providerTestEvent(t, at.Add(4*time.Second), "route", func(o *control.StatusObservation) {
@@ -97,7 +94,7 @@ func TestProviderProjectionRejectsCorruptRecords(t *testing.T) {
 
 func TestProviderInventoryValidation(t *testing.T) {
 	snapshot := providerTestInventory(time.Now().UTC())
-	mustNoError(t, validateInventorySnapshot(snapshot))
+	testassert.NoError(t, validateInventorySnapshot(snapshot))
 	snapshot.InventoryDigest = [32]byte{1}
 	if err := validateInventorySnapshot(snapshot); err == nil {
 		t.Fatal("incorrect digest accepted")
@@ -152,7 +149,7 @@ func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
 	}
 	// A marker for a record the pinned view no longer holds restarts pagination.
 	options.AfterRouteID = store.routePosition(control.RouteStatus{RouteID: route, EndpointID: "removed"})
-	requireErrorIs(t, errOf(store.pageRouteStatuses(records, options)), control.ErrProviderViewExpired, "unknown marker error =")
+	testassert.ErrorIs(t, testassert.Err(store.pageRouteStatuses(records, options)), control.ErrProviderViewExpired, "unknown marker error =")
 	// A plain route position still skips every record of that route.
 	options.AfterRouteID = route
 	if page, err := store.pageRouteStatuses(records, options); err != nil || len(page.Routes) != 0 {

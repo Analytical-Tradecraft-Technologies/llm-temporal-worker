@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,9 +90,7 @@ func TestReviewedGoToolchainPinsStayAligned(t *testing.T) {
 	module := moduleRoot(t)
 
 	versionData, err := os.ReadFile(filepath.Join(module, ".go-version"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := strings.TrimSpace(string(versionData)); got != reviewedGoPatch {
 		t.Fatalf("golang/.go-version = %q, want reviewed patch %q", got, reviewedGoPatch)
 	}
@@ -211,9 +210,7 @@ func TestImageVerifyOCIArchiveFailureReportsStageAndCleansArchive(t *testing.T) 
 			dir := t.TempDir()
 			fake := func(name, body string) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body), 0700); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body), 0700))
 			}
 			fake("docker", `case "$1 ${2:-}" in
   "info ") exit 0 ;;

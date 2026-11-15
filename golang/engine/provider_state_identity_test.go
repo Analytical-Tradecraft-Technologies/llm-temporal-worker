@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -29,9 +30,7 @@ func TestGenerateStoresAdapterProviderStateUnderRoutePinning(t *testing.T) {
 	next := baseRequest("provider-state-identity-next")
 	next.Continuation = &llm.Continuation{Handle: first.Continuation.Handle}
 	loaded, _, _, err := harness.engine.loadContinuation(context.Background(), next, harness.clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	states := loaded.Continuation.ProviderStates
 	if len(states) != 1 || states[0].Provider != stateValue.Provider || states[0].EndpointFamily != stateValue.EndpointFamily || !bytes.Equal(states[0].Opaque, stateValue.Opaque) {
 		t.Fatalf("reloaded provider states = %#v, want the adapter label %s/%s", states, stateValue.Provider, stateValue.EndpointFamily)

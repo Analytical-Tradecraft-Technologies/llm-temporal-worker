@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -20,9 +21,7 @@ func TestLocalValidationUsesExactOriginalSchemaNumbers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			schema := json.RawMessage(`{"type":"object","properties":{"id":{"type":"number",` + tc.constraint + `}},"required":["id"],"additionalProperties":false}`)
 			params, err := lowerRequest(llm.Request{Model: "chat-model", Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}}, testProfile(), "default")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call := provider.Call{SDKParams: params, OutputSchema: schema}
 			for _, tc := range []struct {
 				text  string

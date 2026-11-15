@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // Run with a pinned Redis image and persistence profile whose admission
@@ -30,9 +31,7 @@ func TestLiveRedisAdmission(t *testing.T) {
 		Keys:            testKeyOptions(),
 		MaxRecordBytes:  256 << 10,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	now := time.Now()
 	reservation := testReservation(1, 100)
 	reservation.Bucket = now.Unix() / int64(time.Minute/time.Second)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	"go.yaml.in/yaml/v4"
 )
@@ -45,9 +46,7 @@ var (
 func readModuleFile(t *testing.T, path ...string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(append([]string{moduleRoot(t)}, path...)...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -90,9 +89,7 @@ func readCompose(t *testing.T) (composeDocument, []byte) {
 	t.Helper()
 	data := readModuleFile(t, "compose.yaml")
 	var document composeDocument
-	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&document); err != nil {
-		t.Fatalf("decode compose.yaml: %v", err)
-	}
+	testassert.NoError(t, yaml.NewDecoder(bytes.NewReader(data)).Decode(&document), "decode compose.yaml")
 	return document, data
 }
 
@@ -248,9 +245,7 @@ func TestLocalFixtureDocumentationPreservesFailClosedProviderEgress(t *testing.T
 			base = module
 		}
 		data, err := os.ReadFile(filepath.Join(base, path))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		for _, phrase := range required {
 			if !strings.Contains(string(data), phrase) {
 				t.Errorf("%s must state %q", path, phrase)
@@ -702,9 +697,7 @@ func TestCIExercisesAuthorizedComposeLiveGate(t *testing.T) {
 		".github/workflows/master.yml",
 	} {
 		data, err := os.ReadFile(filepath.Join(root, path))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !strings.Contains(string(data), "LLMTW_COMPOSE_LIVE=1 make compose-live-integration") {
 			t.Errorf("%s must exercise the authorized Compose lifecycle gate", path)
 		}

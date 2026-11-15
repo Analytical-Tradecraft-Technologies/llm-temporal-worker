@@ -2,10 +2,10 @@ package s3blob
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 	"github.com/aws/smithy-go"
 )
@@ -15,18 +15,12 @@ func TestRegionalBlobFailover(t *testing.T) {
 	alternate := &fakeS3{data: []byte("hello")}
 	makeStore := func(client *fakeS3, bucket string) *Store {
 		s, err := New(Options{Client: client, Bucket: bucket, Prefix: "results", MaxBytes: 100})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return s
 	}
 	store, err := NewRegional([]*Store{makeStore(primary, "primary-bucket"), makeStore(alternate, "fallback-bucket")}, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ProbeBucket(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, store.ProbeBucket(context.Background()))
 	store.router.Active.Store(0)
 	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("hello"), ExpiresAt: time.Now().Add(time.Hour)})
 	if err != nil || alternate.putInput == nil {
@@ -46,7 +40,5 @@ func TestRegionalBlobFailover(t *testing.T) {
 	primary.getErr = nil
 	primary.data = []byte("wrong")
 	store.router.Active.Store(0)
-	if _, err := store.Get(context.Background(), "tenant", ref); !errors.Is(err, blob.ErrDigestMismatch) {
-		t.Fatalf("corruption bypassed: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Get(context.Background(), "tenant", ref)), blob.ErrDigestMismatch, "corruption bypassed")
 }

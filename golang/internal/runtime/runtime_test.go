@@ -224,9 +224,7 @@ func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
 	options := testRuntimeOptions(t, controller, &closed)
 	options.V1Runtime = nil
 	runtime := mustNewRuntime(t, runtimeConfig(t), options)
-	if err := runtime.Run(context.Background()); !errors.Is(err, ErrV1RuntimeUnavailable) {
-		t.Fatalf("Run error = %v, want ErrV1RuntimeUnavailable", err)
-	}
+	testassert.ErrorIs(t, runtime.Run(context.Background()), ErrV1RuntimeUnavailable, "Run")
 	if controller.started.Load() || !closed.Load() || runtime.Health.Ready() {
 		t.Fatalf("unconfigured runtime lifecycle started=%v closed=%v ready=%v", controller.started.Load(), closed.Load(), runtime.Health.Ready())
 	}
@@ -310,9 +308,7 @@ func TestRuntimeStartCanRetryAfterInitialBindFailure(t *testing.T) {
 	runtime := newTestRuntime(t, context.Background(), []byte(data), testRuntimeOptions(t, controller, &closed))
 
 	testassert.ErrorContains(t, runtime.Start(), "listen for health server")
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, listener.Close())
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("Start() after failed bind error = %v, want retry to succeed", err)
 	}
@@ -372,9 +368,7 @@ func TestNewFailsClosedWithoutProviderFactory(t *testing.T) {
 	marker := "runtime-secret-marker"
 	data := strings.Replace(string(runtimeConfig(t)), "OPENAI_API_KEY", marker, 1)
 	_, err := New(context.Background(), []byte(data), Options{Resolver: config.ReferenceResolverFunc(func(context.Context, *config.Config) error { return nil })})
-	if !errors.Is(err, ErrEngineFactoryUnavailable) {
-		t.Fatalf("error = %v, want ErrEngineFactoryUnavailable", err)
-	}
+	testassert.ErrorIs(t, err, ErrEngineFactoryUnavailable)
 	if strings.Contains(err.Error(), marker) {
 		t.Fatalf("error leaked configuration marker: %v", err)
 	}
@@ -384,18 +378,14 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	metrics, err := newMetrics(config.Config{Telemetry: config.TelemetryConfig{Metrics: config.MetricsConfig{Enabled: true}}, Models: map[string]config.ModelConfig{
 		"logical-model": {Routes: []config.RouteConfig{{Model: "provider-model"}}},
 	}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	metrics.RecordActivity("success", "none", time.Millisecond, "response_received")
 	metrics.RecordActivity("completed", "none", time.Millisecond, "total")
 	metrics.RecordActivity("success", "none", time.Millisecond, "streaming")
 	metrics.RecordExactCost("endpoint", "model", "standard", "catalog_usage")
 	metrics.RecordProviderAttempt("endpoint", "provider-model", "standard", "success", time.Millisecond)
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// labelValues collects the values of label across the named family.
 	labelValues := func(name, label string) map[string]struct{} {
 		values := make(map[string]struct{})
@@ -438,9 +428,7 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 
 func TestRuntimeActivitiesUseConfiguredHeartbeatKeepaliveInterval(t *testing.T) {
 	configuration, err := config.Load(runtimeConfig(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	configuration.Temporal.Worker.HeartbeatKeepaliveInterval = config.Duration(250 * time.Millisecond)
 	activities := newRuntimeActivities(configuration, testEngine{}, nil, nil, nil)
 	if got, want := activities.HeartbeatKeepaliveInterval, 250*time.Millisecond; got != want {
@@ -455,9 +443,7 @@ func TestQueryServiceFromClientsPreservesSnapshotComposition(t *testing.T) {
 	if got == nil {
 		t.Fatal("query service source returned nil")
 	}
-	if _, err := got.Execute(context.Background(), llm.QueryRequestV1{}); err != nil {
-		t.Fatalf("query service execution error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(got.Execute(context.Background(), llm.QueryRequestV1{})), "query service execution error")
 	if service.called.Load() != 1 {
 		t.Fatalf("query service calls = %d, want 1", service.called.Load())
 	}
@@ -468,9 +454,7 @@ func TestComposeQueryServicePrefersSnapshotFactory(t *testing.T) {
 	fromFactory := &testQueryService{response: llm.QueryResponseV1{Source: "factory"}}
 	clients := &testQueryClientSet{service: fromClients}
 	got, err := composeQueryService(context.Background(), nil, testQueryEngineFactory{service: fromFactory}, clients)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response, err := got.Execute(context.Background(), llm.QueryRequestV1{})
 	if err != nil || response.Source != "factory" {
 		t.Fatalf("composed query response = %#v, error = %v", response, err)
@@ -494,18 +478,14 @@ func TestSnapshotQueryServiceFollowsAppReload(t *testing.T) {
 			return &snapshotClients{clients: &testQueryClientSet{service: second}, queryService: second}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer func() { _ = appInstance.Close(context.Background()) }()
 	service := &snapshotQueryService{application: appInstance}
 	response, err := service.Execute(context.Background(), llm.QueryRequestV1{})
 	if err != nil || response.Source != "first" {
 		t.Fatalf("initial query response = %#v, error = %v", response, err)
 	}
-	if err := appInstance.Reload(context.Background(), runtimeConfig(t)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, appInstance.Reload(context.Background(), runtimeConfig(t)))
 	response, err = service.Execute(context.Background(), llm.QueryRequestV1{})
 	if err != nil || response.Source != "second" {
 		t.Fatalf("reloaded query response = %#v, error = %v", response, err)
@@ -523,9 +503,7 @@ func TestSnapshotQueryServiceFailsClosedWithoutComposition(t *testing.T) {
 			return &snapshotClients{clients: app.ClientSetFunc(func(context.Context) error { return nil })}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer func() { _ = appInstance.Close(context.Background()) }()
 	_, err = (&snapshotQueryService{application: appInstance}).Execute(context.Background(), llm.QueryRequestV1{})
 	testassert.ErrorContains(t, err, "runtime query service is not configured")
@@ -567,9 +545,7 @@ func TestRuntimeInitialDependencyFailureClosesUnpublishedSnapshot(t *testing.T) 
 	})
 	options.DependencyProbes = []DependencyProbe{probe}
 	runtime, err := New(context.Background(), runtimeConfig(t), options)
-	if !errors.Is(err, errRequiredDependencyUnavailable) {
-		t.Fatalf("initial dependency error = %v", err)
-	}
+	testassert.ErrorIs(t, err, errRequiredDependencyUnavailable, "initial dependency")
 	if runtime != nil || temporalCalls.Load() != 0 || !closed.Load() {
 		t.Fatalf("initial dependency failure runtime=%#v temporal-calls=%d clients-closed=%v", runtime, temporalCalls.Load(), closed.Load())
 	}
@@ -592,9 +568,7 @@ func TestRuntimeReloadDependencyFailureKeepsPriorSnapshot(t *testing.T) {
 	runtime := newTestRuntime(t, context.Background(), runtimeConfig(t), options)
 	old := runtime.App.Current()
 	probe.healthy.Store(false)
-	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); !errors.Is(err, errRequiredDependencyUnavailable) {
-		t.Fatalf("reload dependency error = %v", err)
-	}
+	testassert.ErrorIs(t, runtime.App.Reload(context.Background(), runtimeConfig(t)), errRequiredDependencyUnavailable, "reload dependency")
 	if runtime.App.Current() != old {
 		t.Fatal("failed reload replaced the active runtime snapshot")
 	}
@@ -640,9 +614,7 @@ func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
 		t.Fatalf("initial development runtime state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
 	}
 
-	if err := runtime.App.Reload(context.Background(), configuration); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.App.Reload(context.Background(), configuration))
 	probe.healthy.Store(false)
 	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && controller.stops.Load() >= 1 })
 	if runtime.Health.Live() != true {
@@ -685,9 +657,7 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 	probe.healthy.Store(true)
 	runtime, replacement := assertUnconfiguredV1ReloadNotReady(t, []DependencyProbe{probe})
 
-	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)))
 	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() >= 1 })
 	requireHealthStatus(t, runtime, "/health/ready", http.StatusOK, "ready status after configured v1 reload")
 }
@@ -729,9 +699,7 @@ func assertUnconfiguredV1ReloadNotReady(t *testing.T, probes []DependencyProbe) 
 		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
 	}
 
-	if err := runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.App.Reload(context.Background(), runtimeMonitorConfig(t)))
 	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && initial.stops.Load() >= 1 })
 	if runtime.Health.Live() != true {
 		t.Fatal("unconfigured v1 reload changed liveness")
@@ -911,9 +879,7 @@ func waitForRuntime(t *testing.T, condition func() bool) {
 func runtimeHealthStatus(t *testing.T, address, path string) int {
 	t.Helper()
 	response, err := (&http.Client{Timeout: time.Second}).Get("http://" + address + path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer response.Body.Close()
 	return response.StatusCode
 }
@@ -931,9 +897,7 @@ func TestRuntimeStartsAndShutsDownInOrder(t *testing.T) {
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := runtime.Shutdown(shutdownContext); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.Shutdown(shutdownContext))
 	if runtime.Health.Ready() || runtime.Health.Live() || !controller.stopped.Load() || !closed.Load() {
 		t.Fatalf("shutdown state = ready %v live %v stopped %v closed %v", runtime.Health.Ready(), runtime.Health.Live(), controller.stopped.Load(), closed.Load())
 	}
@@ -947,9 +911,7 @@ func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 	// sandboxes deny loopback binds; skip this lifecycle test there while the
 	// listener behavior remains covered by internal/httpserver tests.
 	startTestRuntime(t, runtime)
-	if err := runtime.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.Shutdown(context.Background()))
 	controller = &testWorker{}
 	closed = atomic.Bool{}
 	runtime = mustNewRuntime(t, runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
@@ -980,9 +942,7 @@ func TestLoadTLSConfigPinsConfiguredCA(t *testing.T) {
 		}
 		return caPEM, nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if tlsConfig.RootCAs == nil {
 		t.Fatal("RootCAs is nil")
 	}
@@ -994,9 +954,7 @@ func TestLoadTLSConfigPinsConfiguredCA(t *testing.T) {
 func testCertificateAuthorityPEM(t *testing.T) []byte {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Temporal Test CA"},
@@ -1007,9 +965,7 @@ func testCertificateAuthorityPEM(t *testing.T) []byte {
 		IsCA:                  true,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
@@ -1030,30 +986,22 @@ func TestRuntimeToleratesTransientDependencyProbeFailuresBeforePausing(t *testin
 	runtime, controller := newMonitoredRuntime(t, context.Background(), runtimeConfig(t), probe)
 	probe.healthy.Store(false)
 	for round := 1; round < pauseAfterProbeFailures; round++ {
-		if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, runtime.syncDependencyReadiness(context.Background()))
 		if controller.stops.Load() != 0 || !runtime.Health.Ready() {
 			t.Fatalf("failed probe round %d paused the worker (stops=%d ready=%v)", round, controller.stops.Load(), runtime.Health.Ready())
 		}
 	}
 	// A success resets the count, so isolated failures never accumulate.
 	probe.healthy.Store(true)
-	if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.syncDependencyReadiness(context.Background()))
 	probe.healthy.Store(false)
 	for round := 1; round < pauseAfterProbeFailures; round++ {
-		if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, runtime.syncDependencyReadiness(context.Background()))
 	}
 	if controller.stops.Load() != 0 {
 		t.Fatal("non-consecutive probe failures paused the worker")
 	}
-	if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, runtime.syncDependencyReadiness(context.Background()))
 	// Pause drains the worker controller asynchronously.
 	waitForRuntime(t, func() bool { return controller.stops.Load() >= 1 && !runtime.Health.Ready() })
 }
@@ -1182,12 +1130,8 @@ func TestDependencyReadinessDiscardsAProbeOfASupersededSnapshot(t *testing.T) {
 	go func() { reloaded <- runtime.App.Reload(context.Background(), configuration) }()
 	waitForRuntime(t, func() bool { return runtime.App.Current() != initial })
 	close(stale.release)
-	if err := <-synced; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-reloaded; err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, <-synced)
+	testassert.NoError(t, <-reloaded)
 	runtime.readinessMu.Lock()
 	failures := runtime.probeFailures
 	runtime.readinessMu.Unlock()
@@ -1230,16 +1174,12 @@ func TestDependencyReadinessReleasesItsSnapshotLeaseBeforeResume(t *testing.T) {
 	go func() { reloaded <- runtime.App.Reload(context.Background(), configuration) }()
 	select {
 	case err := <-reloaded:
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("reload waited for the recovery Resume to drain the probed snapshot")
 	}
 	close(controller.release)
-	if err := <-synced; err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, <-synced)
 }
 
 func TestStopDependencyMonitorHonoursTheShutdownDeadlineDuringABlockedResume(t *testing.T) {

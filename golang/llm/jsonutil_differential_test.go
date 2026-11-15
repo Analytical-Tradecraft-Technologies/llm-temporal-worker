@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -130,14 +131,10 @@ func differentialFixtures(t testing.TB) map[string][]byte {
 	fixtures := map[string][]byte{}
 	for _, pattern := range []string{"testdata/v1/*.json", "testdata/request/*.json", "testdata/response/*.json"} {
 		paths, err := filepath.Glob(pattern)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		for _, path := range paths {
 			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			fixtures[path] = data
 		}
 	}
@@ -251,9 +248,7 @@ func parseJSONNode(t testing.TB, data []byte) *jsonNode {
 	var parse func() *jsonNode
 	parse = func() *jsonNode {
 		token, err := decoder.Token()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		delimiter, ok := token.(json.Delim)
 		if !ok {
 			encoded := mustMarshalJSON(t, token)
@@ -263,16 +258,12 @@ func parseJSONNode(t testing.TB, data []byte) *jsonNode {
 		for decoder.More() {
 			if delimiter == '{' {
 				key, err := decoder.Token()
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				node.keys = append(node.keys, key.(string))
 			}
 			node.children = append(node.children, parse())
 		}
-		if _, err := decoder.Token(); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, testassert.Err(decoder.Token()))
 		return node
 	}
 	return parse()
@@ -591,9 +582,7 @@ func FuzzFastJSONDecodingMatchesReference(f *testing.F) {
 func mustMarshalJSON(t testing.TB, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -612,9 +601,7 @@ func mustUnmarshalJSON[T any](t testing.TB, data []byte, what string) T {
 func readFixtureContaining(t testing.TB, path, text string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !strings.Contains(string(data), text) {
 		t.Fatalf("fixture does not contain %q", text)
 	}

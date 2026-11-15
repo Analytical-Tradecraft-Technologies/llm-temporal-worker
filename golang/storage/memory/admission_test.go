@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -27,12 +28,8 @@ func TestAdmissionBeginIdempotencyAndAmbiguity(t *testing.T) {
 		t.Fatalf("conflict error = %v", err)
 	}
 	request.RequestDigest = first.Operation.RequestDigest
-	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "r"}, LeaseUntil: now.Add(time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Fail(context.Background(), admission.FailRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Certainty: admission.Ambiguous, Incurred: 0}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "r"}, LeaseUntil: now.Add(time.Minute)}))
+	testassert.NoError(t, store.Fail(context.Background(), admission.FailRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Certainty: admission.Ambiguous, Incurred: 0}))
 	operation, err := store.Get(context.Background(), "op")
 	if err != nil || operation.State != admission.StateAmbiguous || operation.ReservedMicroUSD != 10 {
 		t.Fatalf("ambiguous operation = %#v %v", operation, err)
@@ -44,9 +41,7 @@ func TestAdmissionDeniesOverlappingWindow(t *testing.T) {
 	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
 	reservation := admission.WindowReservation{PolicyID: "p", WindowID: "w", Bucket: 100, Amount: 6, Limit: 10, BucketNanos: int64(time.Second), DurationNanos: int64(10 * time.Second)}
 	_, err := store.Begin(context.Background(), admission.BeginRequest{ID: "one", ScopeKey: "one", RequestDigest: admission.Digest([]byte("one")), Reservation: 6, Reservations: []admission.WindowReservation{reservation}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reservation.Amount = 5
 	result, err := store.Begin(context.Background(), admission.BeginRequest{ID: "two", ScopeKey: "two", RequestDigest: admission.Digest([]byte("two")), Reservation: 5, Reservations: []admission.WindowReservation{reservation}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)})
 	if err != nil || result.Denied == nil {

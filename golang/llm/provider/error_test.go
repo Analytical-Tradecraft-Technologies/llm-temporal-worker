@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -32,13 +33,9 @@ func TestCommonErrorKeepsCauseLocalAndSerializesSafeFacts(t *testing.T) {
 	if err.Error() != err.SafeMessage {
 		t.Fatalf("Error() = %q, want safe message", err.Error())
 	}
-	if !errors.Is(err, cause) {
-		t.Fatal("Unwrap did not retain local cause")
-	}
+	testassert.ErrorIs(t, err, cause, "Unwrap did not retain local cause")
 	encoded, marshalErr := json.Marshal(err)
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
-	}
+	testassert.NoError(t, marshalErr)
 	serialized := string(encoded)
 	if strings.Contains(serialized, "secret") || strings.Contains(serialized, "body") || strings.Contains(serialized, "Cause") {
 		t.Fatalf("safe error leaked cause/provider raw data: %s", serialized)
@@ -103,9 +100,7 @@ func TestWithEndpointIDCopiesSafeDetailsWithoutExposingCause(t *testing.T) {
 			t.Fatalf("safe endpoint error leaked %q: %s", raw, encoded)
 		}
 	}
-	if !errors.Is(mapped, cause) {
-		t.Fatal("WithEndpointID did not retain the local diagnostic cause")
-	}
+	testassert.ErrorIs(t, mapped, cause, "WithEndpointID did not retain the local diagnostic cause")
 }
 
 func TestNewEgressDeniedErrorKeepsDiagnosticCauseLocal(t *testing.T) {

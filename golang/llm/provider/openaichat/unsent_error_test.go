@@ -9,15 +9,14 @@ import (
 
 	"github.com/openai/openai-go/v3/option"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 func invokeWithClientMiddleware(t *testing.T, middleware option.Middleware, transport roundTripFunc) error {
 	t.Helper()
 	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if middleware != nil {
 		client.requestOptions = append(client.requestOptions, option.WithMiddleware(middleware))
 	}

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -62,9 +63,7 @@ func TestEstimateReservesLongPromptPriceWhenMediaCanReachThreshold(t *testing.T)
 			// the reservation must cover the smallest such prompt.
 			if test.long {
 				minimum, err := pricing.CostFromUsage(entry, pricing.Usage{InputTokens: entry.LongPrompt.MinPromptTokens + 1, OutputTokens: estimate.OutputTokens})
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if estimate.CostUSD.Cmp(minimum.USD) < 0 {
 					t.Fatalf("reservation %s is below the long-prompt cost %s", estimate.CostUSD.String(), minimum.USD.String())
 				}
@@ -104,9 +103,7 @@ func assertReservedAtPromptPrice(t *testing.T, request llm.Request, candidate ro
 		prices = entry.LongPrompt.Prices
 	}
 	want, err := pricing.CostFromUsage(pricing.Entry{Prices: prices}, pricing.Usage{InputTokens: estimate.InputTokens, OutputTokens: estimate.OutputTokens, CacheWriteTokens: estimate.CacheWriteTokens})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if estimate.CostUSD.Cmp(want.USD) != 0 {
 		t.Fatalf("reservation = %s for %d input tokens, want %s (long-prompt price %v)", estimate.CostUSD.String(), estimate.InputTokens, want.USD.String(), long)
 	}

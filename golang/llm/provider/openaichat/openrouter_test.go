@@ -22,9 +22,7 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"gen-1","model":"router-model","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"cost":0.00000123,"cost_details":{"upstream_inference_cost":0.00000123}}}`, "X-Request-Id", "or-req-1"), nil
 	})
 	client, err := NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "or-key", HTTPReferer: "https://client.example", Title: "contract", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{
 		ID:                        "openrouter-pinned",
 		CapabilityVersion:         "openrouter/v1",
@@ -38,19 +36,13 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 		RequireParameters:         true,
 		Upstreams:                 allModelsUpstreams{"ProviderA", "ProviderB/fp8", "ProviderC"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "openrouter-a", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "openrouter-a", provider.FamilyOpenAIChat, llm.Request{OperationKey: "or-op", Model: "router-model"})
 	result := adaptertest.Invoke(t, adapter, call)
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.DecodeJSON[map[string]any](t, body)
 	providerBody, ok := wire["provider"].(map[string]any)
 	if !ok || providerBody["allow_fallbacks"] != false || providerBody["require_parameters"] != true {
@@ -66,9 +58,7 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 
 func TestParseDecimalUSDAcceptsExponentForm(t *testing.T) {
 	amount, err := parseDecimalUSD(json.RawMessage(`1.23e-7`), "openrouter_cost")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := amount.String(); got != "0.000000123000000000" {
 		t.Fatalf("exponent cost = %s, want 0.000000123000000000", got)
 	}
@@ -76,9 +66,7 @@ func TestParseDecimalUSDAcceptsExponentForm(t *testing.T) {
 
 func TestOpenRouterRejectsCallerProviderOverride(t *testing.T) {
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""}, ProviderOrder: []string{"ProviderA"}, RequireParameters: true, Upstreams: allModelsUpstreams{"ProviderA"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = lowerRequest(llm.Request{Model: "model", Extensions: map[string]json.RawMessage{"openrouter": json.RawMessage(`{"provider_order":["Caller"]}`)}}, profile, "standard")
 	testassert.ErrorContains(t, err, "reserved")
 }
@@ -86,13 +74,9 @@ func TestOpenRouterRejectsCallerProviderOverride(t *testing.T) {
 func openRouterProviderBody(t *testing.T, profile Profile, model string, class llm.ServiceClass) map[string]any {
 	t.Helper()
 	lowering, err := profile.forRequest(model, class, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	params, err := lowerRequest(llm.Request{Model: model}, lowering, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	encoded := contract.MarshalJSON(t, params)
 	wire := contract.DecodeJSON[map[string]any](t, encoded)
 	body, ok := wire["provider"].(map[string]any)
@@ -107,9 +91,7 @@ func TestOpenRouterUpstreamSelectionNamesAllowedEndpointsAndSortsByClass(t *test
 	upstreams := StaticOpenRouterUpstreams{"deepseek/deepseek-v3.2": {Tags: []string{"deepinfra/fp8", "novita/fp8"}, Quantizations: []string{"bf16", "fp8"}}}
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: tiers, SelectUpstream: true, RequireParameters: true,
 		Upstreams: upstreams, ZeroRetention: true, DenyPromptTraining: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for class, sort := range map[llm.ServiceClass]string{llm.ServiceClassEconomy: "price", llm.ServiceClassStandard: "price", llm.ServiceClassPriority: "throughput"} {
 		body := openRouterProviderBody(t, profile, "deepseek/deepseek-v3.2", class)
 		want := map[string]any{"only": []any{"deepinfra/fp8", "novita/fp8"}, "quantizations": []any{"bf16", "fp8"}, "sort": sort,
@@ -125,9 +107,7 @@ func TestOpenRouterUpstreamSelectionNamesAllowedEndpointsAndSortsByClass(t *test
 	// Callers cannot steer the upstream: an explicit order would bypass the
 	// allowed endpoints and the price reservation.
 	lowering, err := profile.forRequest("deepseek/deepseek-v3.2", llm.ServiceClassStandard, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, err := lowerRequest(llm.Request{Model: "deepseek/deepseek-v3.2", Extensions: map[string]json.RawMessage{"openrouter": json.RawMessage(`{"provider_order":["Caller"]}`)}}, lowering, "default"); err == nil {
 		t.Fatal("upstream selection accepted a caller provider order")
 	}
@@ -147,9 +127,7 @@ func TestOpenRouterPinnedOrderIsLimitedToAllowedEndpoints(t *testing.T) {
 	}
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: tiers,
 		ProviderOrder: []string{"provider-a", "provider-b"}, RequireParameters: true, Upstreams: upstreams})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	body := openRouterProviderBody(t, profile, "vendor/model", llm.ServiceClassStandard)
 	want := map[string]any{"order": []any{"provider-a", "provider-b"}, "only": []any{"provider-a/fp8", "provider-b"}, "allow_fallbacks": false, "require_parameters": true}
 	if !reflect.DeepEqual(body, want) {
@@ -171,17 +149,11 @@ func TestOpenRouterSendsTheReservedPriceCeiling(t *testing.T) {
 	tiers := map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: ""}
 	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{ID: "or", CapabilityVersion: "or/v1", BaseURL: openRouterBaseURL, Capabilities: profileTestCapabilities("or/v1"), ServiceTiers: tiers, SelectUpstream: true, RequireParameters: true,
 		Upstreams: StaticOpenRouterUpstreams{"vendor/model": {Tags: []string{"provider-a"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	lowering, err := profile.forRequest("vendor/model", llm.ServiceClassStandard, &provider.PriceCeiling{PromptPerMillion: "0.26", CompletionPerMillion: "1.5", PerRequest: "0"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	params, err := lowerRequest(llm.Request{Model: "vendor/model"}, lowering, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	encoded := contract.MarshalJSON(t, params)
 	// Exact decimals travel as JSON numbers, never through a float.
 	if !strings.Contains(string(encoded), `"max_price":{"completion":1.5,"prompt":0.26,"request":0}`) {

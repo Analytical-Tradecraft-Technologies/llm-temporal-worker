@@ -2,6 +2,7 @@ package control
 
 import (
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -9,9 +10,7 @@ import (
 func persistedEvent(t *testing.T, id int64, value StatusObservation) PersistedStatusEvent {
 	t.Helper()
 	event, err := NewStatusEvent(value)
-	if err != nil {
-		t.Fatalf("NewStatusEvent: %v", err)
-	}
+	testassert.NoError(t, err, "NewStatusEvent")
 	return PersistedStatusEvent{EventID: id, Event: event}
 }
 
@@ -31,9 +30,7 @@ func TestReplayRouteStatusUsesLedgerOrderAndHorizonCoverage(t *testing.T) {
 		persistedEvent(t, 11, stale),
 		persistedEvent(t, 12, later),
 	))
-	if err != nil {
-		t.Fatalf("ReplayRouteStatus: %v", err)
-	}
+	testassert.NoError(t, err, "ReplayRouteStatus")
 	if !result.Present || result.Status.ObservedAt != incident.ObservedAt || result.Status.Credit != CreditExhausted {
 		t.Fatalf("replay result = %#v, want ledger-first incident projection", result)
 	}
@@ -56,9 +53,7 @@ func TestReplayRouteStatusAllowsEpochTransition(t *testing.T) {
 	nextEpoch.ConfigEpoch = "epoch-2"
 
 	result, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), true, persistedEvent(t, 1, incident), persistedEvent(t, 2, nextEpoch)))
-	if err != nil {
-		t.Fatalf("ReplayRouteStatus: %v", err)
-	}
+	testassert.NoError(t, err, "ReplayRouteStatus")
 	if result.Status.ConfigEpoch != "epoch-2" || result.Status.Credit != CreditOK || result.Status.Billing != BillingOK {
 		t.Fatalf("epoch transition retained old incident: %#v", result.Status)
 	}
@@ -71,9 +66,7 @@ func TestReplayRouteStatusIncludesEventAtHorizon(t *testing.T) {
 	horizon := time.Unix(250, 0).UTC()
 	value := observation(horizon)
 	result, err := ReplayRouteStatus(replayInput(horizon, true, persistedEvent(t, 1, value)))
-	if err != nil {
-		t.Fatalf("ReplayRouteStatus: %v", err)
-	}
+	testassert.NoError(t, err, "ReplayRouteStatus")
 	if result.Coverage.EventsApplied != 1 || result.Coverage.EventsSkippedHorizon != 0 || !result.Status.ObservedAt.Equal(horizon) {
 		t.Fatalf("event at horizon was not included: %#v", result)
 	}
@@ -100,9 +93,7 @@ func TestReplayRouteStatusRejectsMixedKeysWithoutApplying(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			event := persistedEvent(t, 1, test.value)
 			result, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), true, event))
-			if !errors.Is(err, ErrStatusReplayKey) {
-				t.Fatalf("error = %v, want ErrStatusReplayKey", err)
-			}
+			testassert.ErrorIs(t, err, ErrStatusReplayKey)
 			if result.Present || !result.Status.ObservedAt.IsZero() || result.Coverage.EventsApplied != 0 {
 				t.Fatalf("mixed key mutated replay result: %#v", result)
 			}
@@ -117,9 +108,7 @@ func TestReplayRouteStatusRejectsNonascendingEventIDs(t *testing.T) {
 		persistedEvent(t, 1, observation(base.Add(time.Second))),
 	}
 	_, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), false, events...))
-	if !errors.Is(err, ErrStatusReplayOrder) {
-		t.Fatalf("error = %v, want ErrStatusReplayOrder", err)
-	}
+	testassert.ErrorIs(t, err, ErrStatusReplayOrder)
 }
 
 func TestReplayRouteStatusRejectsMissingDigest(t *testing.T) {
@@ -139,9 +128,7 @@ func TestReplayRouteStatusAcceptsMicrosecondRoundedTimestamps(t *testing.T) {
 	event.Event.ObservedAt = event.Event.ObservedAt.Round(time.Microsecond)
 	event.Event.ExpiresAt = event.Event.ExpiresAt.Round(time.Microsecond)
 	result, err := ReplayRouteStatus(replayInput(event.Event.ObservedAt, true, event))
-	if err != nil {
-		t.Fatalf("rounded persisted event rejected: %v", err)
-	}
+	testassert.NoError(t, err, "rounded persisted event rejected")
 	if !result.Present || !result.Status.ObservedAt.Equal(event.Event.ObservedAt) {
 		t.Fatalf("rounded replay result = %#v", result)
 	}

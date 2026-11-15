@@ -3,7 +3,6 @@ package state
 import (
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -18,15 +18,11 @@ func TestContinuationSecurityHandleFixturesFailClosed(t *testing.T) {
 	keyring := mustPrimaryKeyring(t, "k1", 1, nil)
 	for _, line := range securityFixtureLines(t, "handles.txt") {
 		t.Run(line, func(t *testing.T) {
-			if _, err := keyring.Verify("tenant-a", line); !errors.Is(err, ErrInvalidHandle) {
-				t.Fatalf("malformed handle was accepted: %v", err)
-			}
+			testassert.ErrorIs(t, testassert.Err(keyring.Verify("tenant-a", line)), ErrInvalidHandle, "malformed handle was accepted")
 		})
 	}
 	valid := mustIssue(t, keyring, "tenant-a")
-	if _, err := keyring.Verify("tenant-b", valid); !errors.Is(err, ErrInvalidHandle) {
-		t.Fatalf("cross-tenant handle error = %v, want ErrInvalidHandle", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(keyring.Verify("tenant-b", valid)), ErrInvalidHandle, "cross-tenant handle")
 }
 
 func TestContinuationSecurityRecordFixturesFailClosed(t *testing.T) {
@@ -41,9 +37,7 @@ func TestContinuationSecurityRecordFixturesFailClosed(t *testing.T) {
 		Depth          int    `json:"depth"`
 		DigestMismatch bool   `json:"digest_mismatch"`
 	}
-	if err := json.Unmarshal(data, &fixtures); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &fixtures))
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	for _, fixture := range fixtures {
 		t.Run(fixture.Name, func(t *testing.T) {

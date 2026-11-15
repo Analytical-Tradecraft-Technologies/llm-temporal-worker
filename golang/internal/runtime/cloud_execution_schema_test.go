@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
@@ -22,18 +23,12 @@ func publishedExecutionResultSchema(t *testing.T) *jsonschema.Schema {
 	for _, name := range []string{"generate-response", "compact-response", "execution-result"} {
 		data := mustReadFile(t, filepath.Join("..", "..", "api", "schema", "v1", name+".schema.json"))
 		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		target = document.(map[string]any)["$id"].(string)
-		if err := compiler.AddResource(target, document); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, compiler.AddResource(target, document))
 	}
 	compiled, err := compiler.Compile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return compiled
 }
 
@@ -41,9 +36,7 @@ func assertPublishedExecutionResult(t *testing.T, compiled *jsonschema.Schema, r
 	t.Helper()
 	encoded := encodeJSON(t, result)
 	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if err := compiled.Validate(instance); err != nil {
 		t.Fatalf("published schema rejects the worker's result: %v\n%s", err, encoded)
 	}

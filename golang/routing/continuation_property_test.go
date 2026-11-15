@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -44,9 +45,7 @@ func TestPlannerNeverMovesAcrossRequiredContinuationPin(t *testing.T) {
 				Request: llm.Request{OperationKey: "continuation-property-" + test.name, Model: "logical", ServiceClass: llm.ServiceClassStandard, Portability: test.constraints.Portability, Context: llm.RequestContext{Tenant: "tenant"}},
 				Catalog: catalog, Continuation: test.constraints,
 			})
-			if err != nil {
-				t.Fatalf("Plan() = %v", err)
-			}
+			testassert.NoError(t, err, "Plan()")
 			got := make(map[string]bool, len(plan.Candidates))
 			for _, candidate := range plan.Candidates {
 				got[candidate.RouteID] = true
@@ -87,8 +86,6 @@ func continuationPropertyCatalog(t *testing.T) Catalog {
 		pricedRoute(llm.ServiceClassStandard, Route{ID: "pinned", EndpointID: "endpoint-pinned", Provider: "anthropic", Family: "messages", Region: "region", AccountRegion: "region", Model: "model-pinned", ModelLineage: "lineage-pinned", ModelRevision: "revision-pinned"}),
 		pricedRoute(llm.ServiceClassStandard, Route{ID: "portable", EndpointID: "endpoint-portable", Provider: "openai", Family: "responses", Region: "region", AccountRegion: "region", Model: "model-portable", ModelLineage: "lineage-portable", ModelRevision: "revision-portable"}),
 	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return catalog
 }

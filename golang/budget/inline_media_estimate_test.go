@@ -1,11 +1,11 @@
 package budget
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -33,18 +33,14 @@ func TestInlineMediaBytesAreNotCountedAsTextTokens(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := mediaEstimateRequest(test.part)
 			request.Output.MaxTokens = test.maxOutput
-			if err := estimator.ValidateContext(request, candidate); err != nil {
-				t.Fatalf("context check rejected inline media: %v", err)
-			}
+			testassert.NoError(t, estimator.ValidateContext(request, candidate), "context check rejected inline media")
 			counted := mustCountInputTokens(t, estimator, request, candidate)
 			// Only the part's structure (kind, media type) is text.
 			if counted < textOnly || counted > textOnly+50 {
 				t.Fatalf("counted input tokens = %d, want within 50 of text-only %d", counted, textOnly)
 			}
 			estimate, err := estimator.EstimateCandidate(request, candidate, mediaEstimateEntry())
-			if err != nil {
-				t.Fatalf("reservation rejected inline media: %v", err)
-			}
+			testassert.NoError(t, err, "reservation rejected inline media")
 			want := counted + test.allowance
 			if room := candidate.ContextTokens - estimate.OutputTokens; want > room {
 				want = room
@@ -118,9 +114,7 @@ func TestInlineTextDocumentStillCountsAgainstContextWindow(t *testing.T) {
 	estimator := Estimator{}
 	candidate := routing.Candidate{ID: "c", Model: "physical", AttemptedClass: llm.ServiceClassStandard, ContextTokens: 128_000}
 	request := mediaEstimateRequest(llm.DocumentPart{Bytes: make([]byte, 600<<10), MediaType: "text/plain"})
-	if err := estimator.ValidateContext(request, candidate); !errors.Is(err, ErrContextLimit) {
-		t.Fatalf("600 KiB of inline text fit a 128k window: %v", err)
-	}
+	testassert.ErrorIs(t, estimator.ValidateContext(request, candidate), ErrContextLimit, "600 KiB of inline text fit a 128k window")
 }
 
 func TestEstimateDoesNotModifyInlineMediaRequest(t *testing.T) {

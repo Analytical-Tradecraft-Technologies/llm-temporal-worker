@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -53,9 +54,7 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 		captured = body
 		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"resp-audit","object":"response","status":"completed","model":"gpt-audit","output":[]}`, "X-Request-Id", "req-wire-audit"), nil
 	})}, options...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "wire-audit", provider.FamilyOpenAIResponses, request)
 	// Only the request is under audit; the canned response need not satisfy
 	// the lift for every request shape.
@@ -76,14 +75,10 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Request, options ...AdapterOption) map[string]any {
 	t.Helper()
 	adapter, err := profile.newAdapter(http.DefaultClient, options...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	requestMap, _, err := adapter.lowerRequestMap(normalized, serviceClass, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	encoded := contract.MarshalJSON(t, requestMap)
 	intended := contract.DecodeJSON[map[string]any](t, encoded)
 	return intended

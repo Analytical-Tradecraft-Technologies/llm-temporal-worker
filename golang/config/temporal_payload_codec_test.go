@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 const payloadCodecYAML = `  payload_codec:
@@ -41,9 +42,7 @@ func TestPayloadCodecIsDisabledByDefault(t *testing.T) {
 	}
 
 	enabled, err := config.Load(withPayloadCodec(t, payloadCodecYAML))
-	if err != nil {
-		t.Fatalf("Load() with payload codec = %v", err)
-	}
+	testassert.NoError(t, err, "Load() with payload codec")
 	codec := enabled.Temporal.PayloadCodec
 	if codec == nil || codec.Kind != config.PayloadCodecAES256GCM || len(codec.Keys) != 2 || !codec.Keys[0].Primary {
 		t.Fatalf("payload codec = %+v", codec)

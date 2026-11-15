@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -22,14 +23,10 @@ func TestCheckpointGraphGetDetachesNestedItemData(t *testing.T) {
 			llm.Reference{URI: "https://example.com", Metadata: map[string]json.RawMessage{"key": json.RawMessage(`{"value":1}`)}},
 		},
 	}
-	if err := graph.PutRoot(original); err != nil {
-		t.Fatalf("put root: %v", err)
-	}
+	testassert.NoError(t, graph.PutRoot(original), "put root")
 
 	got, err := graph.Get(original.Handle)
-	if err != nil {
-		t.Fatalf("get root: %v", err)
-	}
+	testassert.NoError(t, err, "get root")
 	message := got.Delta[0].(llm.Message)
 	image := message.Content[0].(llm.ImagePart)
 	image.Bytes[0] = 99
@@ -44,9 +41,7 @@ func TestCheckpointGraphGetDetachesNestedItemData(t *testing.T) {
 	got.Delta[3].(llm.Reference).Metadata["key"][0] = '['
 
 	again, err := graph.Get(original.Handle)
-	if err != nil {
-		t.Fatalf("get root after mutation: %v", err)
-	}
+	testassert.NoError(t, err, "get root after mutation")
 	if got := got.Delta[0].(llm.Message).Content[0].(llm.ImagePart).Bytes[0]; got != 99 {
 		t.Fatalf("mutated clone image bytes were not retained locally: %d", got)
 	}

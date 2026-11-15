@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,9 +27,7 @@ func ComputeTestFingerprint(seed string) Fingerprint {
 func newFillCoordinator(t *testing.T, maxResponseBytes int) *FillCoordinator {
 	t.Helper()
 	coordinator, err := NewFillCoordinator(maxResponseBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return coordinator
 }
 
@@ -72,9 +71,7 @@ func TestFillCoordinatorCollapsesConcurrentFills(t *testing.T) {
 	close(errorsCh)
 	var shared int
 	for err := range errorsCh {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	for result := range results {
 		if string(result.Response) != "normalized-template" {
@@ -113,9 +110,7 @@ func TestFillCoordinatorWaiterCanCancel(t *testing.T) {
 		t.Fatalf("waiter error=%v, want deadline", err)
 	}
 	close(release)
-	if err := <-ownerResult; err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, <-ownerResult)
 }
 
 func TestFillCoordinatorDoesNotRetainFailuresAndCopiesResponse(t *testing.T) {

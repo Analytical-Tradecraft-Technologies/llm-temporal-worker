@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -27,9 +28,7 @@ func localConfigWithBudgetWindows(t *testing.T, windows string) []byte {
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
 		catalogData := mustReadFile(t, filepath.Join("../../deploy/local", name))
 		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, catalogData, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.WriteFile(path, catalogData, 0o600))
 		text = strings.ReplaceAll(text, "/etc/llmtw/"+name, path)
 	}
 	start, end := strings.Index(text, "\nbudgets:\n"), strings.Index(text, "\ncontinuation:\n")
@@ -47,9 +46,7 @@ func loadBudgetPolicies(t *testing.T, windows string) []budget.Policy {
 	compiled := mustCompileConfig(t, localConfigWithBudgetWindows(t, windows))
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(loaded.BudgetPolicies) != 1 {
 		t.Fatalf("loaded budget policies = %#v", loaded.BudgetPolicies)
 	}
@@ -172,20 +169,14 @@ func TestReloadRejectsGeometryChangeBehindBudgetWindowIdentity(t *testing.T) {
 
 	// A new limit, a new position and a re-derived identity are all allowed.
 	allowed := budgetWindowYAML("", "1h", "5m", "10") + budgetWindowYAML("daily", "24h", "5m", "250")
-	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, allowed)); err != nil {
-		t.Fatalf("Reload() with stable identities = %v", err)
-	}
+	testassert.NoError(t, application.Reload(context.Background(), localConfigWithBudgetWindows(t, allowed)), "Reload() with stable identities")
 
 	// Removing the window does not free its id for another geometry: the
 	// accounting written under it may still be in Redis.
-	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("", "1h", "5m", "10"))); err != nil {
-		t.Fatalf("Reload() removing the daily window = %v", err)
-	}
+	testassert.NoError(t, application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("", "1h", "5m", "10"))), "Reload() removing the daily window")
 	err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "12h", "1h", "100")))
 	if !errors.Is(err, errBudgetWindowGeometryChanged) {
 		t.Fatalf("Reload() reintroducing a removed id with another geometry = %v, want geometry rejection", err)
 	}
-	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "24h", "5m", "100"))); err != nil {
-		t.Fatalf("Reload() reintroducing a removed id with its geometry = %v", err)
-	}
+	testassert.NoError(t, application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("daily", "24h", "5m", "100"))), "Reload() reintroducing a removed id with its geometry")
 }

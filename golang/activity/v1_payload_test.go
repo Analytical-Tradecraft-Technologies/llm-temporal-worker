@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -59,16 +60,12 @@ func TestV1PayloadCodecsRoundTripEveryWireKind(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			data := readV1PayloadFixture(t, test.file)
 			decoded, encoded, err := test.codec(data, limits)
-			if err != nil {
-				t.Fatalf("codec round trip: %v", err)
-			}
+			testassert.NoError(t, err, "codec round trip")
 			if decoded == nil || len(encoded) == 0 {
 				t.Fatalf("codec returned empty result: decoded=%#v encoded=%q", decoded, encoded)
 			}
 			canonical, err := json.Marshal(decoded)
-			if err != nil {
-				t.Fatalf("re-marshal decoded payload: %v", err)
-			}
+			testassert.NoError(t, err, "re-marshal decoded payload")
 			if !bytes.Equal(encoded, canonical) {
 				t.Fatalf("payload encoding is not deterministic: %s != %s", encoded, canonical)
 			}
@@ -79,9 +76,7 @@ func TestV1PayloadCodecsRoundTripEveryWireKind(t *testing.T) {
 func TestV1PayloadCodecsEnforceInlineLimitOnEncodeAndDecode(t *testing.T) {
 	data := readV1PayloadFixture(t, "query-provider-status.json")
 	var request llm.QueryRequestV1
-	if err := json.Unmarshal(data, &request); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &request))
 	assertCodecRejectsOneByteOverLimit(t, request, MarshalQueryV1, UnmarshalQueryV1)
 }
 
@@ -117,9 +112,7 @@ func TestV1PayloadCodecsRoundTripContractMatrix(t *testing.T) {
 				codec = payloadRoundTrip(MarshalQueryV1, UnmarshalQueryV1)
 			}
 			_, encoded, err := codec(readV1PayloadFixture(t, name), limits)
-			if err != nil {
-				t.Fatalf("matrix codec round trip: %v", err)
-			}
+			testassert.NoError(t, err, "matrix codec round trip")
 			if len(encoded) == 0 {
 				t.Fatal("matrix codec returned empty payload")
 			}
@@ -141,9 +134,7 @@ func TestV1PayloadCodecsRejectMalformedAndUnknownFields(t *testing.T) {
 func readV1PayloadFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "llm", "testdata", "v1", name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 

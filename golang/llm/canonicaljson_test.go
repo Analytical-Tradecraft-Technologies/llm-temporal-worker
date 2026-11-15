@@ -3,11 +3,11 @@ package llm_test
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -25,16 +25,12 @@ func TestCanonicalJSONSortsKeysAndPreservesExactNumbers(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := llm.CanonicalJSON([]byte(test.in))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if string(got) != test.want {
 				t.Fatalf("CanonicalJSON(%s) = %s, want %s", test.in, got, test.want)
 			}
 			again, err := llm.CanonicalJSON(got)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !bytes.Equal(got, again) {
 				t.Fatalf("canonical output is not idempotent: %s != %s", got, again)
 			}
@@ -83,17 +79,11 @@ func TestCanonicalToolArgumentsHoldsTheToolArgumentDepth(t *testing.T) {
 	nested := func(depth int) []byte {
 		return []byte(strings.Repeat(`{"a":`, depth-1) + `{}` + strings.Repeat(`}`, depth-1))
 	}
-	if _, err := llm.CanonicalToolArguments(nested(llm.MaxToolArgumentsDepth)); err != nil {
-		t.Fatalf("arguments at the depth limit rejected: %v", err)
-	}
-	if _, err := llm.CanonicalToolArguments(nested(llm.MaxToolArgumentsDepth + 1)); !errors.Is(err, llm.ErrCanonicalJSONLimit) {
-		t.Fatalf("arguments over the depth limit error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(llm.CanonicalToolArguments(nested(llm.MaxToolArgumentsDepth))), "arguments at the depth limit rejected")
+	testassert.ErrorIs(t, testassert.Err(llm.CanonicalToolArguments(nested(llm.MaxToolArgumentsDepth+1))), llm.ErrCanonicalJSONLimit, "arguments over the depth limit")
 	// The general canonicalizer still accepts the deeper value; only tool
 	// arguments leave room for the durable records that wrap them.
-	if _, err := llm.CanonicalJSON(nested(llm.MaxToolArgumentsDepth + 1)); err != nil {
-		t.Fatalf("canonical JSON rejected a value within its own limit: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(llm.CanonicalJSON(nested(llm.MaxToolArgumentsDepth+1))), "canonical JSON rejected a value within its own limit")
 }
 
 // TestCanonicalJSONStringsMatchJSONMarshal pins the unescaped-ASCII fast path
@@ -108,14 +98,10 @@ func TestCanonicalJSONStringsMatchJSONMarshal(t *testing.T) {
 	for _, value := range values {
 		input := mustMarshal(t, map[string]string{value: value})
 		var decoded map[string]string
-		if err := json.Unmarshal(input, &decoded); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, json.Unmarshal(input, &decoded))
 		want := mustMarshal(t, decoded)
 		got, err := llm.CanonicalJSON(input)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if !bytes.Equal(got, want) {
 			t.Fatalf("CanonicalJSON(%s) = %s, want %s", input, got, want)
 		}
@@ -128,15 +114,11 @@ func BenchmarkCanonicalJSONLargeObject(b *testing.B) {
 		items = append(items, map[string]any{"type": "message", "role": "user", "index": i, "text": strings.Repeat(fmt.Sprintf("item %d ", i), 128)})
 	}
 	input, err := json.Marshal(map[string]any{"items": items, "status": "running"})
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	b.SetBytes(int64(len(input)))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := llm.CanonicalJSON(input); err != nil {
-			b.Fatal(err)
-		}
+		testassert.NoError(b, testassert.Err(llm.CanonicalJSON(input)))
 	}
 }

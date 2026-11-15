@@ -14,6 +14,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -201,9 +202,7 @@ func newProviderExecutionFixture(t *testing.T, kind string, async bool, configur
 	}}
 	var err error
 	f.call, err = f.prepare(context.Background(), f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.reservation, err = f.helper.Reserve(context.Background(), f.call)
 	if err != nil || f.reservation.Accepted != f.call.Plan().RequiresReservation() {
 		t.Fatal("reserve", err)
@@ -224,9 +223,7 @@ func TestCloudProviderExecutionBothKindsSyncAndAsync(t *testing.T) {
 			t.Run(kind+map[bool]string{true: "/async", false: "/sync"}[async], func(t *testing.T) {
 				f := newProviderExecutionFixture(t, kind, async)
 				result, err := f.submit(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if async {
 					if result.Saved.Execution.Stage != cloudstate.ExecutionPending || result.RetryAfter != 2*time.Second || f.polls.Load() != 0 || f.settlements.Load() != 0 {
 						t.Fatal("submission polled/waited/settled pending work")
@@ -244,9 +241,7 @@ func TestCloudProviderExecutionBothKindsSyncAndAsync(t *testing.T) {
 					t.Fatal("successful usage not priced")
 				}
 				for range 3 {
-					if _, err := f.resume(context.Background()); err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, testassert.Err(f.resume(context.Background())))
 				}
 				if f.submits.Load() != 1 || f.settlements.Load() != 1 {
 					t.Fatal("replayed paid work or settled twice")
@@ -301,9 +296,7 @@ func TestCloudProviderExecutionLostAcknowledgementsNeverResubmit(t *testing.T) {
 			}
 			f.now = f.now.Add(16 * time.Minute)
 			result, err := f.resume(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			requireCount(t, &f.submits, before, "recovery submitted again")
 			if stage == cloudstate.ExecutionClaiming {
 				if result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || f.settlements.Load() != 0 {
@@ -321,9 +314,7 @@ func TestCloudProviderExecutionConcurrentObservationCanRetry(t *testing.T) {
 		t.Run(string(stage), func(t *testing.T) {
 			f := newProviderExecutionFixture(t, "generate", true)
 			ctx := context.Background()
-			if _, err := f.submit(ctx); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(f.submit(ctx)))
 			f.now = f.now.Add(time.Minute)
 			if stage == cloudstate.ExecutionFailed {
 				f.adapter.poll = func(_ context.Context, _ provider.Call, id string, _ provider.Observer) (provider.ResumableResult, error) {
@@ -368,9 +359,7 @@ func TestCloudProviderExecutionResolvesAppliedClaimReply(t *testing.T) {
 				if claims > 1 {
 					return receipt, err
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				switch name {
 				case "lost reply":
 					return durable.ClaimReceipt{}, errors.New("lost claim reply")
@@ -404,9 +393,7 @@ func TestCloudProviderExecutionSettlesUnrecordedClaimAfterRecoveryWindow(t *test
 		t.Fatal("uncertain claim dispatched/refunded", err)
 	}
 	f.leaser.claim = nil
-	if _, err := f.resume(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(f.resume(context.Background())))
 	if f.submits.Load() != 0 || f.settlements.Load() != 0 {
 		t.Fatal("recovery reused uncertain claim inside its window")
 	}
@@ -429,9 +416,7 @@ func TestCloudProviderExecutionExpiredClaimIsNotDispatched(t *testing.T) {
 		return durable.ClaimReceipt{}, durable.ErrLeaseExpired
 	}
 	result, err := f.submit(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	saved := result.Saved
 	failure := saved.Execution.Failure
 	if saved.Execution.Stage != cloudstate.ExecutionFailed || failure == nil || failure.Dispatch != provider.DispatchNotDispatched || !failure.Retryable ||
@@ -492,9 +477,7 @@ func TestCloudProviderExecutionPollFailurePreservesKnownJob(t *testing.T) {
 	for _, mode := range []string{"transport", "identity", "operation", "not_found", "pending"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProviderExecutionFixture(t, "generate", true)
-			if _, err := f.submit(context.Background()); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, testassert.Err(f.submit(context.Background())))
 			f.now = f.now.Add(time.Minute)
 			f.adapter.poll = func(_ context.Context, call provider.Call, id string, _ provider.Observer) (provider.ResumableResult, error) {
 				f.polls.Add(1)
@@ -605,9 +588,7 @@ func TestCloudProviderExecutionFailureAndIncompleteAccounting(t *testing.T) {
 				return outcome, nil
 			}
 			result, err := f.submit(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			data, _ := json.Marshal(result.Saved.Execution)
 			if strings.Contains(string(data), "sensitive") {
 				t.Fatal("stored provider error diagnostic")
@@ -725,9 +706,7 @@ func TestCloudProviderExecutionCanceledPossibleWriteRetainsBudget(t *testing.T) 
 				return provider.Result{}, provider.NewError(provider.CodeCanceled, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryNever, "cancelled")
 			}
 			result, err := f.submit(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if marked {
 				if result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || result.Saved.Execution.Settled || f.settlements.Load() != 0 {
 					t.Fatal("possibly paid cancellation released budget")
@@ -749,9 +728,7 @@ func TestCloudProviderExecutionCertifiedPreDispatchReleasesBudget(t *testing.T) 
 			f := newProviderExecutionFixture(t, "generate", false)
 			f.adapter.invoke = invokeFailingAfterWrite(nil, cause)
 			result, err := f.submit(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if result.Saved.Execution.Stage != cloudstate.ExecutionFailed || !result.Saved.Execution.Settled || f.settlements.Load() != 1 {
 				t.Fatal("certified pre-dispatch failure retained reservation")
 			}

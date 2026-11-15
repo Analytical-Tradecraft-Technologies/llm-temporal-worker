@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -48,9 +49,7 @@ func TestRedisDependencyProbeRejectsUnvalidatedActiveBudgetManifest(t *testing.T
 	client := healthyRedisProbeClient()
 	manifest := validBudgetManifestForProbe()
 	pointer, err := manifest.Pointer()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	generation := &fakeBudgetGenerationProbe{manifest: manifest, active: pointer}
 	generation.manifest.RebuildComplete = false
 	probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
@@ -277,9 +276,7 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 		}))
 	}
 	complete := []DependencyProbe{ready(DependencyRedis), ready(DependencyCloudRequests), ready(DependencyBlobStore)}
-	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, complete); err != nil {
-		t.Fatalf("complete durable probe set rejected: %v", err)
-	}
+	testassert.NoError(t, validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindDurable}, complete), "complete durable probe set rejected")
 	tests := []struct {
 		name   string
 		probes []DependencyProbe
@@ -295,23 +292,17 @@ func TestValidateRequiredDependencyProbeSetRequiresOneProbePerDurableStore(t *te
 			}
 		})
 	}
-	if err := validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindMemory}, nil); err != nil {
-		t.Fatalf("memory probe set rejected: %v", err)
-	}
+	testassert.NoError(t, validateRequiredDependencyProbeSet(config.StateConfig{Kind: config.StateKindMemory}, nil), "memory probe set rejected")
 }
 
 func TestDependencyProbesAcceptNilContext(t *testing.T) {
 	redisProbe, err := NewRedisDependencyProbe(healthyRedisProbeClient(), testRedisProbeConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result := redisProbe.Probe(nil); result.Status != ProbeStatusReady {
 		t.Fatalf("Redis probe with nil context = %#v", result)
 	}
 	blobProbe, err := NewBlobDependencyProbe(&fakeBucketProbe{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result := blobProbe.Probe(nil); result.Status != ProbeStatusReady {
 		t.Fatalf("blob probe with nil context = %#v", result)
 	}
@@ -324,9 +315,7 @@ func TestDependencyProbesBoundEachProbeWithContextDeadline(t *testing.T) {
 	})
 	started := time.Now()
 	err := CheckDependencyProbes(context.Background(), []DependencyProbe{probe}, 10*time.Millisecond)
-	if !errors.Is(err, errRequiredDependencyUnavailable) {
-		t.Fatalf("bounded probe error = %v", err)
-	}
+	testassert.ErrorIs(t, err, errRequiredDependencyUnavailable, "bounded probe")
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("probe timeout took %s", elapsed)
 	}
@@ -354,9 +343,7 @@ func TestDependencyProbesRejectCanceledParent(t *testing.T) {
 				cancel()
 				return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
 			})}, time.Second)
-			if !errors.Is(err, errRequiredDependencyUnavailable) {
-				t.Fatalf("canceled probe gate error = %v", err)
-			}
+			testassert.ErrorIs(t, err, errRequiredDependencyUnavailable, "canceled probe gate")
 			if calls != test.wantCalls {
 				t.Fatalf("canceled probe gate invoked %d probes, want %d", calls, test.wantCalls)
 			}
@@ -367,9 +354,7 @@ func TestDependencyProbesRejectCanceledParent(t *testing.T) {
 func TestBlobDependencyProbeUsesOnlyBucketCapabilityAndMasksErrors(t *testing.T) {
 	bucket := &fakeBucketProbe{err: errors.New("bucket secret marker")}
 	probe, err := NewBlobDependencyProbe(bucket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := probe.Probe(context.Background())
 	if bucket.calls != 1 || result.Dependency != DependencyBlobStore || result.Status != ProbeStatusUnavailable || result.Reason != ProbeReasonUnavailable {
 		t.Fatalf("bucket probe result = %#v calls=%d", result, bucket.calls)
@@ -663,9 +648,7 @@ func TestRedisDependencyProbeChecksClusterSlotOwnerAndEveryMaster(t *testing.T) 
 				test.other(other)
 			}
 			probe, err := NewRedisDependencyProbe(shared, value)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			withFakeRedisCluster(t, probe, owner, other, owner)
 			for attempt := 0; attempt < 5; attempt++ {
 				if result := probe.Probe(context.Background()); result.Status != test.want {
@@ -762,9 +745,7 @@ func TestRedisDependencyProbeChecksSlotOwnerReplicas(t *testing.T) {
 				test.second(second)
 			}
 			probe, err := NewRedisDependencyProbe(shared, value)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			withFakeRedisCluster(t, probe, owner, owner)
 			withFakeRedisReplicas(t, probe, owner, first, second)
 			if test.routeErr != nil {
@@ -831,27 +812,21 @@ func TestRedisDependencyProbeRoutesByClientTopology(t *testing.T) {
 	}
 	single := healthyRedisProbeClient()
 	probe, err := NewRedisDependencyProbe(single, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	node, err := probe.(*redisDependencyProbe).budgetNode(context.Background())
 	if err != nil || node != redisProbeClient(single) {
 		t.Fatalf("single-server budget node = %v, %v", node, err)
 	}
-	if err := probe.(*redisDependencyProbe).budgetReplicas(context.Background(), node, func(context.Context, redisProbeClient) error {
+	testassert.NoError(t, probe.(*redisDependencyProbe).budgetReplicas(context.Background(), node, func(context.Context, redisProbeClient) error {
 		t.Fatal("single-server probe visited a replica")
 		return nil
-	}); err != nil {
-		t.Fatalf("single-server replicas = %v", err)
-	}
+	}), "single-server replicas")
 	// An unreachable cluster cannot resolve the slot owner, and the probe must
 	// fail closed rather than fall back to an arbitrary master.
 	cluster := redisclient.NewClusterClient(&redisclient.ClusterOptions{Addrs: []string{"127.0.0.1:0"}, MaxRedirects: -1})
 	t.Cleanup(func() { _ = cluster.Close() })
 	probe, err = NewRedisDependencyProbe(cluster, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if result := probe.Probe(ctx); result.Status == ProbeStatusReady {
@@ -946,8 +921,6 @@ func streamProbeClient() *fakeRedisProbeClient {
 // probeResult runs probe once, failing the test if building it returned err.
 func probeResult(t *testing.T, probe DependencyProbe, err error) ProbeResult {
 	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return probe.Probe(context.Background())
 }

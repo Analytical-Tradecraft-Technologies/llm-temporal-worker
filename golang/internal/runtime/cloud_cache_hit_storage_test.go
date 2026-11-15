@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -40,9 +41,7 @@ func TestCloudExecutionRuntimeCacheHitWritesNoAttempt(t *testing.T) {
 		f.request.OperationKey = key
 		before := readExecutionStorageCounts(f.table, f.blobs)
 		v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return v, storageCalls(readExecutionStorageCounts(f.table, f.blobs).minus(before))
 	}
 	hit, calls := prepare("warm-hit")
@@ -120,9 +119,7 @@ func TestCloudExecutionRuntimeResolveCachedStartsNoAttempt(t *testing.T) {
 		f.request.OperationKey, f.request.Cache = key, &llm.CachePolicyV1{Variant: variant}
 		before := readExecutionStorageCounts(f.table, f.blobs)
 		result, found, err := f.runtime.ResolveCachedV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return result, found, storageCalls(readExecutionStorageCounts(f.table, f.blobs).minus(before))
 	}
 	hit, found, _ := resolve("resolved-hit", 0)

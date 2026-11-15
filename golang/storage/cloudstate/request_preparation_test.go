@@ -14,6 +14,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -30,16 +31,14 @@ func preparationFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, 
 		Items:    []llm.Item{llm.HumanText("private parent transcript")},
 		Settings: settings, Lineage: []state.Handle{"00000000-0000-4000-8000-000000000001"},
 	}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return r, table, blobs, record, RequestPreparation{Version: 1, ConfigDigest: [32]byte{1}, CheckpointScope: "private-checkpoint-scope", ParentSnapshot: snapshot, PreparedAt: op.Now.Add(time.Second)}
 }
 
 func TestRequestPreparationRestartAndEncryption(t *testing.T) {
 	r, table, blobs, record, preparation := preparationFixture(t)
 	ctx := context.Background()
-	requireErrorIs(t, errOf(r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)), ErrRequestPreparationMissing, "initial read")
+	testassert.ErrorIs(t, testassert.Err(r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)), ErrRequestPreparationMissing, "initial read")
 	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
 	reopened := reopen(t, table, blobs)
 	got, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
@@ -54,7 +53,7 @@ func TestRequestPreparationRestartAndEncryption(t *testing.T) {
 	if _, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); err != nil {
 		t.Fatal("returned data aliased storage", err)
 	}
-	requireErrorIs(t, errOf(reopened.LoadRequestPreparation(ctx, Scope{Tenant: record.Request.Scope.Tenant, Project: "other"}, record.Request.ID)), contracts.ErrNotFound, "cross-scope")
+	testassert.ErrorIs(t, testassert.Err(reopened.LoadRequestPreparation(ctx, Scope{Tenant: record.Request.Scope.Tenant, Project: "other"}, record.Request.ID)), contracts.ErrNotFound, "cross-scope")
 	var stored [][]byte
 	for key, row := range table.rows {
 		data, _ := row.Item.Fields.MarshalBinary()
@@ -117,8 +116,8 @@ func TestRequestPreparationCannotBeAddedAfterAdmission(t *testing.T) {
 			r, _, _, record, preparation := preparationFixture(t)
 			data, _ := json.Marshal(map[string]any{"version": 1, key: map[string]any{}})
 			mustTryUpdate(t, r, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "started", Status: StatusRunning, Progress: data, UpdatedAt: record.UpdatedAt})
-			requireErrorIs(t, r.SaveRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID, preparation), contracts.ErrConflict, "late save")
-			requireErrorIs(t, errOf(r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID)), ErrCorrupt, "missing started preparation treated as cache miss")
+			testassert.ErrorIs(t, r.SaveRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID, preparation), contracts.ErrConflict, "late save")
+			testassert.ErrorIs(t, testassert.Err(r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID)), ErrCorrupt, "missing started preparation treated as cache miss")
 		})
 	}
 }
@@ -135,12 +134,12 @@ func TestRequestPreparationPreservesOtherProgressAndRejectsReplacement(t *testin
 	for _, mutate := range []func(*RequestPreparation){func(p *RequestPreparation) { p.ConfigDigest[0]++ }, func(p *RequestPreparation) { p.CheckpointScope += "-other" }, func(p *RequestPreparation) { p.PreparedAt = p.PreparedAt.Add(time.Second) }, func(p *RequestPreparation) { p.ParentSnapshot = nil }} {
 		changed := p
 		mutate(&changed)
-		requireErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed), contracts.ErrConflict, "replaced saved preparation")
+		testassert.ErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed), contracts.ErrConflict, "replaced saved preparation")
 	}
 	for _, mutate := range []func(*RequestPreparation){func(p *RequestPreparation) { p.Version = 2 }, func(p *RequestPreparation) { p.ConfigDigest = [32]byte{} }, func(p *RequestPreparation) { p.CheckpointScope = "" }, func(p *RequestPreparation) { p.ParentSnapshot = json.RawMessage(`{}`) }, func(p *RequestPreparation) { p.PreparedAt = time.Time{} }} {
 		invalid := p
 		mutate(&invalid)
-		requireErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid), ErrInvalid, "accepted invalid preparation")
+		testassert.ErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid), ErrInvalid, "accepted invalid preparation")
 	}
 }
 
@@ -230,7 +229,7 @@ func TestRequestPreparationStoresParentOnceByReference(t *testing.T) {
 	if len(blobs.values) != before+1 {
 		t.Fatalf("progress write stored %d blobs", len(blobs.values)-before)
 	}
-	mustNoError(t, errOf(r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)))
+	testassert.NoError(t, testassert.Err(r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)))
 }
 
 // TestRequestPreparationLegacyInlineStillLoads keeps preparations saved before
@@ -250,7 +249,7 @@ func TestRequestPreparationLegacyInlineStillLoads(t *testing.T) {
 	table.hook, blobs.hook = nil, nil
 	changed := preparation
 	changed.ConfigDigest[0]++
-	requireErrorIs(t, reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed), contracts.ErrConflict, "replaced legacy preparation")
+	testassert.ErrorIs(t, reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed), contracts.ErrConflict, "replaced legacy preparation")
 	// A paid attempt copies the legacy preparation and loads it.
 	attempt := mustBeginRequestAttempt(t, reopened, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
 	if child, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, attempt.ID); err != nil || !bytes.Equal(child.ParentSnapshot, preparation.ParentSnapshot) {
@@ -290,9 +289,7 @@ func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
 		"inline and reference": inlineAndReferenceParent,
 		"other blob": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
 			other, err := r.writeBlob(context.Background(), r.parentSnapshotStream(record.Request.Scope), []byte(`{"other":true}`))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			stored.ParentSnapshotRef.Blob = other
 			rewritePreparation(t, r, record, stored)
 		},
@@ -309,7 +306,7 @@ func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
 	for name, corrupt := range cases {
 		t.Run(name, func(t *testing.T) {
 			r, record, _ := corruptedPreparation(t, corrupt)
-			requireErrorIsNot(t, errOf(r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID)), ErrCorrupt, contracts.ErrNotFound, "accepted a corrupt parent")
+			requireErrorIsNot(t, testassert.Err(r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID)), ErrCorrupt, contracts.ErrNotFound, "accepted a corrupt parent")
 		})
 	}
 }
@@ -354,7 +351,7 @@ func extendParentLength(t *testing.T, r *Repository, _ *memoryBlobs, record Reco
 func moveParentToForeignScope(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
 	foreignScope := Scope{Tenant: "other-tenant", Project: "other-project"}
 	foreign := r.newParentSnapshotRef(foreignScope, p.ParentSnapshot)
-	mustNoError(t, errOf(r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot)))
+	testassert.NoError(t, testassert.Err(r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot)))
 	stored.ParentSnapshotRef = &foreign
 	rewritePreparation(t, r, record, stored)
 }
@@ -442,7 +439,7 @@ func TestRequestPreparationConfigActivation(t *testing.T) {
 	ctx := context.Background()
 	invalid := preparation
 	invalid.ConfigActivatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
-	requireErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid), ErrInvalid, "invalid activation")
+	testassert.ErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid), ErrInvalid, "invalid activation")
 	preparation.ConfigActivatedAt = preparation.PreparedAt.Add(-time.Hour).In(time.FixedZone("x", 3600))
 	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
 	got, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)

@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -17,9 +18,7 @@ func TestPreparedOutputLimitMatchesEstimate(t *testing.T) {
 			}
 			estimator := Estimator{MaxOutput: configured}
 			prepared, err := estimator.PrepareRequest(request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			estimate := mustEstimateCandidate(t, estimator, request, routing.Candidate{}, pricing.Entry{})
 			want := configured
 			if want == 0 {

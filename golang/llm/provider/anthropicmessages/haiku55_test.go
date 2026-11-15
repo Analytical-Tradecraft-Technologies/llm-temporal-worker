@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -101,9 +102,7 @@ func TestHaiku55PreservesSupportedParameters(t *testing.T) {
 		for _, strict := range []bool{false, true} {
 			t.Run(test.name+messagestest.PortabilityName(strict), func(t *testing.T) {
 				call, err := compileHaiku55(t, test.request, strict)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				test.check(t, contract.JSONObject(t, call.SDKParams))
 			})
 		}
@@ -119,9 +118,7 @@ func TestHaiku55ConstraintsDoNotChangeOtherModels(t *testing.T) {
 		ServiceClass: llm.ServiceClassPriority,
 		Sampling:     &llm.SamplingSpec{Temperature: &temperature, TopK: &topK},
 	}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.JSONObject(t, call.SDKParams)
 	if wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["temperature"] != temperature || wire["top_k"] != float64(topK) {
 		t.Fatal(wire)
@@ -133,9 +130,7 @@ func TestHaiku55ConstraintsDoNotChangeOtherModels(t *testing.T) {
 		Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &budget},
 		Output:    &llm.OutputSpec{MaxTokens: intPtr(4096)},
 	}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if wire := contract.JSONObject(t, call.SDKParams); wire["thinking"].(map[string]any)["type"] != "enabled" {
 		t.Fatal(wire)
 	}

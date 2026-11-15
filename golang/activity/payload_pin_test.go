@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/proto"
@@ -56,9 +57,7 @@ func TestBoundedDataConverterAppliesPinnedWorkflowLimit(t *testing.T) {
 		t.Fatal("pinned converter did not rebuild the wrapped stack")
 	}
 	payload, err := accepts.ToPayload(value)
-	if err != nil {
-		t.Fatalf("pinned ToPayload: %v", err)
-	}
+	testassert.NoError(t, err, "pinned ToPayload")
 	if encoding := string(payload.GetMetadata()[converter.MetadataEncoding]); encoding != "binary/zlib" {
 		t.Fatalf("pinned payload encoding = %q, want the wrapped codec", encoding)
 	}
@@ -82,31 +81,21 @@ func TestEncodeBoundedPayloadPassesThroughSmallerConfiguredLimit(t *testing.T) {
 	pinned := PayloadLimits{MaxInlineBytes: 8 << 10}
 	value := strings.Repeat("x", 4<<10)
 	raw, err := EncodeBoundedPayload(pinned, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want, err := converter.GetDefaultDataConverter().ToPayloads(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	current := PayloadLimits{MaxInlineBytes: 1 << 10}
 	payloads, err := BoundedDataConverter(current).ToPayloads(raw)
-	if err != nil {
-		t.Fatalf("pre-encoded result rejected under the configured limit: %v", err)
-	}
+	testassert.NoError(t, err, "pre-encoded result rejected under the configured limit")
 	if !proto.Equal(payloads, want) {
 		t.Fatalf("pre-encoded result changed: got %v, want %v", payloads, want)
 	}
-	if _, err := BoundedDataConverter(current).ToPayload(raw); err != nil {
-		t.Fatalf("pre-encoded result rejected under the configured limit: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(BoundedDataConverter(current).ToPayload(raw)), "pre-encoded result rejected under the configured limit")
 	zlib := converter.NewZlibCodec(converter.ZlibCodecOptions{AlwaysEncode: true})
 	encoded, err := WrappedBoundedDataConverter(current, func(bounded converter.DataConverter) converter.DataConverter {
 		return converter.NewCodecDataConverter(bounded, zlib)
 	}).ToPayloads(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := string(encoded.Payloads[0].Metadata[converter.MetadataEncoding]); got != "binary/zlib" {
 		t.Fatalf("codec did not encode the pre-encoded result: encoding %q", got)
 	}

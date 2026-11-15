@@ -12,6 +12,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestPendingPaginationAcrossEveryShard(t *testing.T) {
@@ -23,9 +24,7 @@ func TestPendingPaginationAcrossEveryShard(t *testing.T) {
 		request := template
 		request.ID = RequestID(fmt.Sprintf("%s00000000-0000-4000-8000-%012d", RequestIDPrefix, n))
 		shard, err := PendingShard(request.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if len(byShard[shard]) == 3 {
 			continue
 		}
@@ -47,14 +46,12 @@ func TestPendingPaginationAcrossEveryShard(t *testing.T) {
 		if err != nil || len(page.Requests) != 0 || page.NextPageToken == "" {
 			t.Fatalf("terminal page: %+v %v", page, err)
 		}
-		requireErrorIs(t, errOf(r.ListPending(ctx, (shard+1)%PendingShards, 1, page.NextPageToken)), contracts.ErrInvalidArgument, "cross-shard token")
-		requireErrorIs(t, errOf(r.ListPending(ctx, shard, 2, page.NextPageToken)), contracts.ErrInvalidArgument, "resized token")
+		testassert.ErrorIs(t, testassert.Err(r.ListPending(ctx, (shard+1)%PendingShards, 1, page.NextPageToken)), contracts.ErrInvalidArgument, "cross-shard token")
+		testassert.ErrorIs(t, testassert.Err(r.ListPending(ctx, shard, 2, page.NextPageToken)), contracts.ErrInvalidArgument, "resized token")
 		var ids []RequestID
 		for page.NextPageToken != "" {
 			page, err = r.ListPending(ctx, shard, 1, page.NextPageToken)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			for _, item := range page.Requests {
 				ids = append(ids, item.ID)
 			}
@@ -63,24 +60,22 @@ func TestPendingPaginationAcrossEveryShard(t *testing.T) {
 			t.Fatalf("shard %d: %v, want %v", shard, ids, want)
 		}
 	}
-	requireErrorIs(t, errOf(PendingShard("not-an-id")), ErrInvalid, "")
+	testassert.ErrorIs(t, testassert.Err(PendingShard("not-an-id")), ErrInvalid)
 }
 
 func TestInitializingAndLaggingIndexRemainDiscoverable(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	ctx := context.Background()
 	request, err := normalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustNoError(t, r.ensureIndex(ctx, request))
+	testassert.NoError(t, err)
+	testassert.NoError(t, r.ensureIndex(ctx, request))
 	shard, _ := PendingShard(request.ID)
 	r = reopen(t, table, blobs)
 	page, err := r.ListPending(ctx, shard, 0, "")
 	if err != nil || len(page.Requests) != 1 || !page.Requests[0].Initializing {
 		t.Fatalf("initializing: %+v %v", page, err)
 	}
-	requireErrorIs(t, errOf(r.ReadForRecovery(ctx, request.ID)), contracts.ErrNotFound, "unpublished state")
+	testassert.ErrorIs(t, testassert.Err(r.ReadForRecovery(ctx, request.ID)), contracts.ErrNotFound, "unpublished state")
 	record := mustCreate(t, r, request)
 	table.hook = func(op string, _ kv.KeyValueItem) (error, error) {
 		if op == "replace" {
@@ -89,7 +84,7 @@ func TestInitializingAndLaggingIndexRemainDiscoverable(t *testing.T) {
 		return nil, nil
 	}
 	update := change(record, StatusCompleted, "complete")
-	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, update)), ErrIndexPending, "lost committed event")
+	testassert.ErrorIs(t, testassert.Err(r.TryUpdate(ctx, request.Scope, request.ID, update)), ErrIndexPending, "lost committed event")
 	page, err = r.ListPending(ctx, shard, 0, "")
 	if err != nil || len(page.Requests) != 1 || page.Requests[0].Revision != 1 {
 		t.Fatalf("lagging index: %+v %v", page, err)
@@ -122,13 +117,9 @@ func TestPendingRejectsMalformedBackendPages(t *testing.T) {
 			ctx := context.Background()
 			mustCreate(t, r, request)
 			row, err := table.Get(ctx, r.indexKey(request.ID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			value, err := r.decodeIndex(row)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			page := kv.KeyValueQueryPage{Records: []kv.KeyValueRecord{row}}
 			switch name {
 			case "schema":
@@ -154,8 +145,8 @@ func TestPendingRejectsMalformedBackendPages(t *testing.T) {
 			}
 			r = reopen(t, queryTable{KeyValueStore: table, query: func(kv.KeyValueQuery) (kv.KeyValueQueryPage, error) { return page, nil }}, blobs)
 			shard, _ := PendingShard(request.ID)
-			requireErrorIs(t, errOf(r.ListPending(ctx, shard, 2, "repeated")), ErrCorrupt, "accepted bad page")
-			requireErrorIs(t, errOf(r.ListBudgetRecovery(ctx, shard, 2, "repeated", time.Time{})), ErrCorrupt, "budget recovery accepted bad page")
+			testassert.ErrorIs(t, testassert.Err(r.ListPending(ctx, shard, 2, "repeated")), ErrCorrupt, "accepted bad page")
+			testassert.ErrorIs(t, testassert.Err(r.ListBudgetRecovery(ctx, shard, 2, "repeated", time.Time{})), ErrCorrupt, "budget recovery accepted bad page")
 		})
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -109,9 +110,7 @@ func refreshTestService(t *testing.T, store *memoryInventoryStore, authorize con
 	options.Store = store
 	options.Clock = func() time.Time { return refreshTestNow }
 	refresher, err := NewProviderRefresher(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	codec := testCursorCodec(512)
 	handler := &persistedQueryHandler{configDigest: options.ConfigDigest, inventory: store, provider: &fakePersistedProvider{}, refresh: refresher, cursor: codec, clock: func() time.Time { return refreshTestNow }}
 	if authorize == nil {
@@ -146,17 +145,13 @@ func seedInventory(t *testing.T, store *memoryInventoryStore, endpoint string, o
 		snapshot.Models = append(snapshot.Models, control.Model{ProviderModelID: model, Lifecycle: control.LifecycleAvailable})
 	}
 	snapshot.InventoryDigest = control.InventoryDigest(snapshot.Models)
-	if _, err := store.PersistInventorySnapshot(context.Background(), snapshot); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(store.PersistInventorySnapshot(context.Background(), snapshot)))
 }
 
 func inventoryModelIDs(t *testing.T, response llm.QueryResponseV1) []string {
 	t.Helper()
 	decoded, err := control.DecodeQueryResponse(response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, ok := decoded.Result.(control.ModelInventoryResult)
 	if !ok {
 		t.Fatalf("result type %T", decoded.Result)
@@ -174,9 +169,7 @@ func TestProviderRefreshWritesFreshInventory(t *testing.T) {
 	lister := &countingLister{models: []provider.Model{{ProviderModelID: "gpt-new", Lifecycle: provider.ModelAvailable}}}
 	service, _ := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: []ProviderRefreshTarget{refreshTarget("primary", lister)}})
 	response, err := service.Execute(context.Background(), inventoryRefreshRequest(t, llm.QueryModelInventory, "primary", time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if lister.calls.Load() != 1 || response.Source != string(control.QuerySourcePersistedRefreshed) || response.Freshness != string(control.QueryFreshCurrent) {
 		t.Fatalf("calls=%d source=%s freshness=%s", lister.calls.Load(), response.Source, response.Freshness)
 	}
@@ -217,9 +210,7 @@ func TestProviderRefreshCollapsesConcurrentRefreshes(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	if calls := lister.calls.Load(); calls != 1 {
 		t.Fatalf("provider fetched %d times, want 1", calls)
@@ -237,9 +228,7 @@ func TestProviderRefreshTimeoutKeepsExistingStateAndReportsStale(t *testing.T) {
 	lister := &countingLister{release: make(chan struct{})} // never released
 	service, _ := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: []ProviderRefreshTarget{refreshTarget("primary", lister)}, Timeout: 20 * time.Millisecond})
 	response, err := service.Execute(context.Background(), inventoryRefreshRequest(t, llm.QueryModelInventory, "primary", time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.Freshness != string(control.QueryFreshStale) || response.Source != string(control.QuerySourcePersisted) {
 		t.Fatalf("timeout reported source=%s freshness=%s, want persisted/stale", response.Source, response.Freshness)
 	}
@@ -303,9 +292,7 @@ func TestProviderRefreshAbsentLeavesQueriesUnchanged(t *testing.T) {
 	lister := &countingLister{models: []provider.Model{{ProviderModelID: "gpt-new", Lifecycle: provider.ModelAvailable}}}
 	service, _ := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: []ProviderRefreshTarget{refreshTarget("primary", lister)}})
 	response, err := service.Execute(context.Background(), inventoryRefreshRequest(t, llm.QueryModelInventory, "primary", 0))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if lister.calls.Load() != 0 || response.Source != string(control.QuerySourcePersisted) || response.Freshness != string(control.QueryFreshStale) {
 		t.Fatalf("query without refresh: calls=%d source=%s freshness=%s", lister.calls.Load(), response.Source, response.Freshness)
 	}
@@ -337,9 +324,7 @@ func TestProviderRefreshBoundsEndpointsPerQuery(t *testing.T) {
 	}
 	service, _ := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: targets, MaxEndpoints: 2})
 	response, err := service.Execute(context.Background(), inventoryRefreshRequest(t, llm.QueryModelInventory, "", time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if listers[0].calls.Load() != 1 || listers[1].calls.Load() != 1 || listers[2].calls.Load() != 0 {
 		t.Fatalf("fetch counts = %d,%d,%d, want 1,1,0", listers[0].calls.Load(), listers[1].calls.Load(), listers[2].calls.Load())
 	}
@@ -381,9 +366,7 @@ func TestProviderRefreshCapCountsOnlyStaleEndpoints(t *testing.T) {
 	targets := []ProviderRefreshTarget{refreshTarget("a", listers[0]), refreshTarget("b", listers[1]), refreshTarget("c", listers[2])}
 	service, _ := refreshTestService(t, store, nil, ProviderRefresherOptions{Targets: targets, MaxEndpoints: 1})
 	response, err := service.Execute(context.Background(), inventoryRefreshRequest(t, llm.QueryModelInventory, "", time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if listers[0].calls.Load() != 0 || listers[1].calls.Load() != 0 || listers[2].calls.Load() != 1 {
 		t.Fatalf("fetch counts = %d,%d,%d, want 0,0,1", listers[0].calls.Load(), listers[1].calls.Load(), listers[2].calls.Load())
 	}

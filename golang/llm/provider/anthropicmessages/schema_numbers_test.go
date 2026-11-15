@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
@@ -16,9 +17,7 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 		input := structuredOutputInput(schema, true)
 		input.Request.Tools = []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(schema)}}
 		call, err := adapter.Compile(context.Background(), input)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		// The synthetic output intentionally does not satisfy the schema; inspect the request.
 		_, _ = adapter.Invoke(context.Background(), call, nil)
 		return wire

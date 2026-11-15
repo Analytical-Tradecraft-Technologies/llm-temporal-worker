@@ -8,6 +8,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
@@ -39,12 +40,8 @@ func TestNewAzureClientsSendCredentialsToLoopbackHTTPThroughSDKTransport(t *test
 		t.Run(name, func(t *testing.T) {
 			server, requests := adaptertest.LoopbackJSONServer(t, "/openai/v1/responses", test.header, test.want, loopbackResponse)
 			client, err := test.newClient(server.URL)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-loopback")}); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
+			testassert.NoError(t, testassert.Err(client.sdk.Responses.New(context.Background(), responses.ResponseNewParams{Model: shared.ResponsesModel("gpt-loopback")})))
 			if got := requests.Load(); got != 1 {
 				t.Fatalf("loopback requests = %d, want 1", got)
 			}

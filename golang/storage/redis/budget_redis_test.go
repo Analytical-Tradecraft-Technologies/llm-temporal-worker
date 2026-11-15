@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -86,9 +87,7 @@ func testBudgetKeyOptions(hashTag string) KeyOptions {
 func newFakeBudgetGenerationPort(t *testing.T, fake *fakeBudgetGenerationRedis, keys BudgetKeySpace) *RedisBudgetGenerationPort {
 	t.Helper()
 	port, err := NewRedisBudgetGenerationPort(fake, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return port
 }
 
@@ -104,9 +103,7 @@ func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.
 	port := newFakeBudgetGenerationPort(t, fake, keys)
 	manifest := testBudgetManifest(t)
 	pointer, err := port.PublishGeneration(context.Background(), manifest)
-	if err != nil {
-		t.Fatalf("PublishGeneration: %v", err)
-	}
+	testassert.NoError(t, err, "PublishGeneration")
 	if pointer.GenerationID != manifest.GenerationID || len(fake.evalKeys) != 2 || fake.evalKeys[0] != keys.ActiveGenerationKey() || fake.evalKeys[1] != keys.ManifestKey(manifest.GenerationID) {
 		t.Fatalf("publish keys/pointer = %#v, %#v", fake.evalKeys, pointer)
 	}
@@ -114,16 +111,12 @@ func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.
 		t.Fatal("publish does not use an atomic manifest/pointer script")
 	}
 	canonical, err := manifest.Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got, ok := fake.evalArgs[0].(string); !ok || got != string(canonical) {
 		t.Fatal("publish did not pass canonical manifest bytes")
 	}
 	pointerJSON, err := json.Marshal(pointer)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got, ok := fake.evalArgs[1].(string); !ok || got != string(pointerJSON) {
 		t.Fatal("publish did not pass canonical pointer bytes")
 	}
@@ -139,18 +132,18 @@ func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.
 		t.Fatalf("LoadManifest = %#v, %v", loaded, err)
 	}
 	fake.values[keys.ManifestKey(manifest.GenerationID)] = " \n" + string(canonical)
-	requireErrorIs(t, errOf(port.LoadManifest(context.Background(), pointer)), ErrBudgetManifestInvalid, "non-canonical manifest error =")
+	testassert.ErrorIs(t, testassert.Err(port.LoadManifest(context.Background(), pointer)), ErrBudgetManifestInvalid, "non-canonical manifest error =")
 }
 
 func TestRedisBudgetGenerationPortRejectsImmutableConflictAndMalformedState(t *testing.T) {
 	keys := testBudgetKeySpaceForAdapter(t)
 	fake := &fakeBudgetGenerationRedis{evalVal: int64(0), values: make(map[string]string)}
 	port := newFakeBudgetGenerationPort(t, fake, keys)
-	requireErrorIs(t, errOf(port.PublishGeneration(context.Background(), testBudgetManifest(t))), ErrBudgetGenerationConflict, "conflict error =")
+	testassert.ErrorIs(t, testassert.Err(port.PublishGeneration(context.Background(), testBudgetManifest(t))), ErrBudgetGenerationConflict, "conflict error =")
 	fake.values[keys.ActiveGenerationKey()] = `{"generation_id":"g","incarnation_id":"i","manifest_digest":"bad"}`
-	requireErrorIs(t, errOf(port.ActiveGeneration(context.Background())), ErrBudgetManifestInvalid, "malformed pointer error =")
+	testassert.ErrorIs(t, testassert.Err(port.ActiveGeneration(context.Background())), ErrBudgetManifestInvalid, "malformed pointer error =")
 	fake.values[keys.ActiveGenerationKey()] = ""
-	requireErrorIs(t, errOf(port.ActiveGeneration(context.Background())), ErrBudgetManifestInvalid, "empty pointer error =")
+	testassert.ErrorIs(t, testassert.Err(port.ActiveGeneration(context.Background())), ErrBudgetManifestInvalid, "empty pointer error =")
 }
 
 func TestRedisBudgetEventPortAppendsAndReadsBroadcastCursor(t *testing.T) {
@@ -196,27 +189,25 @@ func TestRedisBudgetEventPortHandlesEmptyAndCorruptStreamsFailClosed(t *testing.
 	fake.readErr = nil
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "1-0", Values: map[string]interface{}{budgetStreamEventField: "{}"}}}}}
 	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "1-0"}}
-	requireErrorIs(t, errOf(port.Read(context.Background(), "", 1)), ErrBudgetStreamInvalid, "corrupt event error =")
+	testassert.ErrorIs(t, testassert.Err(port.Read(context.Background(), "", 1)), ErrBudgetStreamInvalid, "corrupt event error =")
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{{ID: "1-0", Values: map[string]interface{}{budgetStreamEventField: "{}"}}}}}
-	requireErrorIs(t, errOf(port.Read(context.Background(), "1-0", 1)), ErrBudgetStreamInvalid, "non-advancing event error =")
+	testassert.ErrorIs(t, testassert.Err(port.Read(context.Background(), "1-0", 1)), ErrBudgetStreamInvalid, "non-advancing event error =")
 	fake.infoValue = &redisclient.XInfoStream{FirstEntry: redisclient.XMessage{ID: "2-0"}}
-	requireErrorIs(t, errOf(port.Read(context.Background(), "1-0", 1)), ErrBudgetStreamGap, "trimmed stream gap error =")
+	testassert.ErrorIs(t, testassert.Err(port.Read(context.Background(), "1-0", 1)), ErrBudgetStreamGap, "trimmed stream gap error =")
 	validEvent := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh, GenerationID: "generation", OccurredAt: time.Unix(1, 0).UTC()}
 	validPayload, err := validEvent.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	fake.readValue = []redisclient.XStream{{Stream: keys.EventsKey(), Messages: []redisclient.XMessage{
 		{ID: "2-0", Values: map[string]interface{}{budgetStreamEventField: string(validPayload)}},
 		{ID: "1-9", Values: map[string]interface{}{budgetStreamEventField: string(validPayload)}},
 	}}}
-	requireErrorIs(t, errOf(port.Read(context.Background(), "", 10)), ErrBudgetStreamInvalid, "non-monotonic event error =")
+	testassert.ErrorIs(t, testassert.Err(port.Read(context.Background(), "", 10)), ErrBudgetStreamInvalid, "non-monotonic event error =")
 }
 
 func TestRedisBudgetEventPortRecoversAfterEviction(t *testing.T) {
 	fake := &fakeBudgetEventRedis{infoErr: errors.New("ERR no such key"), readErr: redisclient.Nil}
 	port := newFakeBudgetEventPort(t, fake, testBudgetKeySpaceForAdapter(t))
-	requireErrorIs(t, errOf(port.Read(context.Background(), "42-7", 10)), ErrBudgetStreamGap, "eviction must trigger authoritative reload")
+	testassert.ErrorIs(t, testassert.Err(port.Read(context.Background(), "42-7", 10)), ErrBudgetStreamGap, "eviction must trigger authoritative reload")
 	if cursor, err := port.CurrentCursor(context.Background()); err != nil || cursor != "0-0" {
 		t.Fatalf("absent stream checkpoint = %q, %v", cursor, err)
 	}
@@ -269,7 +260,7 @@ func TestRedisBudgetEventPortZeroCursorDetectsDiscardedHistory(t *testing.T) {
 func TestRedisBudgetEventPortRecoversEmptyTrimmedStream(t *testing.T) {
 	fake := &fakeBudgetEventRedis{infoValue: &redisclient.XInfoStream{EntriesAdded: 10, LastGeneratedID: "42-7"}}
 	port := newFakeBudgetEventPort(t, fake, testBudgetKeySpaceForAdapter(t))
-	requireErrorIs(t, errOf(port.Read(context.Background(), "0-0", 10)), ErrBudgetStreamGap, "missing hints did not reload")
+	testassert.ErrorIs(t, testassert.Err(port.Read(context.Background(), "0-0", 10)), ErrBudgetStreamGap, "missing hints did not reload")
 	cursor, err := port.CurrentCursor(context.Background())
 	if err != nil || cursor != "42-7" {
 		t.Fatalf("empty stream cursor = %q, %v", cursor, err)

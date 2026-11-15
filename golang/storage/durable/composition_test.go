@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func completeCompositionPorts(materializer BudgetLeaser) CompositionPorts {
@@ -26,21 +27,15 @@ func TestCompositionBuilderCopiesAndValidatesSnapshotPorts(t *testing.T) {
 		Ports:    completeCompositionPorts(materializer),
 	}
 	composition, err := builder.Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
+	testassert.NoError(t, err, "Build() error")
 
 	// A reload mutates the builder input only after the snapshot has been
 	// published. The already-built value retains its complete port set and
 	// identity instead of observing the newer, incomplete bundle.
 	builder.Identity.ConfigDigest = [32]byte{}
 	builder.Ports = CompositionPorts{}
-	if err := composition.Validate(); err != nil {
-		t.Fatalf("built composition changed after builder mutation: %v", err)
-	}
-	if err := composition.BudgetBoundary().Validate(); err != nil {
-		t.Fatalf("built budget boundary invalid: %v", err)
-	}
+	testassert.NoError(t, composition.Validate(), "built composition changed after builder mutation")
+	testassert.NoError(t, composition.BudgetBoundary().Validate(), "built budget boundary invalid")
 	if phases := composition.NewLifecycle().Phases(); len(phases) != 0 {
 		t.Fatalf("new lifecycle phases = %v, want empty", phases)
 	}
@@ -81,41 +76,29 @@ func TestCompositionBuilderBindsBudgetOrderingAndRecovery(t *testing.T) {
 		Identity: validIdentity(),
 		Ports:    completeCompositionPorts(materializer),
 	}).Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
+	testassert.NoError(t, err, "Build() error")
 
 	lifecycle := composition.NewLifecycle()
-	if err := lifecycle.Advance(PhaseOperationReplay); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, lifecycle.Advance(PhaseOperationReplay))
 	reservation, err := composition.BudgetBoundary().Reserve(context.Background(), &lifecycle, request)
 	if err != nil || reservation.DispatchReady() {
 		t.Fatalf("reserve = %#v, %v", reservation, err)
 	}
-	if _, err := composition.BudgetBoundary().Claim(context.Background(), &lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(composition.BudgetBoundary().Claim(context.Background(), &lifecycle, &reservation)))
 	if got, want := materializer.calls, []string{"accept", "claim"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pre-dispatch ordering = %v, want %v", got, want)
 	}
-	if err := lifecycle.Advance(PhaseDispatched); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, lifecycle.Advance(PhaseDispatched))
 
 	materializer.reconcileErr = errors.New("Redis unavailable")
 	boundary := composition.BudgetBoundary()
 	completion := boundaryCompletion(request, now)
-	if err := boundary.Finalize(context.Background(), &lifecycle, reservation, []budget.CompletionEvent{completion}); !errors.Is(err, ErrReconcilePending) {
-		t.Fatalf("first finalization = %v, want ErrReconcilePending", err)
-	}
+	testassert.ErrorIs(t, boundary.Finalize(context.Background(), &lifecycle, reservation, []budget.CompletionEvent{completion}), ErrReconcilePending, "first finalization")
 	if current, _ := lifecycle.Current(); current != PhaseResultFinalized {
 		t.Fatalf("recovery lifecycle phase = %s, want result_finalized", current)
 	}
 	materializer.reconcileErr = nil
-	if err := boundary.Finalize(context.Background(), &lifecycle, reservation, []budget.CompletionEvent{completion}); err != nil {
-		t.Fatalf("reconciliation retry = %v", err)
-	}
+	testassert.NoError(t, boundary.Finalize(context.Background(), &lifecycle, reservation, []budget.CompletionEvent{completion}), "reconciliation retry")
 	if current, _ := lifecycle.Current(); current != PhaseRedisReconciled {
 		t.Fatalf("final lifecycle phase = %s, want redis_reconciled", current)
 	}

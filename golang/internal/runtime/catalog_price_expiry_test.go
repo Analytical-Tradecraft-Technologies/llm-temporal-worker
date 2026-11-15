@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
 
@@ -28,9 +29,7 @@ func metricsText(t *testing.T, metrics *observability.Metrics) string {
 func priceExpiryGauge(t *testing.T, metrics *observability.Metrics) float64 {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() == "llmtw_catalog_price_expiry_timestamp_seconds" {
 			return family.GetMetric()[0].GetGauge().GetValue()
@@ -130,9 +129,7 @@ func TestCatalogPriceExpiryFollowsWindowsOpeningWithoutReload(t *testing.T) {
 // follows reloads and the passage of time with no publish hook.
 func TestCatalogPriceExpiryGaugeReadsCurrentSnapshotAtScrape(t *testing.T) {
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := priceExpiryGauge(t, metrics); !math.IsInf(got, 1) {
 		t.Fatalf("initial expiry = %v, want +Inf", got)
 	}
@@ -154,9 +151,7 @@ func TestCatalogPriceExpiryGaugeReadsCurrentSnapshotAtScrape(t *testing.T) {
 	if got := priceExpiryGauge(t, metrics); got != float64(first.Unix()) {
 		t.Fatalf("expiry = %v, want %v", got, first.Unix())
 	}
-	if err := application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("", "24h", "1h", "200"))); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, application.Reload(context.Background(), localConfigWithBudgetWindows(t, budgetWindowYAML("", "24h", "1h", "200"))))
 	if got := priceExpiryGauge(t, metrics); got != float64(second.Unix()) {
 		t.Fatalf("expiry after reload = %v, want %v", got, second.Unix())
 	}

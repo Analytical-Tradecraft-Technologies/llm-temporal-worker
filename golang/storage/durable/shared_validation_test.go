@@ -6,14 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 func TestCheckRoutePlanStagesAndContext(t *testing.T) {
 	valid := RoutePlan{OperationID: "op", GenerationID: "gen", RouteID: "route", EndpointID: "endpoint", Provider: "provider", Model: "model"}
-	if err := checkRoutePlan(context.Background(), "compact ", valid, nil, nil); err != nil {
-		t.Fatalf("valid route = %v", err)
-	}
+	testassert.NoError(t, checkRoutePlan(context.Background(), "compact ", valid, nil, nil), "valid route")
 	cause := errors.New("route port failed")
 	if err := checkRoutePlan(context.Background(), "compact ", valid, cause, nil); !errors.Is(err, ErrV1Stage) || !errors.Is(err, cause) || !strings.Contains(err.Error(), ": compact route: ") {
 		t.Fatalf("port error = %v", err)
@@ -33,9 +32,7 @@ func TestCheckRoutePlanStagesAndContext(t *testing.T) {
 }
 
 func TestUnchangedIdentity(t *testing.T) {
-	if err := unchangedIdentity[OperationID]("op", "op", "operation"); err != nil {
-		t.Fatalf("same identity = %v", err)
-	}
+	testassert.NoError(t, unchangedIdentity[OperationID]("op", "op", "operation"), "same identity")
 	if err := unchangedIdentity[GenerationID]("gen", "other", "generation"); err == nil || err.Error() != "generation id changed during Redis acceptance" {
 		t.Fatalf("changed identity = %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -39,9 +40,7 @@ func TestResponseResultSealsAndBindsToItsKey(t *testing.T) {
 	key := store.key("acme", "search", "resp_a")
 	plain := []byte(`{"schema":"response-result/v1","created_at":"2023-11-14T22:13:20Z","response":` + mustJSON(t, responseResultTestResponse("resp_a")) + `}`)
 	sealed, err := store.seal(key, plain)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if bytes.Contains(sealed, []byte("private answer")) || strings.Contains(key, "acme") || strings.Contains(key, "resp_a") {
 		t.Fatalf("Redis exposes content or identifiers: key %q", key)
 	}

@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,9 +98,7 @@ func readJSONFile(t *testing.T, path, label string, value any) {
 func makeDirectory(t *testing.T, mode os.FileMode, elem ...string) string {
 	t.Helper()
 	path := filepath.Join(elem...)
-	if err := os.MkdirAll(path, mode); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(path, mode))
 	return path
 }
 

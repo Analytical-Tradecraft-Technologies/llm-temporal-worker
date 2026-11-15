@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -173,9 +174,9 @@ func TestLiveRedisProviderStickyEvidenceAndIsolation(t *testing.T) {
 		o.Billing = control.BillingIssue
 		o.ProviderCode = "insufficient_quota"
 	})
-	mustNoError(t, store.RecordProviderStatus(ctx, incident.StatusObservation))
+	testassert.NoError(t, store.RecordProviderStatus(ctx, incident.StatusObservation))
 	success := providerTestEvent(t, at.Add(time.Minute), "route", nil)
-	mustNoError(t, store.RecordProviderStatus(ctx, success.StatusObservation))
+	testassert.NoError(t, store.RecordProviderStatus(ctx, success.StatusObservation))
 	page, err := store.ListCreditStatuses(ctx, control.CreditStatusListOptions{ConfigDigest: incident.ConfigDigest})
 	if err != nil || len(page.Endpoints) != 1 {
 		t.Fatalf("credit page: %#v %v", page, err)
@@ -184,11 +185,11 @@ func TestLiveRedisProviderStickyEvidenceAndIsolation(t *testing.T) {
 		t.Fatalf("sticky credit: %#v", credit)
 	}
 	otherDigest := sha256.Sum256([]byte("different-config"))
-	requireErrorIs(t, errOf(store.GetRouteStatus(ctx, otherDigest, "route", "endpoint", "", "")), control.ErrProviderStatusNotFound, "config leak")
+	testassert.ErrorIs(t, testassert.Err(store.GetRouteStatus(ctx, otherDigest, "route", "endpoint", "", "")), control.ErrProviderStatusNotFound, "config leak")
 	keys := liveKeyOptions("provider-isolated")
 	cleanupLivePrefix(t, client, keys.Prefix)
 	other := mustCall(t, NewProviderStateStore, ProviderStateOptions{Client: client, Keys: keys})
-	requireErrorIs(t, errOf(other.GetRouteStatus(ctx, incident.ConfigDigest, "route", "endpoint", "", "")), control.ErrProviderStatusNotFound, "prefix leak")
+	testassert.ErrorIs(t, testassert.Err(other.GetRouteStatus(ctx, incident.ConfigDigest, "route", "endpoint", "", "")), control.ErrProviderStatusNotFound, "prefix leak")
 	// Changed epochs reset incidents; clearing one config cannot change another.
 	reset := providerTestEvent(t, now.Add(-time.Minute), "route", func(o *control.StatusObservation) { o.ConfigEpoch = "epoch-2" })
 	if ok, err := store.PersistStatusEvent(ctx, reset); err != nil || !ok {
@@ -232,9 +233,7 @@ func TestLiveRedisProviderInventoryConcurrencyEncryptionAndStaleness(t *testing.
 		t.Fatalf("timezone replay changed snapshot: %v %v", changed, err)
 	}
 	raw, err := client.HGetAll(ctx, store.key("inventory", snapshot.ConfigDigest)).Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, value := range raw {
 		if strings.Contains(value, snapshot.NextCursor) {
 			t.Fatal("provider cursor stored in plaintext")
@@ -263,26 +262,26 @@ func TestLiveRedisProviderInventoryConcurrencyEncryptionAndStaleness(t *testing.
 	if ok, err := store.PersistInventorySnapshot(ctx, newer); err != nil || !ok {
 		t.Fatalf("refresh: %v %v", ok, err)
 	}
-	requireErrorIs(t, errOf(store.GetInventorySnapshot(ctx, snapshot.ConfigDigest, snapshot.Provider, snapshot.EndpointID, sha256.Sum256([]byte("different-account")))), control.ErrInventorySnapshotNotFound, "account leak")
+	testassert.ErrorIs(t, testassert.Err(store.GetInventorySnapshot(ctx, snapshot.ConfigDigest, snapshot.Provider, snapshot.EndpointID, sha256.Sum256([]byte("different-account")))), control.ErrInventorySnapshotNotFound, "account leak")
 	// Tampered encrypted cursor is not exposed as an empty/healthy inventory.
 	field := store.space.digest("provider-inventory", inventoryIdentity(snapshot.Provider, snapshot.EndpointID, snapshot.EndpointAccountHMAC))
 	var corrupted inventoryCacheRecord
 	for k, value := range raw {
 		if k != "__bytes" {
-			mustNoError(t, json.Unmarshal([]byte(value), &corrupted))
+			testassert.NoError(t, json.Unmarshal([]byte(value), &corrupted))
 		}
 	}
 	corrupted.Cursor = "broken"
 	data, _ := json.Marshal(corrupted)
-	mustNoError(t, client.HSet(ctx, store.key("inventory", snapshot.ConfigDigest), field, data).Err())
-	requireErrorIs(t, errOf(store.GetInventorySnapshot(ctx, snapshot.ConfigDigest, snapshot.Provider, snapshot.EndpointID, snapshot.EndpointAccountHMAC)), ErrUnavailable, "tampered cursor accepted")
+	testassert.NoError(t, client.HSet(ctx, store.key("inventory", snapshot.ConfigDigest), field, data).Err())
+	testassert.ErrorIs(t, testassert.Err(store.GetInventorySnapshot(ctx, snapshot.ConfigDigest, snapshot.Provider, snapshot.EndpointID, snapshot.EndpointAccountHMAC)), ErrUnavailable, "tampered cursor accepted")
 }
 
 func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 	store, client, now := liveProviderStore(t)
 	ctx := context.Background()
 	snapshot := providerTestInventory(now.Add(-time.Minute))
-	mustNoError(t, errOf(store.PersistInventorySnapshot(ctx, snapshot)))
+	testassert.NoError(t, testassert.Err(store.PersistInventorySnapshot(ctx, snapshot)))
 	options := control.InventoryModelListOptions{ConfigDigest: snapshot.ConfigDigest, Limit: 1}
 	first, err := store.ListInventoryModels(ctx, options)
 	if err != nil || first.Next == nil || first.Models[0].Model.ProviderModelID != "model-a" {
@@ -293,7 +292,7 @@ func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 	newer.ExpiresAt = now.Add(time.Hour)
 	newer.Models = []control.Model{{ProviderModelID: "replacement", Lifecycle: control.LifecycleAvailable}}
 	newer.InventoryDigest = control.InventoryDigest(newer.Models)
-	mustNoError(t, errOf(store.PersistInventorySnapshot(ctx, newer)))
+	testassert.NoError(t, testassert.Err(store.PersistInventorySnapshot(ctx, newer)))
 	// Signed cursor encodes seconds, so reproduce that round trip here.
 	options.SnapshotHorizon = time.Unix(first.SnapshotHorizon.Unix(), 0).UTC()
 	options.After = *first.Next
@@ -303,7 +302,7 @@ func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 	}
 	for _, route := range []string{"a", "b"} {
 		event := providerTestEvent(t, now.Add(-time.Minute), route, nil)
-		mustNoError(t, errOf(store.PersistStatusEvent(ctx, event)))
+		testassert.NoError(t, testassert.Err(store.PersistStatusEvent(ctx, event)))
 	}
 	statusOptions := control.ProviderStatusListOptions{ConfigDigest: snapshot.ConfigDigest, IncludeHealthy: true, SnapshotHorizon: now, Limit: 1}
 	statusFirst, err := store.ListRouteStatuses(ctx, statusOptions)
@@ -311,7 +310,7 @@ func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 		t.Fatalf("status first: %#v %v", statusFirst, err)
 	}
 	event := providerTestEvent(t, now.Add(time.Second), "b", func(o *control.StatusObservation) { o.Availability = control.AvailabilityUnavailable })
-	mustNoError(t, errOf(store.PersistStatusEvent(ctx, event)))
+	testassert.NoError(t, testassert.Err(store.PersistStatusEvent(ctx, event)))
 	statusOptions.AfterRouteID = "a"
 	statusOptions.SnapshotHorizon = time.Unix(now.Unix(), 0)
 	statusSecond, err := store.ListRouteStatuses(ctx, statusOptions)
@@ -320,9 +319,7 @@ func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 	}
 	// Force expiry on only this test namespace's query views, never shared data.
 	viewKeys, err := client.Keys(ctx, store.space.admissionPrefix()+"provider-view:*").Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(viewKeys) != 2 {
 		t.Fatalf("view keys: %v", viewKeys)
 	}
@@ -330,13 +327,11 @@ func TestLiveRedisProviderPaginationSurvivesUpdatesAndExpires(t *testing.T) {
 		if ttl := client.TTL(ctx, key).Val(); ttl <= 0 || ttl > providerViewTTL {
 			t.Fatalf("view TTL: %v", ttl)
 		}
-		mustNoError(t, client.Expire(ctx, key, -time.Second).Err())
+		testassert.NoError(t, client.Expire(ctx, key, -time.Second).Err())
 	}
-	requireErrorIs(t, errOf(store.ListInventoryModels(ctx, options)), control.ErrProviderViewExpired, "expired inventory view")
-	requireErrorIs(t, errOf(store.ListRouteStatuses(ctx, statusOptions)), control.ErrProviderViewExpired, "expired status view")
-	if _, err := store.GetRouteStatus(ctx, snapshot.ConfigDigest, "b", "endpoint", "", ""); err != nil {
-		t.Fatalf("view expiry removed current state: %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.ListInventoryModels(ctx, options)), control.ErrProviderViewExpired, "expired inventory view")
+	testassert.ErrorIs(t, testassert.Err(store.ListRouteStatuses(ctx, statusOptions)), control.ErrProviderViewExpired, "expired status view")
+	testassert.NoError(t, testassert.Err(store.GetRouteStatus(ctx, snapshot.ConfigDigest, "b", "endpoint", "", "")), "view expiry removed current state")
 }
 
 func TestLiveRedisProviderFilteringEndpointSelectionAndFailures(t *testing.T) {
@@ -351,7 +346,7 @@ func TestLiveRedisProviderFilteringEndpointSelectionAndFailures(t *testing.T) {
 				o.ProviderCode = "insufficient_quota"
 			}
 		})
-		mustNoError(t, errOf(store.PersistStatusEvent(ctx, event)))
+		testassert.NoError(t, testassert.Err(store.PersistStatusEvent(ctx, event)))
 	}
 	// Latest route per endpoint wins before healthy filtering, matching the
 	// existing control query contract (an older route incident is not resurrected).
@@ -373,17 +368,17 @@ func TestLiveRedisProviderFilteringEndpointSelectionAndFailures(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	requireErrorIs(t, errOf(store.GetRouteStatus(canceled, digest, "route-1", "endpoint-0", "", "")), context.Canceled, "canceled")
+	testassert.ErrorIs(t, testassert.Err(store.GetRouteStatus(canceled, digest, "route-1", "endpoint-0", "", "")), context.Canceled, "canceled")
 	event := providerTestEvent(t, now, "capacity-route", nil)
 	key := store.key("status", digest)
-	mustNoError(t, client.HSet(ctx, key, "__bytes", 32<<20).Err())
+	testassert.NoError(t, client.HSet(ctx, key, "__bytes", 32<<20).Err())
 	if _, err := store.PersistStatusEvent(ctx, event); err == nil {
 		t.Fatal("capacity overflow accepted")
 	}
-	requireErrorIs(t, errOf(store.GetRouteStatus(ctx, digest, "capacity-route", "endpoint", "", "")), control.ErrProviderStatusNotFound, "partial write on capacity failure")
-	mustNoError(t, client.Del(ctx, key).Err())
-	mustNoError(t, client.Set(ctx, key, "wrong-type", 0).Err())
-	requireErrorIs(t, errOf(store.PersistStatusEvent(ctx, event)), ErrUnavailable, "wrong type did not fail closed")
+	testassert.ErrorIs(t, testassert.Err(store.GetRouteStatus(ctx, digest, "capacity-route", "endpoint", "", "")), control.ErrProviderStatusNotFound, "partial write on capacity failure")
+	testassert.NoError(t, client.Del(ctx, key).Err())
+	testassert.NoError(t, client.Set(ctx, key, "wrong-type", 0).Err())
+	testassert.ErrorIs(t, testassert.Err(store.PersistStatusEvent(ctx, event)), ErrUnavailable, "wrong type did not fail closed")
 }
 
 func TestLiveRedisProviderCircuitVisibleAcrossWorkers(t *testing.T) {
@@ -402,7 +397,7 @@ func TestLiveRedisProviderCircuitVisibleAcrossWorkers(t *testing.T) {
 		if i%2 != 0 {
 			writer = second
 		}
-		mustNoError(t, errOf(writer.PersistStatusEvent(ctx, last)))
+		testassert.NoError(t, testassert.Err(writer.PersistStatusEvent(ctx, last)))
 	}
 	status, err := second.GetRouteStatus(ctx, last.ConfigDigest, "route", "endpoint", "", "")
 	if err != nil || status.Circuit != control.CircuitOpen || status.ConsecutiveDefiniteFailures != 3 {
@@ -412,7 +407,7 @@ func TestLiveRedisProviderCircuitVisibleAcrossWorkers(t *testing.T) {
 		t.Fatal("replay counted twice", err)
 	}
 	success := providerTestEvent(t, now.Add(4*time.Second), "route", nil)
-	mustNoError(t, errOf(second.PersistStatusEvent(ctx, success)))
+	testassert.NoError(t, testassert.Err(second.PersistStatusEvent(ctx, success)))
 	status, err = first.GetRouteStatus(ctx, last.ConfigDigest, "route", "endpoint", "", "")
 	if err != nil || status.Circuit != control.CircuitClosed || status.ConsecutiveDefiniteFailures != 0 {
 		t.Fatal("recovery not shared", status, err)
@@ -443,10 +438,8 @@ func TestLiveRedisProviderStatusSeparatesSameRouteIDAcrossEndpoints(t *testing.T
 	// listings instead of making the whole view unavailable.
 	legacy, _ := applyProviderEvent(providerStatusRecord{}, providerTestEvent(t, at, "legacy", nil))
 	data, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustNoError(t, client.HSet(ctx, store.key("status", first.ConfigDigest), store.space.digest("provider-route", "legacy"), data).Err())
+	testassert.NoError(t, err)
+	testassert.NoError(t, client.HSet(ctx, store.key("status", first.ConfigDigest), store.space.digest("provider-route", "legacy"), data).Err())
 	options := control.ProviderStatusListOptions{ConfigDigest: first.ConfigDigest, IncludeHealthy: true, SnapshotHorizon: now, Limit: 1}
 	page, err := store.ListRouteStatuses(ctx, options)
 	if err != nil || len(page.Routes) != 1 || page.Routes[0].EndpointID != "endpoint-a" || page.NextRouteID != store.routePosition(page.Routes[0]) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -18,13 +19,9 @@ import (
 func newTestContinuationStore(t *testing.T, now *time.Time, random io.Reader) *ContinuationStore {
 	t.Helper()
 	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, random)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	store, err := NewContinuationStore(ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return *now }, MaxDepth: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return store
 }
 
@@ -44,9 +41,7 @@ func textTranscript(t *testing.T, actor llm.Actor, text string) ([]llm.Item, [32
 func canonicalDigest(t *testing.T, items []llm.Item) [32]byte {
 	t.Helper()
 	_, digest, err := state.CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return digest
 }
 
@@ -68,9 +63,7 @@ func createTextRoot(t *testing.T, store *ContinuationStore, text string, expires
 	t.Helper()
 	items, digest := textTranscript(t, llm.ActorHuman, text)
 	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: expiresAt, LastOperationID: "root"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return handle, items
 }
 
@@ -78,9 +71,7 @@ func retentionRoot(t *testing.T, store *ContinuationStore, expiresAt time.Time) 
 	t.Helper()
 	handle, _ := createTextRoot(t, store, "hello", expiresAt)
 	root, err := store.Get(context.Background(), handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return handle, root
 }
 
@@ -92,9 +83,7 @@ func putShortLivedRetentionChild(t *testing.T, store *ContinuationStore, now tim
 	child := retentionChild(t, root, rootHandle, "world", now.Add(time.Minute))
 	request := state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"}
 	first, err := store.PutChild(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return request, first
 }
 
@@ -104,15 +93,11 @@ func assertRetryStoresNewChild(t *testing.T, store *ContinuationStore, request s
 	t.Helper()
 	request.Child.ExpiresAt = now.Add(time.Minute)
 	retry, err := store.PutChild(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if retry == first {
 		t.Fatalf("PutChild returned the %s child handle %q", stale, retry)
 	}
-	if _, err := store.Get(context.Background(), retry); err != nil {
-		t.Fatalf("Get(new child) = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(store.Get(context.Background(), retry)), "Get(new child)")
 }
 
 // A retry of PutChild with the same parent and operation key after the child
@@ -142,9 +127,7 @@ func TestContinuationPutChildAfterChildExpiryWithoutSweep(t *testing.T) {
 	request, first := putShortLivedRetentionChild(t, store, now)
 	now = now.Add(2 * time.Minute)
 	assertRetryStoresNewChild(t, store, request, first, now, "expired")
-	if _, err := store.Get(context.Background(), first); !errors.Is(err, state.ErrNotFound) {
-		t.Fatalf("Get(expired child) = %v, want ErrNotFound", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(store.Get(context.Background(), first)), state.ErrNotFound, "Get(expired child)")
 }
 
 // Writes reclaim expired continuations without an external lifecycle owner.
@@ -181,20 +164,12 @@ func TestAdmissionSweepReclaimsOnlyExpiredTerminalState(t *testing.T) {
 	ctx := context.Background()
 
 	completed := retentionBegin(t, store, "completed", now)
-	if err := store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: completed.ID, DispatchToken: completed.DispatchToken, LeaseUntil: now.Add(time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkProviderPending(ctx, admission.ProviderPendingRequest{OperationID: completed.ID, DispatchToken: completed.DispatchToken, ProviderOperationID: "provider-op", EndpointID: "endpoint"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Complete(ctx, admission.CompleteRequest{OperationID: completed.ID, DispatchToken: completed.DispatchToken, Actual: 1}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: completed.ID, DispatchToken: completed.DispatchToken, LeaseUntil: now.Add(time.Minute)}))
+	testassert.NoError(t, store.MarkProviderPending(ctx, admission.ProviderPendingRequest{OperationID: completed.ID, DispatchToken: completed.DispatchToken, ProviderOperationID: "provider-op", EndpointID: "endpoint"}))
+	testassert.NoError(t, store.Complete(ctx, admission.CompleteRequest{OperationID: completed.ID, DispatchToken: completed.DispatchToken, Actual: 1}))
 	reserved := retentionBegin(t, store, "reserved", now)
 	dispatching := retentionBegin(t, store, "dispatching", now)
-	if err := store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: dispatching.ID, DispatchToken: dispatching.DispatchToken, LeaseUntil: now.Add(time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: dispatching.ID, DispatchToken: dispatching.DispatchToken, LeaseUntil: now.Add(time.Minute)}))
 
 	// Long after every retention and admission window has passed.
 	now = now.Add(time.Hour)
@@ -222,9 +197,7 @@ func TestAdmissionSweepReclaimsOnlyExpiredTerminalState(t *testing.T) {
 	}
 
 	// In-flight operations can still reconcile against their buckets.
-	if err := store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: reserved.ID, DispatchToken: reserved.DispatchToken, LeaseUntil: now.Add(time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: reserved.ID, DispatchToken: reserved.DispatchToken, LeaseUntil: now.Add(time.Minute)}))
 	for _, operation := range []admission.Operation{reserved, dispatching} {
 		if err := store.Complete(ctx, admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: 1}); err != nil {
 			t.Fatalf("Complete(%s) after sweep = %v", operation.ID, err)
@@ -240,12 +213,8 @@ func TestAdmissionBeginReclaimsExpiredState(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"a", "b", "c"} {
 		operation := retentionBegin(t, store, id, now)
-		if err := store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: operation.DispatchToken, LeaseUntil: now.Add(time.Minute)}); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.Fail(ctx, admission.FailRequest{OperationID: id, DispatchToken: operation.DispatchToken, Certainty: admission.Rejected}); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, store.MarkDispatching(ctx, admission.DispatchRequest{OperationID: id, DispatchToken: operation.DispatchToken, LeaseUntil: now.Add(time.Minute)}))
+		testassert.NoError(t, store.Fail(ctx, admission.FailRequest{OperationID: id, DispatchToken: operation.DispatchToken, Certainty: admission.Rejected}))
 	}
 	now = now.Add(time.Hour)
 	retentionBegin(t, store, "a", now)

@@ -1,6 +1,7 @@
 package control
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -23,9 +24,7 @@ func observation(at time.Time) StatusObservation {
 func mustStatusEvent(t *testing.T, value StatusObservation) StatusEvent {
 	t.Helper()
 	event, err := NewStatusEvent(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return event
 }
 
@@ -48,14 +47,10 @@ func TestStatusEventRequiresEvidenceForCreditIncident(t *testing.T) {
 		t.Fatal("exhausted credit with undocumented provider evidence was accepted")
 	}
 	value.ProviderCode = "insufficient_quota"
-	if _, err := NewStatusEvent(value); err != nil {
-		t.Fatalf("documented provider evidence rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(NewStatusEvent(value)), "documented provider evidence rejected")
 	value.Source, value.SafeErrorCode = SourceOperator, "credit_exhausted"
 	value.ProviderCode = ""
-	if _, err := NewStatusEvent(value); err != nil {
-		t.Fatalf("operator evidence rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(NewStatusEvent(value)), "operator evidence rejected")
 }
 
 // creditObservation returns observation(at) carrying the given credit evidence.

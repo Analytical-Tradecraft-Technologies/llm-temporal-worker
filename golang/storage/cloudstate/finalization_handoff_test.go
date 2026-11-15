@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -25,17 +26,17 @@ func handoffFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Reco
 func TestFinalizationHandoffRequiresCommittedMatchingCheckpoint(t *testing.T) {
 	r, _, _, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
-	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrNotFound, "uncommitted checkpoint")
+	testassert.ErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrNotFound, "uncommitted checkpoint")
 	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	wrong := handoff
 	wrong.CheckpointScope = "another-scope"
-	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), contracts.ErrNotFound, "cross-scope checkpoint")
+	testassert.ErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), contracts.ErrNotFound, "cross-scope checkpoint")
 	other := childCheckpoint(checkpoint, "other-operation")
 	mustPublishCheckpoint(t, r.Checkpoints(), other)
 	wrong = handoff
 	wrong.CheckpointID = other.ID
-	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), contracts.ErrConflict, "other operation checkpoint")
-	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrNotFound, "missing handoff")
+	testassert.ErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), contracts.ErrConflict, "other operation checkpoint")
+	testassert.ErrorIs(t, testassert.Err(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrNotFound, "missing handoff")
 }
 
 func TestFinalizationHandoffRestartReplayAndImmutableValues(t *testing.T) {
@@ -59,10 +60,10 @@ func TestFinalizationHandoffRestartReplayAndImmutableValues(t *testing.T) {
 	}
 	changed := handoff
 	changed.Payload = json.RawMessage(`{"version":1,"response":"other"}`)
-	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt), contracts.ErrConflict, "different handoff replaced committed value")
+	testassert.ErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt), contracts.ErrConflict, "different handoff replaced committed value")
 	wrongScope := record.Request.Scope
 	wrongScope.Tenant = "someone-else"
-	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, wrongScope, record.Request.ID)), contracts.ErrNotFound, "cross-tenant load")
+	testassert.ErrorIs(t, testassert.Err(r.LoadFinalizationHandoff(ctx, wrongScope, record.Request.ID)), contracts.ErrNotFound, "cross-tenant load")
 	// Progress is an in-process value, but the plaintext must not reach KV.
 	assertNotStoredInPlaintext(t, table, blobs, "private answer", "handoff")
 }
@@ -117,9 +118,7 @@ func TestFinalizationHandoffConcurrentSameAndDifferentWrites(t *testing.T) {
 	wg.Wait()
 	close(errorsFound)
 	for err := range errorsFound {
-		if err != nil {
-			t.Fatalf("concurrent same handoff: %v", err)
-		}
+		testassert.NoError(t, err, "concurrent same handoff")
 	}
 	got, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
 	if err != nil || got.Revision != record.Revision+1 {
@@ -139,11 +138,11 @@ func TestFinalizationHandoffValidation(t *testing.T) {
 	} {
 		invalid := handoff
 		mutate(&invalid)
-		requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, invalid, checkpoint.CreatedAt), ErrInvalid, "invalid handoff accepted")
+		testassert.ErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, invalid, checkpoint.CreatedAt), ErrInvalid, "invalid handoff accepted")
 	}
 	mustSaveHandoff(t, r, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt)
 	mustCompleteOperation(t, r, record.Request.Scope, record.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), checkpoint.CreatedAt)
-	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "terminal handoff still actionable")
+	testassert.ErrorIs(t, testassert.Err(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "terminal handoff still actionable")
 }
 
 func TestFinalizationHandoffCacheAndCompactKinds(t *testing.T) {
@@ -183,7 +182,7 @@ func TestFinalizationHandoffRejectsManifestOperationMismatch(t *testing.T) {
 	record := mustBeginOperation(t, r, op)
 	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
-	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "manifest key not bound to request ID")
+	testassert.ErrorIs(t, r.SaveFinalizationHandoff(ctx, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "manifest key not bound to request ID")
 }
 
 func TestFinalizationHandoffSeparatesCallerKeyFromInternalOperationID(t *testing.T) {
@@ -194,7 +193,7 @@ func TestFinalizationHandoffSeparatesCallerKeyFromInternalOperationID(t *testing
 	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
 	mustSaveHandoff(t, r, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt)
 	handoff.OperationID = state.OperationID(op.Key)
-	requireErrorIs(t, r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "caller key accepted as internal ID")
+	testassert.ErrorIs(t, r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "caller key accepted as internal ID")
 }
 
 // assertNotStoredInPlaintext fails with "<what> leaked in KV" or "<what>

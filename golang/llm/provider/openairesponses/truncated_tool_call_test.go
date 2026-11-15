@@ -7,6 +7,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -16,9 +17,7 @@ func TestIncompleteResponseDropsCutOffFunctionCall(t *testing.T) {
 	response := contract.DecodeJSON[responses.Response](t, []byte(body))
 	call := liftCall("op", llm.ServiceClassStandard)
 	lifted, err := liftResponse(call, &response, "req")
-	if err != nil {
-		t.Fatalf("cut-off function call failed the response: %v", err)
-	}
+	testassert.NoError(t, err, "cut-off function call failed the response")
 	if lifted.Status != llm.ResponseStatusLength || lifted.Usage.OutputTokens != 64 || len(lifted.Output) != 1 {
 		t.Fatalf("lifted = status %q usage %#v output %#v", lifted.Status, lifted.Usage, lifted.Output)
 	}

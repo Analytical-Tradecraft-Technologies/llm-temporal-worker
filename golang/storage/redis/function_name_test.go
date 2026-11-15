@@ -3,6 +3,7 @@ package redis
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"regexp"
 	"strings"
@@ -27,9 +28,7 @@ func TestAdmissionFunctionNamesCarryTheLuaSourceDigest(t *testing.T) {
 	}
 	for _, path := range []string{"../../config.example.yaml", "../../deploy/local/config.yaml", "../../deploy/kubernetes/base/config.yaml"} {
 		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		for _, want := range []string{"function_library: " + AdmissionFunctionLibrary, "admission_version: " + AdmissionFunctionVersion, "admission_digest: " + AdmissionFunctionDigest()} {
 			if !strings.Contains(string(data), want) {
 				t.Errorf("%s does not pin %q", path, want)

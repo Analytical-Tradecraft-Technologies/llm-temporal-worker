@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -100,9 +100,7 @@ func (f *snapshotCadenceFixture) materialize(t *testing.T, handle llm.Checkpoint
 	f.store.gets.Store(0)
 	f.store.reads.Store(0)
 	got, err := f.cap.Checkpoints.Materializer.(state.CheckpointHandleMaterializer).MaterializeHandle(context.Background(), "trusted-scope", string(handle), f.options.Limits)
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
+	testassert.NoError(t, err, "materialize")
 	var humans []string
 	for _, item := range got.Items {
 		if message, ok := item.(llm.Message); ok && message.Actor == llm.ActorHuman {
@@ -119,13 +117,9 @@ func (f *snapshotCadenceFixture) materialize(t *testing.T, handle llm.Checkpoint
 func (f *snapshotCadenceFixture) row(t *testing.T, handle llm.CheckpointHandle) state.DurableCheckpoint {
 	t.Helper()
 	id, err := f.options.Keyring.VerifyCheckpointHandle(context.Background(), "trusted-scope", string(handle))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	row, err := f.store.CheckpointStore.Get(context.Background(), "trusted-scope", id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return row
 }
 
@@ -140,9 +134,7 @@ func snapshotCadenceSemantic(t *testing.T, value state.MaterializedState) []byte
 		Depth    int32
 		Rows     int
 	}{value.Items, value.Settings, value.PendingToolCalls, value.Depth, len(value.Lineage)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -238,9 +230,7 @@ func TestCloudRuntimeForksAroundCadenceSnapshots(t *testing.T) {
 	}
 	f.now = f.now.Add(f.options.CheckpointTTL)
 	for _, expired := range []llm.CheckpointHandle{main[8], main[9]} {
-		if _, err := materializer.MaterializeHandle(context.Background(), "trusted-scope", string(expired), f.options.Limits); !errors.Is(err, state.ErrExpired) {
-			t.Fatalf("expired snapshot lineage replayed: %v", err)
-		}
+		testassert.ErrorIs(t, testassert.Err(materializer.MaterializeHandle(context.Background(), "trusted-scope", string(expired), f.options.Limits)), state.ErrExpired, "expired snapshot lineage replayed")
 	}
 }
 

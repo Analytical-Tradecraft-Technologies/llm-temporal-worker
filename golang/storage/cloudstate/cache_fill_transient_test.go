@@ -10,6 +10,7 @@ import (
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func fillPointerBlob(t *testing.T, table *memoryTable, key kv.KeyValueKey) blob.BlobKey {
@@ -87,12 +88,12 @@ func TestCloudFillsMissingBlobIsCorruption(t *testing.T) {
 	head := fillPointerBlob(t, table, store.responses.key("fill", lease.Key))
 	saved := blobs.values[head]
 	delete(blobs.values, head)
-	requireErrorIs(t, errOf(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill head treated as absent or transient")
-	requireErrorIs(t, store.Complete(ctx, lease, completion), ErrCorrupt, "dangling fill head completed")
+	testassert.ErrorIs(t, testassert.Err(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill head treated as absent or transient")
+	testassert.ErrorIs(t, store.Complete(ctx, lease, completion), ErrCorrupt, "dangling fill head completed")
 	blobs.values[head] = saved
-	mustNoError(t, store.Complete(ctx, lease, completion))
+	testassert.NoError(t, store.Complete(ctx, lease, completion))
 	// The sealed receipt binds the terminal head's blob.
 	delete(blobs.values, fillPointerBlob(t, table, store.terminalKey(lease)))
-	requireErrorIs(t, errOf(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill receipt treated as absent or transient")
-	requireErrorIs(t, store.Complete(ctx, lease, completion), ErrCorrupt, "dangling fill receipt replayed")
+	testassert.ErrorIs(t, testassert.Err(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill receipt treated as absent or transient")
+	testassert.ErrorIs(t, store.Complete(ctx, lease, completion), ErrCorrupt, "dangling fill receipt replayed")
 }

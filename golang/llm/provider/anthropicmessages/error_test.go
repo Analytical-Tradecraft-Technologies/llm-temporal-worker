@@ -6,6 +6,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
@@ -33,9 +34,7 @@ func TestTimeoutErrorRemainsAmbiguous(t *testing.T) {
 // a rate limit (#1442).
 func TestSpendCapRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 	spendCap := &anthropic.Error{StatusCode: http.StatusTooManyRequests}
-	if err := spendCap.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your API usage limits","details":{"error_code":"enforced_spend_limit_reached"}},"request_id":"req_1"}`)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, spendCap.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your API usage limits","details":{"error_code":"enforced_spend_limit_reached"}},"request_id":"req_1"}`)))
 	mapped := mapAPIError(spendCap, "anthropic-messages")
 	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNextRoute {
 		t.Fatalf("spend-cap 429 = %#v, want a rejected permission denial", mapped)
@@ -44,9 +43,7 @@ func TestSpendCapRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 		t.Fatalf("safe details = %#v", mapped.SafeDetails)
 	}
 	rateLimit := &anthropic.Error{StatusCode: http.StatusTooManyRequests}
-	if err := rateLimit.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}`)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, rateLimit.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}`)))
 	mapped = mapAPIError(rateLimit, "anthropic-messages")
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Retry != provider.RetryAfter || mapped.SafeDetails["provider_code"] != "" {
 		t.Fatalf("rate limit 429 = %#v, want provider_rate_limited", mapped)

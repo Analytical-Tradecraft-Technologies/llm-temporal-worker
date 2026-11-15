@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	commonpb "go.temporal.io/api/common/v1"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -21,16 +22,12 @@ import (
 func unescapedRequest(t *testing.T, fixture, text string) converter.RawValue {
 	t.Helper()
 	var fields map[string]any
-	if err := json.Unmarshal(wireFixture(t, fixture), &fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(wireFixture(t, fixture), &fields))
 	fields["append"] = []any{map[string]any{"kind": "message", "actor": "human", "content": []any{map[string]any{"kind": "text", "text": text}}}}
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(fields); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, encoder.Encode(fields))
 	return converter.NewRawValue(&commonpb.Payload{
 		Metadata: map[string][]byte{converter.MetadataEncoding: []byte(converter.MetadataEncodingJSON)},
 		Data:     bytes.TrimSuffix(encoded.Bytes(), []byte("\n")),

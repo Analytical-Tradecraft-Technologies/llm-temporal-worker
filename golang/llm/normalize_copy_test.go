@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"math"
 	"math/rand"
 	"path/filepath"
@@ -283,9 +284,7 @@ func TestNormalizeRequestCopyMatchesRoundTripForFixtures(t *testing.T) {
 		request := readRequestFile(t, path)
 		assertNormalizeMatchesRoundTrip(t, path, request, true)
 		normalized, err := NormalizeRequest(request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		assertNormalizeMatchesRoundTrip(t, path+" normalized", normalized, true)
 	}
 }
@@ -410,9 +409,7 @@ func TestNormalizeRequestCopyMatchesRoundTripRandomized(t *testing.T) {
 func TestNormalizeRequestCopyIsIndependent(t *testing.T) {
 	request := normalizeFullRequest()
 	normalized, err := NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	before := fmt.Sprintf("%#v", normalized)
 	want, _ := normalizeRequestRoundTrip(normalizeFullRequest())
 	request.ServiceClassFallbacks[0] = ServiceClassEconomy
@@ -472,9 +469,7 @@ func BenchmarkNormalizeRequestLargeTranscript(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				if _, err := normalize(request); err != nil {
-					b.Fatal(err)
-				}
+				testassert.NoError(b, testassert.Err(normalize(request)))
 			}
 		})
 	}

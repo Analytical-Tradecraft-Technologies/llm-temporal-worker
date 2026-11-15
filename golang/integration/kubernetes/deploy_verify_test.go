@@ -1,6 +1,7 @@
 package kubernetes_test
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,14 +14,10 @@ func TestDeploymentVerificationRejectsRootRenderedWorkload(t *testing.T) {
 
 	temporaryDirectory := t.TempDir()
 	renderedManifest := filepath.Join(temporaryDirectory, "rendered.yaml")
-	if err := os.WriteFile(renderedManifest, []byte(rootRenderedWorkload), 0o600); err != nil {
-		t.Fatalf("write rendered manifest: %v", err)
-	}
+	testassert.NoError(t, os.WriteFile(renderedManifest, []byte(rootRenderedWorkload), 0o600), "write rendered manifest")
 
 	fakeKubectl := filepath.Join(temporaryDirectory, "kubectl")
-	if err := os.WriteFile(fakeKubectl, []byte("#!/bin/sh\ncat \"$RENDERED_MANIFEST\"\n"), 0o700); err != nil {
-		t.Fatalf("write fake kubectl: %v", err)
-	}
+	testassert.NoError(t, os.WriteFile(fakeKubectl, []byte("#!/bin/sh\ncat \"$RENDERED_MANIFEST\"\n"), 0o700), "write fake kubectl")
 
 	command := exec.Command(filepath.Join(moduleRoot(t), "deploy", "verify.sh"))
 	command.Dir = moduleRoot(t)

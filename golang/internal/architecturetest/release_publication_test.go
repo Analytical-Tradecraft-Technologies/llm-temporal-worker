@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -321,9 +322,7 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 				test.mutate(test.evidence)
 			}
 			content, err := json.Marshal(test.evidence)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			writeReleaseArtifact(t, evidence, content)
 			result := runReleaseGuard(t, repository, "verify-evidence",
 				"--evidence", evidence,
@@ -431,9 +430,7 @@ func TestPublicEvidenceRunVerifierValidatesTrustedMasterMetadata(t *testing.T) {
 				test.mutate(metadata)
 			}
 			data, err := json.Marshal(metadata)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			fixture := filepath.Join(t.TempDir(), "public-run.json")
 			writeReleaseArtifact(t, fixture, data)
 
@@ -709,9 +706,7 @@ func TestReleaseEvidenceAgeBoundIsSharedAndDocumented(t *testing.T) {
 		t.Fatalf("bundle age bound %s days differs from run age bound %s days", evidenceAge[1], runAge[1])
 	}
 	days, err := strconv.Atoi(evidenceAge[1])
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	runbook := readRepositoryFile(t, root, "docs", "release", "runbook.md")
 	if !strings.Contains(runbook, fmt.Sprintf("within the last %d days", days)) {
@@ -721,9 +716,7 @@ func TestReleaseEvidenceAgeBoundIsSharedAndDocumented(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
 	upload := artifactUploadStep(t, master, "release-evidence", "release-evidence")
 	retention, err := strconv.Atoi(fmt.Sprint(nestedMapping(t, master.name, upload, "with")["retention-days"]))
-	if err != nil {
-		t.Fatalf("release-evidence artifact retention is not a day count: %v", err)
-	}
+	testassert.NoError(t, err, "release-evidence artifact retention is not a day count")
 	if days >= retention {
 		t.Fatalf("evidence age bound %d days must be shorter than the %d-day artifact retention", days, retention)
 	}
@@ -753,9 +746,7 @@ func newPreflightScanFixture(t *testing.T, tagGoVersion, verifier string) prefli
 	}
 	tools := filepath.Join(directory, "tools")
 	for _, path := range []string{fixture.bin, fixture.logs, tools} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.MkdirAll(path, 0o755))
 	}
 	// Restore write access if a failing scan left the read-only worktree.
 	t.Cleanup(func() {
@@ -883,20 +874,14 @@ func assertPreflightTagWorktreeRemoved(t *testing.T, fixture preflightScanFixtur
 
 func writeFixtureFile(t *testing.T, path, contents string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	testassert.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
 }
 
 func writeFixtureExecutable(t *testing.T, path, contents string) {
 	t.Helper()
 	writeFixtureFile(t, path, contents)
-	if err := os.Chmod(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Chmod(path, 0o755))
 }
 
 // setMetadataField returns a mutation that sets one run metadata field.
@@ -1372,9 +1357,7 @@ func runPublicRunVerifier(t *testing.T, arguments ...string) releaseGuardResult 
 func readGuardOutputs(t *testing.T, path string) map[string]string {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	outputs := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		name, value, found := strings.Cut(line, "=")
@@ -1446,8 +1429,6 @@ func TestWorkflowPublicationAndEvidenceTriggers(t *testing.T) {
 		t.Fatalf("release-evidence if = %q; update docs/release/runbook.md with the new evidence trigger", got)
 	}
 	runbook, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "release", "runbook.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertContainsEach(t, string(runbook), "docs/release/runbook.md does not say %q", "On every master\nrun (push, the daily schedule and manual dispatch)", "Those tags are development images")
 }

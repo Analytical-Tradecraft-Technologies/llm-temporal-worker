@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -19,9 +20,7 @@ func TestToolUseLiftPreservesJSONNumbers(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			body := `{"output":{"message":{"role":"assistant","content":[{"text":"checking"},{"toolUse":{"toolUseId":"tooluse_1","name":"lookup","input":` + input + `}}]}},"stopReason":"tool_use","usage":{"inputTokens":4,"outputTokens":3,"totalTokens":7}}`
 			result, err := invokeCannedConverse(t, body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if result.Response.Status != llm.ResponseStatusToolCalls || len(result.Response.Output) != 2 {
 				t.Fatalf("response = %#v", result.Response)
 			}
@@ -30,13 +29,9 @@ func TestToolUseLiftPreservesJSONNumbers(t *testing.T) {
 				t.Fatalf("tool call = %#v", result.Response.Output[1])
 			}
 			got, err := llm.CanonicalJSON(call.Arguments)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			want, err := llm.CanonicalJSON([]byte(input))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !bytes.Equal(got, want) {
 				t.Fatalf("tool arguments = %s, want %s", got, want)
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
@@ -37,9 +38,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			materializer := mustCall(t, NewRedisBudgetMaterializer, RedisBudgetMaterializerOptions{Client: client, Mode: test.mode, Keys: keys, GenerationID: "retention-gen", IncarnationID: "retention-inc", Clock: time.Now, CoordinationStreamEnabled: true, OperationKeyReuseHorizon: test.horizon})
 			space := mustCall(t, newKeySpace, keys)
 			sampler, err := NewBudgetGrowthSampler(client, keys, time.Now)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			index := space.admissionPrefix() + BudgetOperationsSuffix
 			// check asserts the record's TTL and index score: persistent, or
 			// expiring after about the horizon.
@@ -47,9 +46,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 				t.Helper()
 				key := space.durableBudgetOperationKey("retention-gen", id)
 				ttl, err := client.TTL(ctx, key).Result()
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				score, err := client.ZScore(ctx, index, key[len(key)-64:]).Result()
 				if err != nil {
 					t.Fatalf("%s index entry: %v", id, err)
@@ -95,7 +92,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			}
 			claim := func(result durable.ReserveResult) {
 				t.Helper()
-				mustNoError(t, errOf(materializer.Claim(ctx, durable.ClaimRequest{OperationID: result.OperationID, GenerationID: "retention-gen", IncarnationID: "retention-inc"})))
+				testassert.NoError(t, testassert.Err(materializer.Claim(ctx, durable.ClaimRequest{OperationID: result.OperationID, GenerationID: "retention-gen", IncarnationID: "retention-inc"})))
 			}
 
 			unclaimed := reserve("unclaimed")
@@ -121,9 +118,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			check("ambiguous", true)
 
 			growth, err := sampler.Sample(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			wantPersistent := int64(1)
 			if test.horizon == 0 {
 				wantPersistent = 3
@@ -133,7 +128,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			}
 			// An index entry whose expiry has passed is pruned by the next
 			// mutation and no longer counted.
-			mustNoError(t, client.ZAdd(ctx, index, redisclient.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "stale"}).Err())
+			testassert.NoError(t, client.ZAdd(ctx, index, redisclient.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "stale"}).Err())
 			if growth, err := sampler.Sample(ctx); err != nil || growth.OperationRecords != 3 {
 				t.Fatalf("growth with a stale entry = %+v, %v", growth, err)
 			}
@@ -158,13 +153,13 @@ func TestLiveRedisProviderStateRetiresUnloadedConfigs(t *testing.T) {
 	store := mustCall(t, NewProviderStateStore, ProviderStateOptions{Client: client, Keys: keys, Clock: func() time.Time { return now }})
 	current, recent, retired := [32]byte{1}, [32]byte{2}, [32]byte{3}
 	for _, digest := range [][32]byte{current, recent, retired} {
-		mustNoError(t, client.HSet(ctx, store.key("status", digest), "field", "value").Err())
-		mustNoError(t, client.HSet(ctx, store.key("inventory", digest), "field", "value").Err())
+		testassert.NoError(t, client.HSet(ctx, store.key("status", digest), "field", "value").Err())
+		testassert.NoError(t, client.HSet(ctx, store.key("inventory", digest), "field", "value").Err())
 	}
 	report := func(digest [32]byte, at time.Time) {
 		t.Helper()
 		now = at
-		mustNoError(t, store.MarkConfigLoaded(ctx, digest))
+		testassert.NoError(t, store.MarkConfigLoaded(ctx, digest))
 	}
 	start := now
 	report(retired, start.Add(-8*24*time.Hour))
@@ -183,7 +178,7 @@ func TestLiveRedisProviderStateRetiresUnloadedConfigs(t *testing.T) {
 	}
 	// A digest reported again after the scan observed it stale is kept.
 	report(retired, start.Add(-8*24*time.Hour))
-	mustNoError(t, client.HSet(ctx, store.key("status", retired), "field", "value").Err())
+	testassert.NoError(t, client.HSet(ctx, store.key("status", retired), "field", "value").Err())
 	applied, err := providerRetireScript.Run(ctx, client, []string{store.loadedConfigsKey(), store.key("status", retired), store.key("inventory", retired)}, fmt.Sprintf("%x", retired[:]), "0").Int()
 	if err != nil || applied != 0 {
 		t.Fatalf("retire with a changed marker = %d, %v; want 0", applied, err)

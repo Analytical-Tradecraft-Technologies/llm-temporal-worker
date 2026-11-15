@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -20,17 +21,13 @@ import (
 
 func TestStoragePolicy(t *testing.T) {
 	body, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, permitted := range []bool{false, true} {
 		for _, extension := range []string{`{}`, `{"store":false}`, `{"store":true}`} {
 			calls := 0
 			fixture := newFixtureAdapterWithTransport(t, body, func() { calls++ })
 			adapter, err := New(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(permitted), allowSupportedExtensions)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call, err := adaptertest.Compile(adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "policy", Model: "gpt-contract", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(extension)}}, true)
 			if !permitted && extension == `{"store":true}` {
 				if err == nil || calls != 0 {
@@ -38,9 +35,7 @@ func TestStoragePolicy(t *testing.T) {
 				}
 				continue
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			params := call.SDKParams.(responses.ResponseNewParams)
 			if !permitted && (!params.Store.Valid() || params.Store.Value) {
 				t.Fatal("storage not explicitly disabled")
@@ -52,9 +47,7 @@ func TestStoragePolicy(t *testing.T) {
 				t.Fatalf("serialized store = %v", wire["store"])
 			}
 			result, err := adapter.Invoke(context.Background(), call, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if calls != 1 {
 				t.Fatalf("HTTP calls=%d", calls)
 			}
@@ -71,17 +64,13 @@ func TestStoragePolicyRejectsBypassingCompile(t *testing.T) {
 			calls := 0
 			fixture := newFixtureAdapterWithTransport(t, []byte(`{}`), func() { calls++ })
 			adapter, err := New(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(false))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			_, err = adapter.Invoke(context.Background(), provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, SDKParams: params}, nil)
 			if err == nil || calls != 0 {
 				t.Fatalf("error=%v calls=%d", err, calls)
 			}
 			caps, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if caps.Features[provider.FeatureContinuation].State != provider.CapabilityUnsupported {
 				t.Fatal("continuation advertised")
 			}
@@ -98,17 +87,11 @@ func TestStoragePolicyReconfigurationPreservesExactSchemas(t *testing.T) {
 				wire, _ = io.ReadAll(request.Body)
 				return adaptertest.JSONResponse(request, http.StatusOK, `{}`), nil
 			})}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			permitted, err := New(client, "openai-prod", "cap-test", WithProviderStoragePermitted(true))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			denied, err := New(client, "openai-prod", "cap-test", WithProviderStoragePermitted(false))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			request := llm.Request{OperationKey: "policy-change", Model: "gpt-contract"}
 			if slot != "output" {
 				request.Tools = []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(schema)}}
@@ -117,9 +100,7 @@ func TestStoragePolicyReconfigurationPreservesExactSchemas(t *testing.T) {
 				request.Output = &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}
 			}
 			call, err := adaptertest.Compile(permitted, "openai-prod", provider.FamilyOpenAIResponses, request, false)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			_, _ = denied.Invoke(context.Background(), call, nil)
 			body := contract.DecodeJSON[map[string]json.RawMessage](t, wire)
 			if string(body["store"]) != "false" {
@@ -141,9 +122,7 @@ func TestStoragePolicyRejectsForbiddenRawOverrides(t *testing.T) {
 		calls := 0
 		fixture := newFixtureAdapterWithTransport(t, []byte(`{}`), func() { calls++ })
 		adapter, err := New(fixture.client, "openai-prod", "cap-test", WithProviderStoragePermitted(false))
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		params := responses.ResponseNewParams{}
 		param.SetJSON([]byte(raw), &params)
 		_, err = adapter.Invoke(context.Background(), provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, SDKParams: params}, nil)

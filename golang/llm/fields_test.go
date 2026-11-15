@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"testing"
 )
@@ -97,9 +98,7 @@ func TestReadEnumDefaultsAndRejects(t *testing.T) {
 	if got := readEnum(&reader, "bad", "a", "test kind", "a", "b"); got != "" || reader.err == nil || reader.err.Error() != `test kind "z" is invalid` {
 		t.Fatalf("readEnum(bad) = %q, %v", got, reader.err)
 	}
-	if _, err := defaultEnum(ToolKind(""), ToolKindFunction, "tool kind", toolKinds...); err != nil {
-		t.Fatalf("defaultEnum(empty) = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(defaultEnum(ToolKind(""), ToolKindFunction, "tool kind", toolKinds...)), "defaultEnum(empty)")
 }
 
 func TestArrayHelpersNameTheirFailures(t *testing.T) {

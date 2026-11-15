@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -125,9 +126,7 @@ func TestV1RuntimeCapabilitiesValidateCompactDoesNotImplyGenerate(t *testing.T) 
 	capabilities.CompactPortsFactory = func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
 		return durable.CompactPorts{}, nil
 	}
-	if err := capabilities.ValidateCompact(); err != nil {
-		t.Fatalf("ValidateCompact error = %v", err)
-	}
+	testassert.NoError(t, capabilities.ValidateCompact(), "ValidateCompact error")
 	if err := capabilities.ValidateGenerate(); err == nil {
 		t.Fatal("ValidateGenerate accepted missing Generate factory")
 	}
@@ -157,9 +156,7 @@ func TestGenerateV1RuntimeBuilderCapturesOneSnapshotCapabilityBundle(t *testing.
 	})
 	builder := NewGenerateV1RuntimeBuilder()
 	runtimeValue, err := builder(context.Background(), &config.Snapshot{}, nil, clients)
-	if err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, err, "builder error")
 	clients.capabilities.Snapshot = engine.StaticSnapshot{Value: engine.Snapshot{Version: "snapshot-2"}}
 	if got, want := strings.Join(seen, ","), "snapshot-1"; got != want {
 		t.Fatalf("factory observed snapshots = %q, want %q", got, want)
@@ -174,9 +171,7 @@ func TestGenerateV1RuntimeBuilderLeavesCompactAndQueryFailClosed(t *testing.T) {
 		return validBuilderGeneratePorts(nil), nil
 	})}
 	runtimeValue, err := NewGenerateV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
-	if err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, err, "builder error")
 	if _, err := runtimeValue.CompactV1(context.Background(), llm.CompactRequestV1{}); err == nil {
 		t.Fatal("Generate-only runtime unexpectedly served Compact")
 	}
@@ -192,18 +187,12 @@ func TestGenerateV1RuntimeBuilderPreservesReconciliationNoDuplicateDispatch(t *t
 		return stateful.ports(request), nil
 	})}
 	runtimeValue, err := NewGenerateV1RuntimeBuilder()(context.Background(), &config.Snapshot{}, nil, clients)
-	if err != nil {
-		t.Fatalf("builder error = %v", err)
-	}
+	testassert.NoError(t, err, "builder error")
 	if _, err := runtimeValue.GenerateV1(context.Background(), request); !errors.Is(err, durable.ErrReconcilePending) {
 		t.Fatalf("first Generate error = %v, want reconciliation pending", err)
 	}
-	if _, err := runtimeValue.GenerateV1(context.Background(), request); err != nil {
-		t.Fatalf("reconciliation retry error = %v", err)
-	}
-	if _, err := runtimeValue.GenerateV1(context.Background(), request); err != nil {
-		t.Fatalf("completed replay error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(runtimeValue.GenerateV1(context.Background(), request)), "reconciliation retry error")
+	testassert.NoError(t, testassert.Err(runtimeValue.GenerateV1(context.Background(), request)), "completed replay error")
 	if stateful.dispatchCalls != 1 || stateful.reconcileCalls != 2 {
 		t.Fatalf("dispatch/reconcile calls = %d/%d, want 1/2", stateful.dispatchCalls, stateful.reconcileCalls)
 	}

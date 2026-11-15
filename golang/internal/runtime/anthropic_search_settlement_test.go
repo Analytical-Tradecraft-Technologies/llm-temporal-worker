@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -35,21 +36,15 @@ func TestAnthropicSearchCostFromSDKResponseThroughPublication(t *testing.T) {
 					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 				})},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			adapter, err := anthropicmessages.New(client, "anthropic-contract", anthropicmessages.DefaultProfile("anthropic-contract"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{OperationKey: "search-cost", Model: "claude-contract", WebSearch: true},
 				Query:   provider.CapabilityQuery{EndpointID: "anthropic-contract", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 				Strict:  true,
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			result, err := adapter.Invoke(context.Background(), call, nil)
 			if err != nil || calls != 1 {
 				t.Fatalf("SDK result = %#v, %v; calls = %d", result, err, calls)
@@ -71,9 +66,7 @@ func TestAnthropicSearchCostFromSDKResponseThroughPublication(t *testing.T) {
 				Cache: llm.CacheDispositionV1{Disposition: "miss_populated"}, Cost: published,
 			})
 			diagnostics, err := withCacheOriginCost(nil, cache.ResponseEntry{OriginOperationID: "origin-search-cost", Response: receipt})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			assertOriginCost(t, diagnostics, "origin-search-cost", *published.ActualCostUSD)
 		})
 	}

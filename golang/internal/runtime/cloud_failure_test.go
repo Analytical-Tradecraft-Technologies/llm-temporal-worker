@@ -8,6 +8,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -115,9 +116,7 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 			}
 			scope := testRequestScope
 			first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 			if err != nil || !saved.Execution.Settled || !saved.Execution.Failure.Retryable {
 				t.Fatal("retry exposed before settlement", err)
@@ -189,9 +188,7 @@ func assertCloudStatus(t *testing.T, f *boundedCloudFixture, id cloudstate.Reque
 	if want == cloudstate.StatusFailed || want == cloudstate.StatusCompleted {
 		shard, _ := cloudstate.PendingShard(id)
 		page, err := f.repository.ListPending(ctx, shard, 100, "")
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		for _, pending := range page.Requests {
 			if pending.ID == id {
 				t.Fatal("terminal record still pending")
@@ -230,9 +227,7 @@ func TestCloudPermanentFailureReplaysWithoutParentOrProvider(t *testing.T) {
 	denied := f.options
 	denied.ResolveScope = func(context.Context, llm.RequestContext) (string, error) { return "", errors.New("denied") }
 	r, err := f.cap.NewCloudExecutionRuntime(ctx, denied)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, err := r.AcquireBudgetV1(ctx, ref); err == nil {
 		t.Fatal("failed result bypassed authorization")
 	}

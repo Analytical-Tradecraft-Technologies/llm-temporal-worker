@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -33,9 +34,7 @@ func BenchmarkV1ActivitiesAdmissionMemory(b *testing.B) {
 func benchmarkV1ActivitiesAdmission(b *testing.B, f *boundedCloudFixture) {
 	b.Helper()
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	activities := &activity.Activities{V1Runtime: &cloudV1Runtime{CloudExecutionRuntime: f.runtime}, Metrics: metrics}
 	ctx := context.Background()
 	request := f.request

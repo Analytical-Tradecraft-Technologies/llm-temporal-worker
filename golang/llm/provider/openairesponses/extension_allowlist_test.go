@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -15,9 +16,7 @@ func compileResponsesExtension(t *testing.T, extension string, strict bool, opti
 	t.Helper()
 	fixture := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
 	adapter, err := New(fixture.client, "openai-prod", "cap-test", options...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{
 			OperationKey: "extension-allowlist",

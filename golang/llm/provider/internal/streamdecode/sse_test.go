@@ -22,9 +22,7 @@ func TestParsePreservesFoldedDataAndIgnoresTransportMetadata(t *testing.T) {
 	}, "\r\n")
 
 	got, err := Parse(strings.NewReader(input))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	want := []SSE{
 		{Event: "message", Data: []byte("first\nsecond")},
 		{Event: "empty"},

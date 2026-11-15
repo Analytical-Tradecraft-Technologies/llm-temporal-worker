@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	memory "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/memory"
 	"github.com/redis/go-redis/v9"
@@ -300,9 +301,9 @@ func TestAdmissionConformanceReplayConflictAndAmbiguity(t *testing.T) {
 		t.Fatalf("replay = %#v, %v", replay, err)
 	}
 	request.RequestDigest = admission.Digest([]byte("different"))
-	requireErrorIs(t, errOf(store.Begin(context.Background(), request)), admission.ErrOperationConflict, "digest conflict =")
-	mustNoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "route"}}))
-	mustNoError(t, store.Fail(context.Background(), admission.FailRequest{OperationID: "op", DispatchToken: "op", Certainty: admission.Ambiguous, Incurred: 0}))
+	testassert.ErrorIs(t, testassert.Err(store.Begin(context.Background(), request)), admission.ErrOperationConflict, "digest conflict =")
+	testassert.NoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "route"}}))
+	testassert.NoError(t, store.Fail(context.Background(), admission.FailRequest{OperationID: "op", DispatchToken: "op", Certainty: admission.Ambiguous, Incurred: 0}))
 	operation, err := store.Get(context.Background(), "op")
 	if err != nil || operation.State != admission.StateAmbiguous || operation.ReservedMicroUSD != 6 {
 		t.Fatalf("ambiguous operation = %#v, %v", operation, err)
@@ -318,15 +319,11 @@ func TestAdmissionContinueWireAndCompletion(t *testing.T) {
 		ID: "continue-op", ScopeKey: "tenant/continue", RequestDigest: admission.Digest([]byte("continue")),
 		Reservation: 10, Reservations: []admission.WindowReservation{reservation}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
+	testassert.NoError(t, err)
+	testassert.NoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{
 		OperationID: first.Operation.ID, DispatchToken: first.Operation.DispatchToken,
 		Attempt: admission.AttemptFacts{RouteID: "initial"}, LeaseUntil: now.Add(time.Minute),
-	}); err != nil {
-		t.Fatal(err)
-	}
+	}))
 	next := reservation
 	next.Amount = 8
 	continued, err := store.Continue(context.Background(), admission.ContinueRequest{
@@ -343,18 +340,14 @@ func TestAdmissionContinueWireAndCompletion(t *testing.T) {
 	if continued.Operation.DispatchToken == first.Operation.DispatchToken {
 		t.Fatal("continue did not rotate dispatch token")
 	}
-	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
+	testassert.NoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{
 		OperationID: first.Operation.ID, DispatchToken: continued.Operation.DispatchToken,
 		Attempt: continued.Operation.Attempt, LeaseUntil: now.Add(time.Minute),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Complete(context.Background(), admission.CompleteRequest{
+	}))
+	testassert.NoError(t, store.Complete(context.Background(), admission.CompleteRequest{
 		OperationID: first.Operation.ID, DispatchToken: continued.Operation.DispatchToken,
 		Actual: 8, Attempt: admission.AttemptFacts{RouteID: "retry", ProviderRequestID: "provider-retry"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	}))
 	completed, err := store.Get(context.Background(), first.Operation.ID)
 	if err != nil || completed.State != admission.StateCompleted || completed.FinalMicroUSD != 8 || completed.Attempt.Dispatch != admission.Accepted {
 		t.Fatalf("completed continuation = %#v, %v", completed, err)
@@ -380,9 +373,7 @@ func TestAdmissionDeniesOverlappingReservationAtomically(t *testing.T) {
 func TestAdmissionBeginDecodesTwoFieldDeniedFunctionResult(t *testing.T) {
 	now := time.Unix(100, 0)
 	denialData, err := json.Marshal(denialWire{Policy: "policy", Window: "window", Limit: 10, Active: 6, Requested: 5})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reader := newAdmissionHarness(now)
 	store, err := NewAdmissionStore(AdmissionOptions{
 		Invoker: fixedFunctionResultInvoker{result: []any{"denied", string(denialData)}},
@@ -390,9 +381,7 @@ func TestAdmissionBeginDecodesTwoFieldDeniedFunctionResult(t *testing.T) {
 		Keys:    testKeyOptions(),
 		Clock:   func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, err := store.Begin(context.Background(), admission.BeginRequest{
 		ID:            "two-field-denial",
 		ScopeKey:      "tenant/two-field-denial",
@@ -401,9 +390,7 @@ func TestAdmissionBeginDecodesTwoFieldDeniedFunctionResult(t *testing.T) {
 		Reservations:  []admission.WindowReservation{testReservation(5, 10)},
 		ExpiresAt:     now.Add(time.Hour),
 	})
-	if err != nil {
-		t.Fatalf("two-field denial = %v", err)
-	}
+	testassert.NoError(t, err, "two-field denial")
 	if result.Denied == nil || result.Denied.PolicyID != "policy" || result.Denied.WindowID != "window" || result.Denied.Active != 6 || result.Denied.Requested != 5 {
 		t.Fatalf("two-field denial = %#v", result)
 	}

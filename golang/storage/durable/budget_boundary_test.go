@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -85,18 +86,14 @@ func newBoundary(materializer BudgetLeaser) BudgetBoundary {
 func newLifecycle(t *testing.T) *Lifecycle {
 	t.Helper()
 	lifecycle := new(Lifecycle)
-	if err := lifecycle.Advance(PhaseOperationReplay); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, lifecycle.Advance(PhaseOperationReplay))
 	return lifecycle
 }
 
 func advanceDispatched(t *testing.T, lifecycle *Lifecycle) {
 	t.Helper()
 	for _, phase := range []Phase{PhaseDispatched} {
-		if err := lifecycle.Advance(phase); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, lifecycle.Advance(phase))
 	}
 }
 
@@ -107,12 +104,8 @@ func dispatchedBoundary(t *testing.T, materializer BudgetLeaser, request Reserve
 	boundary := newBoundary(materializer)
 	lifecycle := newLifecycle(t)
 	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, testassert.Err(boundary.Claim(context.Background(), lifecycle, &reservation)))
 	advanceDispatched(t, lifecycle)
 	return boundary, lifecycle, reservation
 }
@@ -155,13 +148,9 @@ func TestBudgetBoundaryOrdersClaimBeforeDispatchAndReconcile(t *testing.T) {
 		t.Fatalf("reserve ordering = %#v", materializer.calls)
 	}
 
-	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(boundary.Claim(context.Background(), lifecycle, &reservation)))
 	advanceDispatched(t, lifecycle)
-	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)}); err != nil {
-		t.Fatalf("finalize = %v", err)
-	}
+	testassert.NoError(t, boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)}), "finalize")
 	if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "claim", "reconcile"}) {
 		t.Fatalf("finalize ordering = %#v", got)
 	}
@@ -208,9 +197,7 @@ func TestBudgetBoundaryReconcileFailureIsRetryableAfterFinalization(t *testing.T
 
 	boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 	err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)})
-	if !errors.Is(err, ErrReconcilePending) {
-		t.Fatalf("reconcile error = %v", err)
-	}
+	testassert.ErrorIs(t, err, ErrReconcilePending, "reconcile")
 	if current, _ := lifecycle.Current(); current != PhaseResultFinalized {
 		t.Fatalf("reconcile failure phase = %s", current)
 	}
@@ -218,13 +205,9 @@ func TestBudgetBoundaryReconcileFailureIsRetryableAfterFinalization(t *testing.T
 	changed.EventID = "completion-event-changed"
 	changed.AccountedIncreaseUSD = pricing.MustUSD("0.06")
 	changed.ActualCostUSD = ptr(pricing.MustUSD("0.06"))
-	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{changed}); !errors.Is(err, ErrInvalidIdentity) {
-		t.Fatalf("changed reconciliation batch error = %v", err)
-	}
+	testassert.ErrorIs(t, boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{changed}), ErrInvalidIdentity, "changed reconciliation batch")
 	materializer.reconcileErr = nil
-	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)}); err != nil {
-		t.Fatalf("reconciliation retry = %v", err)
-	}
+	testassert.NoError(t, boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)}), "reconciliation retry")
 }
 
 func TestBudgetBoundaryRejectsCompletionIdentityMismatch(t *testing.T) {
@@ -247,9 +230,7 @@ func TestBudgetBoundaryPreflightsDuplicateCompletionIDs(t *testing.T) {
 
 	boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 	completion := boundaryCompletion(request, now)
-	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{completion, completion}); !errors.Is(err, ErrBudgetBoundaryInvalid) {
-		t.Fatalf("duplicate completion accepted: %v", err)
-	}
+	testassert.ErrorIs(t, boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{completion, completion}), ErrBudgetBoundaryInvalid, "duplicate completion accepted")
 }
 
 func TestBudgetBoundaryRequiresOneCompletionPerReservedWindowBucket(t *testing.T) {
@@ -289,9 +270,7 @@ func TestBudgetBoundaryRequiresOneCompletionPerReservedWindowBucket(t *testing.T
 			boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 
 			err := boundary.Finalize(context.Background(), lifecycle, reservation, test.events())
-			if !errors.Is(err, ErrBudgetBoundaryInvalid) {
-				t.Fatalf("incomplete completion coverage accepted: %v", err)
-			}
+			testassert.ErrorIs(t, err, ErrBudgetBoundaryInvalid, "incomplete completion coverage accepted")
 			if got := materializer.calls; !reflect.DeepEqual(got, []string{"accept", "claim"}) {
 				t.Fatalf("invalid completion batch caused a side effect: %#v", got)
 			}
@@ -326,18 +305,14 @@ func TestBudgetBoundaryDistinguishesBucketTimesOutsideUnixNanoRange(t *testing.T
 	secondCompletion.EventID = "completion-event-2"
 	secondCompletion.BucketStart = secondBucket
 
-	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{firstCompletion, secondCompletion}); err != nil {
-		t.Fatalf("distinct out-of-range buckets rejected: %v", err)
-	}
+	testassert.NoError(t, boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{firstCompletion, secondCompletion}), "distinct out-of-range buckets rejected")
 }
 
 func TestBudgetBoundaryRejectsTypedNilPorts(t *testing.T) {
 	var materializer *boundaryMaterializer
 
 	boundary := newBoundary(materializer)
-	if err := boundary.Validate(); !errors.Is(err, ErrBudgetBoundaryInvalid) {
-		t.Fatalf("typed nil ports accepted: %v", err)
-	}
+	testassert.ErrorIs(t, boundary.Validate(), ErrBudgetBoundaryInvalid, "typed nil ports accepted")
 }
 
 func TestBudgetBoundaryClaimFailurePreventsDispatchWithoutSQL(t *testing.T) {
@@ -349,21 +324,15 @@ func TestBudgetBoundaryClaimFailurePreventsDispatchWithoutSQL(t *testing.T) {
 			boundary := newBoundary(materializer)
 			lifecycle := newLifecycle(t)
 			reserved, err := boundary.Reserve(context.Background(), lifecycle, request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if reserved.DispatchReady() {
 				t.Fatal("unclaimed lease permits dispatch")
 			}
-			if _, err := boundary.Claim(context.Background(), lifecycle, &reserved); !errors.Is(err, claimError) {
-				t.Fatal(err)
-			}
+			testassert.ErrorIs(t, testassert.Err(boundary.Claim(context.Background(), lifecycle, &reserved)), claimError)
 			if reserved.DispatchReady() {
 				t.Fatal("failed claim permits dispatch")
 			}
-			if err := lifecycle.Advance(PhaseDispatched); !errors.Is(err, ErrClaimRequired) {
-				t.Fatalf("dispatch phase after failed claim: %v", err)
-			}
+			testassert.ErrorIs(t, lifecycle.Advance(PhaseDispatched), ErrClaimRequired, "dispatch phase after failed claim")
 		})
 	}
 }

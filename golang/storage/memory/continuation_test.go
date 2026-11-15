@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -16,9 +17,7 @@ func TestContinuationStoreBranchesImmutably(t *testing.T) {
 	store := newTestContinuationStore(t, &now, deterministicKeyringRandom())
 	rootHandle, _ := createTextRoot(t, store, "hello", now.Add(time.Hour))
 	got, err := store.GetForTenant(context.Background(), "tenant", rootHandle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got.Transcript[0] = llm.Message{Actor: llm.ActorHuman}
 	again, err := store.Get(context.Background(), rootHandle)
 	if err != nil || len(again.Transcript) != 1 {
@@ -31,9 +30,7 @@ func TestContinuationStoreBranchesImmutably(t *testing.T) {
 	child.Transcript = append(child.Transcript, llm.ModelText("world"))
 	child.TranscriptDigest = canonicalDigest(t, child.Transcript)
 	childHandle, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	replay, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"})
 	if err != nil || replay != childHandle {
 		t.Fatalf("idempotent child = %q %v", replay, err)
@@ -104,9 +101,7 @@ func putChildrenConcurrently(t *testing.T, store *ContinuationStore, callers int
 	close(start)
 	group.Wait()
 	for _, err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	return handles
 }
@@ -122,31 +117,23 @@ func TestContinuationStoreDetachesNestedTranscriptData(t *testing.T) {
 	}
 	digest := canonicalDigest(t, items)
 	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Mutate the caller's input after the write.
 	content[0] = llm.TextPart{Text: "mutated input"}
 	arguments[2] = 'Q'
 	got, err := store.Get(context.Background(), handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// Mutate a returned read.
 	got.Transcript[0].(llm.Message).Content[0] = llm.TextPart{Text: "mutated read"}
 	got.Transcript[1].(llm.ToolCall).Arguments[2] = 'R'
 
 	again, err := store.Get(context.Background(), handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if text := again.Transcript[0].(llm.Message).Content[0].(llm.TextPart).Text; text != "hello" {
 		t.Fatalf("stored message text = %q", text)
 	}
 	if args := string(again.Transcript[1].(llm.ToolCall).Arguments); args != `{"q":"x"}` {
 		t.Fatalf("stored tool arguments = %s", args)
 	}
-	if err := again.Validate(now); err != nil {
-		t.Fatalf("stored continuation no longer matches its digest: %v", err)
-	}
+	testassert.NoError(t, again.Validate(now), "stored continuation no longer matches its digest")
 }

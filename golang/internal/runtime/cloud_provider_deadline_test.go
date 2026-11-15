@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -57,15 +58,11 @@ func TestCloudProviderDeadlineMatchesActivityWindow(t *testing.T) {
 					return poll(ctx, call, id, observer)
 				}
 				result, err := f.submit(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if async {
 					f.now = f.now.Add(3 * time.Second)
 					result, err = f.resume(ctx)
-					if err != nil {
-						t.Fatal(err)
-					}
+					testassert.NoError(t, err)
 				}
 				wantObserved := 1
 				if async {

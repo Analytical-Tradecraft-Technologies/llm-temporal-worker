@@ -3,12 +3,12 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -51,9 +51,7 @@ func testRedisMaterializer(t *testing.T, invoker FunctionInvoker) *RedisBudgetMa
 		IncarnationID: durable.IncarnationID("incarnation-1"),
 		Clock:         func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return materializer
 }
 
@@ -77,9 +75,7 @@ func durableAcceptedRecord(t *testing.T, request durable.ReserveRequest, now tim
 	t.Helper()
 	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
 	fingerprint, err := durableRequestFingerprint(request, reservations)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return mustJSON(t, durableOperation{
 		Schema: "durable-budget/v1", OperationID: string(request.OperationID), GenerationID: string(request.GenerationID),
 		IncarnationID: "incarnation-1", Fingerprint: fingerprint, Status: "accepted", OccurredAt: now,
@@ -90,9 +86,7 @@ func durableAcceptedRecord(t *testing.T, request durable.ReserveRequest, now tim
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return string(data)
 }
 
@@ -103,9 +97,7 @@ func TestRedisBudgetMaterializerAcceptsAndReturnsJournalEvents(t *testing.T) {
 	invoker.result = []any{"created", durableAcceptedRecord(t, request, now)}
 	materializer := testRedisMaterializer(t, invoker)
 	result, err := materializer.Accept(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !result.Accepted || len(result.Events) != 1 || result.Events[0].AmountUSD.Cmp(pricing.MustUSD("0.01")) != 0 {
 		t.Fatalf("accepted result = %#v", result)
 	}
@@ -132,9 +124,7 @@ func TestRedisBudgetMaterializerDenialIsReplayable(t *testing.T) {
 		Denial: &durableDenial{PolicyID: "policy", WindowID: "window", LimitNano: "1000000000", ActiveNano: "1000000000", RequestedNano: "10000000"},
 	})}}
 	result, err := testRedisMaterializer(t, invoker).Accept(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Accepted || result.Denial == nil || result.Denial.PolicyID != "policy" || !result.Replayed {
 		t.Fatalf("denied result = %#v", result)
 	}
@@ -146,7 +136,7 @@ func TestRedisBudgetMaterializerRejectsSnapshotMismatchBeforeRedis(t *testing.T)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	request := durableTestRequest(now)
 	request.GenerationID = "different-generation"
-	requireErrorIs(t, errOf(materializer.Accept(context.Background(), request)), ErrRedisBudgetGenerationMismatch, "generation mismatch =")
+	testassert.ErrorIs(t, testassert.Err(materializer.Accept(context.Background(), request)), ErrRedisBudgetGenerationMismatch, "generation mismatch =")
 	if invoker.calls != 0 {
 		t.Fatalf("generation mismatch invoked Redis %d times", invoker.calls)
 	}
@@ -165,15 +155,13 @@ func TestRedisBudgetMaterializerReconcileDuplicateEventIsIdempotent(t *testing.T
 		ActualCostUSD: ptrUSD(pricing.MustUSD("0.005")), CostStatus: budget.CostExact, OccurredAt: now,
 	}
 	reconcile := durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-1", Events: []budget.CompletionEvent{event}}
-	mustNoError(t, materializer.Reconcile(context.Background(), reconcile))
-	mustNoError(t, materializer.Reconcile(context.Background(), reconcile))
+	testassert.NoError(t, materializer.Reconcile(context.Background(), reconcile))
+	testassert.NoError(t, materializer.Reconcile(context.Background(), reconcile))
 	if invoker.calls != 2 || invoker.args[0][0] != "durable_reconcile" {
 		t.Fatalf("reconcile invocations = %#v", invoker.args)
 	}
 	var materializedEvents []durableEvent
-	if err := json.Unmarshal([]byte(invoker.args[0][4]), &materializedEvents); err != nil {
-		t.Fatalf("materialized completion payload = %v", err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(invoker.args[0][4]), &materializedEvents), "materialized completion payload")
 	if len(materializedEvents) != 1 || materializedEvents[0].ReservationRevision != 2 {
 		t.Fatalf("materialized completion revision = %#v, want 2", materializedEvents)
 	}
@@ -183,9 +171,7 @@ func TestRedisBudgetMaterializerTimeoutAfterMutationFailsClosed(t *testing.T) {
 	invoker := &durableMaterializerInvoker{err: ErrUnavailable}
 	materializer := testRedisMaterializer(t, invoker)
 	_, err := materializer.Accept(context.Background(), durableTestRequest(time.Unix(1_700_000_000, 0).UTC()))
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("timeout-after-mutation = %v", err)
-	}
+	testassert.ErrorIs(t, err, ErrUnavailable, "timeout-after-mutation")
 }
 
 func TestRedisBudgetMaterializerRoundsSubsecondExpiryUp(t *testing.T) {

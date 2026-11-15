@@ -5,12 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"testing"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/workflows"
@@ -44,9 +44,7 @@ func TestRecoveredHistoricalCompactionReplaysPublicGenerate(t *testing.T) {
 				f.prepare(t, context.Background(), llm.PrepareExecutionV1{Generate: &effective}, llm.ExecutionBudgetRequired)
 			}
 			op := publicGenerationOperation(original, f.now)
-			if _, err := f.repository.LoadGenerationPlan(context.Background(), op); !errors.Is(err, contracts.ErrNotFound) {
-				t.Fatalf("fixture is not legacy: %v", err)
-			}
+			testassert.ErrorIs(t, testassert.Err(f.repository.LoadGenerationPlan(context.Background(), op)), contracts.ErrNotFound, "fixture is not legacy")
 			before := f.submits.Load()
 			f.now = f.now.Add(24*time.Hour - 500*time.Millisecond)
 			f.restart(t)
