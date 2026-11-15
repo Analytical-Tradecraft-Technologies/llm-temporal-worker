@@ -5,6 +5,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -17,9 +18,7 @@ func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
 		ServiceClass: llm.ServiceClassStandard,
 		Input:        []llm.Item{llm.HumanText("hello")},
 	}, testProfile(), "default")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, params)
 	assertCanonicalFixture(t, got, "request.wire.json")
 }

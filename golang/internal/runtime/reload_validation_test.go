@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestRuntimeReplacementValidatorRejectsProcessLifetimeChanges(t *testing.T) {
@@ -118,9 +119,7 @@ func TestRuntimeReplacementValidatorAllowsSnapshotScopedChanges(t *testing.T) {
 		value.Capabilities.Catalogs[0].SHA256 = strings.Repeat("1", 64)
 		value.Pricing.Catalogs[0].SHA256 = strings.Repeat("2", 64)
 	})
-	if err := application.Reload(context.Background(), replacement); err != nil {
-		t.Fatalf("Reload() rejected snapshot-scoped configuration: %v", err)
-	}
+	testassert.NoError(t, application.Reload(context.Background(), replacement), "Reload() rejected snapshot-scoped configuration")
 	after := application.Current()
 	if after == before || after.Config.ConfigVersion() == before.Config.ConfigVersion() {
 		t.Fatal("allowed replacement did not publish a new snapshot and version")
@@ -133,9 +132,7 @@ func TestRuntimeReplacementValidatorAllowsSnapshotScopedChanges(t *testing.T) {
 func replacementTestConfig(t *testing.T, mutate func(*config.Config)) []byte {
 	t.Helper()
 	value, err := config.Load(runtimeConfig(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	value.Environment = "development"
 	mutate(&value)
 	// A budget matcher naming another environment is a configuration error, so

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -21,9 +22,7 @@ func testCapabilities() CapabilitySet {
 func mustCompileLogicalCatalog(t *testing.T, routes []Route) Catalog {
 	t.Helper()
 	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: routes}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return catalog
 }
 
@@ -53,9 +52,7 @@ func pricedRoute(class llm.ServiceClass, route Route) Route {
 func mustPlan(tb testing.TB, input Input) Plan {
 	tb.Helper()
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), input)
-	if err != nil {
-		tb.Fatalf("Plan(): %v", err)
-	}
+	testassert.NoError(tb, err, "Plan()")
 	return plan
 }
 
@@ -130,9 +127,7 @@ func TestPlannerValidatesRoutesAfterRejectionLimit(t *testing.T) {
 			routes = append(routes, invalid, valid)
 			input := Input{Request: llm.Request{OperationKey: "op", Model: "logical"}, Catalog: Catalog{Version: "v1", Models: map[string]Model{"logical": {Routes: routes}}}}
 			plan, err := (DeterministicPlanner{MaxRejections: limit}).Plan(context.Background(), input)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if len(plan.Rejections) != limit {
 				t.Fatalf("got %d rejections, want %d", len(plan.Rejections), limit)
 			}
@@ -159,9 +154,7 @@ func TestPlannerContextLimitCountsToolResultErrorPrefix(t *testing.T) {
 		t.Fatal("unexpected tool-result error overhead")
 	}
 	encoded, err := llm.CanonicalJSON(mustRequestJSON(request))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	route := func(id, family string) Route {
 		return standardRoute("default", Route{ID: id, EndpointID: id, Provider: id, Family: family, Model: "model", PriceVersion: "price-v1", PriceAvailable: true, ContextBytes: len(encoded) + 30})
 	}

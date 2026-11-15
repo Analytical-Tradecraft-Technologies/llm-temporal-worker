@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -26,13 +27,9 @@ func exaAgentAdapter(t *testing.T, captured **http.Request, body *[]byte) *Adapt
 		return adaptertest.JSONResponse(request, http.StatusOK, exaAgentResponse), nil
 	})
 	client, err := NewExaClient(ExaClientConfig{BaseURL: "https://api.exa.ai", APIKey: "exa-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "exa-agent", "exa-agent/v1", WithExaAgent())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -49,9 +46,7 @@ func TestExaAgentSendsAFixedEffortAndReportsExaCost(t *testing.T) {
 	var body []byte
 	adapter := exaAgentAdapter(t, &got, &body)
 	call, err := compileExaAgent(adapter, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := adaptertest.Invoke(t, adapter, call)
 	if got.URL.String() != "https://api.exa.ai/responses" || got.Header.Get("x-api-key") != "exa-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("request = %s headers %#v", got.URL, got.Header)
@@ -77,9 +72,7 @@ func TestExaAgentAcceptsOnlySynchronousEfforts(t *testing.T) {
 	var body []byte
 	adapter := exaAgentAdapter(t, &got, &body)
 	call, err := compileExaAgent(adapter, &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adaptertest.Invoke(t, adapter, call)
 	if !strings.Contains(string(body), `"effort":"low"`) {
 		t.Fatalf("request body = %s, want effort low", body)

@@ -19,6 +19,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -217,9 +218,7 @@ func newIntegrationEngine(t *testing.T) integrationEngine {
 			}},
 		}}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	entries := make([]pricing.Entry, 0, len(classes))
 	for _, class := range classes {
 		entries = append(entries, pricing.Entry{
@@ -229,9 +228,7 @@ func newIntegrationEngine(t *testing.T) integrationEngine {
 		})
 	}
 	priceCatalog, err := pricing.CompileUSD("prices-1", entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter := &recordingAdapter{response: llm.Response{
 		Status:   llm.ResponseStatusCompleted,
 		Output:   []llm.Item{llm.ModelText("offline response")},
@@ -249,9 +246,7 @@ func newIntegrationEngine(t *testing.T) integrationEngine {
 		Admission: admissionStore, Results: results, Clock: func() time.Time { return now },
 		Estimator: budget.Estimator{MaxOutput: 1}, MaxAttempts: 2,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return integrationEngine{engine: value, adapter: adapter, results: results}
 }
 
@@ -278,9 +273,7 @@ func newWorker(t *testing.T, activities *activity.Activities, health *httpserver
 			return controller, registry, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return worker
 }
 
@@ -292,9 +285,7 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 		Endpoints: []string{"endpoint-1"}, Models: []string{"provider-model"},
 		Outcomes: []string{"success"}, Methods: []string{"provider"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	controller := newTemporalController(false)
 	registry := &captureRegistry{}
 	worker := newWorker(t, activities, health, metrics, controller, registry)
@@ -308,30 +299,20 @@ func TestTemporalWorkerLifecycleRegistrationReplayAndReadiness(t *testing.T) {
 	if health.Ready() || metricsPolling(t, metrics) {
 		t.Fatal("worker became ready or started polling before Start")
 	}
-	if err := worker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, worker.Start())
 	if !health.Ready() || !worker.Ready() || !metricsPolling(t, metrics) {
 		t.Fatal("worker did not publish readiness and polling after Start")
 	}
 
 	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: integrationRequest("replay-operation")}
 	encoded, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var decoded activity.GenerateRequest
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(encoded, &decoded))
 	first, err := generate(context.Background(), decoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	second, err := generate(context.Background(), decoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if first == nil || second == nil {
 		t.Fatalf("registered Activity responses = %#v and %#v, want success responses", first, second)
 	}
@@ -376,15 +357,11 @@ func metricsPolling(t *testing.T, metrics *observability.Metrics) bool {
 func metricsText(t *testing.T, metrics *observability.Metrics) string {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var output strings.Builder
 	encoder := expfmt.NewEncoder(&output, expfmt.NewFormat(expfmt.TypeTextPlain))
 	for _, family := range families {
-		if err := encoder.Encode(family); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, encoder.Encode(family))
 	}
 	return output.String()
 }
@@ -395,9 +372,7 @@ func TestTemporalShutdownBoundsGracefulStopAndFlushesTelemetry(t *testing.T) {
 	controller := newTemporalController(true)
 	registry := &captureRegistry{}
 	worker := newWorker(t, &activity.Activities{Engine: engineValue.engine}, health, nil, controller, registry)
-	if err := worker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, worker.Start())
 	if !health.Ready() {
 		t.Fatal("worker did not become ready")
 	}
@@ -413,9 +388,7 @@ func TestTemporalShutdownBoundsGracefulStopAndFlushesTelemetry(t *testing.T) {
 		CloseApp:  func(context.Context) error { appendEvent("app.close"); return nil },
 		Telemetry: []app.TelemetryFlusher{app.FlushFunc(func(context.Context) error { appendEvent("telemetry.flush"); return nil })},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	started := time.Now()
 	shutdownErr := coordinator.Shutdown(context.Background())
 	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
@@ -445,9 +418,7 @@ func TestObservabilityRejectsContentAndTenantMarkersAcrossSinks(t *testing.T) {
 	const marker = "integration-secret-marker"
 	var logs bytes.Buffer
 	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Level: "debug", Output: &logs})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	providerErr := provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "safe failure")
 	providerErr.Cause = errors.New(marker)
 	logger.Info(context.Background(), "provider request accepted", slog.String("tenant", marker), slog.String("prompt", marker), slog.String("operation_id", "op-1"))
@@ -461,9 +432,7 @@ func TestObservabilityRejectsContentAndTenantMarkersAcrossSinks(t *testing.T) {
 	ctx, span := tracer.Start(context.Background(), "provider.attempt", attribute.String("tenant", marker), attribute.String("prompt", marker), attribute.String("operation_id", "op-1"))
 	tracer.RecordError(span, providerErr)
 	span.End()
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, tracer.Shutdown(ctx))
 	if spans := exporter.Spans(); len(spans) != 1 {
 		t.Fatalf("trace span count = %d, want one", len(spans))
 	} else {
@@ -482,9 +451,7 @@ func TestObservabilityRejectsContentAndTenantMarkersAcrossSinks(t *testing.T) {
 	}
 
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint-1"}, Models: []string{"model-1"}, Outcomes: []string{"success"}, Methods: []string{"provider"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	metrics.RecordProviderAttempt(marker, marker, marker, marker, time.Second)
 	metrics.RecordExactCost("endpoint-1", "model-1", "standard", marker)
 	if encoded := metricsText(t, metrics); strings.Contains(encoded, marker) || !strings.Contains(encoded, `endpoint="other"`) {

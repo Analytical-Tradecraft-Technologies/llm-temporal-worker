@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 type openedBlobs struct {
@@ -48,9 +49,7 @@ func TestPayloadReadLimitsAndBodyOwnership(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			r, _, blobs, request := fixture(t)
 			key, err := r.writeBlob(context.Background(), r.stream(request.ID), []byte("payload"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			data := blobs.values[blob.BlobKey(key)]
 			body := &trackedBody{Reader: bytes.NewReader(data)}
 			opened := blob.BlobReadResult{Body: body, Size: int64(len(data))}
@@ -106,24 +105,20 @@ func TestPayloadBindingRejectsCrossRequestAndNamespaceReads(t *testing.T) {
 	r, _, blobs, request := fixture(t)
 	ctx := context.Background()
 	key, err := r.writeBlob(ctx, r.stream(request.ID), []byte("payload"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	otherID, err := NewRequestID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireErrorIs(t, errOf(r.readBlob(ctx, r.stream(otherID), key)), ErrCorrupt, "cross-request blob")
+	testassert.NoError(t, err)
+	testassert.ErrorIs(t, testassert.Err(r.readBlob(ctx, r.stream(otherID), key)), ErrCorrupt, "cross-request blob")
 	otherKey := strings.Replace(key, r.namespace, "different", 1)
 	blobs.values[blob.BlobKey(otherKey)] = append([]byte(nil), blobs.values[blob.BlobKey(key)]...)
 	r.namespace = "different"
-	requireErrorIs(t, errOf(r.readBlob(ctx, r.stream(request.ID), otherKey)), ErrCorrupt, "cross-namespace blob")
+	testassert.ErrorIs(t, testassert.Err(r.readBlob(ctx, r.stream(request.ID), otherKey)), ErrCorrupt, "cross-namespace blob")
 }
 
 func TestOversizedRecordRejectedBeforeIndex(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	request.Manifest = []byte(`{"text":"` + strings.Repeat("x", maxPayloadBytes-20) + `"}`)
-	requireErrorIs(t, errOf(r.Create(context.Background(), request)), ErrInvalid, "oversized envelope")
+	testassert.ErrorIs(t, testassert.Err(r.Create(context.Background(), request)), ErrInvalid, "oversized envelope")
 	if len(table.rows) != 0 || len(blobs.values) != 0 {
 		t.Fatal("oversized record wrote recovery state")
 	}

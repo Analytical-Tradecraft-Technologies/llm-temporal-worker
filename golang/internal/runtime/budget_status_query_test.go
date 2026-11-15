@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
@@ -70,27 +71,19 @@ func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 		{PolicyID: "policy-b", WindowID: "window", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), ConfigVersion: "config-1", PriceVersion: "price-1", CoverageStart: start, CoverageEnd: end, BucketCount: 60, BucketWidth: time.Minute, BucketCatalogDigest: strings.Repeat("c", 64), LimitNanoUSD: "2000000000"},
 	}
 	catalog, err := redisstore.MemberCatalogDigest(members)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	manifest := redisstore.BudgetManifest{Schema: redisstore.BudgetManifestSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: end, PolicyCount: 2, WindowCount: 2, BucketCount: 120, StreamHighWaterMark: "1-0", RoundingVersion: redisstore.BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members}
 	pointer, err := manifest.Pointer()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	digest, err := manifest.ManifestDigestHex()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	read := redisstore.BudgetStatusRead{GenerationID: "generation-1", IncarnationID: "incarnation-1", ManifestDigest: digest, StreamHighWaterMark: "1-4"}
 	for _, member := range members {
 		read.Members = append(read.Members, redisstore.BudgetStatusWindowRecord{Schema: redisstore.BudgetStatusWindowSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1", ManifestDigest: digest, MemberKey: member.Key(), LimitNanoUSD: member.LimitNanoUSD, ReservedNanoUSD: "200000000", AccountedNanoUSD: "100000000", CoverageStart: start, CoverageEnd: end})
 	}
 	payload := encodeJSON(t, read)
 	keys, err := redisstore.NewBudgetKeySpace(redisstore.KeyOptions{Prefix: "worker", HashTag: "budget", KeySecret: bytes.Repeat([]byte{8}, 32)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f := &cliBudgetFixture{
 		generation: &cliBudgetGeneration{pointer: pointer, manifest: manifest},
 		invoker:    &cliBudgetInvoker{result: []any{"ok", string(payload)}},
@@ -98,17 +91,13 @@ func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 	}
 	clock := func() time.Time { return f.now }
 	reader, err := redisstore.NewRedisBudgetStatusReader(redisstore.BudgetStatusReaderOptions{Invoker: f.invoker, Generation: f.generation, Keys: keys, Mode: redisstore.AdmissionModeFunction, Clock: clock})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	value := trustedTemporalTestConfig(t)
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{Clock: clock, Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 		return bytes.Repeat([]byte{7}, 32), nil
 	})}}
 	f.service, err = trustedTemporalQueryBuilder(factory, value)(context.Background(), trustedTemporalSnapshot(t, value), QueryRepositories{BudgetStatus: reader})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return f
 }
 
@@ -147,9 +136,7 @@ func requireUnsupportedBudget(t *testing.T, err error) {
 func TestCLIBudgetStatusAllowedScopeReadsRedisGeneration(t *testing.T) {
 	f := newCLIBudgetFixture(t)
 	response, err := f.query("project", `{}`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if response.Source != string(control.QuerySourceRedisBudget) || !response.Complete || response.NextCursor != nil {
 		t.Fatalf("response = %+v", response)
 	}
@@ -166,9 +153,7 @@ func TestCLIBudgetStatusAllowedScopeReadsRedisGeneration(t *testing.T) {
 	}
 	// policy_key narrows the coherent snapshot to one policy's windows.
 	response, err = f.query("project", `{"policy_key":"policy-b"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if windows := budgetResult(t, response).Windows; len(windows) != 1 || budgetWindow(t, windows[0])["policy_key"] != "policy-b" {
 		t.Fatalf("filtered windows = %s", windows)
 	}
@@ -191,9 +176,7 @@ func TestCLIBudgetStatusDeniesOtherScopeBeforeRedis(t *testing.T) {
 func TestCLIBudgetStatusIncludeWindowsFalse(t *testing.T) {
 	f := newCLIBudgetFixture(t)
 	response, err := f.query("project", `{"include_windows":false}`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := budgetResult(t, response)
 	if result.Windows == nil || len(result.Windows) != 0 || result.GenerationID != "generation-1" || result.ManifestDigest == "" {
 		t.Fatalf("result = %+v, want provenance with an empty window array", result)
@@ -214,9 +197,7 @@ func TestCLIBudgetStatusIsOneCompleteSnapshot(t *testing.T) {
 		t.Fatal("rejected page request touched Redis")
 	}
 	response, err := f.query("project", `{}`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !response.Complete || response.NextCursor != nil {
 		t.Fatalf("budget snapshot complete=%v next=%v", response.Complete, response.NextCursor)
 	}
@@ -236,9 +217,7 @@ func TestPersistedQueryLogsAuthorizationDecisionsWithoutContent(t *testing.T) {
 		Cursor: &control.CursorCodec{Key: bytes.Repeat([]byte{1}, 32)},
 		Logger: logger,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, project := range []string{"project", "private-project"} {
 		_, _ = service.Execute(context.Background(), llm.QueryRequestV1{
 			APIVersion: llm.QueryAPIVersion, OperationKey: "private-operation",

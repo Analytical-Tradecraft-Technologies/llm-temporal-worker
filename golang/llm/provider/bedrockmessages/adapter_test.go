@@ -167,9 +167,7 @@ func newBedrockTestClient(t *testing.T, baseURL string, httpClient *http.Client,
 		creds = credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", "")
 	}
 	client, err := NewClient(context.Background(), ClientConfig{BaseURL: baseURL, HTTPClient: httpClient, AWSConfig: aws.Config{Region: "us-east-1", Credentials: creds}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return client
 }
 
@@ -179,9 +177,7 @@ func newBedrockTestClient(t *testing.T, baseURL string, httpClient *http.Client,
 func compileBedrockProdCall(t *testing.T, client *Client, baseURL, operationKey string) (*Adapter, provider.Call) {
 	t.Helper()
 	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, baseURL))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter, adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockMessages, llm.Request{OperationKey: operationKey, Model: "claude-contract"})
 }
 
@@ -193,9 +189,7 @@ func mustBedrockProfile(t *testing.T, baseURL string) Profile {
 	profile.ExpectedBaseURL = baseURL
 	profile.ExpectedModel = "claude-contract"
 	validated, err := NewProfile(profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return validated
 }
 

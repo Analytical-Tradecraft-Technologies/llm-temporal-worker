@@ -91,9 +91,7 @@ func TestPersistedQueryProviderStatusIsAuditedAndCursorBound(t *testing.T) {
 	var audited control.QueryAuditRecord
 	service := persistedQueryTestService(t, providerReader, func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil })
 	first, err := service.Execute(context.Background(), providerQueryRequest(t, nil))
-	if err != nil {
-		t.Fatalf("first query: %v", err)
-	}
+	testassert.NoError(t, err, "first query")
 	if first.NextCursor != nil || !first.Complete || audited.Kind != llm.QueryProviderStatus || audited.Source != string(control.QuerySourcePersisted) || audited.ActualCostUSD == nil || *audited.ActualCostUSD != "0" {
 		t.Fatalf("unexpected first response/audit: response=%+v audit=%+v", first, audited)
 	}
@@ -109,9 +107,7 @@ func TestPersistedQueryProviderStatusIsAuditedAndCursorBound(t *testing.T) {
 	providerReader.status.NextRouteID = ""
 	next := control.QueryCursor(*first.NextCursor)
 	second, err := service.Execute(context.Background(), providerQueryRequest(t, &next))
-	if err != nil {
-		t.Fatalf("continuation query: %v", err)
-	}
+	testassert.NoError(t, err, "continuation query")
 	if second.NextCursor != nil || providerReader.lastOpts.AfterRouteID != "route-b" {
 		t.Fatalf("continuation was not bound: response=%+v options=%+v", second, providerReader.lastOpts)
 	}
@@ -143,13 +139,9 @@ func TestPersistedQueryBudgetStatusUsesRedisReaderContract(t *testing.T) {
 	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, Audit: func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil }, CursorCodec: codec, Clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
 	request := encodeTestQuery(t, "budget-op", llm.QueryBudgetStatus, control.BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &activeAt, IncludeWindows: &includeWindows})
 	response, err := service.Execute(context.Background(), request)
-	if err != nil {
-		t.Fatalf("budget status query: %v", err)
-	}
+	testassert.NoError(t, err, "budget status query")
 	decoded, err := control.DecodeQueryResponse(response)
-	if err != nil {
-		t.Fatalf("decode budget status response: %v", err)
-	}
+	testassert.NoError(t, err, "decode budget status response")
 	result, ok := decoded.Result.(control.BudgetStatusResult)
 	if !ok || result.GenerationID != "generation-1" || len(result.Windows) != 1 || result.Windows[0].AvailableUSD != "7" {
 		t.Fatalf("unexpected budget status result: %#v", decoded.Result)
@@ -229,15 +221,11 @@ func TestNewPersistedQueryServiceBuilderBindsSnapshotRedisBudgetReader(t *testin
 		Authorize: authorize,
 		Cursor:    &control.CursorCodec{Key: []byte("query-builder-key"), TTL: time.Hour},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	service, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{
 		BudgetStatus: reader,
 	})
-	if err != nil {
-		t.Fatalf("builder() error = %v", err)
-	}
+	testassert.NoError(t, err, "builder() error")
 	queryService, ok := service.(*control.QueryService)
 	if !ok {
 		t.Fatalf("query service = %T, want *control.QueryService", service)
@@ -283,26 +271,18 @@ func TestPersistedQuerySpendSummaryUsesExplicitScopeResolver(t *testing.T) {
 		Cursor: codec, Clock: func() time.Time { return now }, Authorize: func(context.Context, control.Authorization) error { return nil },
 		Audit: func(context.Context, control.QueryAuditRecord) error { return nil },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request, err := control.EncodeQueryRequest(control.QueryRequest{
 		OperationKey: "spend-op",
 		Scope:        control.QueryScope{Tenant: expectedTenant, Project: expectedProject, Actor: "actor"},
 		Kind:         llm.QuerySpendSummary,
 		Filter:       control.SpendSummaryQuery{StartTime: start, EndTime: end, GroupBy: []control.SpendDimension{control.SpendByProvider}, OperationKinds: []control.OperationKind{control.OperationGenerate}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response, err := service.Execute(context.Background(), request)
-	if err != nil {
-		t.Fatalf("spend summary query: %v", err)
-	}
+	testassert.NoError(t, err, "spend summary query")
 	decoded, err := control.DecodeQueryResponse(response)
-	if err != nil {
-		t.Fatalf("decode spend summary response: %v", err)
-	}
+	testassert.NoError(t, err, "decode spend summary response")
 	result, ok := decoded.Result.(control.SpendSummaryResult)
 	if !ok || len(result.Buckets) != 1 || result.Buckets[0].KnownActualCostUSD != "1.25" {
 		t.Fatalf("unexpected spend summary result: %#v", decoded.Result)
@@ -354,9 +334,7 @@ func TestNewPersistedQueryServiceNormalizesMissingOptionalCapabilities(t *testin
 		Audit:        func(context.Context, control.QueryAuditRecord) error { return nil },
 		BudgetStatus: budget,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	handler := service.(*control.QueryService).TypedHandler.(*persistedQueryHandler)
 	if handler.provider != nil || handler.inventory != nil || handler.spend != nil || handler.budget != nil {
 		t.Fatalf("missing optional capabilities were not normalized: %#v", handler)
@@ -394,14 +372,10 @@ func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 		Logger:    logger,
 		Cursor:    &control.CursorCodec{Key: cursorKey, TTL: time.Hour},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	cursorKey[0] = 'X'
 
-	if _, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{}); err != nil {
-		t.Fatalf("builder without audit repository error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(builder(context.Background(), &config.Snapshot{}, QueryRepositories{})), "builder without audit repository error")
 
 	scopeID := uuid.MustParse("019c9aaf-77f7-7d7f-92c0-b53eb2ed3c47")
 	service, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{
@@ -409,16 +383,12 @@ func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 			return scopeID, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	queryService, ok := service.(*control.QueryService)
 	if !ok {
 		t.Fatalf("query service = %T, want *control.QueryService", service)
 	}
-	if err := queryService.Audit(context.Background(), control.QueryAuditRecord{Kind: llm.QueryBudgetStatus}); err != nil {
-		t.Fatalf("log audit: %v", err)
-	}
+	testassert.NoError(t, queryService.Audit(context.Background(), control.QueryAuditRecord{Kind: llm.QueryBudgetStatus}), "log audit")
 	if !strings.Contains(output.String(), `"query_kind":"budget_status"`) {
 		t.Fatalf("audit was not logged: %s", output.String())
 	}
@@ -431,9 +401,7 @@ func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 	}
 	queryService.CursorCodec.Key[0] = 'Y'
 	nextService, err := builder(context.Background(), &config.Snapshot{}, QueryRepositories{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := string(nextService.(*control.QueryService).CursorCodec.Key); got != "query-builder-key" {
 		t.Fatalf("reloaded snapshot cursor key = %q, want independent builder copy", got)
 	}
@@ -455,9 +423,7 @@ func TestPersistedQueryComposesNeutralProviderReader(t *testing.T) {
 		Audit:     func(context.Context, control.QueryAuditRecord) error { return nil },
 		Clock:     func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	response, err := service.Execute(context.Background(), providerQueryRequest(t, nil))
 	if err != nil || !response.Complete {
 		t.Fatalf("neutral provider query: %#v %v", response, err)
@@ -481,9 +447,7 @@ func TestPersistedQueryTypedNilSpendReaderIsUnsupported(t *testing.T) {
 		},
 		Audit: func(context.Context, control.QueryAuditRecord) error { return nil },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := encodeTestQuery(t, "typed-nil-spend", llm.QuerySpendSummary, budgetOrSpendFilter(llm.QuerySpendSummary))
 	_, err = service.Execute(context.Background(), request)
 	if !isProviderError(err, provider.CodeUnsupportedCapability, provider.RetryNever) {
@@ -506,13 +470,9 @@ func TestProviderStatusPreservesUnknownAvailabilityAndBillingIncident(t *testing
 				if reader.lastOpts.Availability != availability {
 					t.Fatalf("filter lost availability: %+v", reader.lastOpts)
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				decoded, err := control.DecodeQueryResponse(response)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				result := decoded.Result.(control.ProviderStatusResult)
 				if len(result.Routes) != 1 {
 					t.Fatalf("routes=%v", result.Routes)
@@ -567,9 +527,7 @@ func TestPersistedQueryInventoryPagesWithRealisticPositions(t *testing.T) {
 	var cursor *control.QueryCursor
 	for page := 0; page < 3; page++ {
 		request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "inventory-op", Scope: control.QueryScope{Tenant: "tenant-production-eu", Project: "project-forecasting", Actor: "service-account-batch"}, Kind: llm.QueryModelInventory, Filter: control.ModelInventoryQuery{Provider: &provider, Page: control.QueryPage{Size: 1, Cursor: cursor}}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		response, err := service.Execute(context.Background(), request)
 		if err != nil {
 			t.Fatalf("page %d: %v", page+1, err)
@@ -596,9 +554,7 @@ func TestPersistedQueryInventoryPagesWithRealisticPositions(t *testing.T) {
 func encodeTestQuery(t *testing.T, key control.OperationKey, kind llm.QueryKind, filter control.QueryFilter) llm.QueryRequestV1 {
 	t.Helper()
 	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: key, Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: kind, Filter: filter})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return request
 }
 

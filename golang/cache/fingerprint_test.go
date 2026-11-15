@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -28,9 +29,7 @@ func testInput() Input {
 func mustCompute(t *testing.T, key []byte, input Input) Fingerprint {
 	t.Helper()
 	fingerprint, err := Compute(key, input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return fingerprint
 }
 
@@ -63,20 +62,14 @@ func TestComputeDomainSeparatesGenerateAndCompact(t *testing.T) {
 
 func TestCanonicalManifestIsStableAndContainsNoOperationKey(t *testing.T) {
 	canonical, err := testInput().Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	again, err := testInput().Canonical()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !bytes.Equal(canonical, again) {
 		t.Fatalf("canonical manifest changed across identical calls")
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(canonical, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(canonical, &decoded))
 	request := decoded["request"].(map[string]any)
 	if _, ok := request["operation_key"]; ok {
 		t.Fatal("operation key must not be present in semantic manifest")

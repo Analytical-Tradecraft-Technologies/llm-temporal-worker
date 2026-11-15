@@ -62,13 +62,9 @@ func TestTemporalFactoryLeavesPayloadsUnencryptedByDefault(t *testing.T) {
 	value := config.Config{}
 	value.Server.InlinePayloadBytes = 1 << 10
 	dataConverter, err := dialPayloadConverter(t, DefaultTemporalClientFactory{}, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	payload, err := dataConverter.ToPayload("prompt")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := string(payload.Metadata[converter.MetadataEncoding]); got != converter.MetadataEncodingJSON {
 		t.Fatalf("default encoding = %q, want %q", got, converter.MetadataEncodingJSON)
 	}
@@ -82,13 +78,9 @@ func TestTemporalFactoryEncryptsPayloadsWithConfiguredCodec(t *testing.T) {
 	factory := DefaultTemporalClientFactory{SecretResolver: resolver}
 
 	before, err := dialPayloadConverter(t, factory, codecConfig(codecKey("old", "OLD", true)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	written, err := before.ToPayload("summarize project bluebird")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := string(written.Metadata[converter.MetadataEncoding]); got != temporalcodec.EncodingEncrypted {
 		t.Fatalf("encoding = %q, want encrypted", got)
 	}
@@ -97,17 +89,13 @@ func TestTemporalFactoryEncryptsPayloadsWithConfiguredCodec(t *testing.T) {
 	}
 
 	rotated, err := dialPayloadConverter(t, factory, codecConfig(codecKey("new", "NEW", true), codecKey("old", "OLD", false)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var decoded string
 	if err := rotated.FromPayload(written, &decoded); err != nil || decoded != "summarize project bluebird" {
 		t.Fatalf("rotated decode = %q, %v", decoded, err)
 	}
 	fresh, err := rotated.ToPayload("next")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got := string(fresh.Metadata[temporalcodec.MetadataKeyID]); got != "new" {
 		t.Fatalf("encrypted with %q, want the primary key", got)
 	}
@@ -153,28 +141,20 @@ func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
 	secret := bytes.Repeat([]byte{4}, 32)
 	value := codecConfig(codecKey("k1", "KEY", true))
 	dataConverter, err := dialPayloadConverter(t, DefaultTemporalClientFactory{SecretResolver: codecSecrets(map[string][]byte{"KEY": secret})}, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	unbounded, err := temporalcodec.NewAESGCM([]temporalcodec.Key{{ID: "k1", Secret: secret, Primary: true}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	writer := converter.NewCodecDataConverter(converter.GetDefaultDataConverter(), unbounded)
 	var decoded string
 
 	oversized, err := writer.ToPayload(strings.Repeat("x", temporalcodec.MaxCiphertextBytes(config.TemporalBlobLimitBytes)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	testassert.ErrorContains(t, dataConverter.FromPayload(oversized, &decoded), "encrypted payload is")
 
 	// Within the ciphertext ceiling but above the plaintext limit, including
 	// a payload the inline-derived ceiling used to refuse before decrypting.
 	overInline, err := writer.ToPayload(strings.Repeat("x", temporalcodec.MaxCiphertextBytes(value.Server.InlinePayloadBytes)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	testassert.ErrorContains(t, dataConverter.FromPayload(overInline, &decoded), "Temporal payload is")
 }
 
@@ -191,9 +171,7 @@ func TestTemporalFactoryCodecHonoursPinnedWorkflowLimit(t *testing.T) {
 	secret := bytes.Repeat([]byte{5}, 32)
 	value := codecConfig(codecKey("k1", "KEY", true))
 	dataConverter, err := dialPayloadConverter(t, DefaultTemporalClientFactory{SecretResolver: codecSecrets(map[string][]byte{"KEY": secret})}, value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	aware, ok := dataConverter.(converter.ContextAware)
 	if !ok {
 		t.Fatal("client data converter is not context aware")
@@ -202,9 +180,7 @@ func TestTemporalFactoryCodecHonoursPinnedWorkflowLimit(t *testing.T) {
 	recorded := strings.Repeat("x", 4*value.Server.InlinePayloadBytes)
 
 	payload, err := pinned.ToPayload(recorded)
-	if err != nil {
-		t.Fatalf("pinned ToPayload: %v", err)
-	}
+	testassert.NoError(t, err, "pinned ToPayload")
 	if encoding := string(payload.GetMetadata()[converter.MetadataEncoding]); encoding != temporalcodec.EncodingEncrypted {
 		t.Fatalf("pinned payload encoding = %q, want encrypted", encoding)
 	}

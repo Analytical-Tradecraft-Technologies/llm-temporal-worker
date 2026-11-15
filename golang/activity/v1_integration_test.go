@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -153,9 +154,7 @@ func TestMaterializingV1RuntimeMaterializesBeforeGenerateDispatch(t *testing.T) 
 	}
 	request := childGenerateV1Request("parent")
 	response, err := (&Activities{V1Runtime: fixture.wrapped}).GenerateV1(context.Background(), request)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	testassert.NoError(t, err, "GenerateV1 error")
 	if response == nil || response.OperationKey != request.OperationKey {
 		t.Fatalf("response = %#v", response)
 	}
@@ -170,9 +169,7 @@ func TestMaterializingV1RuntimeMaterializesBeforeCompactDispatch(t *testing.T) {
 	request := validCompactV1Request()
 	request.Parent = "parent"
 	response, err := (&Activities{V1Runtime: fixture.wrapped}).CompactV1(context.Background(), request)
-	if err != nil {
-		t.Fatalf("CompactV1 error = %v", err)
-	}
+	testassert.NoError(t, err, "CompactV1 error")
 	if response == nil || response.OperationKey != request.OperationKey {
 		t.Fatalf("response = %#v", response)
 	}
@@ -186,9 +183,7 @@ func TestMaterializingV1RuntimeRootGenerateDoesNotRequireCheckpointMaterializer(
 	events := []string{}
 	runtime := &materializingRuntimeProbe{events: &events}
 	wrapped := &MaterializingV1Runtime{Runtime: runtime}
-	if _, err := (&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), validGenerateV1Request()); err != nil {
-		t.Fatalf("root GenerateV1 error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err((&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), validGenerateV1Request())), "root GenerateV1 error")
 	assertEvents(t, "root dispatch", events, "generate:normal")
 }
 
@@ -229,9 +224,7 @@ func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
 	request := childGenerateV1Request("parent")
 	fixture := newMaterializingV1Fixture()
 	fixture.materializer.err = fmt.Errorf("load checkpoint: %w", context.Canceled)
-	if _, err := (&Activities{V1Runtime: fixture.wrapped}).GenerateV1(context.Background(), request); !errors.Is(err, context.Canceled) {
-		t.Fatalf("GenerateV1 error = %v, want context.Canceled", err)
-	}
+	testassert.ErrorIs(t, testassert.Err((&Activities{V1Runtime: fixture.wrapped}).GenerateV1(context.Background(), request)), context.Canceled, "GenerateV1")
 	assertEvents(t, "events (materialization without runtime dispatch)", fixture.events, "materialize:scope-id:parent")
 }
 

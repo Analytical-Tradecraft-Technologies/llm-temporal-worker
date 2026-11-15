@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"net/http"
 	"testing"
 )
@@ -79,9 +80,7 @@ func TestDispatchSDKErrorClassifiesByEvidence(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dispatch, err := BeginDispatch(context.Background(), nil, dispatchTestTarget(test.credentialUnsent))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var mapped *Error
 			if !errors.As(dispatch.SDKError(test.err, test.sent), &mapped) {
 				t.Fatal("SDKError() did not return a provider error")
@@ -98,9 +97,7 @@ func TestDispatchSDKErrorClassifiesByEvidence(t *testing.T) {
 
 func TestSendHTTPClassifiesPanicsRedirectsAndErrors(t *testing.T) {
 	dispatch, err := BeginDispatch(context.Background(), nil, dispatchTestTarget(false))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	respond := func(status int) func(*DispatchProbe, **http.Response) (string, error) {
 		return func(_ *DispatchProbe, raw **http.Response) (string, error) {
 			*raw = &http.Response{StatusCode: status}
@@ -133,9 +130,7 @@ func TestSendHTTPClassifiesPanicsRedirectsAndErrors(t *testing.T) {
 func TestDispatchAfterResponseHeadersAndLiftProgress(t *testing.T) {
 	observer := &dispatchTestObserver{}
 	dispatch, err := BeginDispatch(context.Background(), observer, dispatchTestTarget(false))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if err := dispatch.AfterResponseHeaders(ResponseMetadata{ResponseID: "resp-1"}); err != nil {
 		t.Fatalf("AfterResponseHeaders() = %v, want nil", err)
 	}

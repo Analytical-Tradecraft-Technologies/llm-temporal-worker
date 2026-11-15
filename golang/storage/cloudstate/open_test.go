@@ -17,6 +17,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/provider"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 type namedProvider struct {
@@ -47,9 +48,7 @@ func TestOpenUsesParsedProviderConfigAndStoreAliases(t *testing.T) {
 		}
 		return p, nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if !reflect.DeepEqual(p.names, []string{"requests", "payloads"}) {
 		t.Fatalf("store selection: %v", p.names)
 	}
@@ -73,12 +72,10 @@ func TestOpenParentSnapshotStorage(t *testing.T) {
 		}
 	}
 	config := Config{Provider: map[string]any{"type": "aws"}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1", ParentSnapshotStorage: "sideways"}
-	if _, err := open(context.Background(), config, bytes.Repeat([]byte{7}, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) {
+	testassert.ErrorIs(t, testassert.Err(open(context.Background(), config, bytes.Repeat([]byte{7}, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) {
 		t.Fatal("opened a provider for an invalid setting")
 		return nil, nil
-	}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("invalid setting: %v", err)
-	}
+	})), ErrInvalid, "invalid setting")
 }
 
 func TestOpenAndConstructorRejectInvalidInputs(t *testing.T) {
@@ -91,18 +88,16 @@ func TestOpenAndConstructorRejectInvalidInputs(t *testing.T) {
 	} {
 		o := base
 		mutate(&o)
-		requireErrorIs(t, errOf(NewRepository(o)), ErrInvalid, "constructor")
+		testassert.ErrorIs(t, testassert.Err(NewRepository(o)), ErrInvalid, "constructor")
 	}
 	config := Config{RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
 	for _, mutate := range []func(*Config){func(c *Config) { c.Namespace = "" }, func(c *Config) { c.RequestTable = "" }, func(c *Config) { c.PayloadStore = "\n" }} {
 		c := config
 		mutate(&c)
-		if _, err := open(context.Background(), c, base.Secret, func(context.Context, map[string]any) (provider.StorageProvider, error) {
+		testassert.ErrorIs(t, testassert.Err(open(context.Background(), c, base.Secret, func(context.Context, map[string]any) (provider.StorageProvider, error) {
 			t.Fatal("initialized provider before validation")
 			return nil, nil
-		}); !errors.Is(err, ErrInvalid) {
-			t.Fatal(err)
-		}
+		})), ErrInvalid)
 	}
 	for _, stage := range []string{"factory", "nil-provider", "table", "blob"} {
 		t.Run(stage, func(t *testing.T) {
@@ -124,9 +119,7 @@ func TestOpenAndConstructorRejectInvalidInputs(t *testing.T) {
 				return p, nil
 			})
 			if stage == "nil-provider" {
-				if !errors.Is(err, ErrInvalid) {
-					t.Fatal(err)
-				}
+				testassert.ErrorIs(t, err, ErrInvalid)
 			} else if !errors.Is(err, failure) || !errors.Is(err, failure.Cause) {
 				t.Fatalf("lost provider error: %v", err)
 			}
@@ -146,15 +139,13 @@ func TestOpenProbeRejectsDeletedResources(t *testing.T) {
 	_, table, blobs, _ := fixture(t)
 	p := &namedProvider{table: table, blobs: blobs}
 	r, err := open(context.Background(), Config{RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}, bytes.Repeat([]byte{7}, 32), func(context.Context, map[string]any) (provider.StorageProvider, error) { return p, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustNoError(t, r.Probe(context.Background()))
+	testassert.NoError(t, err)
+	testassert.NoError(t, r.Probe(context.Background()))
 	p.blobErr = contracts.ErrNotFound
-	requireErrorIs(t, r.Probe(context.Background()), contracts.ErrNotFound, "missing bucket reported ready")
+	testassert.ErrorIs(t, r.Probe(context.Background()), contracts.ErrNotFound, "missing bucket reported ready")
 	p.blobErr = nil
 	p.tableErr = contracts.ErrPermissionDenied
-	requireErrorIs(t, r.Probe(context.Background()), contracts.ErrPermissionDenied, "inaccessible table reported ready")
+	testassert.ErrorIs(t, r.Probe(context.Background()), contracts.ErrPermissionDenied, "inaccessible table reported ready")
 }
 
 // awsTableProvider keeps the real AWS DynamoDB provider but serves payloads from
@@ -215,17 +206,11 @@ func TestOpenProbeToleratesUpdatingTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	r, err := openRepository(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Probe(ctx); err != nil {
-		t.Fatalf("ACTIVE: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, r.Probe(ctx), "ACTIVE")
 	// UpdateTable (autoscaling, billing mode, SSE, streams) keeps the table usable.
 	status.Store("UPDATING")
-	if err := r.Probe(ctx); err != nil {
-		t.Fatalf("UPDATING table reported unready: %v", err)
-	}
+	testassert.NoError(t, r.Probe(ctx), "UPDATING table reported unready")
 	// Unusable statuses still fail readiness through the data-plane read.
 	for state, kind := range map[string]string{"ARCHIVED": "ResourceNotFoundException", "INACCESSIBLE_ENCRYPTION_CREDENTIALS": "KMSAccessDeniedException", "DELETING": "ResourceNotFoundException"} {
 		status.Store(state)
@@ -246,12 +231,8 @@ func TestOpenAcceptsUpdatingTable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	r, err := openRepository(ctx)
-	if err != nil {
-		t.Fatalf("UPDATING table failed to open: %v", err)
-	}
-	if err := r.Probe(ctx); err != nil {
-		t.Fatalf("UPDATING table reported unready after open: %v", err)
-	}
+	testassert.NoError(t, err, "UPDATING table failed to open")
+	testassert.NoError(t, r.Probe(ctx), "UPDATING table reported unready after open")
 	for _, state := range []string{"CREATING", "DELETING", "ARCHIVING", "ARCHIVED", "INACCESSIBLE_ENCRYPTION_CREDENTIALS"} {
 		status.Store(state)
 		if _, err := openRepository(ctx); !errors.Is(err, contracts.ErrUnavailable) {

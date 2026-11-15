@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -19,9 +20,7 @@ func testReservationEvent(amount string) ReservationEvent {
 
 func TestReservationEventValidation(t *testing.T) {
 	event := testReservationEvent("0.000000001")
-	if err := event.Validate(); err != nil {
-		t.Fatalf("valid reservation rejected: %v", err)
-	}
+	testassert.NoError(t, event.Validate(), "valid reservation rejected")
 	event.AmountUSD = pricing.MustUSD("0")
 	if err := event.Validate(); err == nil {
 		t.Fatal("zero reservation accepted")
@@ -35,9 +34,7 @@ func TestCompletionEventEnforcesAccountingVocabulary(t *testing.T) {
 		Kind: JournalFinalizeUnknown, ReservedDecreaseUSD: pricing.MustUSD("1"),
 		AccountedIncreaseUSD: pricing.MustUSD("1"), CostStatus: CostUnknown, UnknownReasonCode: "provider_unpriced",
 	}
-	if err := base.Validate(); err != nil {
-		t.Fatalf("valid unknown finalization rejected: %v", err)
-	}
+	testassert.NoError(t, base.Validate(), "valid unknown finalization rejected")
 	base.AccountedIncreaseUSD = pricing.MustUSD("0.9")
 	if err := base.Validate(); err == nil {
 		t.Fatal("inconsistent finalization accepted")
@@ -61,18 +58,14 @@ func exactReleaseEvent() CompletionEvent {
 
 func TestCompletionEventSupportsExactReleaseAndAmbiguousRetention(t *testing.T) {
 	release := exactReleaseEvent()
-	if err := release.Validate(); err != nil {
-		t.Fatalf("valid release rejected: %v", err)
-	}
+	testassert.NoError(t, release.Validate(), "valid release rejected")
 	retain := release
 	retain.Kind = JournalRetainAmbiguous
 	retain.ReservedDecreaseUSD = pricing.MustUSD("0")
 	retain.ActualCostUSD = nil
 	retain.CostStatus = CostUnknown
 	retain.UnknownReasonCode = "dispatch_ambiguous"
-	if err := retain.Validate(); err != nil {
-		t.Fatalf("valid retention rejected: %v", err)
-	}
+	testassert.NoError(t, retain.Validate(), "valid retention rejected")
 	resolveZero := retain
 	resolveZero.Kind = JournalResolveUnknownExact
 	resolveZero.ReservedDecreaseUSD = pricing.MustUSD("1")
@@ -80,9 +73,7 @@ func TestCompletionEventSupportsExactReleaseAndAmbiguousRetention(t *testing.T) 
 	resolveZero.ActualCostUSD = ptrUSD(pricing.MustUSD("0"))
 	resolveZero.CostStatus = CostExact
 	resolveZero.UnknownReasonCode = ""
-	if err := resolveZero.Validate(); err != nil {
-		t.Fatalf("valid zero-cost resolution rejected: %v", err)
-	}
+	testassert.NoError(t, resolveZero.Validate(), "valid zero-cost resolution rejected")
 }
 
 func TestCompletionEventRejectsUnknownReasonForKnownCost(t *testing.T) {

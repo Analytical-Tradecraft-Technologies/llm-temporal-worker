@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -30,9 +31,7 @@ import (
 func mustProviderPlanning(t testing.TB, capabilities V1RuntimeCapabilities) *ProviderPlanning {
 	t.Helper()
 	planning, err := capabilities.NewProviderPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return planning
 }
 
@@ -41,9 +40,7 @@ func mustProviderPlanning(t testing.TB, capabilities V1RuntimeCapabilities) *Pro
 func mustProviderRecovery(t testing.TB, capabilities V1RuntimeCapabilities) *ProviderRecovery {
 	t.Helper()
 	recovery, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return recovery
 }
 
@@ -52,9 +49,7 @@ func mustProviderRecovery(t testing.TB, capabilities V1RuntimeCapabilities) *Pro
 func mustPrepareGenerate(t testing.TB, request llm.GenerateRequestV1) PreparedGenerateInput {
 	t.Helper()
 	prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return prepared
 }
 
@@ -63,9 +58,7 @@ func mustPrepareGenerate(t testing.TB, request llm.GenerateRequestV1) PreparedGe
 func mustPrepareCompact(t testing.TB, request llm.CompactRequestV1, replay durable.CompactReplay) PreparedCompactInput {
 	t.Helper()
 	prepared, err := PrepareCompactInput(context.Background(), request, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return prepared
 }
 
@@ -140,9 +133,7 @@ func executionRef(v llm.ExecutionResultV1, caller llm.RequestContext) llm.Execut
 func (f *boundedCloudFixture) firstAttempt(t testing.TB, ctx context.Context, v llm.ExecutionResultV1) (llm.ExecutionReferenceV1, cloudstate.Scope, cloudstate.RequestAttempt) {
 	t.Helper()
 	first, err := f.repository.LoadRequestAttempt(ctx, testRequestScope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return f.ref(v), testRequestScope, first
 }
 
@@ -226,9 +217,7 @@ func startTestRuntime(t testing.TB, runtime *Runtime) {
 func newStartedRuntime(t testing.TB, ctx context.Context, data []byte, options Options) *Runtime {
 	t.Helper()
 	runtime, err := New(ctx, data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	startTestRuntime(t, runtime)
 	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
 	return runtime
@@ -245,9 +234,7 @@ func (f *budgetPlanningFixture) plan(t testing.TB, planning *BudgetPlanning, com
 	} else {
 		planned, err = planning.Generate(context.Background(), f.generate, f.attempt)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return planned
 }
 
@@ -263,9 +250,7 @@ func planGenerate(t testing.TB, capabilities V1RuntimeCapabilities, request llm.
 func recoveryBinding(t testing.TB, planned PlannedBudgetCall) ProviderRecoveryBinding {
 	t.Helper()
 	binding, err := planned.Provider.RecoveryBinding(planned.Route)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return binding
 }
 
@@ -274,13 +259,9 @@ func recoveryBinding(t testing.TB, planned PlannedBudgetCall) ProviderRecoveryBi
 func responsesAdapter(t testing.TB, httpClient *http.Client) *openairesponses.Adapter {
 	t.Helper()
 	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: httpClient})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 
@@ -328,9 +309,7 @@ func (f *boundedCloudFixture) requireCacheOutcome(t testing.TB, what string, v l
 func newTestRuntime(t testing.TB, ctx context.Context, data []byte, options Options) *Runtime {
 	t.Helper()
 	runtime, err := New(ctx, data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
 	return runtime
 }
@@ -428,9 +407,7 @@ func failCompile(err error) func(provider.CompileInput) (provider.Call, error) {
 func newTestApp(t testing.TB, options app.Options) *app.App {
 	t.Helper()
 	application, err := app.New(context.Background(), options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = application.Close(context.Background()) })
 	return application
 }
@@ -439,9 +416,7 @@ func newTestApp(t testing.TB, options app.Options) *app.App {
 func testKeyring(t testing.TB, key state.Key) *state.Keyring {
 	t.Helper()
 	keyring, err := state.NewKeyring([]state.Key{key}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return keyring
 }
 
@@ -449,9 +424,7 @@ func testKeyring(t testing.TB, key state.Key) *state.Keyring {
 func testLogger(t testing.TB, options observability.LogOptions) *observability.Logger {
 	t.Helper()
 	logger, err := observability.NewLogger(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return logger
 }
 
@@ -460,9 +433,7 @@ func testLogger(t testing.TB, options observability.LogOptions) *observability.L
 func mustNewRuntime(t testing.TB, data []byte, options Options) *Runtime {
 	t.Helper()
 	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return runtime
 }
 
@@ -471,9 +442,7 @@ func mustNewRuntime(t testing.TB, data []byte, options Options) *Runtime {
 func mustCompileConfig(t testing.TB, data []byte) *config.Snapshot {
 	t.Helper()
 	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return snapshot
 }
 
@@ -481,9 +450,7 @@ func mustCompileConfig(t testing.TB, data []byte) *config.Snapshot {
 func mustReadFile(t testing.TB, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -491,9 +458,7 @@ func mustReadFile(t testing.TB, path string) []byte {
 func encodeJSON(t testing.TB, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
@@ -501,9 +466,7 @@ func encodeJSON(t testing.TB, value any) []byte {
 func decodeJSON[T any](t testing.TB, data []byte) T {
 	t.Helper()
 	var value T
-	if err := json.Unmarshal(data, &value); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(data, &value))
 	return value
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -32,9 +33,7 @@ func loadOnceChild(t *testing.T, f *boundedCloudFixture, key string) (llm.Genera
 func parentSnapshotBlob(t *testing.T, f *boundedCloudFixture, child llm.GenerateRequestV1, v llm.ExecutionResultV1) blob.BlobKey {
 	t.Helper()
 	record, err := f.repository.Read(context.Background(), cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var progress struct {
 		Preparation struct {
 			Ref struct {
@@ -57,16 +56,12 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
 	p, err := f.runtime.preparation.Load(ctx, executionRef(v, child.Context))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if p.input == nil || p.input.generate == nil || !p.loaded || p.parentSnapshot == nil {
 		t.Fatalf("Load did not keep the step's prepared input: %+v", p.input)
 	}
 	want, err := PrepareGenerateInput(ctx, *p.Generate, p.GenerateReplay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	first, err := p.generateInput(ctx)
 	if err != nil || !reflect.DeepEqual(first, want) {
 		t.Fatalf("reused input differs from a fresh preparation: %v", err)
@@ -83,9 +78,7 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 	other.Append = []llm.Item{llm.HumanText("other")}
 	manifest, _ := json.Marshal(other)
 	wantOther, err := PrepareGenerateInput(ctx, other, p.GenerateReplay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got, err := p.input.generateInput(ctx, manifest, other, p.GenerateReplay); err != nil || !reflect.DeepEqual(got, wantOther) {
 		t.Fatalf("another manifest used the prepared input: %v", err)
 	}
@@ -169,9 +162,7 @@ func TestCloudExecutionRuntimeTurnStillRejectsCorruptParent(t *testing.T) {
 // (#1112) derives the same requests and digests as resolving each time.
 func TestCandidateResolutionMatchesResolveCandidateRequest(t *testing.T) {
 	prompt, err := compaction.Prompt(compaction.PromptVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	plain := llm.Request{APIVersion: llm.APIVersion, OperationKey: "op", Model: "logical", ServiceClass: llm.ServiceClassStandard,
 		Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Text: "be brief"}}, Input: []llm.Item{llm.HumanText("hello")}}
 	summarizer := plain
@@ -196,16 +187,12 @@ func TestCandidateResolutionMatchesResolveCandidateRequest(t *testing.T) {
 	for name, request := range map[string]llm.Request{"plain": plain, "summarizer": summarizer, "no instructions": none} {
 		t.Run(name, func(t *testing.T) {
 			semantic, err := llm.NormalizeRequest(request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var digests [][32]byte
 			for _, family := range []provider.Family{provider.FamilyOpenAIResponses, provider.FamilyAnthropicMessages} {
 				want := resolveCandidateRequest(semantic, providerStatePins{}, routing.Candidate{Model: candidate.Model, AttemptedClass: candidate.AttemptedClass, Family: string(family)}, nil)
 				wantDigest, err := llm.RequestDigest(want)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				flatten := !preservesInstructionHierarchy(family, nil)
 				resolution := newCandidateResolution(semantic, providerStatePins{}, candidate)
 				if got := resolution.request(flatten); !reflect.DeepEqual(got, want) {
@@ -229,9 +216,7 @@ func TestCandidateResolutionMatchesResolveCandidateRequest(t *testing.T) {
 				}
 				// A request that flattening leaves unchanged is hashed once,
 				// also when the adapter then compiles the flattened form.
-				if _, err := resolution.digest(true); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, testassert.Err(resolution.digest(true)))
 				if name != "summarizer" && resolution.digests[1] != nil {
 					t.Fatal("hashed an unchanged request twice")
 				}

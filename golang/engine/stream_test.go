@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -64,9 +65,7 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 	}, maximum: 99}
 	request := baseRequest("filtered-stream-admission")
 	filtered, err := harness.engine.preflightStreamingPlan(context.Background(), request, quoted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(filtered.candidates) != 1 || filtered.candidates[0].candidate.EndpointID != "streaming" || filtered.maximum != 7 {
 		t.Fatalf("filtered stream plan = %#v, want only the streaming candidate with maximum 7", filtered)
 	}
@@ -74,14 +73,10 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 		t.Fatalf("filtered price version = %q, want stream-price", version)
 	}
 	snapshot, err := harness.engine.dependencies.Snapshots.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	identity := normalizedIdentityForTest(t, request)
 	operation, existing, err := harness.engine.beginOrResume(context.Background(), identity.normalized, snapshot, identity.id, identity.scopeKey, identity.digest, filtered, harness.clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if existing || operation.ReservedMicroUSD != 7 || operation.PriceVersion != "stream-price" || len(operation.Reservations) != 1 || operation.Reservations[0].Amount != 7 {
 		t.Fatalf("stream admission operation = %#v, want only the streaming candidate's reservation and price", operation)
 	}
@@ -285,9 +280,7 @@ func TestStreamCloseClosesProviderSourceThatIgnoresContext(t *testing.T) {
 		t.Fatalf("stream type = %T, want *streamEmitter", stream)
 	}
 	waitChannel(t, source.entered, "provider source read")
-	if err := stream.Close(); err != nil {
-		t.Fatalf("close stream: %v", err)
-	}
+	testassert.NoError(t, stream.Close(), "close stream")
 	waitChannel(t, source.closed, "provider source close after explicit stream close")
 	waitChannel(t, emitter.closed, "producer completion after explicit stream close")
 }
@@ -327,9 +320,7 @@ func TestStreamAppliesBackpressureBeforePullingMoreProviderEvents(t *testing.T) 
 		t.Fatal("engine pulled a provider event beyond the full public stream buffer")
 	default:
 	}
-	if _, err := stream.Next(context.Background()); err != nil {
-		t.Fatalf("drain one public event: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(stream.Next(context.Background())), "drain one public event")
 	waitChannel(t, source.gateRequested, "provider read after drain")
 }
 
@@ -574,9 +565,7 @@ func (source *gatedProviderSource) Close() error {
 func streamEvents(t *testing.T, harness testHarness, request llm.Request) []llm.Event {
 	t.Helper()
 	stream, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	testassert.NoError(t, err, "open stream")
 	defer stream.Close()
 	return readTerminalStream(t, stream)
 }
@@ -617,9 +606,7 @@ func readTerminalStream(t *testing.T, stream llm.EventStream) []llm.Event {
 		if err == io.EOF {
 			t.Fatal("stream ended before a terminal event")
 		}
-		if err != nil {
-			t.Fatalf("read stream event: %v", err)
-		}
+		testassert.NoError(t, err, "read stream event")
 		events = append(events, event)
 		if llm.IsTerminalEvent(event) {
 			if trailing, trailingErr := stream.Next(context.Background()); trailingErr != io.EOF {

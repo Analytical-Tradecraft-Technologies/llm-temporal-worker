@@ -3,14 +3,13 @@ package state
 import (
 	"context"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
 func TestIssueRootChecksTenantAndResetsDepth(t *testing.T) {
 	keyring, err := NewKeyring([]Key{{ID: "key-1", Secret: []byte("01234567890123456789012345678901"), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, _, err := IssueRoot(context.Background(), keyring, Continuation{}); err == nil || err.Error() != "continuation tenant is required" {
 		t.Fatalf("missing tenant = %v", err)
 	}

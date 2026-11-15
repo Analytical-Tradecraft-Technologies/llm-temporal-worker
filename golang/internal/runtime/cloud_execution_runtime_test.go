@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"strings"
 	"sync"
@@ -58,9 +59,7 @@ func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFix
 	f.table, f.blobs = table, blobs
 	var err error
 	f.repository, err = cloudstate.NewRepository(cloudstate.Options{Table: table, Blobs: blobs, Namespace: "runtime-test", Secret: bytes.Repeat([]byte{7}, 32), ParentSnapshotBlob: b.parentSnapshotBlob})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	keys := testKeyring(t, state.Key{ID: "test", Primary: true, Secret: bytes.Repeat([]byte{8}, 32)})
 	checkpoints := f.repository.Checkpoints()
 	f.cap = b.cap
@@ -72,13 +71,9 @@ func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFix
 	f.cap.CloudIdentity = durable.CloudIdentity{Provider: "aws", Namespace: "runtime-test", RequestTable: "requests", PayloadStore: "payloads", ProviderDigest: [32]byte{2}}
 	f.cap.RedisIdentity = validCapabilityComposition().Identity.Redis
 	f.cap.Budgets, err = durable.NewReferenceBudgetMaterializer("generation-1", "incarnation-1", f.cap.Clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.cap.Finalizer, err = newCloudFinalizer(f.repository, f.cap.Responses, f.cap.ResponseFills, f.cap.Budgets, f.cap.Clock)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.adapter = &executionAsyncAdapter{executionSyncAdapter: &executionSyncAdapter{planningAdapter: &planningAdapter{version: "profile/v1"}}}
 	answer := func(call provider.Call) provider.ResumableResult {
 		v := executionResponse(call)
@@ -123,9 +118,7 @@ func (f *boundedCloudFixture) restart(t testing.TB) {
 	t.Helper()
 	var err error
 	f.runtime, err = f.cap.NewCloudExecutionRuntime(context.Background(), f.options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 }
 func boundedState(t testing.TB, v llm.ExecutionResultV1, err error, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
 	t.Helper()
@@ -303,9 +296,7 @@ func TestCloudExecutionRuntimeUnknownRetryGetsNewBudget(t *testing.T) {
 	}
 	shard, _ := cloudstate.PendingShard(first.ID)
 	page, err := f.repository.ListPending(ctx, shard, 100, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	found := false
 	for _, request := range page.Requests {
 		if request.ID == first.ID {
@@ -323,13 +314,9 @@ func TestCloudExecutionRuntimeExpiresUnusedAttempt(t *testing.T) {
 			f := boundedCloud(t, false)
 			ctx := context.Background()
 			p, err := f.runtime.preparation.Prepare(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			first, err := f.repository.BeginRequestAttempt(ctx, p.Record.Request.Scope, p.Record.Request.ID, "", f.now)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if quote {
 				f.prepareGenerate(t, ctx)
 			}
@@ -605,9 +592,7 @@ func TestCloudExecutionRuntimeCacheKeepsExactTemperature(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	for i, value := range []string{"0.10000000000000001", "0.100000000000000009"} {
 		decimal, err := llm.NewDecimalV1(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		f.request.SettingsPatch.Temperature.Set = &decimal
 		f.request.OperationKey = fmt.Sprintf("exact-temperature-%d", i)
 		result := f.finish(t)
@@ -625,9 +610,7 @@ func TestCloudExecutionRuntimeIndependentSamples(t *testing.T) {
 			f := boundedCloud(t, false)
 			if temperature != "" {
 				value, err := llm.NewDecimalV1(temperature)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				f.request.SettingsPatch.Temperature.Set = &value
 			} else {
 				f.request.SettingsPatch.Temperature.Set = nil
@@ -1015,13 +998,9 @@ func TestCloudExecutionRuntimeProvenanceWithoutAccountFailsClosed(t *testing.T) 
 func (p *pinnedCloudFixture) row(t *testing.T, handle llm.CheckpointHandle) state.DurableCheckpoint {
 	t.Helper()
 	id, err := p.options.Keyring.VerifyCheckpointHandle(context.Background(), "trusted-scope", string(handle))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	row, err := p.repository.Checkpoints().Get(context.Background(), "trusted-scope", id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return row
 }
 
@@ -1139,9 +1118,7 @@ func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 	ctx := context.Background()
 	scope, id := cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID)
 	record, err := f.repository.Read(ctx, scope, id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// The record references the parent snapshot blob instead of embedding it.
 	if !bytes.Contains(record.Progress, []byte(`"parent_snapshot_ref"`)) || bytes.Contains(record.Progress, []byte(`"parent_snapshot"`)) {
 		t.Fatal("request record embeds the parent snapshot")
@@ -1154,9 +1131,7 @@ func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 		t.Fatalf("loaded parent differs from a fresh decode: %v", err)
 	}
 	want, err := f.runtime.preparation.restore(ctx, record, preparation, "trusted-scope")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got, err := f.runtime.preparation.restoreLoaded(ctx, record, preparation, snapshot, true, "trusted-scope")
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("validated restore differs: err=%v", err)
@@ -1187,9 +1162,7 @@ func TestCloudExecutionRuntimeTurnParentSnapshotStorage(t *testing.T) {
 			child, v := loadOnceChild(t, f, "child")
 			ctx := context.Background()
 			record, err := f.repository.Read(ctx, cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			inline, referenced := bytes.Contains(record.Progress, []byte(`"parent_snapshot"`)), bytes.Contains(record.Progress, []byte(`"parent_snapshot_ref"`))
 			if inline == blobStorage || referenced != blobStorage {
 				t.Fatalf("inline=%t referenced=%t with blob storage %t", inline, referenced, blobStorage)

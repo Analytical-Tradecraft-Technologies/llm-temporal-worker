@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -27,9 +28,7 @@ func FuzzCanonicalJSONIdempotent(f *testing.F) {
 			t.Skip()
 		}
 		again, err := llm.CanonicalJSON(canonical)
-		if err != nil {
-			t.Fatalf("canonical output was rejected: %v", err)
-		}
+		testassert.NoError(t, err, "canonical output was rejected")
 		if !bytes.Equal(canonical, again) {
 			t.Fatalf("canonicalization is not idempotent: %s != %s", canonical, again)
 		}

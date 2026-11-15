@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -48,9 +49,7 @@ func TestBedrockConverseContractFixturesMatchLoweringAndLifting(t *testing.T) {
 	response := bedrockConverseResponse("Hello from the fixture response.", 7, 6)
 	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, response), "response.completed.json")
 	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	semantic := contract.MarshalJSON(t, lifted)
 	assertBedrockConverseCanonicalFixture(t, semantic, "response.semantic.json")
 }
@@ -80,9 +79,7 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.HumanText("fixture")}}
 			call := provider.Call{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model, OperationKey: fixture.operation, ServiceClass: fixture.requested}
 			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			semantic := contract.MarshalJSON(t, lifted)
 			assertBedrockConverseCanonicalFixture(t, semantic, fixture.semantic)
 			if lifted.Usage.InputTokens <= 0 || lifted.Usage.OutputTokens <= 0 {
@@ -141,18 +138,14 @@ func TestBedrockConverseToolUseContractFixtures(t *testing.T) {
 	response := bedrockConverseToolResponse()
 	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, response), "response.tool-use.completed.json")
 	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, lifted), "response.tool-use.semantic.json")
 }
 
 func mustBedrockConverseProfile(t *testing.T) Profile {
 	t.Helper()
 	profile, err := NewDefaultProfile("bedrock-converse")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return profile
 }
 

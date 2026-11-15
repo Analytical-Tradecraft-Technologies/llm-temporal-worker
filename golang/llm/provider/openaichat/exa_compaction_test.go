@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -20,9 +21,7 @@ func TestExaCompactionSummaryIgnoresCitations(t *testing.T) {
 				payload := fmt.Sprintf(body, finish)
 				input := []llm.Item{llm.HumanText("a long conversation")}
 				request, err := compaction.PrepareRequest(llm.Request{OperationKey: "exa-op", Model: "exa", Input: input}, "exa-op/compact", input, compaction.DefaultPolicy())
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				result := invokeExa(t, newExaTestAdapter(t, exaBody(payload)), request, strict)
 				if len(result.Response.Output) != 3 {
 					t.Fatalf("exa output = %#v, want message and two references", result.Response.Output)

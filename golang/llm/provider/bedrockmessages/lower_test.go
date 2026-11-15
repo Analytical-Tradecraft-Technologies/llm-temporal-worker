@@ -33,9 +33,7 @@ func TestLowerRequestMapsSystemToolsOutputSamplingAndReasoning(t *testing.T) {
 		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortMedium, Summary: llm.ReasoningSummaryNone, TokenBudget: &reasoningBudget},
 	}
 	params, err := lowerRequest(request, mustBedrockProfile(t, ""))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wire := contract.JSONObject(t, params)
 	if wire["model"] != "claude-contract" || wire["max_tokens"] != float64(maxTokens) {
 		t.Fatalf("request identity = %#v", wire)
@@ -74,36 +72,28 @@ func TestLowerRequestMapsSystemToolsOutputSamplingAndReasoning(t *testing.T) {
 
 func TestLowerItemMapsToolAndMediaContent(t *testing.T) {
 	tool, err := lowerItem(llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"city":"sydney"}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	toolContent := tool["content"].([]any)[0].(map[string]any)
 	if tool["role"] != "assistant" || toolContent["type"] != "tool_use" || toolContent["id"] != "call-1" || toolContent["name"] != "lookup" {
 		t.Fatalf("tool call = %#v", tool)
 	}
 
 	result, err := lowerItem(llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "result"}}, IsError: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	resultContent := result["content"].([]any)[0].(map[string]any)
 	if result["role"] != "user" || resultContent["type"] != "tool_result" || resultContent["tool_use_id"] != "call-1" || resultContent["is_error"] != true {
 		t.Fatalf("tool result = %#v", result)
 	}
 
 	image, err := lowerPart(llm.ImagePart{Bytes: []byte("image-bytes"), MediaType: "image/png"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	imageSource := image.(map[string]any)["source"].(map[string]any)
 	if imageSource["type"] != "base64" || imageSource["media_type"] != "image/png" || imageSource["data"] != base64.StdEncoding.EncodeToString([]byte("image-bytes")) {
 		t.Fatalf("image = %#v", image)
 	}
 
 	document, err := lowerPart(llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "Report"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	documentMap := document.(map[string]any)
 	if documentMap["type"] != "document" || documentMap["title"] != "Report" || documentMap["source"].(map[string]any)["type"] != "base64" {
 		t.Fatalf("document = %#v", document)
@@ -198,9 +188,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 			// A manual budget must stay below max_tokens.
 			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}}
 			params, err := lowerRequest(request, mustBedrockProfile(t, ""))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			wire := contract.JSONObject(t, params)
 			thinking, exists := wire["thinking"]
 			if test.wantType == "" {
@@ -227,9 +215,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 
 func TestLoweringSendsNonStrictToolsAndRejectsSchemalessJSONOutput(t *testing.T) {
 	tools, err := lowerTools([]llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string","minLength":1}}}`)}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, strict := tools[0].(map[string]any)["strict"]; strict {
 		t.Fatalf("tool must not be forced strict: %#v", tools[0])
 	}

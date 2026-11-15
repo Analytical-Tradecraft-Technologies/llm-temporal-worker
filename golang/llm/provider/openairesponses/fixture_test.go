@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -12,9 +13,7 @@ func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
 	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
 	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	params, err := lowerRequest(normalized, serviceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := contract.MarshalJSON(t, params)
 	assertCanonicalFixtureJSON(t, got, "openai-responses", "request.wire.json")
 }

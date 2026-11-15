@@ -15,6 +15,7 @@ import (
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -29,9 +30,7 @@ func responseCacheFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs
 		Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.origin", Kind: "generation"},
 		Cache:      llm.CacheDispositionV1{Disposition: "miss_populated"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: &cost, Method: "provider_reported"}}
 	response, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	entry := cache.ResponseEntry{ID: "entry-original", Key: cache.ResponseKey{ScopeID: cp.ScopeID, Operation: cache.OperationGenerate,
 		Route: cache.RouteIdentity{Provider: "private-provider", Endpoint: "private-endpoint", Account: "private-account", Region: "private-region", Model: "private-model", Revision: "revision-1", Compiler: "compiler-1"}, Fingerprint: cache.Fingerprint{1}},
 		OriginOperationID: cp.OriginOperationID, OriginCheckpointID: cp.ID, CompletedAt: cp.CreatedAt.Add(time.Minute), Response: response}
@@ -41,9 +40,7 @@ func responseCacheFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs
 func lookupResponse(t *testing.T, r *Repository, key cache.ResponseKey, now time.Time) *cache.ResponseEntry {
 	t.Helper()
 	entry, err := r.Responses().Lookup(context.Background(), cache.ResponseLookup{Key: key, Now: now})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return entry
 }
 
@@ -127,9 +124,7 @@ func TestCloudResponseCacheConcurrentPublicationAndMonotonicHead(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	if len(table.rows) != 5 {
 		t.Fatalf("duplicate entries: %d rows", len(table.rows))
@@ -146,9 +141,7 @@ func TestCloudResponseCacheConcurrentPublicationAndMonotonicHead(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	mustPublishResponse(t, r, entry)
 	if got := lookupResponse(t, r, entry.Key, entry.CompletedAt.Add(time.Hour)); got.ID != "entry-29" {
@@ -162,7 +155,7 @@ func TestCloudResponseCacheConcurrentPublicationAndMonotonicHead(t *testing.T) {
 	}
 	conflict := entry
 	conflict.CompletedAt = conflict.CompletedAt.Add(time.Second)
-	requireErrorIs(t, r.Responses().Publish(ctx, conflict), contracts.ErrConflict, "ID reused")
+	testassert.ErrorIs(t, r.Responses().Publish(ctx, conflict), contracts.ErrConflict, "ID reused")
 }
 
 func TestCloudResponseCacheIncompleteResultsPreserveSuccess(t *testing.T) {
@@ -185,9 +178,7 @@ func TestCloudResponseCacheIncompleteResultsPreserveSuccess(t *testing.T) {
 	tools.ID = "tool-calls"
 	tools.CompletedAt = tools.CompletedAt.Add(time.Second)
 	tools.Response = bytes.Replace(entry.Response, []byte(`"status":"completed"`), []byte(`"status":"tool_calls"`), 1)
-	if err := r.Responses().Publish(ctx, tools); err != nil {
-		t.Fatalf("tool-call success rejected: %v", err)
-	}
+	testassert.NoError(t, r.Responses().Publish(ctx, tools), "tool-call success rejected")
 }
 
 func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
@@ -220,7 +211,7 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 						return nil, nil
 					}
 				}
-				requireErrorIs(t, r.Responses().Publish(ctx, entry), contracts.ErrOutcomeUnknown, "uncertain publication")
+				testassert.ErrorIs(t, r.Responses().Publish(ctx, entry), contracts.ErrOutcomeUnknown, "uncertain publication")
 				got := lookupResponse(t, r, entry.Key, entry.CompletedAt)
 				visible := committed && (phase == "success" || phase == "replace")
 				if visible {
@@ -236,9 +227,7 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 				}
 				table.hook, blobs.hook = nil, nil
 				r = reopen(t, table, blobs)
-				if err := r.Responses().Publish(ctx, entry); err != nil {
-					t.Fatalf("restart retry: %v", err)
-				}
+				testassert.NoError(t, r.Responses().Publish(ctx, entry), "restart retry")
 				requireResponseHit(t, r, entry, entry.CompletedAt, "retry lost result")
 			})
 		}
@@ -265,10 +254,10 @@ func TestCloudResponseCacheUseReceipts(t *testing.T) {
 	ctx := context.Background()
 	child := publishEntryWithReplayChild(t, r, entry, origin)
 	use := replayUse(origin, child, entry, entry.CompletedAt.Add(time.Hour))
-	requireErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrNotFound, "uncommitted checkpoint consumed")
+	testassert.ErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrNotFound, "uncommitted checkpoint consumed")
 	mustPublishCheckpoint(t, r.Checkpoints(), child)
 	table.hook = failTableWrites("", "/cache/use/", nil, contracts.ErrOutcomeUnknown)
-	requireErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrOutcomeUnknown, "")
+	testassert.ErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrOutcomeUnknown)
 	table.hook = nil
 	r = reopen(t, table, blobs)
 	var wg sync.WaitGroup
@@ -279,9 +268,7 @@ func TestCloudResponseCacheUseReceipts(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 	}
 	got, err := r.Responses().ReadUse(ctx, use.ScopeID, use.OperationID)
 	if err != nil || got != use {
@@ -298,8 +285,8 @@ func TestCloudResponseCacheUseReceipts(t *testing.T) {
 	}
 	conflict := use
 	conflict.CompletedAt = conflict.CompletedAt.Add(time.Second)
-	requireErrorIs(t, r.Responses().RecordUse(ctx, conflict), contracts.ErrConflict, "receipt changed")
-	requireErrorIs(t, errOf(r.Responses().ReadUse(ctx, "other-scope", use.OperationID)), contracts.ErrNotFound, "cross-scope receipt")
+	testassert.ErrorIs(t, r.Responses().RecordUse(ctx, conflict), contracts.ErrConflict, "receipt changed")
+	testassert.ErrorIs(t, testassert.Err(r.Responses().ReadUse(ctx, "other-scope", use.OperationID)), contracts.ErrNotFound, "cross-scope receipt")
 	age := time.Minute
 	if got, err := r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: use.CompletedAt, MaxAge: &age}); err != nil || got != nil {
 		t.Fatal("use refreshed age")
@@ -318,15 +305,15 @@ func TestCloudResponseCacheInvalidInputsAndCorruption(t *testing.T) {
 	} {
 		candidate := entry
 		edit(&candidate)
-		requireErrorIs(t, r.Responses().Publish(ctx, candidate), ErrInvalid, "invalid accepted")
+		testassert.ErrorIs(t, r.Responses().Publish(ctx, candidate), ErrInvalid, "invalid accepted")
 	}
-	requireErrorIs(t, r.Responses().Publish(nil, entry), ErrInvalid, "")
+	testassert.ErrorIs(t, r.Responses().Publish(nil, entry), ErrInvalid)
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	requireErrorIs(t, r.Responses().Publish(canceled, entry), context.Canceled, "")
+	testassert.ErrorIs(t, r.Responses().Publish(canceled, entry), context.Canceled)
 	mustPublishResponse(t, r, entry)
 	for _, age := range []time.Duration{0, -time.Second} {
-		requireErrorIs(t, errOf(r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt, MaxAge: &age})), ErrInvalid, "")
+		testassert.ErrorIs(t, testassert.Err(r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt, MaxAge: &age})), ErrInvalid)
 	}
 	s := r.Responses().(*responseCache)
 	head := s.key("success", entry.Key)
@@ -335,13 +322,11 @@ func TestCloudResponseCacheInvalidInputsAndCorruption(t *testing.T) {
 	bad.Item = cloneItem(row.Item)
 	bad.Item.Fields["cache"] = kv.String("bad")
 	table.rows[head] = bad
-	requireErrorIs(t, errOf(s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt})), ErrCorrupt, "corruption hidden")
+	testassert.ErrorIs(t, testassert.Err(s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt})), ErrCorrupt, "corruption hidden")
 	table.rows[head] = row
 	pointer, _, err := s.readPointer(ctx, head)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	data := blobs.values[blob.BlobKey(pointer.Blob)]
 	data[len(data)-1] ^= 1
-	requireErrorIs(t, errOf(s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt})), ErrCorrupt, "tampering hidden")
+	testassert.ErrorIs(t, testassert.Err(s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt})), ErrCorrupt, "tampering hidden")
 }

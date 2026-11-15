@@ -11,6 +11,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 )
 
@@ -64,13 +65,9 @@ func testInitialization(identity budget.InitializationIdentity, now time.Time) b
 func testBudgetIdentity(t *testing.T, value config.Config) budget.InitializationIdentity {
 	t.Helper()
 	keys, err := redisKeyOptions(value, bytes.Repeat([]byte{8}, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	space, err := redisstore.NewBudgetKeySpace(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return space.InitializationIdentity()
 }
 

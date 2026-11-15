@@ -12,6 +12,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -84,13 +85,9 @@ func (f anthropicContractFixture) testLoweringAndLifting(t *testing.T) {
 	request := f.loadRequest(t, "request.semantic.json")
 	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	tier, err := profile.providerTier(serviceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	params, err := lowerRequest(normalized, profile, tier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotWire := contract.MarshalJSON(t, params)
 	f.assertCanonical(t, gotWire, "request.wire.json")
 
@@ -108,12 +105,10 @@ func (f anthropicContractFixture) testSemanticRoundTrip(t *testing.T) {
 		Request  json.RawMessage `json:"request"`
 		Response json.RawMessage `json:"response"`
 	}{Request: requestSemantic, Response: responseSemantic})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	metadata := f.loadMetadata(t)
 	responseWire := f.read(t, "response.completed.json")
-	if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+	testassert.NoError(t, contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
 		var fixture struct {
 			Request  json.RawMessage `json:"request"`
 			Response json.RawMessage `json:"response"`
@@ -153,9 +148,7 @@ func (f anthropicContractFixture) testSemanticRoundTrip(t *testing.T) {
 			return nil, err
 		}
 		return json.Marshal(fixture)
-	}, metadata.GeneratedFieldExemptions); err != nil {
-		t.Fatal(err)
-	}
+	}, metadata.GeneratedFieldExemptions))
 }
 
 func (f anthropicContractFixture) read(t *testing.T, name string) []byte {
@@ -224,9 +217,7 @@ func (f anthropicContractFixture) assertClassFacts(t *testing.T, profile Profile
 func (f anthropicContractFixture) assertCompileError(t *testing.T, profile Profile, request llm.Request, expectedName string) {
 	t.Helper()
 	adapter, err := New(f.newClient(t, nil), f.endpoint, profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{
 		Request: request,
 		Query: provider.CapabilityQuery{
@@ -246,9 +237,7 @@ func (f anthropicContractFixture) assertCompileError(t *testing.T, profile Profi
 		Dispatch        provider.DispatchCertainty `json:"dispatch"`
 		MessageContains string                     `json:"message_contains"`
 	}
-	if err := json.Unmarshal(f.read(t, expectedName), &expected); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(f.read(t, expectedName), &expected))
 	if mapped.Code != expected.Code || mapped.Phase != expected.Phase || mapped.Dispatch != expected.Dispatch {
 		t.Fatalf("%s compile error = %#v, want %#v", request.OperationKey, mapped, expected)
 	}
@@ -261,9 +250,7 @@ func (f anthropicContractFixture) assertContinuation(t *testing.T, profile Profi
 	t.Helper()
 	request := f.loadRequest(t, "continuation-compatibility.semantic.json")
 	adapter, err := New(f.newClient(t, nil), f.endpoint, profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, f.endpoint, provider.FamilyAnthropicMessages, request)
 	wire := contract.MarshalJSON(t, call.SDKParams)
 	f.assertCanonical(t, wire, "continuation-compatibility.wire.json")
@@ -300,9 +287,7 @@ func (f anthropicContractFixture) assertUsageClassesLossAndContinuation(t *testi
 		OperationKey: f.usageOperationKey,
 		ServiceClass: llm.ServiceClassStandard,
 	}, &response, f.usageRequestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	gotUsage := contract.MarshalJSON(t, lifted)
 	f.assertCanonical(t, gotUsage, "usage-cost.semantic.json")
 

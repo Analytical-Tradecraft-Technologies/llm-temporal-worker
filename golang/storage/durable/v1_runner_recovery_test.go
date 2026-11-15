@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -37,9 +38,7 @@ func TestGenerateV1CrashAfterResultFinalizationDoesNotResubmit(t *testing.T) {
 	}
 
 	second, err := GenerateV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("reconciliation retry error = %v", err)
-	}
+	testassert.NoError(t, err, "reconciliation retry error")
 	if second.OperationID != string(store.route.OperationID) {
 		t.Fatalf("reconciliation response operation id = %q, want %q", second.OperationID, store.route.OperationID)
 	}
@@ -48,9 +47,7 @@ func TestGenerateV1CrashAfterResultFinalizationDoesNotResubmit(t *testing.T) {
 	}
 
 	third, err := GenerateV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("completed replay error = %v", err)
-	}
+	testassert.NoError(t, err, "completed replay error")
 	if third.OperationID != second.OperationID {
 		t.Fatalf("completed replay operation id = %q, want %q", third.OperationID, second.OperationID)
 	}

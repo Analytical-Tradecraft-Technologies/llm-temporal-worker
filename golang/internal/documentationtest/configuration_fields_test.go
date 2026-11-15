@@ -1,6 +1,7 @@
 package documentationtest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,13 +15,9 @@ import (
 // in golang/config must appear in it (#1531).
 func TestConfigurationReferenceNamesEveryField(t *testing.T) {
 	reference, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "configuration.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	sources, err := filepath.Glob(filepath.Join("..", "..", "config", "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	tag := regexp.MustCompile(`yaml:"([A-Za-z0-9_]+)`)
 	fields := map[string]string{}
 	for _, source := range sources {

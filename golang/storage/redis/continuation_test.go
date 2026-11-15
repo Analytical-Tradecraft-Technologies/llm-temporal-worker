@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/redis/go-redis/v9"
 )
@@ -74,7 +75,7 @@ func TestContinuationKeysShareAdmissionHashSlot(t *testing.T) {
 		}
 	}
 	child := testChildContinuation(t, now, root)
-	mustNoError(t, errOf(store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: child, OperationKey: "operation"})))
+	testassert.NoError(t, testassert.Err(store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: child, OperationKey: "operation"})))
 	if len(harness.lastKeys) != 3 {
 		t.Fatalf("child continuation keys = %d, want 3", len(harness.lastKeys))
 	}
@@ -87,19 +88,15 @@ func TestContinuationKeysShareAdmissionHashSlot(t *testing.T) {
 
 func testKeyring(t *testing.T) *state.Keyring {
 	secret := make([]byte, 32)
-	mustNoError(t, errOf(rand.Read(secret)))
+	testassert.NoError(t, testassert.Err(rand.Read(secret)))
 	keyring, err := state.NewKeyring([]state.Key{{ID: "primary", Secret: secret, Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return keyring
 }
 
 func testContinuation(t *testing.T, now time.Time) state.Continuation {
 	_, digest, err := state.CanonicalTranscript(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return state.Continuation{Tenant: "tenant-a", TranscriptDigest: digest, TranscriptComplete: true, CapabilityVersion: "cap-v1", PriceVersion: "price-v1", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 }
 
@@ -115,9 +112,7 @@ func testChildContinuation(t *testing.T, now time.Time, parent state.Handle) sta
 func createTestRoot(t *testing.T, store *ContinuationStore, now time.Time) state.Handle {
 	t.Helper()
 	root, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return root
 }
 
@@ -130,7 +125,7 @@ func TestContinuationCreateGetAndTenantBinding(t *testing.T) {
 	if err != nil || got.Tenant != "tenant-a" || got.ID != root.String() {
 		t.Fatalf("root = %#v, %v", got, err)
 	}
-	requireErrorIs(t, errOf(store.GetForTenant(context.Background(), "tenant-b", root)), state.ErrInvalidHandle, "tenant mismatch =")
+	testassert.ErrorIs(t, testassert.Err(store.GetForTenant(context.Background(), "tenant-b", root)), state.ErrInvalidHandle, "tenant mismatch =")
 	if got, err := store.GetForTenant(context.Background(), "tenant-a", root); err != nil || got.ID != root.String() {
 		t.Fatalf("tenant read = %#v, %v", got, err)
 	}
@@ -145,13 +140,9 @@ func TestContinuationStoreRoundTripsNilTranscriptForRootAndChild(t *testing.T) {
 		t.Fatal("test must exercise nil transcript persistence")
 	}
 	root, err := store.CreateRoot(context.Background(), rootValue)
-	if err != nil {
-		t.Fatalf("create root: %v", err)
-	}
+	testassert.NoError(t, err, "create root")
 	gotRoot, err := store.Get(context.Background(), root)
-	if err != nil {
-		t.Fatalf("get root: %v", err)
-	}
+	testassert.NoError(t, err, "get root")
 	if gotRoot.ID != root.String() {
 		t.Fatalf("get root returned handle %q, want %q", gotRoot.ID, root)
 	}
@@ -163,13 +154,9 @@ func TestContinuationStoreRoundTripsNilTranscriptForRootAndChild(t *testing.T) {
 
 	childValue := testChildContinuation(t, now, root)
 	child, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: childValue, OperationKey: "nil-transcript-operation"})
-	if err != nil {
-		t.Fatalf("create child: %v", err)
-	}
+	testassert.NoError(t, err, "create child")
 	gotChild, err := store.Get(context.Background(), child)
-	if err != nil {
-		t.Fatalf("get child: %v", err)
-	}
+	testassert.NoError(t, err, "get child")
 	if gotChild.ID != child.String() {
 		t.Fatalf("get child returned handle %q, want %q", gotChild.ID, child)
 	}
@@ -190,7 +177,7 @@ func TestContinuationChildIsImmutableAndOperationIdempotent(t *testing.T) {
 	if err != nil || second != first {
 		t.Fatalf("idempotent child = %q, %q, %v", first, second, err)
 	}
-	requireErrorIs(t, errOf(store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: state.Continuation{Tenant: "other", ParentID: parent.String(), Depth: 1, ExpiresAt: now.Add(time.Hour)}, OperationKey: "op-2"})), state.ErrConflict, "cross-tenant child =")
+	testassert.ErrorIs(t, testassert.Err(store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: state.Continuation{Tenant: "other", ParentID: parent.String(), Depth: 1, ExpiresAt: now.Add(time.Hour)}, OperationKey: "op-2"})), state.ErrConflict, "cross-tenant child =")
 	if got, err := store.Get(context.Background(), first); err != nil || got.ParentID != parent.String() {
 		t.Fatalf("child read = %#v, %v", got, err)
 	}
@@ -204,9 +191,7 @@ func TestContinuationOperationKeyIsScopedToTenantAndParent(t *testing.T) {
 	rootB := testContinuation(t, now)
 	rootB.Tenant = "tenant-b"
 	parentB, err := store.CreateRoot(context.Background(), rootB)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	childA := testChildContinuation(t, now, parentA)
 	first := mustPutChild(t, store, state.PutChildRequest{Parent: parentA, Child: childA, OperationKey: "shared-op"})
@@ -235,8 +220,8 @@ func TestContinuationExpiryAndBounds(t *testing.T) {
 	large := testContinuation(t, now)
 	large.ExpiresAt = now.Add(-time.Second)
 	store = mustCall(t, NewContinuationStore, ContinuationOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	requireErrorIs(t, errOf(store.CreateRoot(context.Background(), large)), state.ErrExpired, "expired continuation =")
+	testassert.ErrorIs(t, testassert.Err(store.CreateRoot(context.Background(), large)), state.ErrExpired, "expired continuation =")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	requireErrorIs(t, errOf(store.Get(ctx, "handle")), context.Canceled, "canceled get =")
+	testassert.ErrorIs(t, testassert.Err(store.Get(ctx, "handle")), context.Canceled, "canceled get =")
 }

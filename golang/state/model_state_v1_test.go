@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -14,9 +15,7 @@ func TestApplySettingsPatchV1PreservesCanonicalDecimalAndDetachedCollections(t *
 	tools := []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	wire := llm.SettingsPatchV1{Temperature: llm.Patch[llm.DecimalV1]{Set: &decimal}, Tools: llm.Patch[[]llm.Tool]{Set: &tools}}
 	got, err := ApplySettingsPatchV1(base, wire)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if got.TemperatureDecimal.String() != "0.10000000000000001" || *got.Temperature != 0.1 || decimal.String() != "0.100000000000000010" {
 		t.Fatal("lost exact/canonical decimal or changed the caller's patch")
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -85,9 +86,7 @@ func upstreamDocument() *Document {
 
 func TestUpstreamPolicyRequiresHeadquartersAndEveryDatacenterInTheList(t *testing.T) {
 	document := upstreamDocument()
-	if err := document.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, document.Validate())
 	rules := mergedPrecisionRules(t)
 	core5, _ := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
 	got := core5.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags
@@ -217,9 +216,7 @@ native_precision:
 func mustParse(t *testing.T, data string) RulesDocument {
 	t.Helper()
 	document, err := ParseRules([]byte(data))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return document
 }
 
@@ -228,21 +225,15 @@ func mustParse(t *testing.T, data string) RulesDocument {
 func mergedPrecisionRules(t *testing.T, layers ...string) Rules {
 	t.Helper()
 	precision, err := ParseRules(NativePrecisionRulesDocument())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	builtIn, err := ParseRules(DefaultRulesDocument())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	documents := []RulesDocument{builtIn, precision}
 	for _, layer := range layers {
 		documents = append(documents, mustParse(t, layer))
 	}
 	rules, err := MergeRules(documents...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return rules
 }
 
@@ -250,9 +241,7 @@ func TestDropUnlistedProvidersClearsCarriedForwardProviders(t *testing.T) {
 	document := upstreamDocument()
 	document.Providers = document.Providers[1:] // abroad-dc is no longer listed
 	dropUnlistedProviders(document)
-	if err := document.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, document.Validate())
 	for _, endpoint := range document.Models[0].Endpoints {
 		if endpoint.Tag == "abroad-dc/fp8" && endpoint.Provider != "" {
 			t.Fatalf("endpoint %q kept unlisted provider %q", endpoint.Tag, endpoint.Provider)
@@ -288,9 +277,7 @@ func TestUpstreamPolicyAssumesProviderLocationsOnlyWhereNoneArePublished(t *test
 	rules := mergedPrecisionRules(t)
 	locations := map[string][]string{"no-dc": {"US"}, "no-hq": {"US"}, "abroad-dc": {"US"}, "eu-host": {"US"}}
 	us, err := NewUpstreamPolicy(CountryListUS, false, false, false, locations)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	got := us.Upstreams(document, rules)["deepseek/deepseek-v3.2"].Tags
 	want := []string{"no-dc", "no-hq", "us-host/fp4", "us-host/fp8", "us-host/unknown"}
 	if !reflect.DeepEqual(got, want) {
@@ -328,9 +315,7 @@ func TestUnreadablePublishedLocationsFailClosed(t *testing.T) {
 	}))
 	defer server.Close()
 	providers, _, unreadable, err := Fetcher{Client: server.Client(), BaseURL: server.URL}.listProviders(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	wantUnreadable := []SkippedModel{{ID: "bad-hq", Cause: SkipProviderLocation}, {ID: "bad-dc", Cause: SkipProviderLocation},
 		{ID: "mixed-dc", Cause: SkipProviderLocation}, {ID: "long-dc", Cause: SkipProviderLocation}}
 	if !reflect.DeepEqual(unreadable, wantUnreadable) {
@@ -342,17 +327,13 @@ func TestUnreadablePublishedLocationsFailClosed(t *testing.T) {
 	}
 	// A reader of any version accepts the stored value and fails it closed.
 	document.Normalize()
-	if err := document.Validate(); err != nil {
-		t.Fatalf("Validate = %v", err)
-	}
+	testassert.NoError(t, document.Validate(), "Validate")
 	assumed := map[string][]string{}
 	for _, provider := range providers {
 		assumed[provider.Slug] = []string{"US"}
 	}
 	policy, err := NewUpstreamPolicy(CountryListUS, false, false, false, assumed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var allowed []string
 	for model := range policy.Upstreams(document, Rules{}) {
 		allowed = append(allowed, model)

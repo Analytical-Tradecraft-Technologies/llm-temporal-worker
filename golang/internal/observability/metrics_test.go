@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 )
@@ -31,9 +32,7 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 	metricFamilies := gather(t, metrics)
 	encoder := expfmt.NewEncoder(response, expfmt.NewFormat(expfmt.TypeTextPlain))
 	for _, family := range metricFamilies {
-		if err := encoder.Encode(family); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, encoder.Encode(family))
 	}
 	output := response.String()
 	for _, forbidden := range []string{"secret-endpoint", "secret-model", "secret-class", "secret-outcome", "secret-origin", "tenant-secret"} {
@@ -284,18 +283,14 @@ func requireMetricValues(t *testing.T, families []*dto.MetricFamily, expectation
 func newMetrics(t *testing.T, allowed observability.AllowedValues) *observability.Metrics {
 	t.Helper()
 	metrics, err := observability.NewMetrics(allowed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return metrics
 }
 
 func gather(t *testing.T, metrics *observability.Metrics) []*dto.MetricFamily {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return families
 }
 

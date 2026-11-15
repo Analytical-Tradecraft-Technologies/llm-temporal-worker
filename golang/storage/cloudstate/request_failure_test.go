@@ -9,6 +9,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -47,9 +48,7 @@ func firstPendingPage(t *testing.T, r *Repository, id RequestID) PendingPage {
 	t.Helper()
 	shard, _ := PendingShard(id)
 	page, err := r.ListPending(context.Background(), shard, 100, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return page
 }
 
@@ -107,7 +106,7 @@ func TestRequestFailureRenewalRequiresSettledRetryableChild(t *testing.T) {
 		r, _, _, root, a, failure, now := failedRequestFixture(t, retryable)
 		ctx, scope := context.Background(), root.Request.Scope
 		// A provider result alone cannot bypass failure finalization.
-		requireErrorIs(t, errOf(r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now)), contracts.ErrConflict, "unclosed child renewed")
+		testassert.ErrorIs(t, testassert.Err(r.BeginRequestAttempt(ctx, scope, root.Request.ID, a.ID, now)), contracts.ErrConflict, "unclosed child renewed")
 		changed := failure
 		changed.Retryable = !retryable
 		if err := r.FinishRequestFailure(ctx, scope, root.Request.ID, a.ID, changed, now); err == nil {

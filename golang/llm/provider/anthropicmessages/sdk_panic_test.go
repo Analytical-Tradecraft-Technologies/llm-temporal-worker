@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -16,9 +17,7 @@ func invokeWithPanickingResponse(t *testing.T, client *Client, baseURL, endpoint
 	profile := testProfile()
 	profile.ExpectedBaseURL = baseURL
 	adapter, err := New(client, endpointID, profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, endpointID, provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-panic", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	return err
@@ -30,9 +29,7 @@ func panickingTransport() *http.Client {
 
 func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 	client, err := NewClient(ClientConfig{BaseURL: "http://127.0.0.1/contract", APIKey: "test-key", HTTPClient: panickingTransport()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	err = invokeWithPanickingResponse(t, client, "http://127.0.0.1/contract", "anthropic-prod")
 	adaptertest.RecoveredDecodePanic(t, err, "op-panic")
 }
@@ -43,9 +40,7 @@ func TestInvokeRecoversAnSDKPanicInTheAWSGatewayClient(t *testing.T) {
 		HTTPClient: panickingTransport(),
 		AWSConfig:  anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	err = invokeWithPanickingResponse(t, client, "http://127.0.0.1/aws-contract", "anthropic-aws")
 	adaptertest.RecoveredDecodePanic(t, err, "op-panic")
 }

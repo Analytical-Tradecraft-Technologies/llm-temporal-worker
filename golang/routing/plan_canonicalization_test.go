@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -97,9 +98,7 @@ func canonicalizationCatalog(tb testing.TB) Catalog {
 			canonicalizationRoute("all", []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority}),
 		}},
 	})
-	if err != nil {
-		tb.Fatalf("compile canonicalization catalog: %v", err)
-	}
+	testassert.NoError(tb, err, "compile canonicalization catalog")
 	return catalog
 }
 
@@ -162,12 +161,8 @@ func assertEquivalentPlans(tb testing.TB, what string, first, second Plan) {
 func canonicalPlanJSON(tb testing.TB, plan Plan) []byte {
 	tb.Helper()
 	encoded, err := json.Marshal(plan)
-	if err != nil {
-		tb.Fatalf("marshal plan: %v", err)
-	}
+	testassert.NoError(tb, err, "marshal plan")
 	canonical, err := llm.CanonicalJSON(encoded)
-	if err != nil {
-		tb.Fatalf("canonicalize plan: %v", err)
-	}
+	testassert.NoError(tb, err, "canonicalize plan")
 	return canonical
 }

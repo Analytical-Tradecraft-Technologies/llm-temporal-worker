@@ -20,9 +20,7 @@ func TestReadSecretFileRejectsUnixSpecialTargets(t *testing.T) {
 			name: "fifo",
 			setup: func(t *testing.T) string {
 				path := filepath.Join(t.TempDir(), "fifo")
-				if err := syscall.Mkfifo(path, 0600); err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, syscall.Mkfifo(path, 0600))
 				return path
 			},
 		},

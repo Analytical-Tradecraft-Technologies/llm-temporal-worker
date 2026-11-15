@@ -9,6 +9,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	durablestore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,37 +19,29 @@ func TestRequireDurableV1RuntimeBuilderRejectsProductionDurableWithoutBuilder(t 
 		Environment: "production",
 		State:       config.StateConfig{Kind: config.StateKindDurable},
 	}, nil)
-	if !errors.Is(err, ErrDurableV1Composition) {
-		t.Fatalf("error = %v, want ErrDurableV1Composition", err)
-	}
+	testassert.ErrorIs(t, err, ErrDurableV1Composition)
 }
 
 func TestRequireDurableV1RuntimeBuilderAllowsDevelopmentFixture(t *testing.T) {
-	if err := requireDurableV1RuntimeBuilder(config.Config{
+	testassert.NoError(t, requireDurableV1RuntimeBuilder(config.Config{
 		Environment: "development",
 		State:       config.StateConfig{Kind: config.StateKindDurable},
-	}, nil); err != nil {
-		t.Fatalf("development durable fixture rejected: %v", err)
-	}
+	}, nil), "development durable fixture rejected")
 }
 
 func TestRequireDurableV1RuntimeBuilderAllowsExplicitBuilder(t *testing.T) {
 	builder := NewGenerateV1RuntimeBuilder()
-	if err := requireDurableV1RuntimeBuilder(config.Config{
+	testassert.NoError(t, requireDurableV1RuntimeBuilder(config.Config{
 		Environment: "production",
 		State:       config.StateConfig{Kind: config.StateKindDurable},
-	}, builder); err != nil {
-		t.Fatalf("explicit durable builder rejected: %v", err)
-	}
+	}, builder), "explicit durable builder rejected")
 }
 
 func TestRequireDurableV1RuntimeBuilderIgnoresNonDurableState(t *testing.T) {
-	if err := requireDurableV1RuntimeBuilder(config.Config{
+	testassert.NoError(t, requireDurableV1RuntimeBuilder(config.Config{
 		Environment: "production",
 		State:       config.StateConfig{Kind: config.StateKindRedis},
-	}, nil); err != nil {
-		t.Fatalf("non-durable state rejected: %v", err)
-	}
+	}, nil), "non-durable state rejected")
 }
 
 func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(t *testing.T) {
@@ -61,13 +54,9 @@ func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(
 			return engine.Snapshot{}, nil
 		}),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, _, err = factory.Build(context.Background(), snapshot)
-	if !errors.Is(err, ErrDurableV1Composition) {
-		t.Fatalf("Build() error = %v, want ErrDurableV1Composition", err)
-	}
+	testassert.ErrorIs(t, err, ErrDurableV1Composition, "Build()")
 	if loaded {
 		t.Fatal("Build() loaded the engine snapshot before rejecting unconfigured durable composition")
 	}
@@ -100,13 +89,9 @@ func TestProductionFactoryRejectsPhaseFactoriesWithoutCompositionBeforeLoadingEn
 			return validCompactPorts(), nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, _, err = factory.Build(context.Background(), snapshot)
-	if !errors.Is(err, ErrDurableV1Composition) {
-		t.Fatalf("Build() error = %v, want ErrDurableV1Composition", err)
-	}
+	testassert.ErrorIs(t, err, ErrDurableV1Composition, "Build()")
 	if loaded || resolverCalled || redisCalled || generateCalled || compactCalled {
 		t.Fatalf("missing composition reached external work: snapshot=%t provider=%t redis=%t generate=%t compact=%t", loaded, resolverCalled, redisCalled, generateCalled, compactCalled)
 	}
@@ -154,9 +139,7 @@ func assertCompositionRejectedBeforeEngine(t *testing.T, composition durablestor
 			return composition, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, _, err = factory.Build(context.Background(), snapshot)
 	if !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), wantError) {
 		t.Fatalf("Build() error = %v, want %s automatic-composition failure", err, label)
@@ -173,14 +156,10 @@ func TestProductionFactoryRejectsMismatchedAutomaticCompositionBeforeLoadingEngi
 func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t *testing.T) {
 	data := exampleConfig(t)
 	first, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile first config: %v", err)
-	}
+	testassert.NoError(t, err, "compile first config")
 	secondData := []byte(strings.Replace(string(data), "route_attempts: 6", "route_attempts: 5", 1))
 	second, err := config.Compile(context.Background(), secondData, nil)
-	if err != nil {
-		t.Fatalf("compile second config: %v", err)
-	}
+	testassert.NoError(t, err, "compile second config")
 	if first.Digest() == second.Digest() {
 		t.Fatal("distinct compiled snapshots share a config digest")
 	}
@@ -202,9 +181,7 @@ func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t 
 			return composition, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, snapshot := range []*config.Snapshot{first, second} {
 		composition, err := factory.preflightAutomaticDurableComposition(context.Background(), snapshot)
 		if err != nil {
@@ -232,12 +209,8 @@ func TestProductionFactoryDoesNotPreflightCompositionForExplicitBuilder(t *testi
 			return durablestore.Composition{}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := factory.preflightAutomaticDurableComposition(context.Background(), &config.Snapshot{}); err != nil {
-		t.Fatalf("explicit builder preflight error = %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, testassert.Err(factory.preflightAutomaticDurableComposition(context.Background(), &config.Snapshot{})), "explicit builder preflight error")
 	if compositionCalled {
 		t.Fatal("production factory preflighted a composition for an explicit builder")
 	}
@@ -258,13 +231,9 @@ func TestProductionFactoryDoesNotInferDurableBuilderFromCompositionFactory(t *te
 			return durablestore.Composition{}, errors.New("durable composition factory must be invoked by an explicit V1RuntimeBuilder")
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, _, err = factory.Build(context.Background(), snapshot)
-	if !errors.Is(err, ErrDurableV1Composition) {
-		t.Fatalf("Build() error = %v, want ErrDurableV1Composition", err)
-	}
+	testassert.ErrorIs(t, err, ErrDurableV1Composition, "Build()")
 	if loaded {
 		t.Fatal("Build() loaded the engine snapshot before rejecting unconfigured durable composition")
 	}
@@ -276,9 +245,7 @@ func TestProductionFactoryDoesNotInferDurableBuilderFromCompositionFactory(t *te
 func TestCloudRequestIdentityBindsMappingsAndProviderConfiguration(t *testing.T) {
 	original := testCloudConfig()
 	want, err := cloudRequestIdentity(original)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, test := range []struct {
 		name   string
 		change func(*config.CloudRequestConfig)
@@ -304,9 +271,7 @@ func TestCloudRequestIdentityBindsMappingsAndProviderConfiguration(t *testing.T)
 	// encoding/json sorts map keys, regardless of insertion order.
 	original.Provider.KeyValueStores["extra"] = "another-table"
 	first, err := cloudRequestIdentity(original)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	original.Provider.KeyValueStores = map[string]string{"extra": "another-table", "requests": "physical-table"}
 	second, err := cloudRequestIdentity(original)
 	if err != nil || first != second {
@@ -361,9 +326,7 @@ func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.
 					return c, nil
 				},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if test.valid {
 				c, err := factory.preflightAutomaticDurableComposition(context.Background(), snapshot)
 				if err != nil || c == nil {
@@ -371,9 +334,7 @@ func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.
 				}
 			} else {
 				_, _, err := factory.Build(context.Background(), snapshot)
-				if !errors.Is(err, ErrDurableV1Composition) {
-					t.Fatalf("invalid cloud preflight: %v", err)
-				}
+				testassert.ErrorIs(t, err, ErrDurableV1Composition, "invalid cloud preflight")
 			}
 			if calls != 1 {
 				t.Fatalf("composition calls=%d", calls)
@@ -384,15 +345,11 @@ func TestCloudCompositionPreflightValidatesBackendBeforeExternalWork(t *testing.
 
 func TestBoundCloudCompositionRevalidatesIdentity(t *testing.T) {
 	expected, err := cloudRequestIdentity(testCloudConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	c := validCapabilityComposition()
 	c.Identity.Cloud = expected
 	capabilities := V1RuntimeCapabilities{CloudIdentity: expected, ConfigDigest: c.Identity.ConfigDigest, composition: &c}
-	if _, err := capabilities.BuildDurableComposition(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(capabilities.BuildDurableComposition(context.Background())))
 	capabilities.CloudIdentity.Namespace = "other"
 	if _, err := capabilities.BuildDurableComposition(context.Background()); err == nil {
 		t.Fatal("reused mismatched cloud composition")

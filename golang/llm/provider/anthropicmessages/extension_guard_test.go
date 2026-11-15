@@ -89,9 +89,7 @@ func TestCompileAcceptsAllowedNonOwnedExtensionField(t *testing.T) {
 				Query:  provider.CapabilityQuery{EndpointID: "anthropic-test", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 				Strict: strict,
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if wire := contract.JSONObject(t, call.SDKParams); wire["contract_tag"] != "us" {
 				t.Fatalf("wire = %#v", wire)
 			}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
@@ -32,27 +33,21 @@ func TestLiveRedisBudgetStatusFailsClosedOnExpiryBacklog(t *testing.T) {
 
 	generation, incarnation, digest := "generation-1", "incarnation-1", strings.Repeat("a", 64)
 	active, err := json.Marshal(map[string]string{"generation_id": generation, "incarnation_id": incarnation, "manifest_digest": digest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustNoError(t, client.Set(ctx, pointer, active, 0).Err())
-	mustNoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: stream, ID: "1-0", Values: []string{"event", "seed"}}).Err())
-	if err := client.HSet(ctx, window, map[string]any{
+	testassert.NoError(t, err)
+	testassert.NoError(t, client.Set(ctx, pointer, active, 0).Err())
+	testassert.NoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: stream, ID: "1-0", Values: []string{"event", "seed"}}).Err())
+	testassert.NoError(t, client.HSet(ctx, window, map[string]any{
 		"schema": BudgetStatusWindowSchema, "generation_id": generation, "incarnation_id": incarnation, "manifest_digest": digest,
 		"member_key": "policy/window", "limit_nano_usd": "1000000000", "reserved_nano_usd": "300", "accounted_nano_usd": "0",
 		"coverage_start": "2026-01-01T00:00:00Z", "coverage_end": "2027-01-01T00:00:00Z",
-	}).Err(); err != nil {
-		t.Fatal(err)
-	}
+	}).Err())
 	past := float64(time.Now().Add(-time.Minute).UnixMilli())
-	mustNoError(t, client.ZAdd(ctx, expiry, redisclient.Z{Score: past, Member: generation + "|100"}, redisclient.Z{Score: past, Member: generation + "|200"}).Err())
+	testassert.NoError(t, client.ZAdd(ctx, expiry, redisclient.Z{Score: past, Member: generation + "|100"}, redisclient.Z{Score: past, Member: generation + "|200"}).Err())
 
 	read := func(limit int) []any {
 		t.Helper()
 		raw, err := budgetStatusScript.Run(ctx, client, []string{pointer, stream, window, expiry}, "read", generation, incarnation, digest, strconv.FormatInt(time.Now().UnixMilli(), 10), "1", strconv.Itoa(limit)).Result()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		result, ok := raw.([]any)
 		if !ok || len(result) != 2 {
 			t.Fatalf("budget status result = %#v", raw)
@@ -102,9 +97,7 @@ func TestLiveRedisBudgetStatusRefusesDurableLedgerSpend(t *testing.T) {
 		GenerationID: "generation-live", IncarnationID: "incarnation-live",
 		Clock: func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	accepted, err := materializer.Accept(ctx, durable.ReserveRequest{
 		OperationID: "spend", GenerationID: "generation-live", ExpiresAt: now.Add(time.Hour),
 		Reservations: []admission.WindowReservation{{
@@ -127,10 +120,8 @@ func TestLiveRedisBudgetStatusRefusesDurableLedgerSpend(t *testing.T) {
 	members := []BudgetManifestMember{{PolicyID: "policy", WindowID: "hour", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), ConfigVersion: "config-1", PriceVersion: "price-1", CoverageStart: start, CoverageEnd: start.Add(time.Hour), BucketCount: 60, BucketWidth: time.Minute, BucketCatalogDigest: strings.Repeat("c", 64), LimitNanoUSD: "1000000000"}}
 	catalog := mustCall(t, MemberCatalogDigest, members)
 	generations, err := NewRedisBudgetGenerationPort(client, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustNoError(t, errOf(generations.PublishGeneration(ctx, BudgetManifest{Schema: BudgetManifestSchema, GenerationID: "status-generation", IncarnationID: "status-incarnation", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: start.Add(time.Hour), PolicyCount: 1, WindowCount: 1, BucketCount: 60, StreamHighWaterMark: "1-0", RoundingVersion: BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members})))
+	testassert.NoError(t, err)
+	testassert.NoError(t, testassert.Err(generations.PublishGeneration(ctx, BudgetManifest{Schema: BudgetManifestSchema, GenerationID: "status-generation", IncarnationID: "status-incarnation", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: start.Add(time.Hour), PolicyCount: 1, WindowCount: 1, BucketCount: 60, StreamHighWaterMark: "1-0", RoundingVersion: BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members})))
 	reader := mustCall(t, NewRedisBudgetStatusReader, BudgetStatusReaderOptions{Client: client, Mode: AdmissionModeFunction, Generation: generations, Keys: keys})
 	result, err := reader.ReadBudgetStatus(ctx, control.BudgetStatusQuery{}, time.Now())
 	if !errors.Is(err, ErrBudgetStatusUnavailable) {

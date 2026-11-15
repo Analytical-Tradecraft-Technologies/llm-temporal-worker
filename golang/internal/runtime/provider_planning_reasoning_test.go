@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -32,18 +33,12 @@ func TestProviderPlanningRoutesV1ReasoningEffortOnAnthropicMessages(t *testing.T
 			client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://api.anthropic.com", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
 				return nil, errors.New("unexpected HTTP request")
 			})}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			adapter, err := anthropicmessages.NewAdapter(client, "endpoint", profile)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			query := provider.CapabilityQuery{EndpointID: "endpoint", Family: provider.FamilyAnthropicMessages, Model: "provider-model", ServiceClass: llm.ServiceClassStandard}
 			set, err := adapter.Capabilities(context.Background(), query)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			model := source.value.Routes.Models["alias"]
 			route := &model.Routes[0]
 			route.Provider, route.Family = "anthropic", string(provider.FamilyAnthropicMessages)
@@ -65,9 +60,7 @@ func TestProviderPlanningRoutesV1ReasoningEffortOnAnthropicMessages(t *testing.T
 			}
 			planning := mustProviderPlanning(t, capabilities)
 			planned, err := planning.Generate(context.Background(), prepared)
-			if err != nil {
-				t.Fatalf("v1 reasoning effort is not routable on Anthropic Messages: %v", err)
-			}
+			testassert.NoError(t, err, "v1 reasoning effort is not routable on Anthropic Messages")
 			data := encodeJSON(t, planned.Call.SDKParams)
 			wire := decodeJSON[map[string]any](t, data)
 			config, _ := wire["output_config"].(map[string]any)

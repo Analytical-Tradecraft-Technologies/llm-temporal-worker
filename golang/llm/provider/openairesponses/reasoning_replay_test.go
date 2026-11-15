@@ -6,6 +6,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -33,9 +34,7 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 	input = append(input, produced...)
 	input = append(input, llm.HumanText("follow-up"))
 	params, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: input}, llm.ServiceClassStandard)
-	if err != nil {
-		t.Fatalf("replaying lifted output: %v", err)
-	}
+	testassert.NoError(t, err, "replaying lifted output")
 	wire := contract.JSONObject(t, params)
 	found := false
 	for _, raw := range wire["input"].([]any) {
@@ -64,7 +63,5 @@ func TestStrictCompileAcceptsReplayedReasoning(t *testing.T) {
 	lifted := mustLift(t, call, &response, "req")
 	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
 	request.Input = append(append(request.Input, lifted.Output...), llm.HumanText("follow-up"))
-	if _, err := adaptertest.Compile(fixtureAdapterForProfile(t, responsesFixtureProfiles[0]), "openai-fixture", provider.FamilyOpenAIResponses, request, true); err != nil {
-		t.Fatalf("strict compile of replayed reasoning: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(adaptertest.Compile(fixtureAdapterForProfile(t, responsesFixtureProfiles[0]), "openai-fixture", provider.FamilyOpenAIResponses, request, true)), "strict compile of replayed reasoning")
 }

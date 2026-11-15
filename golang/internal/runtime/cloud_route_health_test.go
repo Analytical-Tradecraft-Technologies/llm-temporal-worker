@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -71,9 +72,7 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 	}
 	f.request.OperationKey = "blocked"
 	metrics, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = f.runtime.GenerateStepV1(observability.WithMetrics(context.Background(), metrics), f.request)
 	// The held route is counted, not only reported in the no-route failure.
 	if held := cloudMetricTotal(t, metrics, "llmtw_route_held_total", "reason", observability.RouteHeldCircuitOpen); held != 1 {
@@ -119,9 +118,7 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 	f.restart(t)
 	result := f.step(t, context.Background(), f.request, llm.ExecutionPending)
 	snapshot, err := f.cap.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	route := snapshot.Routes.Models["alias"].Routes[0]
 	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: route.EndpointAccountHMAC, Provider: route.Provider, EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
 	f.now = f.now.Add(2 * time.Second)
@@ -221,9 +218,7 @@ func TestCloudRouteHealthIgnoresMismatchedIdentity(t *testing.T) {
 	shared := &sharedHealthFixture{}
 	f.cap.ProviderRouteStatus = shared
 	snapshot, err := f.cap.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	route := snapshot.Routes.Models["alias"].Routes[0]
 	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: [32]byte{9}, Provider: "other-provider", EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditExhausted, Billing: control.BillingOK}
 	f.restart(t)
@@ -260,17 +255,13 @@ func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 	directory := t.TempDir()
 	for name, content := range map[string]string{"capabilities.yaml": read("capabilities.yaml"), "prices.yaml": prices} {
 		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 		data = strings.ReplaceAll(data, "/etc/llmtw/"+name, path)
 	}
 	compiled := mustCompileConfig(t, []byte(data))
 	now := time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
 	loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	candidate := func(model string) routing.Candidate {
 		t.Helper()
 		request := llm.Request{OperationKey: "operation", Model: model, ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "local", Project: "project", Actor: "actor"}, Input: []llm.Item{llm.HumanText("hello")},
@@ -397,9 +388,7 @@ func TestCloudRouteHealthTransitionsAreCountedAndLogged(t *testing.T) {
 	account := [32]byte{7}
 	candidate := routing.Candidate{RouteID: "primary", EndpointID: "openai-direct", Provider: "openai", Family: "responses", Model: "gpt-5-mini", ProviderTier: "default", EndpointAccountHMAC: account}
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"openai-direct", "idle-endpoint"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var logs strings.Builder
 	logger := testLogger(t, observability.LogOptions{Format: "json", Output: &logs})
 	ctx := observability.WithLogger(observability.WithMetrics(context.Background(), metrics), logger)
@@ -500,8 +489,6 @@ func routeOutcomeRecorder(ctx context.Context, shared *keyedHealthFixture, diges
 func mustRouteBlocked(t *testing.T, planning *ProviderPlanning, candidate routing.Candidate) bool {
 	t.Helper()
 	blocked, err := planning.routeBlocked(context.Background(), candidate)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return blocked
 }

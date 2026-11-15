@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,9 +13,7 @@ func TestSettingsPatchV1SamplingAndReasoningLeavesRoundTrip(t *testing.T) {
 	set := SettingsPatchV1{TopP: Patch[DecimalV1]{Set: &topP}, StopSequences: Patch[[]string]{Set: &stop}, Seed: Patch[int64]{Set: &seed},
 		ReasoningMode: Patch[ReasoningMode]{Set: &mode}, ReasoningTokenBudget: Patch[int]{Set: &budget}}
 	encoded, err := set.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	const want = `{"reasoning_mode":{"set":"enabled"},"reasoning_token_budget":{"set":2048},"seed":{"set":42},"stop_sequences":{"set":["END","\n\n"]},"top_p":{"set":"0.5"}}`
 	if string(encoded) != want {
 		t.Fatalf("encoded = %s; want %s", encoded, want)
@@ -28,9 +27,7 @@ func TestSettingsPatchV1SamplingAndReasoningLeavesRoundTrip(t *testing.T) {
 	clear := SettingsPatchV1{TopP: Patch[DecimalV1]{Clear: true}, StopSequences: Patch[[]string]{Clear: true}, Seed: Patch[int64]{Clear: true},
 		ReasoningMode: Patch[ReasoningMode]{Clear: true}, ReasoningTokenBudget: Patch[int]{Clear: true}}
 	encoded, err = clear.MarshalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var roundTrip SettingsPatchV1
 	if err := json.Unmarshal(encoded, &roundTrip); err != nil || !reflect.DeepEqual(roundTrip, clear) {
 		t.Fatalf("clear round trip = %+v, %v; want %+v", roundTrip, err, clear)

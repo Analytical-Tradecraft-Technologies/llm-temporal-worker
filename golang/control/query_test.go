@@ -141,9 +141,7 @@ func allTypedQueryRequests() []QueryRequest {
 func typedRequestWire(t *testing.T, request QueryRequest) llm.QueryRequestV1 {
 	t.Helper()
 	wire, err := EncodeQueryRequest(request)
-	if err != nil {
-		t.Fatalf("EncodeQueryRequest() error = %v", err)
-	}
+	testassert.NoError(t, err, "EncodeQueryRequest() error")
 	return wire
 }
 
@@ -189,9 +187,7 @@ func requireProviderError(t *testing.T, err error) *provider.Error {
 func mustSignServiceCursor(t *testing.T, service *QueryService, request llm.QueryRequestV1, position string, issuedAt time.Time) string {
 	t.Helper()
 	token, err := service.SignCursor(request, position, issuedAt)
-	if err != nil {
-		t.Fatalf("SignCursor() error = %v", err)
-	}
+	testassert.NoError(t, err, "SignCursor() error")
 	return token
 }
 
@@ -203,9 +199,7 @@ func TestQueryServiceAuthorizesAndValidatesResponse(t *testing.T) {
 		return nil
 	})
 	response, err := service.Execute(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
+	testassert.NoError(t, err, "Execute() error")
 	if response.QueryExecutionID == "" || seen.Tenant != "tenant" || seen.Project != "project" || seen.Actor != "workflow" || seen.Kind != llm.QueryProviderStatus {
 		t.Fatalf("response/authorization = %#v / %#v", response, seen)
 	}
@@ -259,9 +253,7 @@ func TestQueryServiceAuditsValidatedResponseBeforeReturning(t *testing.T) {
 	}
 
 	response, err := service.Execute(context.Background(), request)
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
+	testassert.NoError(t, err, "Execute() error")
 	if audit.Tenant != request.Context.Tenant || audit.Project != request.Context.Project || audit.OperationKey != request.OperationKey || audit.Kind != request.Kind {
 		t.Fatalf("audit identity = %#v", audit)
 	}
@@ -355,9 +347,7 @@ func TestQueryServiceRawHandlerAdmitsAllQueryKinds(t *testing.T) {
 		t.Run(string(typedRequest.Kind), func(t *testing.T) {
 			request := typedRequestWire(t, typedRequest)
 			response, err := service.Execute(context.Background(), request)
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
+			testassert.NoError(t, err, "Execute() error")
 			if response.Kind != typedRequest.Kind {
 				t.Fatalf("response kind = %q, want %q", response.Kind, typedRequest.Kind)
 			}
@@ -388,13 +378,9 @@ func TestQueryServiceTypedHandlerAdmitsAllQueryKinds(t *testing.T) {
 	for _, typedRequest := range allTypedQueryRequests() {
 		t.Run(string(typedRequest.Kind), func(t *testing.T) {
 			response, err := service.Execute(context.Background(), typedRequestWire(t, typedRequest))
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
+			testassert.NoError(t, err, "Execute() error")
 			decoded, err := DecodeQueryResponse(response)
-			if err != nil {
-				t.Fatalf("DecodeQueryResponse() error = %v", err)
-			}
+			testassert.NoError(t, err, "DecodeQueryResponse() error")
 			if decoded.Kind != typedRequest.Kind || decoded.NextCursor != nil {
 				t.Fatalf("decoded response = %#v, want kind %q without cursor", decoded, typedRequest.Kind)
 			}
@@ -406,14 +392,10 @@ func TestQueryServiceRejectsUnsupportedKindAndAuthorization(t *testing.T) {
 	request := queryRequest()
 	request.Kind = llm.QueryKind("future_query")
 	service := testQueryService(queryHandlerFunc(echoQueryHandler), allowQuery)
-	if _, err := service.Execute(context.Background(), request); !errors.Is(err, ErrQueryUnsupported) {
-		t.Fatalf("unsupported kind error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), request)), ErrQueryUnsupported, "unsupported kind")
 	request = queryRequest()
 	service.Authorize = func(context.Context, Authorization) error { return errors.New("missing role") }
-	if _, err := service.Execute(context.Background(), request); !errors.Is(err, ErrQueryAuthorization) {
-		t.Fatalf("authorization error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), request)), ErrQueryAuthorization, "authorization")
 	request = queryRequest()
 	request.Query = json.RawMessage(`{"page_size":1001}`)
 	service.Authorize = allowQuery
@@ -425,21 +407,13 @@ func TestQueryServiceCursorsAreBoundToScopeAndFilter(t *testing.T) {
 	request := queryRequest()
 	issued := service.now()
 	token := mustSignServiceCursor(t, service, request, "route-2", issued)
-	if err := service.ValidateCursor(request, token, issued.Add(time.Minute)); err != nil {
-		t.Fatalf("ValidateCursor() error = %v", err)
-	}
+	testassert.NoError(t, service.ValidateCursor(request, token, issued.Add(time.Minute)), "ValidateCursor() error")
 	request.Query = json.RawMessage(`{"page_size":20}`)
-	if err := service.ValidateCursor(request, token, issued.Add(time.Minute)); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("filter-bound cursor error = %v", err)
-	}
+	testassert.ErrorIs(t, service.ValidateCursor(request, token, issued.Add(time.Minute)), ErrQueryCursor, "filter-bound cursor")
 	request = queryRequest()
 	request.Context.Tenant = "other-tenant"
-	if err := service.ValidateCursor(request, token, issued.Add(time.Minute)); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("scope-bound cursor error = %v", err)
-	}
-	if err := service.ValidateCursor(queryRequest(), token, issued.Add(16*time.Minute)); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("expired cursor error = %v", err)
-	}
+	testassert.ErrorIs(t, service.ValidateCursor(request, token, issued.Add(time.Minute)), ErrQueryCursor, "scope-bound cursor")
+	testassert.ErrorIs(t, service.ValidateCursor(queryRequest(), token, issued.Add(16*time.Minute)), ErrQueryCursor, "expired cursor")
 }
 
 func TestQueryServiceDecodeCursorReturnsAuthenticatedPosition(t *testing.T) {
@@ -448,9 +422,7 @@ func TestQueryServiceDecodeCursorReturnsAuthenticatedPosition(t *testing.T) {
 	issued := service.now()
 	token := mustSignServiceCursor(t, service, request, `{"after":"provider\u0000endpoint","horizon":"2026-07-20T00:00:00Z"}`, issued)
 	claims, err := service.DecodeCursor(request, token, issued.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("DecodeCursor() error = %v", err)
-	}
+	testassert.NoError(t, err, "DecodeCursor() error")
 	if claims.Kind != request.Kind || claims.Position == "" || !claims.IssuedAt.Equal(issued) || !claims.ExpiresAt.After(issued) {
 		t.Fatalf("claims = %#v", claims)
 	}
@@ -482,9 +454,7 @@ func TestQueryServiceValidatesOutgoingCursorAgainstFreshTime(t *testing.T) {
 			return response, nil
 		}),
 	}
-	if _, err := service.Execute(context.Background(), request); err != nil {
-		t.Fatalf("Execute() rejected a cursor signed after a slow handler: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(service.Execute(context.Background(), request)), "Execute() rejected a cursor signed after a slow handler")
 	if clockCalls != 2 {
 		t.Fatalf("clock calls = %d, want pre-handler and post-handler samples", clockCalls)
 	}
@@ -580,9 +550,7 @@ func TestQueryServiceTypedHandlerBindsCursorClaimsAndValidatesOutgoingCursor(t *
 		return typedProviderResponse(got, &next), nil
 	}, codec, base)
 	first, err := service.Execute(context.Background(), typedRequestWire(t, request))
-	if err != nil {
-		t.Fatalf("first typed Execute() error = %v", err)
-	}
+	testassert.NoError(t, err, "first typed Execute() error")
 	if first.NextCursor == nil {
 		t.Fatal("first typed response did not contain a cursor")
 	}
@@ -593,9 +561,7 @@ func TestQueryServiceTypedHandlerBindsCursorClaimsAndValidatesOutgoingCursor(t *
 
 	request.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: (*QueryCursor)(first.NextCursor)}}
 	second, err := service.Execute(context.Background(), typedRequestWire(t, request))
-	if err != nil {
-		t.Fatalf("second typed Execute() error = %v", err)
-	}
+	testassert.NoError(t, err, "second typed Execute() error")
 	if second.NextCursor == nil || incoming == nil || incoming.Position != "route-2" || !incoming.Horizon.Equal(horizon) {
 		t.Fatalf("incoming claims = %#v, response = %#v", incoming, second)
 	}
@@ -619,9 +585,7 @@ func TestQueryServiceTypedHandlerRejectsChangedContinuationHorizon(t *testing.T)
 		t.Fatalf("first typed Execute() response = %#v, error = %v", first, err)
 	}
 	request.Filter = ProviderStatusQuery{Page: QueryPage{Size: 10, Cursor: (*QueryCursor)(first.NextCursor)}}
-	if _, err := service.Execute(context.Background(), typedRequestWire(t, request)); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("changed continuation horizon error = %v, want %v", err, ErrQueryCursor)
-	}
+	testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), typedRequestWire(t, request))), ErrQueryCursor, "changed continuation horizon")
 }
 
 func TestQueryServiceRawHandlerAcceptsTypedCursorCodec(t *testing.T) {
@@ -637,9 +601,7 @@ func TestQueryServiceRawHandlerAcceptsTypedCursorCodec(t *testing.T) {
 		CursorCodec: codec,
 		Clock:       func() time.Time { return base },
 	}
-	if _, err := service.Execute(context.Background(), request); err != nil {
-		t.Fatalf("raw Handler with typed cursor error = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(service.Execute(context.Background(), request)), "raw Handler with typed cursor error")
 }
 
 func TestQueryServiceTypedCursorBridgeRejectsInvalidClaims(t *testing.T) {
@@ -693,34 +655,20 @@ func TestQueryServiceTypedCursorBridgeRejectsInvalidClaims(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := service.Execute(context.Background(), test.request); !errors.Is(err, test.wantErr) {
-				t.Fatalf("Execute() error = %v, want %v", err, test.wantErr)
-			}
+			testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), test.request)), test.wantErr, "Execute()")
 		})
 	}
 
 	expired, err := codec.Sign(valid, "route-2", base.Add(-2*time.Minute), base.Add(-2*time.Minute))
-	if err != nil {
-		t.Fatalf("expired CursorCodec.Sign() error = %v", err)
-	}
-	if _, err := service.Execute(context.Background(), withCursor(valid, expired)); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("expired cursor error = %v", err)
-	}
+	testassert.NoError(t, err, "expired CursorCodec.Sign() error")
+	testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), withCursor(valid, expired))), ErrQueryCursor, "expired cursor")
 	future, err := codec.Sign(valid, "route-2", base, base.Add(3*time.Minute))
-	if err != nil {
-		t.Fatalf("future CursorCodec.Sign() error = %v", err)
-	}
-	if _, err := service.Execute(context.Background(), withCursor(valid, future)); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("future cursor error = %v", err)
-	}
-	if _, err := codec.Sign(valid, "route-2", time.Time{}, base); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("zero-horizon sign error = %v", err)
-	}
+	testassert.NoError(t, err, "future CursorCodec.Sign() error")
+	testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), withCursor(valid, future))), ErrQueryCursor, "future cursor")
+	testassert.ErrorIs(t, testassert.Err(codec.Sign(valid, "route-2", time.Time{}, base)), ErrQueryCursor, "zero-horizon sign")
 	limited := *codec
 	limited.MaxPosition = 4
-	if _, err := limited.Sign(valid, "route-2", base, base); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("oversized position sign error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(limited.Sign(valid, "route-2", base, base)), ErrQueryCursor, "oversized position sign")
 }
 
 func TestQueryServiceTypedCursorBridgeRejectsInvalidOutgoingCursor(t *testing.T) {
@@ -729,9 +677,7 @@ func TestQueryServiceTypedCursorBridgeRejectsInvalidOutgoingCursor(t *testing.T)
 		invalid := QueryCursor("not-a-signed-cursor")
 		return typedProviderResponse(request, &invalid), nil
 	}, &CursorCodec{Key: []byte("typed-query-key")}, base)
-	if _, err := service.Execute(context.Background(), typedRequestWire(t, typedProviderRequest())); !errors.Is(err, ErrQueryCursor) {
-		t.Fatalf("invalid outgoing cursor error = %v", err)
-	}
+	testassert.ErrorIs(t, testassert.Err(service.Execute(context.Background(), typedRequestWire(t, typedProviderRequest()))), ErrQueryCursor, "invalid outgoing cursor")
 }
 
 func TestQueryServiceTypedHandlerResponseContractErrorIsNotMappedToStateUnavailable(t *testing.T) {

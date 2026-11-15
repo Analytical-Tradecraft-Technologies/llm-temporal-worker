@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	yaml "go.yaml.in/yaml/v4"
 )
 
@@ -108,9 +109,7 @@ func TestBaseNetworkPolicyScopesStateAndControlEgress(t *testing.T) {
 		} `yaml:"spec"`
 	}
 	policyData := readRepositoryFile(t, "deploy", "kubernetes", "base", "networkpolicy.yaml")
-	if err := yaml.Unmarshal([]byte(policyData), &policy); err != nil {
-		t.Fatalf("decode base NetworkPolicy: %v", err)
-	}
+	testassert.NoError(t, yaml.Unmarshal([]byte(policyData), &policy), "decode base NetworkPolicy")
 	config := readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")
 
 	if strings.Contains(config, "postgres:") || !strings.Contains(config, "request_table: requests") {
@@ -195,9 +194,7 @@ func TestBaseActivityConcurrencyFitsTheGoMemoryLimit(t *testing.T) {
 			} `yaml:"template"`
 		} `yaml:"spec"`
 	}
-	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, "deploy", "kubernetes", "base", "deployment.yaml")), &deployment); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, yaml.Unmarshal([]byte(readRepositoryFile(t, "deploy", "kubernetes", "base", "deployment.yaml")), &deployment))
 	limitMiB := 0
 	for _, container := range deployment.Spec.Template.Spec.Containers {
 		for _, env := range container.Env {
@@ -221,9 +218,7 @@ func TestBaseActivityConcurrencyFitsTheGoMemoryLimit(t *testing.T) {
 			} `yaml:"worker"`
 		} `yaml:"temporal"`
 	}
-	if err := yaml.Unmarshal([]byte(readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")), &config); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, yaml.Unmarshal([]byte(readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")), &config))
 	activities := config.Temporal.Worker.MaxConcurrentActivities
 	if activities <= 0 || activities*perActivityHeapMiB >= limitMiB {
 		t.Fatalf("max_concurrent_activities %d x %d MiB must stay below GOMEMLIMIT %d MiB", activities, perActivityHeapMiB, limitMiB)

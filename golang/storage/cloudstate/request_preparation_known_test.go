@@ -10,6 +10,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -27,9 +28,7 @@ func TestRequestPreparationKnownParent(t *testing.T) {
 			mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
 			reopened := reopen(t, table, blobs)
 			want, wantParent, err := reopened.LoadRequestPreparationParent(ctx, record.Request.Scope, record.Request.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			parentKey := blob.BlobKey(r.newParentSnapshotRef(record.Request.Scope, preparation.ParentSnapshot).Blob)
 			reads := 0
 			blobs.open = func(key blob.BlobKey) error {
@@ -42,9 +41,7 @@ func TestRequestPreparationKnownParent(t *testing.T) {
 				Items:    []llm.Item{llm.HumanText("another transcript")},
 				Settings: state.RootModelState("private-model"), Lineage: []state.Handle{"00000000-0000-4000-8000-000000000002"},
 			}))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			for _, tc := range []struct {
 				name      string
 				known     *KnownParent
@@ -117,9 +114,7 @@ func TestRequestPreparationKnownParentStillRejectsCorruption(t *testing.T) {
 				if verified && tc.blobOnly {
 					// Verified means this step already read and checked
 					// that blob; it is not read again.
-					if err != nil {
-						t.Fatalf("verified known parent: %v", err)
-					}
+					testassert.NoError(t, err, "verified known parent")
 					return
 				}
 				if !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
@@ -139,25 +134,21 @@ func TestRequestPreparationKnownParentSave(t *testing.T) {
 			ctx := context.Background()
 			plain, _, _, record, preparation := preparationFixture(t)
 			plain.parentSnapshotBlob = referenced
-			mustNoError(t, plain.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation))
+			testassert.NoError(t, plain.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation))
 			want, err := plain.Read(ctx, record.Request.Scope, record.Request.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			known, _, _, record, preparation := preparationFixture(t)
 			known.parentSnapshotBlob = referenced
 			// A different, corrupt parent is still decoded and rejected.
 			corrupt := preparation
 			corrupt.ParentSnapshot = append([]byte(nil), preparation.ParentSnapshot[:len(preparation.ParentSnapshot)/2]...)
-			requireErrorIs(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, corrupt, &KnownParent{Snapshot: preparation.ParentSnapshot}), ErrInvalid, "saved a corrupt parent")
+			testassert.ErrorIs(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, corrupt, &KnownParent{Snapshot: preparation.ParentSnapshot}), ErrInvalid, "saved a corrupt parent")
 			invalid := preparation
 			invalid.Version = 2
-			requireErrorIs(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, invalid, &KnownParent{Snapshot: preparation.ParentSnapshot}), ErrInvalid, "saved invalid fields")
-			mustNoError(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, preparation, &KnownParent{Snapshot: preparation.ParentSnapshot}))
+			testassert.ErrorIs(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, invalid, &KnownParent{Snapshot: preparation.ParentSnapshot}), ErrInvalid, "saved invalid fields")
+			testassert.NoError(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, preparation, &KnownParent{Snapshot: preparation.ParentSnapshot}))
 			got, err := known.Read(ctx, record.Request.Scope, record.Request.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !reflect.DeepEqual(storedPreparationOf(t, got), storedPreparationOf(t, want)) {
 				t.Fatal("a known parent changed what was stored")
 			}

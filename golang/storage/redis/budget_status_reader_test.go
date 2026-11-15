@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -78,9 +79,7 @@ func testBudgetStatusReader(t *testing.T, invoker BudgetStatusFunctionInvoker) (
 	catalog := mustCall(t, MemberCatalogDigest, members)
 	manifest := BudgetManifest{Schema: BudgetManifestSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: end, PolicyCount: 1, WindowCount: 1, BucketCount: 60, StreamHighWaterMark: "1-0", RoundingVersion: BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members}
 	pointer, err := manifest.Pointer()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reader := mustCall(t, NewRedisBudgetStatusReader, BudgetStatusReaderOptions{Generation: budgetStatusGenerationFake{pointer: pointer, manifest: manifest}, Invoker: invoker, Keys: testBudgetKeySpaceForAdapter(t), Clock: func() time.Time { return start.Add(10 * time.Minute) }})
 	return reader, manifest, start.Add(10 * time.Minute)
 }
@@ -91,9 +90,7 @@ func TestRedisBudgetStatusReaderUsesOneCoherentFunctionRead(t *testing.T) {
 	invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
 	policy := control.PolicyKey("policy")
 	result, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{PolicyKey: &policy}, activeAt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if invoker.calls != 1 || len(invoker.keys[0]) != 4 || len(invoker.args[0]) != 7 {
 		t.Fatalf("function invocation = calls %d keys %d args %d", invoker.calls, len(invoker.keys[0]), len(invoker.args[0]))
 	}
@@ -113,15 +110,15 @@ func TestRedisBudgetStatusReaderRejectsHistoryAndV1OrMalformedState(t *testing.T
 	invoker := &budgetStatusInvokerFake{}
 	reader, manifest, activeAt := testBudgetStatusReader(t, invoker)
 	invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
-	requireErrorIs(t, errOf(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt.Add(-2*time.Second))), ErrBudgetHistoryNotAvailable, "history error =")
+	testassert.ErrorIs(t, testassert.Err(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt.Add(-2*time.Second))), ErrBudgetHistoryNotAvailable, "history error =")
 	bad := budgetStatusResultForManifest(t, manifest, "1-4")
 	bad[1] = strings.Replace(bad[1].(string), `"schema":"budget-window/v2"`, `"schema":"durable-budget/v1"`, 1)
 	invoker.result = bad
-	requireErrorIs(t, errOf(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)), ErrBudgetStatusUnavailable, "v1 error =")
+	testassert.ErrorIs(t, testassert.Err(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)), ErrBudgetStatusUnavailable, "v1 error =")
 	bad = budgetStatusResultForManifest(t, manifest, "1-4")
 	bad[1] = strings.Replace(bad[1].(string), `"reserved_nano_usd":"200000000"`, `"reserved_nano_usd":"not-an-int"`, 1)
 	invoker.result = bad
-	requireErrorIs(t, errOf(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)), ErrBudgetStatusUnavailable, "malformed error =")
+	testassert.ErrorIs(t, testassert.Err(reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)), ErrBudgetStatusUnavailable, "malformed error =")
 }
 
 func TestRedisBudgetStatusReaderTypesRequestMisses(t *testing.T) {
@@ -160,9 +157,7 @@ func TestRedisBudgetStatusReaderKeepsMissesRetryableAcrossRotation(t *testing.T)
 	invoker := &budgetStatusInvokerFake{}
 	_, manifest, activeAt := testBudgetStatusReader(t, invoker)
 	pointer, err := manifest.Pointer()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	next := pointer
 	next.GenerationID = "generation-2"
 	unknown := control.PolicyKey("missing-policy")
@@ -182,9 +177,7 @@ func TestRedisBudgetStatusReaderKeepsMissesRetryableAcrossRotation(t *testing.T)
 				Keys:       testBudgetKeySpaceForAdapter(t),
 				Clock:      func() time.Time { return activeAt },
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			_, err = reader.ReadBudgetStatus(context.Background(), test.query, test.activeAt)
 			if !errors.Is(err, ErrBudgetStatusUnavailable) || errors.Is(err, ErrBudgetStatusOutsideCoverage) || errors.Is(err, ErrBudgetStatusUnknownPolicy) {
 				t.Fatalf("error = %v, want untyped unavailable after rotation", err)
@@ -197,9 +190,7 @@ func TestRedisBudgetStatusReaderFailsClosedWhenActivePointerChanges(t *testing.T
 	readerInvoker := &budgetStatusInvokerFake{}
 	_, manifest, activeAt := testBudgetStatusReader(t, readerInvoker)
 	pointer, err := manifest.Pointer()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := budgetStatusResultForManifest(t, manifest, "1-4")
 	for _, test := range []struct {
 		name   string
@@ -219,9 +210,7 @@ func TestRedisBudgetStatusReaderFailsClosedWhenActivePointerChanges(t *testing.T
 				Keys:       testBudgetKeySpaceForAdapter(t),
 				Clock:      func() time.Time { return activeAt },
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			_, err = reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{}, activeAt)
 			if !errors.Is(err, ErrBudgetStatusUnavailable) {
 				t.Fatalf("error = %v, want fail-closed Redis status error", err)
@@ -272,14 +261,10 @@ func FuzzParseBudgetStatusNano(f *testing.F) {
 func budgetStatusResultForManifest(t *testing.T, manifest BudgetManifest, highWater string) []any {
 	t.Helper()
 	digest, err := manifest.ManifestDigestHex()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	read := BudgetStatusRead{GenerationID: string(manifest.GenerationID), IncarnationID: string(manifest.IncarnationID), ManifestDigest: digest, StreamHighWaterMark: highWater, Members: []BudgetStatusWindowRecord{{Schema: BudgetStatusWindowSchema, GenerationID: string(manifest.GenerationID), IncarnationID: string(manifest.IncarnationID), ManifestDigest: digest, MemberKey: manifest.Members[0].Key(), LimitNanoUSD: "1000000000", ReservedNanoUSD: "200000000", AccountedNanoUSD: "100000000", CoverageStart: manifest.Members[0].CoverageStart, CoverageEnd: manifest.Members[0].CoverageEnd}}}
 	data, err := json.Marshal(read)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return []any{"ok", string(data)}
 }
 
@@ -299,9 +284,7 @@ func TestRedisBudgetStatusReaderEncodesWindowSelection(t *testing.T) {
 			reader, manifest, activeAt := testBudgetStatusReader(t, invoker)
 			invoker.result = budgetStatusResultForManifest(t, manifest, "1-4")
 			result, err := reader.ReadBudgetStatus(context.Background(), control.BudgetStatusQuery{IncludeWindows: test.include}, activeAt)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			zero := control.DecimalUSD("0")
 			wire, err := control.EncodeQueryResponse(control.QueryResponse{
 				OperationKey: "budget-status", ExecutionID: "execution", Kind: llm.QueryBudgetStatus,
@@ -309,22 +292,16 @@ func TestRedisBudgetStatusReaderEncodesWindowSelection(t *testing.T) {
 				Complete:   true, Result: result,
 				Cost: control.QueryCost{Status: control.QueryCostExact, ActualUSD: &zero, Method: control.QueryCostControlZero},
 			})
-			if err != nil {
-				t.Fatalf("encode budget status: %v", err)
-			}
+			testassert.NoError(t, err, "encode budget status")
 			data, err := json.Marshal(wire.Result)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var decoded control.BudgetStatusResult
-			mustNoError(t, json.Unmarshal(data, &decoded))
+			testassert.NoError(t, json.Unmarshal(data, &decoded))
 			if decoded.Windows == nil || len(decoded.Windows) != test.wantWindows {
 				t.Fatalf("windows = %s, want array with %d entries", data, test.wantWindows)
 			}
 			digest, err := manifest.ManifestDigestHex()
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			if !decoded.ActiveAt.Equal(activeAt) || decoded.GenerationID != control.BudgetGenerationID(manifest.GenerationID) || decoded.ManifestDigest != control.ManifestDigest(digest) || decoded.StreamHighWaterMark != "1-4" {
 				t.Fatalf("snapshot metadata changed: %#v", decoded)
 			}
@@ -341,9 +318,7 @@ func TestBudgetStatusWindowRefusesOverspendInsteadOfZero(t *testing.T) {
 		return BudgetStatusWindowRecord{LimitNanoUSD: limit, ReservedNanoUSD: reserved, AccountedNanoUSD: accounted}
 	}
 	window, err := budgetStatusWindow(member, record("1000000000", "200000000", "100000000"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if window.LimitUSD != "1.000000000000000000" || window.ReservedCostUSD != "0.200000000000000000" || window.AccountedCostUSD != "0.100000000000000000" || window.AvailableUSD != "0.700000000000000000" {
 		t.Fatalf("window = %+v", window)
 	}

@@ -8,6 +8,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -31,20 +32,16 @@ func TestCloudCacheFinalizationRetriesPublicationSettlementAndFillReceipt(t *tes
 	}
 	table.hook = nil
 	settlementFailure := errors.New("Redis settlement temporarily unavailable")
-	if err := newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, func(context.Context) error {
+	testassert.ErrorIs(t, newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, func(context.Context) error {
 		settlements++
 		return settlementFailure
-	}); !errors.Is(err, settlementFailure) {
-		t.Fatal(err)
-	}
+	}), settlementFailure)
 	requireResponseHit(t, r, entry, entry.CompletedAt, "committed success not visible after settlement failure")
 	mustAcquireFill(t, r.ResponseFills(), lease, cache.FillRecoveryNeeded)
 	table.hook = failTableWrites("replace", "/cache/fill/", nil, contracts.ErrOutcomeUnknown)
-	requireErrorIs(t, newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle), contracts.ErrOutcomeUnknown, "")
+	testassert.ErrorIs(t, newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle), contracts.ErrOutcomeUnknown)
 	table.hook = nil
-	if err := newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle); err != nil {
-		t.Fatalf("restart completion: %v", err)
-	}
+	testassert.NoError(t, newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle), "restart completion")
 	mustAcquireFill(t, r.ResponseFills(), lease, cache.FillAttemptFinished)
 	if settlements != 3 {
 		t.Fatalf("settlement retries=%d", settlements)
@@ -84,15 +81,13 @@ func TestCloudCacheFinalizationUseRequiresCommittedConsumer(t *testing.T) {
 	child := publishEntryWithReplayChild(t, r, entry, origin)
 	use := replayUse(origin, child, entry, entry.CompletedAt.Add(time.Hour))
 	finalizer := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return use.CompletedAt })
-	requireErrorIs(t, finalizer.RecordUse(ctx, entry, use), contracts.ErrNotFound, "uncommitted consumer counted")
+	testassert.ErrorIs(t, finalizer.RecordUse(ctx, entry, use), contracts.ErrNotFound, "uncommitted consumer counted")
 	mustPublishCheckpoint(t, r.Checkpoints(), child)
 	table.hook = failTableWrites("", "/cache/use/", nil, contracts.ErrOutcomeUnknown)
-	requireErrorIs(t, finalizer.RecordUse(ctx, entry, use), contracts.ErrOutcomeUnknown, "")
+	testassert.ErrorIs(t, finalizer.RecordUse(ctx, entry, use), contracts.ErrOutcomeUnknown)
 	table.hook = nil
 	finalizer = mustResponseCache(t, reopen(t, table, blobs).Responses(), reopen(t, table, blobs).ResponseFills(), func() time.Time { return use.CompletedAt })
-	if err := finalizer.RecordUse(ctx, entry, use); err != nil {
-		t.Fatalf("restart use: %v", err)
-	}
+	testassert.NoError(t, finalizer.RecordUse(ctx, entry, use), "restart use")
 	got, err := r.Responses().ReadUse(ctx, use.ScopeID, use.OperationID)
 	if err != nil || got != use {
 		t.Fatalf("use receipt=%+v error=%v", got, err)
@@ -117,7 +112,7 @@ func TestCloudCacheLaggingClockUsesPublishedSuccess(t *testing.T) {
 	mustStartFill(t, r.ResponseFills(), origin, origin.AcquiredAt)
 	completion := cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: entry.CompletedAt}
 	finalizer := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return completion.CompletedAt })
-	mustNoError(t, finalizer.CompleteAttempt(ctx, origin, completion, &entry, func(context.Context) error { return nil }))
+	testassert.NoError(t, finalizer.CompleteAttempt(ctx, origin, completion, &entry, func(context.Context) error { return nil }))
 	lag := 150 * time.Millisecond
 	fresh := origin
 	fresh.OperationID, fresh.Attempt = "new-operation", "new-attempt"
@@ -128,9 +123,7 @@ func TestCloudCacheLaggingClockUsesPublishedSuccess(t *testing.T) {
 		opened := reopen(t, table, blobs)
 		c := mustResponseCache(t, opened.Responses(), opened.ResponseFills(), func() time.Time { return now })
 		decision, err := c.PrepareGenerate(ctx, lease, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		if decision.Disposition == durable.CacheHit && decision.Entry().ID != entry.ID {
 			t.Fatalf("hit on %q", decision.Entry().ID)
 		}

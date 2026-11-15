@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -45,9 +46,7 @@ func TestCompileProfileExercisesOmittedServiceClassAsStandard(t *testing.T) {
 	adapter := &recordingAdapter{}
 
 	call, err := compileProfile(context.Background(), adapter, profile, requestFor(profile))
-	if err != nil {
-		t.Fatalf("compile profile: %v", err)
-	}
+	testassert.NoError(t, err, "compile profile")
 	if adapter.capabilityCalls != 1 || adapter.compileCalls != 1 {
 		t.Fatalf("adapter calls = capabilities:%d compile:%d, want one each", adapter.capabilityCalls, adapter.compileCalls)
 	}
@@ -69,9 +68,7 @@ func TestUnsupportedContinuationProbeFailsBeforeProviderInvocation(t *testing.T)
 	profile := Profiles()[2]
 	adapter := &recordingAdapter{rejectContinuation: true}
 
-	if err := preflightUnsupportedContinuation(context.Background(), adapter, profile); err != nil {
-		t.Fatalf("preflight unsupported continuation: %v", err)
-	}
+	testassert.NoError(t, preflightUnsupportedContinuation(context.Background(), adapter, profile), "preflight unsupported continuation")
 	if adapter.compileCalls != 1 || adapter.capabilityCalls != 1 {
 		t.Fatalf("adapter calls = capabilities:%d compile:%d, want one compile preflight", adapter.capabilityCalls, adapter.compileCalls)
 	}
@@ -91,9 +88,7 @@ func TestRunWithAdapterPreflightsUnsupportedContinuationBeforeInvocation(t *test
 	}
 
 	evidence, err := runWithAdapter(context.Background(), adapter, profile)
-	if err != nil {
-		t.Fatalf("run profile: %v", err)
-	}
+	testassert.NoError(t, err, "run profile")
 	if adapter.capabilityCalls != 2 || adapter.compileCalls != 2 || adapter.invokeCalls != 1 {
 		t.Fatalf("adapter calls = capabilities:%d compile:%d invoke:%d, want 2/2/1", adapter.capabilityCalls, adapter.compileCalls, adapter.invokeCalls)
 	}
@@ -126,21 +121,15 @@ func TestRunWithAdapterAllowsTextOnlyAnthropicResponseWithoutContinuation(t *tes
 			}, nil
 		})},
 	})
-	if err != nil {
-		t.Fatalf("new Anthropic client: %v", err)
-	}
+	testassert.NoError(t, err, "new Anthropic client")
 	providerProfile := anthropicmessages.DefaultProfile(profile.ID)
 	providerProfile.ExpectedBaseURL = baseURL
 	providerProfile.ExpectedModel = profile.Model
 	adapter, err := anthropicmessages.New(client, profile.ID, providerProfile)
-	if err != nil {
-		t.Fatalf("new Anthropic adapter: %v", err)
-	}
+	testassert.NoError(t, err, "new Anthropic adapter")
 
 	evidence, err := runWithAdapter(context.Background(), adapter, profile)
-	if err != nil {
-		t.Fatalf("run text-only Anthropic profile: %v", err)
-	}
+	testassert.NoError(t, err, "run text-only Anthropic profile")
 	if invocations != 1 {
 		t.Fatalf("Anthropic invocations = %d, want 1", invocations)
 	}
@@ -213,13 +202,9 @@ func TestChatProfilesRequireReportedActualTier(t *testing.T) {
 			// The provider object is built per request, so read it from a
 			// compiled call; compiling sends nothing.
 			client, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: liveOpenRouterBaseURL, APIKey: "live-test-key", HTTPClient: &http.Client{}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			adapter, err := openaichat.New(client, liveProfile.ID, profile)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			capabilities := provider.CapabilitySet{Version: profile.Capabilities.Version, Features: map[provider.Feature]provider.Capability{}}
 			for feature, capability := range profile.Capabilities.Features {
 				capabilities.Features[feature] = capability
@@ -230,19 +215,13 @@ func TestChatProfilesRequireReportedActualTier(t *testing.T) {
 				Request:    llm.Request{OperationKey: "live-profile", Model: liveProfile.Model, Input: []llm.Item{llm.HumanText("hello")}},
 				Query:      provider.CapabilityQuery{EndpointID: liveProfile.ID, Family: provider.FamilyOpenAIChat, Model: liveProfile.Model},
 			})
-			if err != nil {
-				t.Fatalf("compile OpenRouter request: %v", err)
-			}
+			testassert.NoError(t, err, "compile OpenRouter request")
 			encoded, err := json.Marshal(call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var wire struct {
 				Provider map[string]any `json:"provider"`
 			}
-			if err := json.Unmarshal(encoded, &wire); err != nil {
-				t.Fatalf("decode OpenRouter provider object: %v", err)
-			}
+			testassert.NoError(t, json.Unmarshal(encoded, &wire), "decode OpenRouter provider object")
 			if wire.Provider["allow_fallbacks"] != false || wire.Provider["require_parameters"] != true || wire.Provider["only"] == nil {
 				t.Errorf("OpenRouter provider object %v is not fail-closed", wire.Provider)
 			}
@@ -302,9 +281,7 @@ func TestAdapterForBuildsEnvironmentCredentialProfilesWithoutInvocation(t *testi
 		}
 		t.Run(profile.ID, func(t *testing.T) {
 			adapter, err := adapterFor(context.Background(), profile, lookup)
-			if err != nil {
-				t.Fatalf("build adapter: %v", err)
-			}
+			testassert.NoError(t, err, "build adapter")
 			if adapter == nil || adapter.Name() == "" {
 				t.Fatal("adapter is unavailable")
 			}

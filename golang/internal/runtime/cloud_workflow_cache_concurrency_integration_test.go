@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -68,9 +69,7 @@ func exerciseCloudCacheConcurrency(t *testing.T, compact, aws bool) {
 	}
 	read := func(run client.WorkflowRun) cloudCacheWorkflowResult {
 		var v llm.GenerateResponseV1
-		if err := run.Get(h.ctx, &v); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, run.Get(h.ctx, &v))
 		return cloudCacheWorkflowResult{v.OperationKey, v.OperationID, v.Checkpoint, v.Cache, v.Cost, v.Diagnostics}
 	}
 	if compact {
@@ -80,9 +79,7 @@ func exerciseCloudCacheConcurrency(t *testing.T, compact, aws bool) {
 		}
 		read = func(run client.WorkflowRun) cloudCacheWorkflowResult {
 			var v llm.CompactResponseV1
-			if err := run.Get(h.ctx, &v); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, run.Get(h.ctx, &v))
 			return cloudCacheWorkflowResult{v.OperationKey, v.OperationID, v.Checkpoint, v.Cache, v.Cost, v.Diagnostics}
 		}
 	}
@@ -132,9 +129,7 @@ func exerciseCloudCacheConcurrency(t *testing.T, compact, aws bool) {
 	operations := map[string]bool{original.operation: true}
 	checkpoints := map[string]bool{string(original.checkpoint.Handle): true}
 	scope, err := h.fixture.options.ResolveScope(h.ctx, request.Context)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var entryID string
 	for i, run := range runs {
 		v := read(run)

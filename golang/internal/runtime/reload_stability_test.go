@@ -26,9 +26,7 @@ func manualConfigFileWatcher(t *testing.T, path string, baseline []byte) *config
 func pollingConfigFileWatcher(t *testing.T, path string, interval time.Duration, baseline []byte) *configFileWatcher {
 	t.Helper()
 	watcher, err := newConfigFileWatcherWithBaseline(path, interval, baseline)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = watcher.Close() })
 	return watcher
 }
@@ -44,9 +42,7 @@ func watcherNotified(watcher *configFileWatcher) bool {
 
 func writeConfigFile(t *testing.T, path, content string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, []byte(content), 0600))
 }
 
 func TestConfigFileWatcherNotifiesOnlyAfterTwoEqualPolls(t *testing.T) {
@@ -112,26 +108,18 @@ func TestConfigFileWatcherDefersStartupReplacementUntilStable(t *testing.T) {
 func TestConfigFileWatcherDetectsConfigMapSymlinkSwap(t *testing.T) {
 	directory := t.TempDir()
 	for _, version := range []string{"first", "second"} {
-		if err := os.Mkdir(filepath.Join(directory, version), 0700); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.Mkdir(filepath.Join(directory, version), 0700))
 		// Equal sizes: only the file identity distinguishes the two versions.
 		writeConfigFile(t, filepath.Join(directory, version, "config.yaml"), "version: "+version[:5]+"\n")
 	}
 	link := filepath.Join(directory, "data")
-	if err := os.Symlink("first", link); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Symlink("first", link))
 	path := filepath.Join(link, "config.yaml")
 	watcher := manualConfigFileWatcher(t, path, []byte("version: first\n"))
 
 	next := filepath.Join(directory, "next")
-	if err := os.Symlink("second", next); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(next, link); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.Symlink("second", next))
+	testassert.NoError(t, os.Rename(next, link))
 	watcher.poll()
 	watcher.poll()
 	if !watcherNotified(watcher) {
@@ -186,9 +174,7 @@ func TestWatchedReloadNeverPublishesAFileCaughtMidWrite(t *testing.T) {
 	// An in-place write observed halfway: the first poll sees a valid prefix
 	// without budgets, the next one the complete file.
 	complete, prefix := budgetsLastConfig(t, "121s")
-	if _, err := config.Load([]byte(prefix)); err != nil {
-		t.Fatalf("the truncated prefix must be a valid configuration for this test: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load([]byte(prefix))), "the truncated prefix must be a valid configuration for this test")
 	writeConfigFile(t, path, prefix)
 	watcher.poll()
 	writeConfigFile(t, path, complete)
@@ -251,12 +237,8 @@ func TestConfigValidationAgreesWithBudgetCompilationBounds(t *testing.T) {
 				testassert.ErrorContains(t, err, "budgets.policies[0].windows[2]")
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := compileBudgetPolicies(value); err != nil {
-				t.Fatalf("validated configuration fails budget compilation: %v", err)
-			}
+			testassert.NoError(t, err)
+			testassert.NoError(t, testassert.Err(compileBudgetPolicies(value)), "validated configuration fails budget compilation")
 		})
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	"github.com/google/uuid"
@@ -82,23 +83,15 @@ func newRedisBenchmarkKeyOptions() (redisstore.KeyOptions, error) {
 // loads Functions.
 func BenchmarkV1ActivitiesAdmissionRedis(b *testing.B) {
 	config, err := redisBenchmarkConfigFromEnv(os.Getenv)
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	ctx := context.Background()
 	client := newRedisBenchmarkClient(config.address)
 	defer func() { _ = client.Close() }()
 	libraries, err := client.FunctionList(ctx, redisclient.FunctionListQuery{LibraryNamePattern: redisstore.AdmissionFunctionLibrary, WithCode: true}).Result()
-	if err != nil {
-		b.Fatal(err)
-	}
-	if err := redisBenchmarkAdmissionFunctionAvailable(libraries); err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
+	testassert.NoError(b, redisBenchmarkAdmissionFunctionAvailable(libraries))
 	keys, err := newRedisBenchmarkKeyOptions()
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	defer func() {
 		if err := cleanupRedisBenchmarkPrefix(ctx, client, keys.Prefix); err != nil {
 			b.Error(err)
@@ -107,22 +100,16 @@ func BenchmarkV1ActivitiesAdmissionRedis(b *testing.B) {
 	f := boundedCloud(b, false)
 	f.now = time.Now().UTC()
 	initializer, err := redisstore.NewRedisBudgetInitializer(client, keys, redisstore.AdmissionModeFunction, redisstore.AdmissionFunctionVersion)
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	receipt := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: uuid.NewString(), CreatedAt: f.now}
-	if err := initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}); err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}))
 	receipt.Ready = true
 	budgets, err := redisstore.NewRedisBudgetMaterializer(redisstore.RedisBudgetMaterializerOptions{
 		Client: client, Keys: keys, Mode: redisstore.AdmissionModeFunction, FunctionVersion: redisstore.AdmissionFunctionVersion,
 		GenerationID: redisBudgetGeneration, IncarnationID: durable.IncarnationID(redisBudgetGeneration), Clock: f.cap.Clock,
 		Initialization: &receipt,
 	})
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	f.cap.Budgets = budgets
 	if f.cap.Finalizer, err = newCloudFinalizer(f.repository, f.cap.Responses, f.cap.ResponseFills, budgets, f.cap.Clock); err != nil {
 		b.Fatal(err)
@@ -214,13 +201,9 @@ func TestRedisBenchmarkRequiresExactPreloadedAdmissionFunction(t *testing.T) {
 
 func TestRedisBenchmarkKeyOptionsAreUniqueAndBounded(t *testing.T) {
 	first, err := newRedisBenchmarkKeyOptions()
-	if err != nil {
-		t.Fatalf("first key options: %v", err)
-	}
+	testassert.NoError(t, err, "first key options")
 	second, err := newRedisBenchmarkKeyOptions()
-	if err != nil {
-		t.Fatalf("second key options: %v", err)
-	}
+	testassert.NoError(t, err, "second key options")
 
 	if first.Prefix == second.Prefix {
 		t.Fatal("benchmark key prefixes must be unique")

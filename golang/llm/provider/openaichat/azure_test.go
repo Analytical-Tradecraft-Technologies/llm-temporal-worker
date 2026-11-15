@@ -19,13 +19,9 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 	})
 	endpoint := "https://127.0.0.1"
 	client, err := NewAzureClient(AzureClientConfig{Endpoint: endpoint, APIVersion: "2025-01-01", APIKey: "test-azure-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "azure-a", azureDeploymentProfile(t, endpoint))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, "azure-a", provider.FamilyOpenAIChat, llm.Request{OperationKey: "azure-op", Model: "deployment-a", ServiceClass: llm.ServiceClassPriority})
 	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil || got.URL.Path != "/openai/deployments/deployment-a/chat/completions" || got.URL.Query().Get("api-version") != "2025-01-01" {
@@ -62,18 +58,14 @@ func azureDeploymentProfile(t *testing.T, baseURL string) Profile {
 			"priority": llm.ServiceClassPriority,
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return profile
 }
 
 func TestAzureChatRejectsUnsupportedEconomyBeforeDispatch(t *testing.T) {
 	client := &Client{baseURL: "http://127.0.0.1/"}
 	adapter, err := New(client, "azure-a", azureDeploymentProfile(t, "http://127.0.0.1"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "economy-op", Model: "deployment-a", ServiceClass: llm.ServiceClassEconomy}, Query: provider.CapabilityQuery{EndpointID: "azure-a", Family: provider.FamilyOpenAIChat, Model: "deployment-a"}, Strict: true})
 	testassert.ErrorContains(t, err, "unsupported")
 }

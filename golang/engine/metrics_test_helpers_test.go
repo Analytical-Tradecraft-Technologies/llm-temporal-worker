@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func assertMetricCounter(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string, want float64) {
@@ -28,9 +29,7 @@ func assertMetricHistogramCount(t *testing.T, metrics *observability.Metrics, na
 func metricValue(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string, histogram bool) (float64, bool) {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() != name {
 			continue

@@ -4,18 +4,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestValidateInstanceWordsItsErrors(t *testing.T) {
 	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource("mem://object.json", map[string]any{"type": "object"}); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, compiler.AddResource("mem://object.json", map[string]any{"type": "object"}))
 	schema, err := compiler.Compile("mem://object.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	instance, err := validateInstance(schema, []byte(`{"kind":"x"}`), "doc", "the schema")
 	if document, ok := instance.(map[string]any); err != nil || !ok || document["kind"] != "x" {
 		t.Fatalf("valid instance = %#v, %v", instance, err)

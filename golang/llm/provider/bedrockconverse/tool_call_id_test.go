@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -15,13 +16,9 @@ import (
 func TestLowerItemRemapsNonPortableToolCallIDs(t *testing.T) {
 	const id = "functions.lookup:0"
 	call, err := lowerItem(llm.ToolCall{ID: id, Name: "lookup", Arguments: []byte(`{}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result, err := lowerItem(llm.ToolResult{CallID: id, Content: []llm.Part{llm.TextPart{Text: "ok"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	callID := *call.Content[0].(*types.ContentBlockMemberToolUse).Value.ToolUseId
 	resultID := *result.Content[0].(*types.ContentBlockMemberToolResult).Value.ToolUseId
 	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(callID) || callID != resultID {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -26,9 +27,7 @@ func TestValidateRejectsUnboundedNumbersWithoutPanicking(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			compiled, err := schema.Parse([]byte(test.schema))
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var bound *schema.NumberBoundError
 			if err := compiled.Validate([]byte(test.instance)); !errors.As(err, &bound) {
 				t.Fatalf("Validate = %T %v, want NumberBoundError", err, err)
@@ -39,9 +38,7 @@ func TestValidateRejectsUnboundedNumbersWithoutPanicking(t *testing.T) {
 
 func TestValidateAcceptsNumbersAtTheBounds(t *testing.T) {
 	compiled, err := schema.Parse([]byte(`{"type":"number"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, instance := range []string{
 		`1e1000`, `1E+1000`, `-1.5e-1000`, `0`, `-0.0`, `12.5`,
 		strings.Repeat("9", schema.MaxNumberDigits),
@@ -52,9 +49,7 @@ func TestValidateAcceptsNumbersAtTheBounds(t *testing.T) {
 		}
 	}
 	bounded, err := schema.Parse([]byte(`{"type":"number","minimum":-1e1000,"maximum":1e1000}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var validationErr *schema.ValidationError
 	if err := bounded.Validate([]byte(`2e1000`)); !errors.As(err, &validationErr) || validationErr.Keyword != "maximum" {
 		t.Fatalf("Validate(2e1000) = %v, want maximum violation", err)

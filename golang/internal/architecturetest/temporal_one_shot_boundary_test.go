@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -28,18 +29,12 @@ type temporalStreamingImports struct {
 
 func TestTemporalOneShotActivityBoundary(t *testing.T) {
 	activities := parseGoFile(t, filepath.Join(moduleRoot(t), "activity", "activities.go"))
-	if err := validateActivitiesOneShotBoundary(activities); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateActivitiesOneShotBoundary(activities))
 
-	if err := validateNoTemporalStreamingReferences(moduleRoot(t)); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateNoTemporalStreamingReferences(moduleRoot(t)))
 
 	runtime := parseGoFile(t, filepath.Join(moduleRoot(t), "internal", "runtime", "runtime.go"))
-	if err := validateRuntimeActivityWiring(runtime); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, validateRuntimeActivityWiring(runtime))
 }
 
 func TestTemporalOneShotActivityBoundaryRejectsStreamingFixtures(t *testing.T) {

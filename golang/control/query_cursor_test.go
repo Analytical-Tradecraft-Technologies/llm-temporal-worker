@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -12,9 +13,7 @@ import (
 func mustSignCursor(t *testing.T, codec *CursorCodec, request QueryRequest, position string, horizon, issuedAt time.Time) QueryCursor {
 	t.Helper()
 	token, err := codec.Sign(request, position, horizon, issuedAt)
-	if err != nil {
-		t.Fatalf("CursorCodec.Sign() error = %v", err)
-	}
+	testassert.NoError(t, err, "CursorCodec.Sign() error")
 	return token
 }
 
@@ -24,9 +23,7 @@ func TestCursorCodecBindsScopeFilterAndHorizon(t *testing.T) {
 	query := scopedQuery(llm.QuerySpendSummary, SpendSummaryQuery{StartTime: now.Add(-time.Hour), EndTime: now, GroupBy: []SpendDimension{SpendByProvider, SpendByModel}, OperationKinds: []OperationKind{OperationGenerate}})
 	token := mustSignCursor(t, &codec, query, "position-1", now.Add(-30*time.Second), now)
 	claims, err := codec.Decode(query, token, now.Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if claims.Position != "position-1" || !claims.Horizon.Equal(now.Add(-30*time.Second)) {
 		t.Fatalf("unexpected claims: %#v", claims)
 	}
@@ -51,9 +48,7 @@ func TestCursorCodecIgnoresContinuationCursorInFilterDigest(t *testing.T) {
 	continuation.Filter = ProviderStatusQuery{Page: QueryPage{Size: 20, Cursor: &cursor}}
 	codec := CursorCodec{Key: []byte("key")}
 	token := mustSignCursor(t, &codec, first, "position", now, now)
-	if _, err := codec.Decode(continuation, token, now); err != nil {
-		t.Fatalf("continuation cursor changed binding: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(codec.Decode(continuation, token, now)), "continuation cursor changed binding")
 }
 
 func TestCursorCodecCanonicalizesUnorderedSpendDimensions(t *testing.T) {
@@ -63,9 +58,7 @@ func TestCursorCodecCanonicalizesUnorderedSpendDimensions(t *testing.T) {
 	second := first
 	second.Filter = SpendSummaryQuery{StartTime: first.Filter.(SpendSummaryQuery).StartTime, EndTime: now, GroupBy: []SpendDimension{SpendByModel, SpendByProvider}, OperationKinds: []OperationKind{OperationCompact, OperationGenerate}}
 	token := mustSignCursor(t, &codec, first, "position", now.Add(-time.Minute), now)
-	if _, err := codec.Decode(second, token, now); err != nil {
-		t.Fatalf("unordered dimensions should share binding: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(codec.Decode(second, token, now)), "unordered dimensions should share binding")
 }
 
 func TestCursorCodecRejectsTamperExpiryFutureAndOversize(t *testing.T) {

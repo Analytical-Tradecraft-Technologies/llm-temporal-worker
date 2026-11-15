@@ -8,6 +8,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -23,9 +24,7 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 		SnapshotLoader: emptySnapshotLoader,
 		HTTPClient:     &http.Client{},
 	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewProductionEngineFactory() error")
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
 		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", OutboundHosts: []string{"api.openai.com"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}},
 		"azure": {Family: "azure_openai_responses", BaseURL: "https://example.openai.azure.com/openai/v1", OutboundHosts: []string{"example.openai.azure.com"},
@@ -47,9 +46,7 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 	for _, endpointID := range []string{"openai", "azure"} {
 		t.Run(endpointID, func(t *testing.T) {
 			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
-			if err != nil {
-				t.Fatalf("buildAdapter() error = %v", err)
-			}
+			testassert.NoError(t, err, "buildAdapter() error")
 			compile := func(request llm.Request) map[string]any {
 				t.Helper()
 				request.Model = "model"
@@ -58,9 +55,7 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 					Query:   provider.CapabilityQuery{EndpointID: endpointID, Family: provider.FamilyOpenAIResponses, Model: "model"},
 					Strict:  true,
 				})
-				if err != nil {
-					t.Fatalf("Compile() error = %v", err)
-				}
+				testassert.NoError(t, err, "Compile() error")
 				encoded := encodeJSON(t, call.SDKParams)
 				wire := decodeJSON[map[string]any](t, encoded)
 				return wire

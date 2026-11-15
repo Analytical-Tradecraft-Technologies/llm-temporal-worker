@@ -7,24 +7,21 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func exampleConfig(t *testing.T) []byte {
 	t.Helper()
 	path := filepath.Join("..", "..", "config.example.yaml")
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }
 
 func TestSnapshotBuilderCompilesImmutableConfig(t *testing.T) {
 	builder := SnapshotBuilder{}
 	snapshot, err := builder.Build(context.Background(), exampleConfig(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if snapshot.ConfigVersion() == "" || len(snapshot.Canonical()) == 0 {
 		t.Fatal("compiled snapshot has no stable identity")
 	}

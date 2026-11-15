@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -213,23 +214,17 @@ func BenchmarkCheckpointSnapshotCodec(b *testing.B) {
 	snapshot.Digest = snapshot.digest()
 	codec := CheckpointBlobCodec{MaxBytes: 4 << 20}
 	encoded, err := codec.EncodeSnapshot(snapshot)
-	if err != nil {
-		b.Fatal(err)
-	}
+	testassert.NoError(b, err)
 	b.Run("encode", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, err := codec.EncodeSnapshot(snapshot); err != nil {
-				b.Fatal(err)
-			}
+			testassert.NoError(b, testassert.Err(codec.EncodeSnapshot(snapshot)))
 		}
 	})
 	b.Run("decode", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if _, err := codec.DecodeSnapshot(encoded); err != nil {
-				b.Fatal(err)
-			}
+			testassert.NoError(b, testassert.Err(codec.DecodeSnapshot(encoded)))
 		}
 	})
 }

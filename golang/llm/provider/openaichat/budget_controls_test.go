@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -46,9 +47,7 @@ func TestChatRejectsUnsupportedChoiceCountsBeforeDispatch(t *testing.T) {
 			p.WireDefaults = nil
 			p.AllowedExtensions["choices"] = ExtensionSpec{Fields: map[string]string{"count": "n"}}
 			validated, err := NewProfile(p)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			a := &Adapter{endpointID: "chat-prod", profile: validated}
 			req := boundedChatRequest()
 			req.Extensions = map[string]json.RawMessage{"choices": json.RawMessage(`{"count":` + raw + `}`)}
@@ -72,9 +71,7 @@ func TestChatSingleChoicePreservesBudgetedExplicitAndDefaultCap(t *testing.T) {
 				p.WireDefaults = map[string]json.RawMessage{"n": json.RawMessage(`1`)}
 			}
 			p, err := NewProfile(p)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			request := boundedChatRequest()
 			if explicit {
 				cap := 16
@@ -84,9 +81,7 @@ func TestChatSingleChoicePreservesBudgetedExplicitAndDefaultCap(t *testing.T) {
 				request.Extensions = map[string]json.RawMessage{"choices": json.RawMessage(`{"n":1}`)}
 			}
 			prepared, err := (budget.Estimator{MaxOutput: 16}).PrepareRequest(request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			call := adaptertest.CompileStrict(t, (&Adapter{endpointID: "chat-prod", profile: p}), "chat-prod", provider.FamilyOpenAIChat, prepared)
 			wire := contract.JSONObject(t, call.SDKParams)
 			if wire["max_completion_tokens"] != float64(16) || wire["n"] != float64(1) {
@@ -118,9 +113,7 @@ func TestChatCompileRejectsOutputCapOverrides(t *testing.T) {
 					request.Extensions = map[string]json.RawMessage{"override": json.RawMessage(`{"limit":4096}`)}
 				}
 				prepared, err := (budget.Estimator{MaxOutput: 16}).PrepareRequest(request)
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				if _, err := adaptertest.Compile((&Adapter{endpointID: "chat-prod", profile: p}), "chat-prod", provider.FamilyOpenAIChat, prepared, true); err == nil {
 					t.Fatalf("compiled output override: field=%s explicit=%v default=%v", field, explicit, asDefault)
 				}

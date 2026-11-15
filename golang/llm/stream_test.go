@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"strings"
 	"testing"
@@ -19,9 +20,7 @@ func TestValidateStreamEventRequiresIdentityAndBoundsDelta(t *testing.T) {
 	}
 
 	valid := TextDelta{EventHeader: EventHeader{Sequence: 1, OperationID: "operation-1"}, Text: "hello"}
-	if err := ValidateStreamEvent(valid); err != nil {
-		t.Fatalf("validate valid event: %v", err)
-	}
+	testassert.NoError(t, ValidateStreamEvent(valid), "validate valid event")
 }
 
 func TestValidateStreamEventAllowsCompletedResponseAtResponsePayloadSize(t *testing.T) {
@@ -46,16 +45,12 @@ func TestEventStreamExposesExactlyOneTypedTerminalOutcome(t *testing.T) {
 	})
 
 	first, err := stream.Next(context.Background())
-	if err != nil {
-		t.Fatalf("read first event: %v", err)
-	}
+	testassert.NoError(t, err, "read first event")
 	if _, ok := first.(ResponseStarted); !ok {
 		t.Fatalf("first event = %T, want ResponseStarted", first)
 	}
 	terminal, err := stream.Next(context.Background())
-	if err != nil {
-		t.Fatalf("read terminal event: %v", err)
-	}
+	testassert.NoError(t, err, "read terminal event")
 	if !IsTerminalEvent(terminal) {
 		t.Fatalf("terminal event = %T, want typed terminal", terminal)
 	}

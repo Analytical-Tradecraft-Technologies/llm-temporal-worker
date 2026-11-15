@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"math"
 	"testing"
 	"time"
@@ -34,15 +35,11 @@ func TestNewPolicyAndWireAge(t *testing.T) {
 }
 
 func TestValidateOptionalCachePolicy(t *testing.T) {
-	if err := ValidateOptional(nil, OperationGenerate, nil); err != nil {
-		t.Fatalf("omitted policy rejected: %v", err)
-	}
+	testassert.NoError(t, ValidateOptional(nil, OperationGenerate, nil), "omitted policy rejected")
 	positive := 0.7
 	zero := 0.0
 	valid := mustPolicy(t, 60, 2)
-	if err := valid.Validate(OperationGenerate, &positive); err != nil {
-		t.Fatalf("positive temperature rejected: %v", err)
-	}
+	testassert.NoError(t, valid.Validate(OperationGenerate, &positive), "positive temperature rejected")
 	for _, test := range []struct {
 		name        string
 		operation   OperationKind
@@ -65,9 +62,7 @@ func TestValidateOptionalCachePolicy(t *testing.T) {
 		}
 	}
 	compact := mustPolicy(t, 60, 0)
-	if err := compact.Validate(OperationCompact, &positive); err != nil {
-		t.Fatalf("compact variant zero rejected: %v", err)
-	}
+	testassert.NoError(t, compact.Validate(OperationCompact, &positive), "compact variant zero rejected")
 	if err := compact.ValidateWithMaximum(OperationGenerate, &positive, 30*time.Second); err == nil {
 		t.Fatal("operator maximum was ignored")
 	}
@@ -81,9 +76,7 @@ func TestPolicyMaxAgeSecondsRejectsSubsecond(t *testing.T) {
 
 func TestOmittedMaximumAgePolicy(t *testing.T) {
 	policy := mustPolicy(t, 0, 0)
-	if err := policy.Validate(OperationGenerate, nil); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, policy.Validate(OperationGenerate, nil))
 	if seconds, err := policy.MaxAgeSeconds(); err != nil || seconds != 0 {
 		t.Fatalf("age=%d error=%v", seconds, err)
 	}
@@ -92,8 +85,6 @@ func TestOmittedMaximumAgePolicy(t *testing.T) {
 func mustPolicy(t *testing.T, maxAgeSeconds int64, variant int32) Policy {
 	t.Helper()
 	policy, err := NewPolicy(maxAgeSeconds, variant)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return policy
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
@@ -22,11 +23,7 @@ func TestBlobStoreLimitAdmitsResponsesLargerThanRequestLimit(t *testing.T) {
 		t.Fatalf("blobMaxBytes = %d, want the larger request limit", got)
 	}
 	store, _, err := defaultBlobFactory(context.Background(), value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	result := bytes.Repeat([]byte("a"), 4096)
-	if _, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: result, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
-		t.Fatalf("result larger than request_bytes rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: result, ExpiresAt: time.Now().Add(time.Hour)})), "result larger than request_bytes rejected")
 }

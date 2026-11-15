@@ -3,6 +3,7 @@ package activity
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -24,9 +25,7 @@ func TestNewDurableV1RuntimeAllowsIndependentQueryComposition(t *testing.T) {
 	generate := recordingGeneratePorts(new([]string), validGenerateV1Request(), durable.RoutePlan{})
 	compact := recordingCompactPorts(new([]string), validCompactV1Request(), durable.RoutePlan{})
 	runtime, err := NewDurableV1Runtime(generate, compact, nil)
-	if err != nil {
-		t.Fatalf("NewDurableV1Runtime() error = %v", err)
-	}
+	testassert.NoError(t, err, "NewDurableV1Runtime() error")
 	if runtime.Query != nil {
 		t.Fatal("runtime unexpectedly installed a Query callback")
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestAuthorizationPolicyValidation(t *testing.T) {
@@ -37,9 +38,7 @@ func TestAuthorizationPolicyValidation(t *testing.T) {
 	}
 	policy := valid()
 	policy.AllowedScopes = append(policy.AllowedScopes, config.AuthorizedScope{Tenant: "租户", Project: "project:two"})
-	if err := policy.Validate(); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, policy.Validate())
 }
 
 func TestAuthorizationPolicyStrictLoadAndSnapshotIsolation(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -16,9 +17,7 @@ func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 		APIKey:     "test-key",
 		HTTPClient: &http.Client{Transport: adaptertest.PanickingTransport(http.StatusOK)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileChatProdCall(t, client, "op-panic")
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	adaptertest.RecoveredDecodePanic(t, err, "op-panic")
@@ -30,9 +29,7 @@ func TestInvokeRecoversAnSDKPanicWhileReadingAnErrorResponse(t *testing.T) {
 		APIKey:     "test-key",
 		HTTPClient: &http.Client{Transport: adaptertest.PanickingTransport(http.StatusServiceUnavailable)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, call := compileChatProdCall(t, client, "op-panic")
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error

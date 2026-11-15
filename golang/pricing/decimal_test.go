@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"math/big"
 	"testing"
 )
@@ -15,20 +16,14 @@ func TestDecimalUSDJSONRoundTrip(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			original := MustDecimalUSD(value)
 			encoded, err := json.Marshal(original)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			var decoded DecimalUSD
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, json.Unmarshal(encoded, &decoded))
 			if got, want := decoded.CanonicalString(), original.CanonicalString(); got != want {
 				t.Fatalf("round trip = %s, want %s", got, want)
 			}
 			originalCost, err := CeilUSD(original, 1, 1)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			decodedCost, err := CeilUSD(decoded, 1, 1)
 			if err != nil || decodedCost.Cmp(originalCost) != 0 {
 				t.Fatalf("round trip changed exact cost: %s, %v", decodedCost, err)
@@ -134,9 +129,7 @@ func TestMicroUSDCheckedArithmetic(t *testing.T) {
 func TestCeilMatchesRationalOracle(t *testing.T) {
 	price := MustDecimalUSD("0.00012345")
 	got, err := CeilMicroUSD(price, 12345, 1_000_000)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	numerator := new(big.Int).Mul(big.NewInt(12345), big.NewInt(12345))
 	denominator := big.NewInt(100_000_000_000_000)
 	numerator.Mul(numerator, big.NewInt(1_000_000))

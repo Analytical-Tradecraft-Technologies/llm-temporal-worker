@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -19,9 +20,7 @@ import (
 func sendSchemaRequest(t *testing.T, toolSchema, toolOutputSchema, outputSchema string) []byte {
 	t.Helper()
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var sent []byte
 	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		sent, _ = io.ReadAll(request.Body)
@@ -34,9 +33,7 @@ func sendSchemaRequest(t *testing.T, toolSchema, toolOutputSchema, outputSchema 
 	call, err := adaptertest.Compile(adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "op-order", Model: "gpt-contract",
 		Tools:  []llm.Tool{tool},
 		Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(outputSchema)}}}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	// The canned response does not satisfy the schema; only the request matters.
 	_, _ = adapter.Invoke(context.Background(), call, &adaptertest.Observer{})
 	return sent
@@ -62,9 +59,7 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 			OutputSchema json.RawMessage `json:"output_schema"`
 		} `json:"tools"`
 	}
-	if err := json.Unmarshal(sent, &requestBody); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(sent, &requestBody))
 	if len(requestBody.Tools) != 1 {
 		t.Fatalf("tool schema missing: %s", sent)
 	}

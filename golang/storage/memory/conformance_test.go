@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/conformance"
 )
@@ -20,16 +21,12 @@ func TestStoreFactoryConformance(t *testing.T) {
 				Secret:  bytes.Repeat([]byte{1}, 32),
 				Primary: true,
 			}}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			continuations, err := NewContinuationStore(ContinuationOptions{
 				Keyring: keyring,
 				Clock:   func() time.Time { return now },
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			return conformance.Stores{
 				Admission:     NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }}),
 				Continuations: continuations,

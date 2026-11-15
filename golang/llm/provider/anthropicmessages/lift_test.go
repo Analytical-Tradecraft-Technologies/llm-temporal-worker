@@ -8,6 +8,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -71,9 +72,7 @@ func TestLiftAcceptsUnmappableServiceTier(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			response := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{`+test.usage+`}}`))
 			got, err := profile.liftResponse(call, &response, "req")
-			if err != nil {
-				t.Fatalf("lift: %v", err)
-			}
+			testassert.NoError(t, err, "lift")
 			if got.Status != llm.ResponseStatusCompleted || got.Service.Actual != nil || got.Service.ProviderValue != test.want {
 				t.Fatalf("service = %#v status = %q, want no actual class and provider value %q", got.Service, got.Status, test.want)
 			}
@@ -116,9 +115,7 @@ func TestMixedToolResponseSupportsCheckpointAndCompaction(t *testing.T) {
  {"type":"tool_use","id":"b","name":"lookup","input":{}}
  ], "stop_reason":"tool_use", "usage":{"input_tokens":5,"output_tokens":5,"service_tier":"standard"}
  }`), &response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile := mustProfile(t, testProfile())
 	lifted := mustLift(t, profile, liftCall("mixed", llm.ServiceClassStandard), &response, "request-mixed")
 	if lifted.Status != llm.ResponseStatusToolCalls {
@@ -131,9 +128,7 @@ func TestMixedToolResponseSupportsCheckpointAndCompaction(t *testing.T) {
 	items := append([]llm.Item{}, lifted.Output...)
 	items = append(items, llm.ToolResult{CallID: "a"}, llm.ToolResult{CallID: "b"})
 	selection, err := compaction.SelectPrefix(items, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(selection.Prefix) != len(items) || len(selection.Retained) != 0 {
 		t.Fatalf("selection = %#v", selection)
 	}
@@ -148,8 +143,6 @@ func liftCall(operationKey string, class llm.ServiceClass) provider.Call {
 func mustLift(t *testing.T, profile Profile, call provider.Call, response *anthropic.Message, requestID string) llm.Response {
 	t.Helper()
 	lifted, err := profile.liftResponse(call, response, requestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return lifted
 }

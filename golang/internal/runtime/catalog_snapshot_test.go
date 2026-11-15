@@ -7,6 +7,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/catalog"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -33,9 +34,7 @@ func TestRoutePriceIdentityUsesEndpointIdentity(t *testing.T) {
 	}}
 
 	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassStandard}, when)
-	if err != nil {
-		t.Fatalf("routePriceIdentity() error = %v", err)
-	}
+	testassert.NoError(t, err, "routePriceIdentity() error")
 	if providerName != "right-provider" || region != "australiaeast" || version != "right" || !available {
 		t.Fatalf("identity = (%q, %q, %q, %t), want target endpoint quote", providerName, region, version, available)
 	}
@@ -79,9 +78,7 @@ func TestRoutePriceIdentityUsesVerifiedIdentityWithoutCurrentQuote(t *testing.T)
 	}}
 
 	providerName, region, version, available, err := routePriceIdentity(bundle, "target-endpoint", endpoint, "model", []llm.ServiceClass{llm.ServiceClassPriority}, when)
-	if err != nil {
-		t.Fatalf("routePriceIdentity() error = %v", err)
-	}
+	testassert.NoError(t, err, "routePriceIdentity() error")
 	if providerName != "verified-provider" || region != "australiaeast" || version != "" || available {
 		t.Fatalf("identity = (%q, %q, %q, %t), want verified unpriced endpoint identity", providerName, region, version, available)
 	}

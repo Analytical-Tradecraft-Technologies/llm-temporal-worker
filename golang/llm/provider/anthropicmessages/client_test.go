@@ -7,15 +7,14 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestSDKRetriesDisabled(t *testing.T) {
 	server := contract.NewRetryServer(t)
 	client, err := NewClient(ClientConfig{BaseURL: server.URL, APIKey: "test-key", HTTPClient: server.HTTPClient})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = client.sdk.Messages.New(context.Background(), anthropic.MessageNewParams{
 		MaxTokens: 8,
 		Model:     anthropic.Model("claude-contract"),

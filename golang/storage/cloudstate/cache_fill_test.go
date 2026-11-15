@@ -16,6 +16,7 @@ import (
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func fillLease(entry cache.ResponseEntry) cache.FillLease {
@@ -139,9 +140,9 @@ func TestCloudFillsExpiryFencesPreviousOwner(t *testing.T) {
 	if ok, err := store.Start(ctx, lease, lease.AcquiredAt); ok || !errors.Is(err, contracts.ErrConflict) {
 		t.Fatalf("stale start = %v %v", ok, err)
 	}
-	requireErrorIs(t, store.Release(ctx, lease, next.AcquiredAt), contracts.ErrConflict, "")
+	testassert.ErrorIs(t, store.Release(ctx, lease, next.AcquiredAt), contracts.ErrConflict)
 	mustStartFill(t, store, next, next.AcquiredAt)
-	requireErrorIs(t, store.Release(ctx, next, next.AcquiredAt), contracts.ErrConflict, "released started work")
+	testassert.ErrorIs(t, store.Release(ctx, next, next.AcquiredAt), contracts.ErrConflict, "released started work")
 }
 
 func TestCloudFillsWaiterTakesOverExpiredOwnerAtAcquisitionTime(t *testing.T) {
@@ -158,7 +159,7 @@ func TestCloudFillsWaiterTakesOverExpiredOwnerAtAcquisitionTime(t *testing.T) {
 			t.Fatalf("acquire at %s = %v, %v", now, decision, err)
 		}
 	}
-	requireErrorIs(t, errOf(store.Acquire(ctx, waiter, waiter.AcquiredAt.Add(-time.Nanosecond))), ErrInvalid, "acquisition before the lease")
+	testassert.ErrorIs(t, testassert.Err(store.Acquire(ctx, waiter, waiter.AcquiredAt.Add(-time.Nanosecond))), ErrInvalid, "acquisition before the lease")
 	if decision, err := store.Acquire(ctx, waiter, lease.ExpiresAt); err != nil || decision.Disposition != cache.FillOwned || decision.Record.Lease != waiter {
 		t.Fatalf("acquire at expiry = %v, %v", decision, err)
 	}
@@ -190,9 +191,7 @@ func TestCloudFillsTakeoverRacesStart(t *testing.T) {
 			acquired, newErr = reopen(t, table, blobs).ResponseFills().Acquire(context.Background(), next, next.AcquiredAt)
 		})
 		wg.Wait()
-		if newErr != nil {
-			t.Fatal(newErr)
-		}
+		testassert.NoError(t, newErr)
 		if oldStarted {
 			if acquired.Disposition != cache.FillRecoveryNeeded {
 				t.Fatal("takeover of started owner")
@@ -225,7 +224,7 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 				}
 				mustPublishResponse(t, r, entry)
 			}
-			mustNoError(t, store.Complete(ctx, lease, completion))
+			testassert.NoError(t, store.Complete(ctx, lease, completion))
 			store = reopen(t, table, blobs).ResponseFills()
 			if err := store.Complete(ctx, lease, completion); err != nil {
 				t.Fatal("retry", err)
@@ -236,7 +235,7 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 			}
 			changed := completion
 			changed.CompletedAt = changed.CompletedAt.Add(time.Second)
-			requireErrorIs(t, store.Complete(ctx, lease, changed), contracts.ErrConflict, "mutable completion")
+			testassert.ErrorIs(t, store.Complete(ctx, lease, changed), contracts.ErrConflict, "mutable completion")
 			// Even unknown paid work needs an explicit completion before a NEW
 			// attempt can own the key. This does not grant that attempt budget.
 			next := lease
@@ -245,7 +244,7 @@ func TestCloudFillsCompletionAndTombstone(t *testing.T) {
 			if err := store.Complete(ctx, lease, completion); err != nil {
 				t.Fatal("completed attempt lost after new owner", err)
 			}
-			mustNoError(t, store.Release(ctx, next, next.AcquiredAt))
+			testassert.NoError(t, store.Release(ctx, next, next.AcquiredAt))
 			mustAcquireFill(t, store, lease, cache.FillAttemptFinished)
 		})
 	}
@@ -264,10 +263,10 @@ func TestCloudFillsWaiterOwnsAfterUnpublishedEnd(t *testing.T) {
 			mustAcquireFill(t, store, waiter, cache.FillWait)
 			ended := entry.CompletedAt
 			if outcome == "" {
-				mustNoError(t, store.Release(ctx, lease, ended))
+				testassert.NoError(t, store.Release(ctx, lease, ended))
 			} else {
 				mustStartFill(t, store, lease, lease.AcquiredAt)
-				mustNoError(t, store.Complete(ctx, lease, cache.FillCompletion{Outcome: outcome, CompletedAt: ended}))
+				testassert.NoError(t, store.Complete(ctx, lease, cache.FillCompletion{Outcome: outcome, CompletedAt: ended}))
 			}
 			// A lease that had expired by the end stays fenced and sees the record.
 			expired := waiter
@@ -387,10 +386,10 @@ func TestCloudFillsCorruptionAndIsolation(t *testing.T) {
 	key := r.Responses().(*responseCache).key("fill", lease.Key)
 	row := table.rows[key]
 	var pointer cachePointer
-	mustNoError(t, json.Unmarshal(row.Item.Fields["cache"].(kv.KeyValueBytes), &pointer))
+	testassert.NoError(t, json.Unmarshal(row.Item.Fields["cache"].(kv.KeyValueBytes), &pointer))
 	data := blobs.values[blob.BlobKey(pointer.Blob)]
 	delete(blobs.values, blob.BlobKey(pointer.Blob))
-	requireErrorIs(t, errOf(r.ResponseFills().Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill treated as miss")
+	testassert.ErrorIs(t, testassert.Err(r.ResponseFills().Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill treated as miss")
 	blobs.values[blob.BlobKey(pointer.Blob)] = append([]byte(nil), data...)
 	blobs.values[blob.BlobKey(pointer.Blob)][0] ^= 1
 	if ok, err := r.ResponseFills().Start(ctx, lease, lease.AcquiredAt); ok || !errors.Is(err, ErrCorrupt) {
@@ -410,18 +409,18 @@ func TestCloudFillsInvalidInputCannotMutate(t *testing.T) {
 	} {
 		bad := lease
 		edit(&bad)
-		requireErrorIs(t, errOf(r.ResponseFills().Acquire(ctx, bad, bad.AcquiredAt)), ErrInvalid, "")
+		testassert.ErrorIs(t, testassert.Err(r.ResponseFills().Acquire(ctx, bad, bad.AcquiredAt)), ErrInvalid)
 	}
 	if _, err := r.ResponseFills().Acquire(nil, lease, lease.AcquiredAt); err == nil {
 		t.Fatal("nil context")
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	requireErrorIs(t, errOf(r.ResponseFills().Acquire(cancelled, lease, lease.AcquiredAt)), context.Canceled, "")
+	testassert.ErrorIs(t, testassert.Err(r.ResponseFills().Acquire(cancelled, lease, lease.AcquiredAt)), context.Canceled)
 	if ok, err := r.ResponseFills().Start(ctx, lease, lease.AcquiredAt.Add(-time.Second)); ok || !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
-	requireErrorIs(t, r.ResponseFills().Complete(ctx, lease, cache.FillCompletion{Outcome: cache.FillFailed, EntryID: "unexpected", CompletedAt: entry.CompletedAt}), ErrInvalid, "")
+	testassert.ErrorIs(t, r.ResponseFills().Complete(ctx, lease, cache.FillCompletion{Outcome: cache.FillFailed, EntryID: "unexpected", CompletedAt: entry.CompletedAt}), ErrInvalid)
 	if len(table.rows) != rows || len(blobs.values) != objects {
 		t.Fatal("invalid input wrote storage")
 	}

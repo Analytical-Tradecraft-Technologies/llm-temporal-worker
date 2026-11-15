@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -28,9 +29,7 @@ func unreservedFinalizationFixture(t *testing.T, kind string) (*cloudRequestRunt
 	r, repository, store, run, save, effects := finalizationFixture(t, kind, "provider")
 	f := newProviderExecutionFixture(t, kind, false, unreservedPlanning(t, "free"))
 	result, err := f.submit(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	saved := result.Saved
 	paid := effects.Provider
 	paid.Unreserved = true
@@ -59,9 +58,7 @@ func unreservedFinalizationFixture(t *testing.T, kind string) (*cloudRequestRunt
 	}
 	actual := pricing.MustUSD(*cost.ActualCostUSD)
 	saved.Execution.Response.Cost = llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &actual, Method: cost.Method, CatalogVersion: cost.CatalogVersion}
-	if err := saved.Execution.Validate(saved.Plan); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, saved.Execution.Validate(saved.Plan))
 	wrapper := &unreservedFinalizationStore{recordingCloudRequests: repository, saved: saved}
 	r.finalizer.requests = wrapper
 	r.finalizer.budgets = nil
@@ -94,9 +91,7 @@ func TestCloudUnreservedFinalizationReplaysWithoutBudget(t *testing.T) {
 				repository.completeErr = nil
 				store.fail = ""
 				first, err := run()
-				if err != nil {
-					t.Fatal(err)
-				}
+				testassert.NoError(t, err)
 				second, err := run()
 				if err != nil || !equalFinalizationJSON(first, second) {
 					t.Fatal("replay changed response", err)

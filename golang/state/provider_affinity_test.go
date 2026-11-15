@@ -1,6 +1,7 @@
 package state
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 	"time"
 )
@@ -21,9 +22,7 @@ func TestProviderCacheAffinityValidationKeepsExpiredHistoryAuditable(t *testing.
 	expired := now.Add(-time.Minute)
 	affinity := testAffinity(now.Add(-2 * time.Minute))
 	affinity.ExpiresAt = &expired
-	if err := affinity.Validate(now); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, affinity.Validate(now))
 	if affinity.Active(now) {
 		t.Fatal("expired affinity reported active")
 	}

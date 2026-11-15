@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	redisclient "github.com/redis/go-redis/v9"
 )
 
@@ -126,13 +127,11 @@ func TestThrottleAcquireIsAtomicIdempotentAndReleases(t *testing.T) {
 	if err != nil || !replay.Existing || replay.Reservation.Digest != first.Reservation.Digest {
 		t.Fatalf("replay acquire = %#v, %v", replay, err)
 	}
-	requireErrorIs(t, errOf(store.Acquire(context.Background(), "reservation-1", append([]ThrottleLimit(nil), ThrottleLimit{Kind: ThrottleRequests, Scope: "tenant-a", Amount: 2, Limit: 2, Window: time.Minute}))), ErrThrottleConflict, "digest conflict =")
-	requireErrorIs(t, errOf(store.Acquire(context.Background(), "reservation-2", limits)), ErrThrottleDenied, "limit denial =")
-	mustNoError(t, store.Release(context.Background(), first.Reservation))
-	if err := store.Release(context.Background(), first.Reservation); err != nil {
-		t.Fatalf("idempotent release = %v", err)
-	}
-	requireErrorIs(t, errOf(store.Lookup(context.Background(), "reservation-1")), ErrThrottleNotFound, "released lookup =")
+	testassert.ErrorIs(t, testassert.Err(store.Acquire(context.Background(), "reservation-1", append([]ThrottleLimit(nil), ThrottleLimit{Kind: ThrottleRequests, Scope: "tenant-a", Amount: 2, Limit: 2, Window: time.Minute}))), ErrThrottleConflict, "digest conflict =")
+	testassert.ErrorIs(t, testassert.Err(store.Acquire(context.Background(), "reservation-2", limits)), ErrThrottleDenied, "limit denial =")
+	testassert.NoError(t, store.Release(context.Background(), first.Reservation))
+	testassert.NoError(t, store.Release(context.Background(), first.Reservation), "idempotent release")
+	testassert.ErrorIs(t, testassert.Err(store.Lookup(context.Background(), "reservation-1")), ErrThrottleNotFound, "released lookup =")
 }
 
 // The throttle names carry the Lua source digest, and the compose fixture
@@ -144,9 +143,7 @@ func TestThrottleFunctionNamesCarryTheLuaSourceDigestAndAreProvisioned(t *testin
 		t.Fatalf("names = %q/%q, want the %s source tag", ThrottleFunctionLibrary, ThrottleFunctionVersion, tag)
 	}
 	compose, err := os.ReadFile("../../compose.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if want := "load_function " + ThrottleFunctionLibrary + " " + ThrottleFunctionVersion + " "; !strings.Contains(string(compose), want) {
 		t.Fatalf("compose.yaml does not provision %q", want)
 	}

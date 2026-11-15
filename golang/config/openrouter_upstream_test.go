@@ -7,15 +7,14 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func withoutOpenRouterUpstreamOverrides(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{config.EnvOpenRouterCountries, config.EnvOpenRouterProviderLocations, config.EnvOpenRouterRequireNativePrecision, config.EnvOpenRouterRequireZeroRetention, config.EnvOpenRouterDenyPromptTraining} {
 		value, present := os.LookupEnv(name)
-		if err := os.Unsetenv(name); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.Unsetenv(name))
 		t.Cleanup(func() {
 			if present {
 				_ = os.Setenv(name, value)

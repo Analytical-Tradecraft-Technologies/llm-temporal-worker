@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"strings"
 	"testing"
@@ -11,9 +12,7 @@ func withoutTemporalControllerEnvironment(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{"TEMPORAL_ADDRESS", "TEMPORAL_NAMESPACE", "TEMPORAL_DEPLOYMENT_NAME", "TEMPORAL_WORKER_BUILD_ID"} {
 		value, present := os.LookupEnv(key)
-		if err := os.Unsetenv(key); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, os.Unsetenv(key))
 		t.Cleanup(func() {
 			if present {
 				_ = os.Setenv(key, value)
@@ -104,9 +103,7 @@ func TestTemporalVersioningRejectsIdentitiesTemporalRejects(t *testing.T) {
 		{Enabled: true, DeploymentName: limit, BuildID: limit},
 		{Enabled: true, DeploymentName: "_worker", BuildID: "_b"},
 	} {
-		if err := valid.Validate(); err != nil {
-			t.Fatalf("valid identity rejected: %v", err)
-		}
+		testassert.NoError(t, valid.Validate(), "valid identity rejected")
 	}
 }
 func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {

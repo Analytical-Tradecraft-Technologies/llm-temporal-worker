@@ -1,6 +1,7 @@
 package architecturetest
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,9 +60,7 @@ fi
 		t.Fatalf("prefetch helper failed: %v\n%s", err, output)
 	}
 	calls, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, want := range []string{
 		"git -C " + sourceRoot + " rev-parse HEAD",
 		"cargo offline=false fetch --locked --manifest-path " + filepath.Join(sourceRoot, "rust", "Cargo.toml"),

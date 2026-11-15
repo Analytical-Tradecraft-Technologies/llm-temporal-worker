@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // Durable state identity is where in-flight requests, budgets and results
@@ -112,12 +113,8 @@ func TestRuntimeReplacementValidatorAllowsStateConnectionChanges(t *testing.T) {
 		value.State.Redis.OperationTimeout += config.Duration(time.Second)
 		value.BlobStore.InlineBytes++
 	}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateRuntimeReplacement(current, replacement); err != nil {
-		t.Fatalf("validateRuntimeReplacement() rejected a connection-only change: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, validateRuntimeReplacement(current, replacement), "validateRuntimeReplacement() rejected a connection-only change")
 }
 
 // Parent-snapshot storage only selects how new preparations are written. Every
@@ -127,13 +124,7 @@ func TestRuntimeReplacementValidatorAllowsParentSnapshotStorageChange(t *testing
 	replacement, err := config.Compile(context.Background(), replacementTestConfig(t, func(value *config.Config) {
 		value.State.Requests.ParentSnapshotStorage = config.ParentSnapshotStorageBlob
 	}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateRuntimeReplacement(current, replacement); err != nil {
-		t.Fatalf("validateRuntimeReplacement() rejected a parent-snapshot storage change: %v", err)
-	}
-	if err := validateRuntimeReplacement(replacement, current); err != nil {
-		t.Fatalf("validateRuntimeReplacement() rejected switching back to inline: %v", err)
-	}
+	testassert.NoError(t, err)
+	testassert.NoError(t, validateRuntimeReplacement(current, replacement), "validateRuntimeReplacement() rejected a parent-snapshot storage change")
+	testassert.NoError(t, validateRuntimeReplacement(replacement, current), "validateRuntimeReplacement() rejected switching back to inline")
 }

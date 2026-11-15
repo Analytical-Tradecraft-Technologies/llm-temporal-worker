@@ -4,6 +4,7 @@ import (
 	domainactivity "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 	sdkworkflow "go.temporal.io/sdk/workflow"
@@ -30,13 +31,9 @@ func TestWorkerVersionIdentityAndPinnedBehaviorSurviveDependencyPause(t *testing
 					return &fakeWorker{}, &fakeRegistry{}, nil
 				},
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			defer value.Stop()
-			if err := value.Start(); err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, value.Start())
 			value.Pause()
 			deadline := time.Now().Add(time.Second)
 			for {

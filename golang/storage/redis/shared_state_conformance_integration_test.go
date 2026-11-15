@@ -20,6 +20,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/conformance"
@@ -67,12 +68,8 @@ func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
 	leftAdmission := openLiveAdmissionStore(t, client, AdmissionModeFunction, left, now)
 	rightAdmission := openLiveAdmissionStore(t, client, AdmissionModeFunction, right, now)
 	request := liveBeginRequest("shared-prefix-operation", "shared-prefix-policy", 1, 10, now)
-	if _, err := leftAdmission.Begin(ctx, request); err != nil {
-		t.Fatalf("left admission = %v", err)
-	}
-	if _, err := rightAdmission.Begin(ctx, request); err != nil {
-		t.Fatalf("right admission = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(leftAdmission.Begin(ctx, request)), "left admission")
+	testassert.NoError(t, testassert.Err(rightAdmission.Begin(ctx, request)), "right admission")
 
 	keyring := testKeyring(t)
 	leftContinuation := openLiveContinuationStore(t, client, left, keyring, now)
@@ -80,16 +77,12 @@ func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
 	root := testContinuation(t, now)
 	root.ExpiresAt = now.Add(time.Hour)
 	leftHandle, err := leftContinuation.CreateRoot(ctx, root)
-	if err != nil {
-		t.Fatalf("left continuation = %v", err)
-	}
+	testassert.NoError(t, err, "left continuation")
 	if _, err := rightContinuation.Get(ctx, leftHandle); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("right continuation read = %v, want not found", err)
 	}
 	rightHandle, err := rightContinuation.CreateRoot(ctx, root)
-	if err != nil {
-		t.Fatalf("right continuation = %v", err)
-	}
+	testassert.NoError(t, err, "right continuation")
 	if _, err := leftContinuation.Get(ctx, rightHandle); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("left continuation read = %v, want not found", err)
 	}
@@ -97,25 +90,15 @@ func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
 	leftThrottle := mustCall(t, NewThrottleStore, ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: left})
 	rightThrottle := mustCall(t, NewThrottleStore, ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: right})
 	limits := []ThrottleLimit{{Kind: ThrottleRequests, Scope: "shared-prefix-scope", Amount: 1, Limit: 2, Window: time.Minute}}
-	if _, err := leftThrottle.Acquire(ctx, "shared-prefix-throttle", limits); err != nil {
-		t.Fatalf("left throttle = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(leftThrottle.Acquire(ctx, "shared-prefix-throttle", limits)), "left throttle")
 	if _, err := rightThrottle.Lookup(ctx, "shared-prefix-throttle"); !errors.Is(err, ErrThrottleNotFound) {
 		t.Fatalf("right throttle read = %v, want not found", err)
 	}
 
-	if err := deleteLivePrefix(ctx, client, right.Prefix); err != nil {
-		t.Fatalf("delete right namespace = %v", err)
-	}
-	if _, err := leftAdmission.Get(ctx, request.ID); err != nil {
-		t.Fatalf("left admission after right cleanup = %v", err)
-	}
-	if _, err := leftContinuation.Get(ctx, leftHandle); err != nil {
-		t.Fatalf("left continuation after right cleanup = %v", err)
-	}
-	if _, err := leftThrottle.Lookup(ctx, "shared-prefix-throttle"); err != nil {
-		t.Fatalf("left throttle after right cleanup = %v", err)
-	}
+	testassert.NoError(t, deleteLivePrefix(ctx, client, right.Prefix), "delete right namespace")
+	testassert.NoError(t, testassert.Err(leftAdmission.Get(ctx, request.ID)), "left admission after right cleanup")
+	testassert.NoError(t, testassert.Err(leftContinuation.Get(ctx, leftHandle)), "left continuation after right cleanup")
+	testassert.NoError(t, testassert.Err(leftThrottle.Lookup(ctx, "shared-prefix-throttle")), "left throttle after right cleanup")
 }
 
 func TestLiveRedisLuaStoreFactoryConformance(t *testing.T) {
@@ -128,9 +111,7 @@ func TestLiveRedisLuaStoreFactoryConformance(t *testing.T) {
 	// black-box StoreFactory contract used by Function mode. The worker never
 	// performs this load at runtime.
 	sha, err := client.ScriptLoad(ctx, AdmissionLuaSource()).Result()
-	if err != nil {
-		t.Fatalf("provision Redis admission Lua script: %v", err)
-	}
+	testassert.NoError(t, err, "provision Redis admission Lua script")
 	if sha != AdmissionLuaSHA1() {
 		t.Fatalf("provisioned Lua script SHA = %q, want %q", sha, AdmissionLuaSHA1())
 	}
@@ -181,9 +162,7 @@ func TestLiveRedisFunctionBeginDecodesTwoFieldDenial(t *testing.T) {
 	}
 	second := liveBeginRequest("begin-denial-second", "begin-denial-policy", 5, 10, now)
 	result, err := store.Begin(context.Background(), second)
-	if err != nil {
-		t.Fatalf("denied reservation = %v", err)
-	}
+	testassert.NoError(t, err, "denied reservation")
 	if result.Denied == nil {
 		t.Fatalf("denied reservation = %#v, want a decoded denial", result)
 	}
@@ -219,9 +198,7 @@ func TestLiveRedisTimeoutAfterMutationResolvesByRead(t *testing.T) {
 		Keys:    keys,
 		Clock:   func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	request := liveBeginRequest("timeout-after-mutation", "timeout-policy", 1, 10, now)
 	if _, err := store.Begin(context.Background(), request); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("timeout after mutation = %v, want unresolved shared state", err)
@@ -246,9 +223,7 @@ func TestLiveRedisFunctionAndLuaMismatchFailClosed(t *testing.T) {
 		Keys:            keys,
 		Clock:           func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if _, err := functionStore.Begin(context.Background(), request); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("function version mismatch = %v, want unresolved shared state", err)
 	}
@@ -304,7 +279,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if mode == AdmissionModeLua {
-		mustNoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
+		testassert.NoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
 	}
 	settings, err := client.ConfigGet(ctx, "appendonly").Result()
 	if err != nil || settings["appendonly"] != "yes" {
@@ -323,7 +298,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	keys := liveKeyOptions("restart")
 	initializer := mustBudgetInitializer(t, client, keys, mode, AdmissionFunctionVersion)
 	authority := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: "00000000-0000-4000-8000-000000000001", CreatedAt: now}
-	mustNoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: authority, Created: true}))
+	testassert.NoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: authority, Created: true}))
 	authority.Ready = true
 	store := openLiveAdmissionStore(t, client, mode, keys, now)
 	request := liveBeginRequest("restart", "restart-policy", 1, 10, now)
@@ -339,9 +314,9 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("reserve before restart: %#v %v", accepted, err)
 	}
-	mustNoError(t, errOf(budgets.Claim(ctx, claimOf(accepted))))
+	testassert.NoError(t, testassert.Err(budgets.Claim(ctx, claimOf(accepted))))
 	completion := durable.ReconcileRequest{OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID, Events: []budget.CompletionEvent{exactSettledEvent(accepted, accepted.Events[0], "settled-before-restart", pricing.MustUSD("0.4"), now)}}
-	mustNoError(t, budgets.Reconcile(ctx, completion))
+	testassert.NoError(t, budgets.Reconcile(ctx, completion))
 	pendingRequest := budgetRequest
 	pendingRequest.OperationID = "pending-before-restart"
 	pendingRequest.Reservations = append([]admission.WindowReservation(nil), budgetRequest.Reservations...)
@@ -351,7 +326,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 		t.Fatalf("pending before restart: %#v %v", pending, err)
 	}
 	pendingClaim := claimOf(pending)
-	mustNoError(t, errOf(budgets.Claim(ctx, pendingClaim)))
+	testassert.NoError(t, testassert.Err(budgets.Claim(ctx, pendingClaim)))
 
 	providerOptions := ProviderStateOptions{Client: client, Keys: keys}
 	providers := mustCall(t, NewProviderStateStore, providerOptions)
@@ -359,15 +334,13 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 		o.Credit = control.CreditExhausted
 		o.ProviderCode = "insufficient_quota"
 	})
-	mustNoError(t, errOf(providers.PersistStatusEvent(ctx, incident)))
+	testassert.NoError(t, testassert.Err(providers.PersistStatusEvent(ctx, incident)))
 	inventory := providerTestInventory(now)
 	inventory.Complete, inventory.NextCursor = false, "restart-private-cursor"
-	mustNoError(t, errOf(providers.PersistInventorySnapshot(ctx, inventory)))
+	testassert.NoError(t, testassert.Err(providers.PersistInventorySnapshot(ctx, inventory)))
 
 	eventsBefore, err := client.XRange(ctx, initializer.keys.EventsKey(), "-", "+").Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if len(eventsBefore) != 6 { // initialization, reserve/claim/settle, reserve/claim
 		t.Fatalf("budget transitions before restart: %d", len(eventsBefore))
 	}
@@ -388,11 +361,9 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 		if err := recoveredInitializer.Check(recoveryContext, authority); err == nil || !strings.HasPrefix(err.Error(), "NOSCRIPT") {
 			t.Fatalf("Lua cache loss did not fail closed: %v", err)
 		}
-		mustNoError(t, restartedClient.ScriptLoad(recoveryContext, AdmissionLuaSource()).Err())
+		testassert.NoError(t, restartedClient.ScriptLoad(recoveryContext, AdmissionLuaSource()).Err())
 	}
-	if err := recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}); err != nil {
-		t.Fatalf("adopt persisted ready authority: %v", err)
-	}
+	testassert.NoError(t, recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}), "adopt persisted ready authority")
 	eventsAfter, err := restartedClient.XRange(recoveryContext, initializer.keys.EventsKey(), "-", "+").Result()
 	if err != nil || !reflect.DeepEqual(eventsAfter, eventsBefore) {
 		t.Fatalf("budget transitions did not survive restart unchanged: %v", err)
@@ -411,7 +382,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	// Redis script caches may disappear on restart; the embedded script must
 	// still accept a new observation without a SQL fallback or manual preload.
 	updated := providerTestEvent(t, now.Add(time.Second), "restart-route", nil)
-	mustNoError(t, errOf(providers.PersistStatusEvent(context.Background(), updated)))
+	testassert.NoError(t, testassert.Err(providers.PersistStatusEvent(context.Background(), updated)))
 	status, err = providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID, incident.EndpointID, incident.Model, incident.ProviderTier)
 	if err != nil || status.Credit != control.CreditExhausted {
 		t.Fatalf("sticky incident after restart/update: %#v %v", status, err)
@@ -419,8 +390,8 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 
 	budgetOptions.Client = restartedClient
 	recovered := mustCall(t, NewRedisBudgetMaterializer, budgetOptions)
-	requireErrorIs(t, errOf(recovered.Claim(context.Background(), pendingClaim)), durable.ErrAlreadyClaimed, "pending claim after restart")
-	mustNoError(t, recovered.Reconcile(context.Background(), completion))
+	testassert.ErrorIs(t, testassert.Err(recovered.Claim(context.Background(), pendingClaim)), durable.ErrAlreadyClaimed, "pending claim after restart")
+	testassert.NoError(t, recovered.Reconcile(context.Background(), completion))
 	if n := restartedClient.XLen(recoveryContext, initializer.keys.EventsKey()).Val(); n != int64(len(eventsBefore)) {
 		t.Fatalf("authority adoption/paid replay duplicated budget hints: %d", n)
 	}
@@ -439,11 +410,11 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	if result, err := restartedStore.Begin(context.Background(), liveBeginRequest("restart-after", "restart-policy", 1, 10, now)); err != nil || result.Denied != nil {
 		t.Fatalf("Function after Redis restart = %#v, %v", result, err)
 	}
-	mustNoError(t, restartedClient.Del(recoveryContext, initializer.keys.AuthorityKey()).Err())
-	requireErrorIs(t, recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}), ErrBudgetAuthorityUnavailable, "ready receipt recreated lost authority after restart")
-	requireErrorIs(t, errOf(recovered.Accept(recoveryContext, extra)), ErrBudgetAuthorityUnavailable, "admission reopened after authority loss")
-	requireErrorIs(t, errOf(recovered.Claim(recoveryContext, pendingClaim)), ErrBudgetAuthorityUnavailable, "claim allowed after authority loss")
-	requireErrorIs(t, recovered.Reconcile(recoveryContext, completion), ErrBudgetAuthorityUnavailable, "settlement allowed after authority loss")
+	testassert.NoError(t, restartedClient.Del(recoveryContext, initializer.keys.AuthorityKey()).Err())
+	testassert.ErrorIs(t, recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}), ErrBudgetAuthorityUnavailable, "ready receipt recreated lost authority after restart")
+	testassert.ErrorIs(t, testassert.Err(recovered.Accept(recoveryContext, extra)), ErrBudgetAuthorityUnavailable, "admission reopened after authority loss")
+	testassert.ErrorIs(t, testassert.Err(recovered.Claim(recoveryContext, pendingClaim)), ErrBudgetAuthorityUnavailable, "claim allowed after authority loss")
+	testassert.ErrorIs(t, recovered.Reconcile(recoveryContext, completion), ErrBudgetAuthorityUnavailable, "settlement allowed after authority loss")
 	if n := restartedClient.Exists(recoveryContext, initializer.keys.AuthorityKey()).Val(); n != 0 {
 		t.Fatal("lost authority was recreated")
 	}
@@ -458,9 +429,7 @@ func TestLiveRedisConfiguredPersistenceGateAllowsOverriddenPrefix(t *testing.T) 
 
 func TestLiveRedisAddressForPublishedPort(t *testing.T) {
 	address, err := liveRedisAddressForPublishedPort("32768")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if want := "127.0.0.1:32768"; address != want {
 		t.Fatalf("address = %q, want %q", address, want)
 	}
@@ -496,9 +465,7 @@ func openLiveRedis(t *testing.T) *redisclient.Client {
 	// LLMTW_REDIS_ADDR is retained for manually provisioned Redis instances.
 	if container := os.Getenv("LLMTW_REDIS_CONTAINER"); container != "" {
 		current, err := liveRedisAddressForContainer(container)
-		if err != nil {
-			t.Fatalf("could not discover the current isolated Redis address: %v", err)
-		}
+		testassert.NoError(t, err, "could not discover the current isolated Redis address")
 		address = current
 	}
 	if address == "" {
@@ -606,9 +573,7 @@ func liveRedisStoreFactoryWithKeys(client *redisclient.Client, mode AdmissionMod
 				Secret:  bytes.Repeat([]byte{2}, 32),
 				Primary: true,
 			}}, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			admissions := openLiveAdmissionStore(t, client, mode, keys, now)
 			continuations := openLiveContinuationStore(t, client, keys, keyring, now)
 			return conformance.Stores{

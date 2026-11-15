@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -39,9 +40,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 	root := testContinuation(t, now)
 	root.ExpiresAt = now.Add(time.Minute)
 	parent, err := store.CreateRoot(ctx, root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	cleanup = append(cleanup,
 		space.continuationIndexKey(parent.String()),
 		space.continuationKey(root.Tenant, parent.String()),
@@ -68,9 +67,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 	child := testChildContinuation(t, now, parent)
 	child.ExpiresAt = now.Add(time.Minute)
 	first, err := store.PutChild(ctx, state.PutChildRequest{Parent: parent, Child: child, OperationKey: "live-operation"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	childKeys := []string{
 		space.continuationIndexKey(first.String()),
 		space.continuationKey(child.Tenant, first.String()),
@@ -86,7 +83,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 			t.Fatalf("force expiry for %q: %v", key, err)
 		}
 	}
-	mustNoError(t, waitForLiveRedisKeysAbsent(ctx, client, childKeys))
+	testassert.NoError(t, waitForLiveRedisKeysAbsent(ctx, client, childKeys))
 	if _, err := store.Get(ctx, first); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("fully expired child read = %v, want not found", err)
 	}
@@ -94,9 +91,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 	replacement := testChildContinuation(t, now, parent)
 	replacement.ExpiresAt = now.Add(time.Minute)
 	second, err := store.PutChild(ctx, state.PutChildRequest{Parent: parent, Child: replacement, OperationKey: "live-operation"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if second == first {
 		t.Fatalf("expired operation index returned stale continuation %q", first)
 	}

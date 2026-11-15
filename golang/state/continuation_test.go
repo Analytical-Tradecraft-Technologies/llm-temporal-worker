@@ -24,9 +24,7 @@ func testTranscript() []llm.Item {
 func mustCanonicalTranscript(t *testing.T, items []llm.Item) ([]byte, [32]byte) {
 	t.Helper()
 	canonical, digest, err := CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return canonical, digest
 }
 
@@ -143,9 +141,7 @@ func TestContinuationCloneCopiesMutableFields(t *testing.T) {
 func TestContinuationValidateEnforcesIntegrityAndLifetime(t *testing.T) {
 	now := time.Unix(100, 0)
 	base := validContinuation(t, now)
-	if err := base.Validate(now); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, base.Validate(now))
 
 	tests := map[string]struct {
 		mutate func(*Continuation)
@@ -238,9 +234,7 @@ func TestContinuationValidateRejectsOptionalStateWithMismatchedProvenance(t *tes
 	base := validContinuation(t, now)
 	base.Pinning = Pinning{Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude"}
 	base.ProviderState[0].ModelLineage = "claude"
-	if err := base.Validate(now); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, base.Validate(now))
 	base.ProviderState[0].Provider = "openai"
 	testassert.ErrorContains(t, base.Validate(now), "does not match continuation pinning")
 }

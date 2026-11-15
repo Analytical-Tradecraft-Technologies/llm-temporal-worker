@@ -49,9 +49,7 @@ func TestRequestPayloadRejectsUnknownVersionFieldsAndDuplicates(t *testing.T) {
 			t.Fatalf("payload unexpectedly accepted: %s", value)
 		}
 	}
-	if _, err := UnmarshalRequest([]byte(base), PayloadLimits{}); err != nil {
-		t.Fatalf("valid base payload rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(UnmarshalRequest([]byte(base), PayloadLimits{})), "valid base payload rejected")
 }
 
 func TestRequestPayloadRejectsOversizeAndMalformedBlob(t *testing.T) {
@@ -81,9 +79,7 @@ func TestRequestPayloadAllowsArbitraryDigestFields(t *testing.T) {
 		},
 	}
 
-	if _, err := MarshalRequest(payload, PayloadLimits{MaxInlineBytes: 16 * 1024}); err != nil {
-		t.Fatalf("MarshalRequest rejected opaque digest fields: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(MarshalRequest(payload, PayloadLimits{MaxInlineBytes: 16 * 1024})), "MarshalRequest rejected opaque digest fields")
 }
 
 func TestRequestPayloadValidatesDocumentBlobSource(t *testing.T) {
@@ -92,9 +88,7 @@ func TestRequestPayloadValidatesDocumentBlobSource(t *testing.T) {
 		MediaType: "application/pdf",
 	}
 	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "document-blob", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{document}}}}}
-	if _, err := payload.Validate(16 * 1024); err != nil {
-		t.Fatalf("valid document blob rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(payload.Validate(16*1024)), "valid document blob rejected")
 
 	document.Blob.Digest = "bad"
 	payload.Request.Input = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{document}}}
@@ -112,12 +106,8 @@ func TestRequestPayloadAppliesMediaURLPolicy(t *testing.T) {
 			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{URL: raw, MediaType: "image/png"}}}}}}
 	}
 	encoded, err := MarshalRequest(payloadFor("https://cdn1.example.com/a.png"), PayloadLimits{})
-	if err != nil {
-		t.Fatalf("public media URL rejected: %v", err)
-	}
-	if _, err := UnmarshalRequest(encoded, PayloadLimits{}); err != nil {
-		t.Fatalf("public media URL rejected on decode: %v", err)
-	}
+	testassert.NoError(t, err, "public media URL rejected")
+	testassert.NoError(t, testassert.Err(UnmarshalRequest(encoded, PayloadLimits{})), "public media URL rejected on decode")
 	for _, raw := range []string{"http://localhost/a.png", "http://127.1/a.png", "http://2130706433/a.png", "http://[64:ff9b::a9fe:a9fe]/a.png", "http://100.64.0.1/a.png", "http://metadata.google.internal/a.png"} {
 		if _, err := payloadFor(raw).Validate(16 * 1024); err == nil {
 			t.Errorf("media URL %q accepted by Validate", raw)
@@ -157,9 +147,7 @@ func TestBoundedDataConverterRejectsBeforeTemporalDecode(t *testing.T) {
 	limits := PayloadLimits{MaxInlineBytes: 64}
 	bounded := BoundedDataConverter(limits)
 	oversize, err := converter.GetDefaultDataConverter().ToPayload(strings.Repeat("x", 128))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var decoded string
 	testassert.ErrorContains(t, bounded.FromPayload(oversize, &decoded), "Temporal payload is 130 bytes; limit is 64")
 	if _, err := bounded.ToPayload(strings.Repeat("x", 128)); err == nil {
@@ -170,9 +158,7 @@ func TestBoundedDataConverterRejectsBeforeTemporalDecode(t *testing.T) {
 func TestBlobRefValidationAndResponseRoundTrip(t *testing.T) {
 	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	ref := BlobRef{Store: "s3", Locator: "tenant-1/abc", Digest: strings.Repeat("a", 64), ByteLength: 12, MediaType: "application/json", ExpiresAt: &expires}
-	if err := ref.Validate(time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, ref.Validate(time.Now()))
 	response := GenerateResponse{APIVersion: APIVersion, Response: llm.Response{OperationKey: "operation-1", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
 	_, decoded := mustPayloadRoundTrip(t, response, MarshalResponse, UnmarshalResponse)
 	if decoded.Response.OperationKey != response.Response.OperationKey {
@@ -189,13 +175,9 @@ func mustPayloadRoundTrip[T any](t *testing.T, value T, marshal func(T, PayloadL
 	t.Helper()
 	limits := PayloadLimits{MaxInlineBytes: 16 * 1024}
 	encoded, err := marshal(value, limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	decoded, err := unmarshal(encoded, limits)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded, decoded
 }
 
@@ -216,8 +198,6 @@ func assertCodecRejectsOneByteOverLimit[T any](t *testing.T, value T, marshal fu
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return data
 }

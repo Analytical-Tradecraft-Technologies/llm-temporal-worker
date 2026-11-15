@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -49,18 +50,14 @@ func TestCarryProviderCacheAffinityKeepsAnExpiredObservationUnchanged(t *testing
 	expired := now.Add(-time.Minute)
 	affinity := affinityTestObservation(now.Add(-time.Hour), &expired)
 	affinity.ObservedCacheReadTokens, affinity.ObservedCacheWriteTokens = 1, 2
-	if err := affinity.Validate(now); err != nil {
-		t.Fatalf("expired parent affinity must be valid history: %v", err)
-	}
+	testassert.NoError(t, affinity.Validate(now), "expired parent affinity must be valid history")
 	parent := &state.Continuation{Affinities: state.ProviderCacheAffinitySet{affinity}}
 	candidate := affinityTestCandidate()
 	result := carryProviderCacheAffinity(parent, candidate, llm.Usage{CacheReadTokens: 13}, now)
 	if len(result) != 1 || !result[0].LastSuccessAt.Equal(affinity.LastSuccessAt) || result[0].ObservedCacheReadTokens != 1 {
 		t.Fatalf("expired affinity = %#v, want it unchanged", result)
 	}
-	if err := result[0].Validate(now); err != nil {
-		t.Fatalf("carried affinity is invalid: %v", err)
-	}
+	testassert.NoError(t, result[0].Validate(now), "carried affinity is invalid")
 }
 
 func TestCarryProviderCacheAffinityDropsAnExpiredHardPin(t *testing.T) {

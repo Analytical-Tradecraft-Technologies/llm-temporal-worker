@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -19,9 +20,7 @@ func TestV1SamplingAndReasoningPatchBoundsAgree(t *testing.T) {
 	}
 	encode := func(value any) string {
 		data, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return string(data)
 	}
 	for name, test := range map[string]struct {
@@ -89,9 +88,7 @@ func TestV1SamplingAndReasoningPatchBoundsAgree(t *testing.T) {
 				return
 			}
 			encoded, err := json.Marshal(request)
-			if err != nil {
-				t.Fatalf("re-marshal: %v", err)
-			}
+			testassert.NoError(t, err, "re-marshal")
 			if err := compiled.Validate(encoded); err != nil {
 				t.Fatalf("re-marshaled request is not schema-valid: %v\n%s", err, encoded)
 			}

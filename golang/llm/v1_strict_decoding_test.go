@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"strings"
 	"testing"
@@ -8,13 +9,9 @@ import (
 
 func TestGenerateRequestV1RejectsLooseToolPolicyAndNullScalars(t *testing.T) {
 	base, err := os.ReadFile("testdata/v1/generate-fork-patch-set.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	var control GenerateRequestV1
-	if err := control.UnmarshalJSON(base); err != nil {
-		t.Fatalf("control fixture rejected: %v", err)
-	}
+	testassert.NoError(t, control.UnmarshalJSON(base), "control fixture rejected")
 	for name, replace := range map[string][2]string{
 		"tool policy unknown field": {`"tool_policy": {"set": {"mode": "named", "name": "lookup", "parallel": false}}`, `"tool_policy": {"set": {"mode": "auto", "parallel": true, "surprise": {}}}`},
 		"tool policy case folding":  {`"tool_policy": {"set": {"mode": "named", "name": "lookup", "parallel": false}}`, `"tool_policy": {"set": {"MODE": "none", "Parallel": false}}`},

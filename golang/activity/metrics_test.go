@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.temporal.io/sdk/temporal"
@@ -111,9 +112,7 @@ func validGeneratePayload() GenerateRequest {
 func newActivityTestMetrics(t *testing.T) *observability.Metrics {
 	t.Helper()
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Statuses: []string{"completed", "failed", "canceled"}, ErrorClasses: []string{"none", "provider_unavailable", "budget_denied", "internal"}, Phases: []string{"total"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return metrics
 }
 
@@ -145,9 +144,7 @@ func assertActivityMetricHistogramCount(t *testing.T, metrics *observability.Met
 func activityMetricValue(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string, histogram bool) (float64, bool) {
 	t.Helper()
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() != name {
 			continue

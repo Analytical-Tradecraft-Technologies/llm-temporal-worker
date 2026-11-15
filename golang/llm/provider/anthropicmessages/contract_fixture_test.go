@@ -8,6 +8,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -43,14 +44,10 @@ func TestAnthropicDirectContractFixtureDecoderIsFragmentationInvariant(t *testin
 	if len(want) == 0 {
 		t.Fatal("stream fixture decoded no events")
 	}
-	if _, err := streamtest.Assemble("fixture-anthropic-direct-stream", want); err != nil {
-		t.Fatal(err)
-	}
-	if err := contracttest.VerifyStreamAssemblyEquivalent(wire, anthropicDirectFixture.read(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+	testassert.NoError(t, testassert.Err(streamtest.Assemble("fixture-anthropic-direct-stream", want)))
+	testassert.NoError(t, contracttest.VerifyStreamAssemblyEquivalent(wire, anthropicDirectFixture.read(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
 		return streamtest.AssembleJSON(events, "fixture-anthropic-direct-stream", DecodeStream)
-	}, metadata.GeneratedFieldExemptions); err != nil {
-		t.Fatal(err)
-	}
+	}, metadata.GeneratedFieldExemptions))
 }
 
 func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testing.T) {
@@ -62,18 +59,14 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "Request-Id", "req-fixture"), nil
 	}))
 	adapter, err := New(client, anthropicDirectFixtureEndpoint, anthropicDirectFixtureProfile(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, anthropicDirectFixtureEndpoint, provider.FamilyAnthropicMessages, request)
 	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil {
 		t.Fatal("fixture transport was not called")
 	}
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	anthropicDirectFixture.assertCanonical(t, body, "request.wire.json")
 	if got.URL.Path != "/v1/messages" || got.Header.Get("X-Api-Key") != "fixture-anthropic-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("Anthropic direct transport = %s %#v", got.URL, got.Header)
@@ -92,9 +85,7 @@ func newAnthropicDirectFixtureClient(t *testing.T, transport http.RoundTripper) 
 		APIKey:     "fixture-anthropic-key",
 		HTTPClient: &http.Client{Transport: transport},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return client
 }
 

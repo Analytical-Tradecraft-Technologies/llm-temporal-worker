@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -28,13 +29,9 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Request-Id", "req-name"), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := New(client, "chat-prod", testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	names := make([]string, 0, 2)
 	for range 2 {
 		call := adaptertest.CompileStrict(t, adapter, "chat-prod", provider.FamilyOpenAIChat, llm.Request{
@@ -42,9 +39,7 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 			Input:  []llm.Item{llm.HumanText("extract")},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)}},
 		})
-		if _, err := adapter.Invoke(context.Background(), call, nil); err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, testassert.Err(adapter.Invoke(context.Background(), call, nil)))
 		var body struct {
 			ResponseFormat struct {
 				Type       string `json:"type"`

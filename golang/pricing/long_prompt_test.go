@@ -2,6 +2,7 @@ package pricing
 
 import (
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -97,9 +98,7 @@ func TestLongPromptPriceIsValidatedAndOmittedWhenUnset(t *testing.T) {
 	// therefore their catalog digest.
 	entry.LongPrompt = nil
 	encoded, err := json.Marshal(entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if strings.Contains(string(encoded), "LongPrompt") {
 		t.Fatalf("encoded entry %s names an unset long-prompt price", encoded)
 	}

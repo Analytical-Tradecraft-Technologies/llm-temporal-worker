@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -111,9 +112,7 @@ func TestPollProviderOperationNeverSubmitsAndResumesPendingID(t *testing.T) {
 		MaxPolls: 2,
 		Sleep:    recordSleeps(&slept),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Response.Status != llm.ResponseStatusCompleted {
 		t.Fatalf("response status = %q, want completed", result.Response.Status)
 	}
@@ -139,9 +138,7 @@ func TestPollProviderOperationHonorsInitialProviderGuidance(t *testing.T) {
 		InitialDelay: 5 * time.Second,
 		Sleep:        recordSleeps(&slept),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if result.Response.Status != llm.ResponseStatusCompleted || adapter.polls != 1 {
 		t.Fatalf("result/polls = %#v/%d, want completed/1", result.Response, adapter.polls)
 	}
@@ -153,14 +150,12 @@ func TestPollProviderOperationHonorsInitialProviderGuidance(t *testing.T) {
 func TestPollProviderOperationCapsInitialGuidance(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{completedProviderOp()}}
 	var slept []time.Duration
-	if _, err := PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", nil, ProviderPollOptions{
+	testassert.NoError(t, testassert.Err(PollProviderOperation(context.Background(), adapter, provider.Call{OperationKey: "operation-key"}, "provider-op", nil, ProviderPollOptions{
 		MaxPolls:        1,
 		MaxPollInterval: time.Second,
 		InitialDelay:    5 * time.Second,
 		Sleep:           recordSleeps(&slept),
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})))
 	if len(slept) != 1 || slept[0] != time.Second {
 		t.Fatalf("initial sleep = %v, want capped guidance", slept)
 	}

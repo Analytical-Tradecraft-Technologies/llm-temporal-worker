@@ -40,9 +40,7 @@ func TestServiceClassPoliciesLoadAndKeepStandard(t *testing.T) {
 
 func TestServiceClassPolicyDefault(t *testing.T) {
 	data := string(replaceExample(t, "    classes: [economy, standard]\n", "    classes: [economy, standard]\n    default_class: economy\n"))
-	if _, err := config.Load([]byte(data)); err != nil {
-		t.Fatalf("valid project default rejected: %v", err)
-	}
+	testassert.NoError(t, testassert.Err(config.Load([]byte(data))), "valid project default rejected")
 	for _, value := range []string{"turbo", "priority"} {
 		requireLoadRejected(t, []byte(strings.Replace(data, "default_class: economy", "default_class: "+value, 1)), "accepted invalid or disabled default %q", value)
 	}

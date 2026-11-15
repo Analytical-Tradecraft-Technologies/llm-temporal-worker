@@ -75,9 +75,7 @@ func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T
 
 	old := runtime.App.Current()
 	lease, err := runtime.App.Acquire()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	defer lease.Release()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -110,9 +108,7 @@ func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T
 	}
 
 	lease.Release()
-	if err := old.WaitClosed(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, old.WaitClosed(context.Background()))
 }
 
 func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
@@ -177,9 +173,7 @@ func TestRuntimeRunCancellationInterruptsPublishedReloadDrain(t *testing.T) {
 	waitForReloadRuntimeStart(t, runtime, done)
 	old := runtime.App.Current()
 	lease, err := runtime.App.Acquire()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 
 	reloads <- struct{}{}
 	waitForRuntime(t, func() bool {
@@ -250,17 +244,11 @@ func waitForReloadRuntimeStart(t *testing.T, runtime *Runtime, done <-chan error
 func TestConfigFileWatcherDetectsAtomicReplacement(t *testing.T) {
 	path := tempConfigFile(t, "first")
 	watcher, err := newConfigFileWatcher(path, time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	t.Cleanup(func() { _ = watcher.Close() })
 	replacement := filepath.Join(filepath.Dir(path), "replacement.yaml")
-	if err := os.WriteFile(replacement, []byte("second"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(replacement, path); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(replacement, []byte("second"), 0600))
+	testassert.NoError(t, os.Rename(replacement, path))
 	select {
 	case <-watcher.Changes():
 	case <-time.After(time.Second):
@@ -297,9 +285,7 @@ func reloadOutcome(t *testing.T, metrics *observability.Metrics, outcome string)
 		t.Fatal("metrics are not configured")
 	}
 	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() != "llmtw_config_reload_total" {
 			continue
@@ -327,21 +313,15 @@ func TestRuntimeReloadFileLabelsIdentifiersIntroducedByTheReload(t *testing.T) {
 	// requests can already run on the replacement during that interval.
 	old := runtime.App.Current()
 	lease, err := runtime.App.Acquire()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	reloaded := make(chan error, 1)
 	go func() { reloaded <- runtime.ReloadFile(context.Background(), path) }()
 	waitForRuntime(t, func() bool { return runtime.App.Current() != old })
 	runtime.Metrics.RecordProviderAttempt("openai-prod", "gpt-replacement-2026-09-20", "standard", "success", time.Millisecond)
 	lease.Release()
-	if err := <-reloaded; err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, <-reloaded)
 	families, err := runtime.Metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	found := false
 	for _, family := range families {
 		if family.GetName() != "llmtw_provider_attempt_total" {
@@ -367,7 +347,5 @@ func writeReplacedConfig(t *testing.T, path string, data []byte, old, replacemen
 	if !bytes.Contains(data, []byte(old)) {
 		t.Fatalf("test configuration does not contain %q", old)
 	}
-	if err := os.WriteFile(path, bytes.Replace(data, []byte(old), []byte(replacement), 1), 0600); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, os.WriteFile(path, bytes.Replace(data, []byte(old), []byte(replacement), 1), 0600))
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -81,15 +82,11 @@ func TestCloudBudgetPlansStoredQuoteSurvivesReloadAndUncertainAdmission(t *testi
 	store := &budgetPlanStoreStub{}
 	f.cap.Requests = store
 	plans, err := f.cap.NewCloudBudgetPlans()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	id, _ := cloudstate.NewRequestID()
 	scope := cloudstate.Scope{Tenant: f.gen.Context.Tenant, Project: f.gen.Context.Project}
 	ctx := context.Background()
-	if _, err := plans.Save(ctx, scope, id, "generate", planned, f.attempt.QuotedAt); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(plans.Save(ctx, scope, id, "generate", planned, f.attempt.QuotedAt)))
 	admissionFixture := newBudgetAdmissionFixture(t)
 	admissionFixture.gen, admissionFixture.route, admissionFixture.plan, admissionFixture.now = f.gen, planned.Route, planned.Reservation, planned.QuotedAt
 	first := true
@@ -109,9 +106,7 @@ func TestCloudBudgetPlansStoredQuoteSurvivesReloadAndUncertainAdmission(t *testi
 	// Reconstruct the helper with a different config and no pricing/routing
 	// capabilities. Replay must load the original facts without replanning.
 	restarted, err := (V1RuntimeCapabilities{Requests: &budgetPlanStoreStub{data: store.data}, ConfigDigest: [32]byte{9}}).NewCloudBudgetPlans()
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	stored, err := restarted.Load(ctx, scope, id)
 	if err != nil || stored.ConfigDigest != planned.Provider.ConfigDigest || !reflect.DeepEqual(stored.Reservation, planned.Reservation) {
 		t.Fatalf("reload changed recovered plan: %v", err)
@@ -122,9 +117,7 @@ func TestCloudBudgetPlansStoredQuoteSurvivesReloadAndUncertainAdmission(t *testi
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("recovered admission failed: %v", err)
 	}
-	if _, err := admissionFixture.helper.ClaimGenerate(ctx, f.gen, stored.Route, accepted); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, testassert.Err(admissionFixture.helper.ClaimGenerate(ctx, f.gen, stored.Route, accepted)))
 	_, err = admissionFixture.helper.ClaimGenerate(ctx, f.gen, stored.Route, accepted)
 	assertBudgetAdmissionError(t, err, provider.CodeAmbiguousDispatch, provider.DispatchAmbiguous, provider.RetryNever)
 }

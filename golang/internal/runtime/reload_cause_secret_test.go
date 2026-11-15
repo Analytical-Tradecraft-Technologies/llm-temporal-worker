@@ -8,6 +8,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // rejectedReload publishes a valid snapshot, then reloads with the given
@@ -133,9 +134,7 @@ func TestRuntimeReplacementValidatorIgnoresRedisIdentityInMemoryState(t *testing
 			value.BlobStore = config.BlobStoreConfig{Kind: "memory", InlineBytes: value.BlobStore.InlineBytes}
 			edit(value)
 		}), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return snapshot
 	}
 	current := memory(func(*config.Config) {})
@@ -146,7 +145,5 @@ func TestRuntimeReplacementValidatorIgnoresRedisIdentityInMemoryState(t *testing
 	if current.ConfigVersion() == replacement.ConfigVersion() {
 		t.Fatal("fixture did not change the configuration")
 	}
-	if err := validateRuntimeReplacement(current, replacement); err != nil {
-		t.Fatalf("validateRuntimeReplacement() rejected ignored Redis settings in memory state: %v", err)
-	}
+	testassert.NoError(t, validateRuntimeReplacement(current, replacement), "validateRuntimeReplacement() rejected ignored Redis settings in memory state")
 }

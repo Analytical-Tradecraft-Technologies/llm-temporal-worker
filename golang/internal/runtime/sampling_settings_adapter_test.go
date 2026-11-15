@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -31,9 +32,7 @@ func samplingSettingsRoutes() []hierarchyRoute {
 func compileSettingsPatch(t *testing.T, adapter provider.Adapter, family provider.Family, patch string, strict bool) (map[string]any, error) {
 	t.Helper()
 	var settings llm.SettingsPatchV1
-	if err := json.Unmarshal([]byte(patch), &settings); err != nil {
-		t.Fatalf("decode settings_patch: %v", err)
-	}
+	testassert.NoError(t, json.Unmarshal([]byte(patch), &settings), "decode settings_patch")
 	settings.Model.Set = preparationPointer("provider-model")
 	portability := llm.PortabilityBestEffort
 	if strict {
@@ -43,9 +42,7 @@ func compileSettingsPatch(t *testing.T, adapter provider.Adapter, family provide
 	request := llm.GenerateRequestV1{OperationKey: "operation", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"},
 		Append: []llm.Item{llm.HumanText("hello")}, SettingsPatch: settings}
 	prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-	if err != nil {
-		t.Fatalf("PrepareGenerateInput: %v", err)
-	}
+	testassert.NoError(t, err, "PrepareGenerateInput")
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: prepared.Request, Strict: strict,
 		Query: provider.CapabilityQuery{EndpointID: "endpoint", Family: family, Model: "provider-model", ServiceClass: llm.ServiceClassStandard}})
 	if err != nil {
@@ -169,9 +166,7 @@ func TestPrepareGenerateInputInheritsSamplingAndReasoningLeaves(t *testing.T) {
 	settings.ReasoningTokenBudget = preparationPointer(4096)
 
 	prepared, err := PrepareGenerateInput(context.Background(), request, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	sampling, reasoning := prepared.Request.Sampling, prepared.Request.Reasoning
 	if sampling == nil || *sampling.TopP != 0.25 || !reflect.DeepEqual(sampling.StopSequences, []string{"END"}) || *sampling.Seed != 7 || *sampling.Temperature != 0.2 {
 		t.Fatalf("inherited sampling = %+v", sampling)
@@ -186,9 +181,7 @@ func TestPrepareGenerateInputInheritsSamplingAndReasoningLeaves(t *testing.T) {
 	request.SettingsPatch.ReasoningMode.Set = preparationPointer(llm.ReasoningModeAdaptive)
 	request.SettingsPatch.ReasoningTokenBudget.Clear = true
 	prepared, err = PrepareGenerateInput(context.Background(), request, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	sampling, reasoning = prepared.Request.Sampling, prepared.Request.Reasoning
 	if *sampling.TopP != 0.5 || prepared.Settings.TopP.String() != "0.5" || sampling.StopSequences != nil || *sampling.Seed != 9 {
 		t.Fatalf("patched sampling = %+v", sampling)

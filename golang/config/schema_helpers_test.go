@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -14,13 +15,9 @@ import (
 func configSchema(t *testing.T) *schema.Schema {
 	t.Helper()
 	data, err := os.ReadFile("../api/schema/v1/config.schema.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	compiled, err := schema.Parse(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return compiled
 }
 
@@ -35,9 +32,7 @@ func validateConfigSchema(t *testing.T, value any) error {
 func mustLoadConfig(t *testing.T, data []byte) config.Config {
 	t.Helper()
 	loaded, err := config.Load(data)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return loaded
 }
 
@@ -45,9 +40,7 @@ func mustLoadConfig(t *testing.T, data []byte) config.Config {
 func mustMarshalJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return encoded
 }
 
@@ -56,9 +49,7 @@ func mustMarshalJSON(t *testing.T, value any) []byte {
 func mustCompile(t *testing.T, data []byte) *config.Snapshot {
 	t.Helper()
 	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return snapshot
 }
 
@@ -75,9 +66,7 @@ func requireLoadRejected(t *testing.T, data []byte, format string, args ...any) 
 func jsonDocument(t *testing.T, value any) map[string]any {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(mustMarshalJSON(t, value), &document); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(mustMarshalJSON(t, value), &document))
 	return document
 }
 

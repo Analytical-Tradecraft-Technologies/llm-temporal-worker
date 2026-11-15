@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -215,9 +216,7 @@ func TestLegacyCapabilityHistoryReplays(t *testing.T) {
 
 	replayer := worker.NewWorkflowReplayer()
 	RegisterInternal(replayer, activity.PayloadLimits{})
-	if err := replayer.ReplayWorkflowHistory(nil, &historypb.History{Events: h.events}); err != nil {
-		t.Fatalf("legacy history does not replay: %v", err)
-	}
+	testassert.NoError(t, replayer.ReplayWorkflowHistory(nil, &historypb.History{Events: h.events}), "legacy history does not replay")
 }
 
 // A legacy run that completes recovers the capability for the best-effort

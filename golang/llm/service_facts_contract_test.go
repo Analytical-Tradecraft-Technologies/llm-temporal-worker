@@ -12,9 +12,7 @@ import (
 // must reject its omission like the OCaml decoder does.
 func TestGenerateResponseV1RequiresServiceFallbackIndex(t *testing.T) {
 	data, err := os.ReadFile("testdata/v1/generate-response-all-kinds.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	mustUnmarshalJSON[GenerateResponseV1](t, data, "decode fixture")
 	missing := bytes.Replace(data, []byte(`, "fallback_index": 0}`), []byte(`}`), 1)
 	if bytes.Equal(missing, data) {

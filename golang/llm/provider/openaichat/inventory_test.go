@@ -38,13 +38,9 @@ func TestListModelsUnsupportedWithoutDirectCapability(t *testing.T) {
 
 func TestListModelsRejectsEndpointMismatch(t *testing.T) {
 	profile, err := NewOpenAIProfile(testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewOpenAIAdapter(&Client{}, "openai-direct", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "other", Limit: 1})
 	testassert.ErrorContains(t, err, "endpoint does not match")
 }
@@ -63,9 +59,7 @@ func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
 	defer server.Close()
 	adapter := newInventoryAdapter(t, server, "key")
 	first, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Limit: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 1})
 	testassert.ErrorContains(t, err, "snapshot changed")
 }
@@ -75,17 +69,11 @@ func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
 func newInventoryAdapter(t *testing.T, server *httptest.Server, apiKey string) *ModelListerAdapter {
 	t.Helper()
 	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: apiKey, HTTPClient: server.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	profile, err := NewOpenAIProfile(testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewOpenAIAdapter(client, "openai-direct", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	return adapter
 }
 

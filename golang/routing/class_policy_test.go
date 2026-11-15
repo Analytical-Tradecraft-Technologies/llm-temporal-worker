@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -16,9 +17,7 @@ func classPolicyCatalog(t *testing.T, policies ...ClassPolicy) Catalog {
 			ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"}, Capabilities: testCapabilities(), PriceVersion: "p"}}},
 		"standard-only": {Routes: []Route{standardRoute("standard_only", Route{ID: "anthropic", EndpointID: "anthropic", Provider: "anthropic", Family: "anthropic_messages", Model: "claude", PriceVersion: "p"})}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if catalog, err = catalog.WithClassPolicies(policies); err != nil {
 		t.Fatal(err)
 	}

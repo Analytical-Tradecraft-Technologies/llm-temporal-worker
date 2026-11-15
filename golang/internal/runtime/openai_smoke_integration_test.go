@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -65,9 +66,7 @@ func configureOpenAISmoke(t *testing.T, f *boundedCloudFixture, key string) (llm
 	model.Routes[0].Capabilities.Features[routing.FeatureReasoning] = routing.Capability{State: routing.CapabilityNative}
 	source.value.Routes.Models["alias"] = model
 	prices, err := pricing.CompileUSD("smoke-luna/v1", []pricing.Entry{{Provider: "openai", Family: string(provider.FamilyOpenAIResponses), EndpointID: "endpoint", Region: "region", Model: "gpt-6-luna", ProviderTier: "default", Version: "price/v1", Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("0.10"), OutputPerMillion: pricing.MustDecimalUSD("0.50")}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	source.value.Prices = pricing.NewResolver(prices)
 	for i := range source.value.BudgetPolicies[0].Windows {
 		source.value.BudgetPolicies[0].Windows[i].LimitUSD = pricing.MustUSD("0.01")
@@ -91,9 +90,7 @@ func configureOpenAISmoke(t *testing.T, f *boundedCloudFixture, key string) (llm
 		t.Fatal("cannot construct OpenAI client")
 	}
 	adapter, err := openairesponses.New(sdk, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
 	request := f.request
 	request.Append = []llm.Item{llm.HumanText("Reply with exactly OK.")}

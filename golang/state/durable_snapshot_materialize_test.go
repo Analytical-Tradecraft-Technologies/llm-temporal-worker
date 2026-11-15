@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -77,9 +78,7 @@ func (fixture *snapshotLineageFixture) add(id string, parent string, delta, outp
 	t.Helper()
 	encode := func(data []byte, err error) CheckpointBlobReference {
 		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return fixture.putBlob(data)
 	}
 	row := DurableCheckpoint{
@@ -94,18 +93,14 @@ func (fixture *snapshotLineageFixture) add(id string, parent string, delta, outp
 		parentID := parentRow.ID
 		row.ParentID, row.Depth = &parentID, parentRow.Depth+1
 		full, err := fixture.materializer(fixture.plain).Materialize(context.Background(), "scope-a", parentID, MaterializeLimits{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		lineage = append(append([]Handle(nil), full.Lineage...), Handle(id))
 	}
 	row.CanonicalLineageDigest = sha256.Sum256(mustJSON(t, lineage))
 	fixture.plain.rows[row.ID] = row
 	if snapshot {
 		full, err := fixture.materializer(fixture.plain).Materialize(context.Background(), "scope-a", row.ID, MaterializeLimits{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		reference := encode(fixture.codec.EncodeSnapshot(*NewCheckpointSnapshot(full)))
 		row.MaterializedSnapshotBlob = &reference
 	}
@@ -346,14 +341,10 @@ func TestDurableCheckpointMaterializerEnforcesOnlyRequestedRowExpiry(t *testing.
 	row := fixture.snapshotted.rows["main-08"]
 	row.ExpiresAt = fixture.now
 	fixture.snapshotted.rows["main-08"] = row
-	if _, err := fixture.materializer(fixture.snapshotted).Materialize(context.Background(), "scope-a", "main-10", MaterializeLimits{}); err != nil {
-		t.Fatalf("materialize with expired ancestor = %v", err)
-	}
+	testassert.NoError(t, testassert.Err(fixture.materializer(fixture.snapshotted).Materialize(context.Background(), "scope-a", "main-10", MaterializeLimits{})), "materialize with expired ancestor")
 	// The requested row's own deadline still gates the read.
 	leaf := fixture.snapshotted.rows["main-10"]
 	leaf.ExpiresAt = fixture.now
 	fixture.snapshotted.rows["main-10"] = leaf
-	if _, err := fixture.materializer(fixture.snapshotted).Materialize(context.Background(), "scope-a", "main-10", MaterializeLimits{}); !errors.Is(err, ErrExpired) {
-		t.Fatalf("materialize expired leaf = %v, want %v", err, ErrExpired)
-	}
+	testassert.ErrorIs(t, testassert.Err(fixture.materializer(fixture.snapshotted).Materialize(context.Background(), "scope-a", "main-10", MaterializeLimits{})), ErrExpired, "materialize expired leaf")
 }

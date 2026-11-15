@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -27,9 +28,7 @@ func FuzzCanonicalTranscriptNeverPanics(f *testing.F) {
 			return
 		}
 		second, secondDigest, err := CanonicalTranscript(items)
-		if err != nil {
-			t.Fatalf("second canonicalization rejected accepted input: %v", err)
-		}
+		testassert.NoError(t, err, "second canonicalization rejected accepted input")
 		if !bytes.Equal(first, second) || firstDigest != secondDigest {
 			t.Fatalf("canonical transcript is not deterministic: %x/%x", firstDigest, secondDigest)
 		}

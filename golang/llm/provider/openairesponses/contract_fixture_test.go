@@ -13,6 +13,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -38,9 +39,7 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			request := loadContractRequestFixture(t, profile.id, "request.semantic.json")
 			normalized, serviceClass := contract.NormalizeRequest(t, request)
 			params, err := fixtureAdapterForProfile(t, profile).lowerRequest(normalized, serviceClass, "")
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			gotWire := contract.MarshalJSON(t, params)
 			assertCanonicalFixtureJSON(t, gotWire, profile.id, "request.wire.json")
 
@@ -65,12 +64,10 @@ func TestResponsesContractFixturesVerifySemanticRoundTrip(t *testing.T) {
 				Request  json.RawMessage `json:"request"`
 				Response json.RawMessage `json:"response"`
 			}{Request: requestSemantic, Response: responseSemantic})
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			metadata := loadContractFixtureMetadata(t, profile.id)
 			responseWire := readContractFixture(t, profile.id, "response.completed.json")
-			if err := contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
+			testassert.NoError(t, contracttest.VerifySemanticRoundTrip(semantic, func(semantic []byte) ([]byte, error) {
 				var fixture struct {
 					Request  json.RawMessage `json:"request"`
 					Response json.RawMessage `json:"response"`
@@ -108,9 +105,7 @@ func TestResponsesContractFixturesVerifySemanticRoundTrip(t *testing.T) {
 					return nil, err
 				}
 				return json.Marshal(fixture)
-			}, metadata.GeneratedFieldExemptions); err != nil {
-				t.Fatal(err)
-			}
+			}, metadata.GeneratedFieldExemptions))
 		})
 	}
 }
@@ -202,16 +197,12 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 			metadata := loadContractFixtureMetadata(t, profile.id)
 			want := streamtest.FragmentationInvariant(t, wire, 17, 11, DecodeStream)
 			assembled, err := streamtest.Assemble("fixture-stream", want)
-			if err != nil {
-				t.Fatal(err)
-			}
+			testassert.NoError(t, err)
 			gotSemantic := contract.MarshalJSON(t, assembled)
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "stream.decoder.semantic.json")
-			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readContractFixture(t, profile.id, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
+			testassert.NoError(t, contracttest.VerifyStreamAssemblyEquivalent(wire, readContractFixture(t, profile.id, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
 				return streamtest.AssembleJSON(events, "fixture-stream", DecodeStream)
-			}, metadata.GeneratedFieldExemptions); err != nil {
-				t.Fatal(err)
-			}
+			}, metadata.GeneratedFieldExemptions))
 		})
 	}
 }
@@ -231,13 +222,9 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewAdapter(client, profile.endpoint, "openai-responses/fixture", allowSupportedExtensions)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
 	result := adaptertest.Invoke(t, adapter, call)
 	if calls != 1 {
@@ -250,9 +237,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 		t.Fatalf("OpenAI Responses auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertCanonicalFixtureJSON(t, body, profile.id, "request.wire.json")
 	gotSemantic := contract.MarshalJSON(t, result.Response)
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
@@ -272,13 +257,9 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 		})},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	adapter, err := NewAzureAdapter(client, profile.endpoint, "azure-responses/fixture", allowSupportedExtensions)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
 	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil || got.URL.Path != "/openai/v1/responses" || got.URL.Query().Get("api-version") != "v1" {
@@ -288,9 +269,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 		t.Fatalf("Azure Responses auth headers = %#v", got.Header)
 	}
 	body, err := io.ReadAll(got.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	assertCanonicalFixtureJSON(t, body, profile.id, "request.wire.json")
 	gotSemantic := contract.MarshalJSON(t, result.Response)
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
@@ -299,9 +278,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 func TestCapabilitiesKeepStreamingUnsupportedAndContinuationNative(t *testing.T) {
 	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
 	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses})
-	if err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, err)
 	if capability := set.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported {
 		t.Fatalf("streaming capability = %#v, want unsupported until a streaming adapter dispatches SDK streams", capability)
 	}
@@ -346,9 +323,7 @@ func assertLossyRequestIsRejectedBeforeDispatch(t *testing.T, adapter *Adapter, 
 		Phase    provider.Phase             `json:"phase"`
 		Dispatch provider.DispatchCertainty `json:"dispatch"`
 	}
-	if err := json.Unmarshal(readContractFixture(t, profile.id, "strict-loss.wire.json"), &expected); err != nil {
-		t.Fatal(err)
-	}
+	testassert.NoError(t, json.Unmarshal(readContractFixture(t, profile.id, "strict-loss.wire.json"), &expected))
 	if providerErr.Code != expected.Code || providerErr.Phase != expected.Phase || providerErr.Dispatch != expected.Dispatch {
 		t.Fatalf("%s strict-loss facts = %#v, want %#v", profile.id, providerErr, expected)
 	}
@@ -401,13 +376,9 @@ func fixtureAdapterForProfile(t *testing.T, profile responsesFixtureProfile) *Ad
 			APIKey:     "test-azure-key",
 			HTTPClient: http.DefaultClient,
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		adapter, err := NewAzureAdapter(client, profile.endpoint, "azure-responses/fixture", allowSupportedExtensions)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testassert.NoError(t, err)
 		return adapter
 	}
 	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
