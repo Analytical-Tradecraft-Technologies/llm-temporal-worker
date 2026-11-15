@@ -1,7 +1,6 @@
 package openaichat
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
@@ -45,18 +45,12 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, "openrouter-a", provider.FamilyOpenAIChat, llm.Request{OperationKey: "or-op", Model: "router-model"})
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	body, err := io.ReadAll(got.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wire map[string]any
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatal(err)
-	}
+	wire := contract.DecodeJSON[map[string]any](t, body)
 	providerBody, ok := wire["provider"].(map[string]any)
 	if !ok || providerBody["allow_fallbacks"] != false || providerBody["require_parameters"] != true {
 		t.Fatalf("provider routing body = %#v", wire["provider"])
@@ -100,14 +94,8 @@ func openRouterProviderBody(t *testing.T, profile Profile, model string, class l
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire map[string]any
-	if err := json.Unmarshal(encoded, &wire); err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, params)
+	wire := contract.DecodeJSON[map[string]any](t, encoded)
 	body, ok := wire["provider"].(map[string]any)
 	if !ok {
 		t.Fatalf("provider routing body = %#v", wire["provider"])
@@ -195,10 +183,7 @@ func TestOpenRouterSendsTheReservedPriceCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, params)
 	// Exact decimals travel as JSON numbers, never through a float.
 	if !strings.Contains(string(encoded), `"max_price":{"completion":1.5,"prompt":0.26,"request":0}`) {
 		t.Fatalf("wire body %s lacks the price ceiling", encoded)

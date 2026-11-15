@@ -204,9 +204,7 @@ func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
 	listed = append(listed[:19], "openai/m20")
 	mutex.Unlock()
 	now = now.Add(2 * time.Hour)
-	if err := refresher.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustRefresh(t, refresher)
 	if !installed.FetchedAt.Equal(now) {
 		t.Fatalf("installed FetchedAt = %v, want the second fetch", installed.FetchedAt)
 	}
@@ -218,11 +216,8 @@ func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
 		t.Fatalf("installed %d models (m07 %v m20 %v m11 %v m19 %v), want m07 carried forward, m20 retried, m11 and m19 removed",
 			len(installed.Models), present["openai/m07"], present["openai/m20"], present["openai/m11"], present["openai/m19"])
 	}
-	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	compiled, err := Compile(Input{Document: &installed, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	openrouter := standardOpenRouterSource()
+	compiled := mustCompile(t, Input{Document: &installed, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t)})
 	if len(compiled.Models["openai/m07"].Routes) == 0 {
 		t.Fatal("the carried-forward model has no route")
 	}
@@ -230,18 +225,9 @@ func TestRefreshCarriesForwardModelsWhoseEndpointLookupFails(t *testing.T) {
 
 func TestDocumentRoundTripsCanonically(t *testing.T) {
 	document := fetchFixture(t)
-	encoded, err := document.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeDocument(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, err := decoded.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeDocument(t, document)
+	decoded := decodeDocument(t, encoded)
+	again := encodeDocument(t, decoded)
 	if Digest(encoded) != Digest(again) {
 		t.Fatal("re-encoded Document digest changed")
 	}
@@ -426,18 +412,7 @@ func TestDefaultRulesPriceEveryDirectModelCompletely(t *testing.T) {
 
 func TestGenerateDefaultRulesFromFirstPartyEndpoints(t *testing.T) {
 	document := fetchFixture(t)
-	rendered, err := GenerateDefaultRules(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := ParseRules(rendered)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rules, err := MergeRules(parsed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rules := mergeRendered(t, generateRules(t, document))
 	gpt, ok := rules.Direct("openai", "openai/gpt-5.4")
 	if !ok || gpt.ContextTokens != 1050000 || gpt.Prices["flex"].Input != "1.25" || gpt.Prices["default"].Input != "2.5" || gpt.Prices["priority"].Input != "5" {
 		t.Fatalf("generated gpt-5.4 = %+v", gpt)
@@ -460,10 +435,7 @@ func TestGeneratedLongPromptKeepsBaseComponentsAnOverrideOmits(t *testing.T) {
 		Prompt: "0.000001", Completion: "0.000004",
 		Overrides: []PricingOverride{{MinPromptTokens: 200_000, Prompt: "0.000002"}},
 	}}}}
-	rendered, ok, err := renderGeneratedModel(generatedProviders[0], model)
-	if err != nil || !ok {
-		t.Fatalf("render = %v, %v", ok, err)
-	}
+	rendered := renderModel(t, generatedProviders[0], model)
 	// The base cache-read price defaults to the base input price, and the
 	// override leaves it, and the output price, unchanged.
 	want := `            long_prompt:
@@ -486,10 +458,7 @@ func TestGeneratedAnthropicLongPromptOnlyForHaiku55(t *testing.T) {
 		Prompt: "0.0000001", Completion: "0.0000005", InputCacheRead: "0.00000001", InputCacheWrite: "0.000000125",
 		Overrides: []PricingOverride{{MinPromptTokens: 100_000, Prompt: "0.0000005", Completion: "0.0000025", InputCacheRead: "0.00000005", InputCacheWrite: "0.000000625"}},
 	}}
-	haiku, ok, err := renderGeneratedModel(generatedProviders[1], Model{ID: "anthropic/claude-haiku-5.5", ContextLength: 1_000_000, Endpoints: []Endpoint{endpoint}})
-	if err != nil || !ok {
-		t.Fatalf("render = %v, %v", ok, err)
-	}
+	haiku := renderModel(t, generatedProviders[1], Model{ID: "anthropic/claude-haiku-5.5", ContextLength: 1_000_000, Endpoints: []Endpoint{endpoint}})
 	want := `            long_prompt:
               min_prompt_tokens: 100000
               input_per_million: "0.5"
@@ -501,10 +470,7 @@ func TestGeneratedAnthropicLongPromptOnlyForHaiku55(t *testing.T) {
 	if !strings.Contains(haiku, want) || !strings.Contains(haiku, "context_tokens: 1000000\n") {
 		t.Fatalf("rendered = %s, want the real window and long prompt\n%s", haiku, want)
 	}
-	older, ok, err := renderGeneratedModel(generatedProviders[1], Model{ID: "anthropic/claude-sonnet-4.5", ContextLength: 1_000_000, Endpoints: []Endpoint{endpoint}})
-	if err != nil || !ok {
-		t.Fatalf("render = %v, %v", ok, err)
-	}
+	older := renderModel(t, generatedProviders[1], Model{ID: "anthropic/claude-sonnet-4.5", ContextLength: 1_000_000, Endpoints: []Endpoint{endpoint}})
 	if strings.Contains(older, "long_prompt") || !strings.Contains(older, "context_tokens: 100000\n") {
 		t.Fatalf("rendered = %s, want the window capped at the threshold", older)
 	}
@@ -529,18 +495,7 @@ func TestGenerateDefaultRulesSkipsReasoningPresets(t *testing.T) {
 		document.Models = append(document.Models, clone)
 	}
 	slices.SortFunc(document.Models, func(a, b Model) int { return strings.Compare(a.ID, b.ID) })
-	rendered, err := GenerateDefaultRules(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := ParseRules(rendered)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rules, err := MergeRules(parsed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rules := mergeRendered(t, generateRules(t, document))
 	if pro, ok := rules.Direct("openai", "openai/gpt-5.4-pro"); !ok || pro.Model != "gpt-5.4-pro" {
 		t.Fatalf("OpenAI Pro model gpt-5.4-pro = %+v, %v; want a direct route", pro, ok)
 	}
@@ -585,21 +540,11 @@ func TestGenerateDefaultRulesNeverRendersDiscountedPricesSilently(t *testing.T) 
 		t.Fatal("fixture has no openai/fast endpoint for openai/gpt-5.4")
 		return Document{}
 	}
-	rendered, err := GenerateDefaultRules(discounted(t, "0.5", true))
-	if err != nil {
-		t.Fatal(err)
-	}
+	rendered := generateRules(t, discounted(t, "0.5", true))
 	if !strings.Contains(string(rendered), `# REVIEW: OpenRouter lists endpoint "openai/fast" at a 0.5 discount`) {
 		t.Fatal("a discounted endpoint was rendered without a review marker")
 	}
-	parsed, err := ParseRules(rendered)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rules, err := MergeRules(parsed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rules := mergeRendered(t, rendered)
 	gpt, _ := rules.Direct("openai", "openai/gpt-5.4")
 	if got := gpt.Prices["priority"]; got.Input != "5" || got.Output != "15" || got.CacheRead != "0.5" {
 		t.Fatalf("priority prices = %+v; want the undiscounted $5/$15, $0.50 cache read", got)
@@ -634,6 +579,61 @@ func TestRulesRejectInvalidDocuments(t *testing.T) {
 	}
 }
 
+func generateRules(t *testing.T, document Document) []byte {
+	t.Helper()
+	rendered, err := GenerateDefaultRules(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rendered
+}
+
+// mergeRendered parses rendered rules and merges them on their own.
+func mergeRendered(t *testing.T, rendered []byte) Rules {
+	t.Helper()
+	parsed, err := ParseRules(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := MergeRules(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rules
+}
+
+// renderModel renders model for provider and requires it to be generated.
+func renderModel(t *testing.T, provider generatedProvider, model Model) string {
+	t.Helper()
+	rendered, ok, err := renderGeneratedModel(provider, model)
+	if err != nil || !ok {
+		t.Fatalf("render = %v, %v", ok, err)
+	}
+	return rendered
+}
+
+func mustRefresh(t *testing.T, refresher *Refresher) {
+	t.Helper()
+	if err := refresher.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustCompile(t *testing.T, input Input) Compiled {
+	t.Helper()
+	compiled, err := Compile(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+// standardOpenRouterSource is an OpenRouter source serving only the standard
+// class from the default tier.
+func standardOpenRouterSource() Source {
+	return testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
+}
+
 func testSource(endpointID, rulesProvider, family string, tiers map[llm.ServiceClass]string) Source {
 	return Source{
 		EndpointID: endpointID, RulesProvider: rulesProvider, Family: family, Region: "global", AccountRegion: "global", Tiers: tiers,
@@ -666,16 +666,13 @@ func assertPrices(t *testing.T, entry pricing.Entry, input, output, cacheRead, c
 
 func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 	document := fetchFixture(t)
-	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
+	openrouter := standardOpenRouterSource()
 	openai := testSource("openai-direct", "openai", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"})
 	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "fast"})
 	exa := testSource("exa-direct", "exa", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
 	exaAgent := testSource("exa-agent-direct", "exa", "openai_responses", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
-	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t), Direct: []Source{openai, anthropic, exa, exaAgent},
+	compiled := mustCompile(t, Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t), Direct: []Source{openai, anthropic, exa, exaAgent},
 		Reserved: map[string]struct{}{"inference-net/schematron-v2-turbo": {}}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, present := compiled.Models["inference-net/schematron-v2-turbo"]; present {
 		t.Fatal("a configured model name was overridden by a synced model")
 	}
@@ -737,11 +734,8 @@ func TestCompileRoutesDirectFirstAndPricesEveryRoute(t *testing.T) {
 
 func TestCompileNarrowsFeaturesTheModelCannotAccept(t *testing.T) {
 	document := fetchFixture(t)
-	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	compiled, err := Compile(Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	openrouter := standardOpenRouterSource()
+	compiled := mustCompile(t, Input{Document: &document, Rules: mergedRules(t), OpenRouter: &openrouter, Policy: testPolicy(t)})
 	route := compiled.Models["inference-net/schematron-v2-turbo"].Routes[0]
 	features := route.Capabilities.Features
 	if features[routing.FeatureToolCall].State != routing.CapabilityUnsupported || features[routing.FeatureReasoning].State != routing.CapabilityUnsupported {
@@ -758,11 +752,8 @@ func TestCompileNarrowsFeaturesTheModelCannotAccept(t *testing.T) {
 func TestCompileWithoutDocumentRoutesOnlyDirectModels(t *testing.T) {
 	exa := testSource("exa-direct", "exa", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"})
 	anthropic := testSource("anthropic-direct", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only"})
-	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
-	compiled, err := Compile(Input{Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{exa, anthropic}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	openrouter := standardOpenRouterSource()
+	compiled := mustCompile(t, Input{Rules: mergedRules(t), OpenRouter: &openrouter, Direct: []Source{exa, anthropic}})
 	for id, model := range compiled.Models {
 		for _, route := range model.Routes {
 			if route.EndpointID == "openrouter" {
@@ -795,15 +786,11 @@ func TestRefresherFetchesOnceAcrossWorkersAndInstallsEverywhere(t *testing.T) {
 		}
 	}
 	first, second := newWorker(1), newWorker(2)
-	if err := first.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustRefresh(t, first)
 	// The second worker's timer fires shortly after: the Document is fresh,
 	// so it installs instead of fetching again.
 	now = now.Add(10 * time.Minute)
-	if err := second.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustRefresh(t, second)
 	if fetches != 1 || installed[1] != 1 || installed[2] != 1 {
 		t.Fatalf("fetches = %d installed = %v, want one fetch installed by both", fetches, installed)
 	}
@@ -812,9 +799,7 @@ func TestRefresherFetchesOnceAcrossWorkersAndInstallsEverywhere(t *testing.T) {
 	// unchanged, so the content digest is too: the Store records the later
 	// fetch time and no worker reinstalls (#1555).
 	now = now.Add(50 * time.Minute)
-	if err := second.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustRefresh(t, second)
 	if fetches != 2 || installed[1] != 1 || installed[2] != 1 {
 		t.Fatalf("fetches = %d installed = %v after the interval, want a second fetch and no reinstall", fetches, installed)
 	}
@@ -894,10 +879,7 @@ func TestRefreshIntervalStaysWithinBounds(t *testing.T) {
 // before its public catalog contains the newly released model.
 func TestHaiku55HasPricedDirectAnthropicRoute(t *testing.T) {
 	source := testSource("anthropic", "anthropic", "anthropic_messages", map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only", llm.ServiceClassPriority: "fast"})
-	compiled, err := Compile(Input{Rules: mergedRules(t), Direct: []Source{source}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := mustCompile(t, Input{Rules: mergedRules(t), Direct: []Source{source}})
 	model, ok := compiled.Models["anthropic/claude-haiku-5.5"]
 	if !ok || len(model.Routes) != 1 {
 		t.Fatalf("missing direct Haiku route: %+v", model)

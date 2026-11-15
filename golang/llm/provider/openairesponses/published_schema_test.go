@@ -8,7 +8,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -20,16 +19,13 @@ func TestLiftedResponseSatisfiesPublishedGenerateResponseSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: "op-lift", ServiceClass: llm.ServiceClassEconomy}
+	call := liftCall("op-lift", llm.ServiceClassEconomy)
 	completed := loadResponseFixture(t, "response.completed.json")
 	refused := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	refused.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"no"}]}]`)
 	for name, response := range map[string]responses.Response{"completed": completed, "refused": refused} {
 		t.Run(name, func(t *testing.T) {
-			lifted, err := liftResponse(call, &response, "req-1")
-			if err != nil {
-				t.Fatal(err)
-			}
+			lifted := mustLift(t, call, &response, "req-1")
 			if name == "completed" && len(lifted.Usage.ProviderRaw) == 0 {
 				t.Fatal("fixture no longer lifts provider_raw usage")
 			}

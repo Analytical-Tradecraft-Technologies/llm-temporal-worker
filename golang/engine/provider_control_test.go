@@ -22,16 +22,27 @@ func (stub *providerStatusRecorderStub) RecordProviderStatus(_ context.Context, 
 	return stub.err
 }
 
+// onlyObservation requires exactly one recorded observation and returns it.
+func (stub *providerStatusRecorderStub) onlyObservation(t *testing.T) control.StatusObservation {
+	t.Helper()
+	if len(stub.observations) != 1 {
+		t.Fatalf("recorded observations = %d, want 1", len(stub.observations))
+	}
+	return stub.observations[0]
+}
+
+// recordRouteAStatus records one route-a outcome against a minimal epoch-a snapshot.
+func recordRouteAStatus(engineValue *Engine, failure *provider.Error) {
+	engineValue.recordProviderStatus(context.Background(), Snapshot{Version: "epoch-a", ConfigDigest: [32]byte{1}}, admission.Operation{ID: "operation-a"}, routing.Candidate{RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{2}, Provider: "openai", Family: "openai_responses"}, provider.Result{}, failure)
+}
+
 func TestRecordProviderStatusSuccessIsBoundedToSnapshot(t *testing.T) {
 	recorder := &providerStatusRecorderStub{}
 	engineValue := &Engine{dependencies: Dependencies{Clock: func() time.Time { return time.Unix(100, 0).UTC() }, ProviderControl: recorder}}
 	snapshot := Snapshot{Version: "epoch-a", ConfigEpoch: "epoch-a", ConfigDigest: [32]byte{1}}
 	candidate := routing.Candidate{RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{2}, Provider: "openai", Family: "openai_responses", Model: "gpt-test"}
 	engineValue.recordProviderStatus(context.Background(), snapshot, admission.Operation{ID: "operation-a"}, candidate, provider.Result{}, nil)
-	if len(recorder.observations) != 1 {
-		t.Fatalf("recorded observations = %d, want 1", len(recorder.observations))
-	}
-	observation := recorder.observations[0]
+	observation := recorder.onlyObservation(t)
 	if observation.Source != control.SourceInference || observation.Availability != control.AvailabilityAvailable || observation.Credit != control.CreditOK || observation.Billing != control.BillingOK {
 		t.Fatalf("success observation = %#v", observation)
 	}
@@ -60,11 +71,8 @@ func TestRecordProviderStatusClassifiesCreditEvidenceButNotGenericRateLimit(t *t
 			engineValue := &Engine{dependencies: Dependencies{Clock: time.Now, ProviderControl: recorder}}
 			failure := provider.NewError(test.code, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "provider failure")
 			failure.SafeDetails = test.safeDetails
-			engineValue.recordProviderStatus(context.Background(), Snapshot{Version: "epoch-a", ConfigDigest: [32]byte{1}}, admission.Operation{ID: "operation-a"}, routing.Candidate{RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{2}, Provider: "openai", Family: "openai_responses"}, provider.Result{}, failure)
-			if len(recorder.observations) != 1 {
-				t.Fatalf("recorded observations = %d, want 1", len(recorder.observations))
-			}
-			observation := recorder.observations[0]
+			recordRouteAStatus(engineValue, failure)
+			observation := recorder.onlyObservation(t)
 			if observation.Credit != test.credit || observation.Billing != test.billing {
 				t.Fatalf("credit/billing = %q/%q, want %q/%q", observation.Credit, observation.Billing, test.credit, test.billing)
 			}
@@ -75,8 +83,6 @@ func TestRecordProviderStatusClassifiesCreditEvidenceButNotGenericRateLimit(t *t
 func TestRecordProviderStatusRecorderFailureIsBestEffort(t *testing.T) {
 	recorder := &providerStatusRecorderStub{err: errors.New("database unavailable")}
 	engineValue := &Engine{dependencies: Dependencies{Clock: time.Now, ProviderControl: recorder}}
-	engineValue.recordProviderStatus(context.Background(), Snapshot{Version: "epoch-a", ConfigDigest: [32]byte{1}}, admission.Operation{ID: "operation-a"}, routing.Candidate{RouteID: "route-a", EndpointID: "endpoint-a", EndpointAccountHMAC: [32]byte{2}, Provider: "openai", Family: "openai_responses"}, provider.Result{}, nil)
-	if len(recorder.observations) != 1 {
-		t.Fatalf("recorded observations = %d, want 1", len(recorder.observations))
-	}
+	recordRouteAStatus(engineValue, nil)
+	recorder.onlyObservation(t)
 }

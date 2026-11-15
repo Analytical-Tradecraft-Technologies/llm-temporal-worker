@@ -52,9 +52,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 			t.Fatalf("turn %d payload grew by %d bytes, want <= %d", turn, growth, maxAllowedGrowth)
 		}
 		previousPayload = payload
-		if len(payload) > maximum {
-			maximum = len(payload)
-		}
+		maximum = max(maximum, len(payload))
 		checkpoint := llm.CheckpointHandle(fmt.Sprintf("checkpoint-%05d", turn))
 		parent = &checkpoint
 		actualCost := "0"
@@ -73,9 +71,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 		if len(responsePayload) > maxPayloadBytes || (strings.Contains(string(responsePayload), "turn-00001") && turn > 1) {
 			t.Fatalf("turn %d response payload is unbounded or contains transcript: %d bytes", turn, len(responsePayload))
 		}
-		if len(responsePayload) > maximum {
-			maximum = len(responsePayload)
-		}
+		maximum = max(maximum, len(responsePayload))
 
 		// A compaction still carries only the current checkpoint and bounded
 		// policy metadata. Its resulting checkpoint becomes the next parent.
@@ -91,9 +87,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("turn %d compact payload: %v", turn, err)
 			}
-			if len(compactPayload) > maximum {
-				maximum = len(compactPayload)
-			}
+			maximum = max(maximum, len(compactPayload))
 			if len(compactPayload) > maxPayloadBytes || strings.Contains(string(compactPayload), "turn-00001") {
 				t.Fatalf("turn %d compact payload is unbounded or contains transcript: %d bytes", turn, len(compactPayload))
 			}
@@ -113,9 +107,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 			if len(compactResponsePayload) > maxPayloadBytes || strings.Contains(string(compactResponsePayload), "turn-00001") {
 				t.Fatalf("turn %d compact response is unbounded or contains transcript: %d bytes", turn, len(compactResponsePayload))
 			}
-			if len(compactResponsePayload) > maximum {
-				maximum = len(compactResponsePayload)
-			}
+			maximum = max(maximum, len(compactResponsePayload))
 		}
 
 		// Forks share one immutable parent. Encode all three siblings and then
@@ -137,9 +129,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 				if len(forkPayload) > maxPayloadBytes || strings.Contains(string(forkPayload), "turn-00001") {
 					t.Fatalf("turn %d branch %d payload is unbounded or contains transcript: %d bytes", turn, branch, len(forkPayload))
 				}
-				if len(forkPayload) > maximum {
-					maximum = len(forkPayload)
-				}
+				maximum = max(maximum, len(forkPayload))
 				if branch == 0 {
 					forkCheckpoint := llm.CheckpointHandle(fmt.Sprintf("checkpoint-fork-%05d-0", turn))
 					parent = &forkCheckpoint

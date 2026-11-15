@@ -74,6 +74,15 @@ type v1TraceabilityCatalog struct {
 	Requirements  []v1TraceabilityRequirement `json:"requirements"`
 }
 
+// requirementsByID indexes the catalog requirements by their ID.
+func (catalog v1TraceabilityCatalog) requirementsByID() map[string]v1TraceabilityRequirement {
+	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
+	for _, requirement := range catalog.Requirements {
+		requirements[requirement.ID] = requirement
+	}
+	return requirements
+}
+
 type v1TraceabilityRequirement struct {
 	ID                  string                     `json:"id"`
 	Source              v1TraceabilitySource       `json:"source"`
@@ -137,10 +146,7 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 	root := repositoryRoot(t)
 	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, root))
 
-	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
-	for _, requirement := range catalog.Requirements {
-		requirements[requirement.ID] = requirement
-	}
+	requirements := catalog.requirementsByID()
 
 	for _, want := range []v1TraceabilityRequirement{
 		{
@@ -235,10 +241,7 @@ func TestV1TraceabilityLiveProviderRequirements(t *testing.T) {
 	raw := readV1TraceabilityCatalog(t, root)
 	catalog := decodeV1TraceabilityCatalog(t, raw)
 
-	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
-	for _, requirement := range catalog.Requirements {
-		requirements[requirement.ID] = requirement
-	}
+	requirements := catalog.requirementsByID()
 
 	var gotIDs []string
 	for _, profile := range liveProviderWorkflowProfiles {
@@ -541,11 +544,7 @@ func requirementAt(t *testing.T, document map[string]any, index int) map[string]
 
 func catalogObject(t *testing.T, requirement map[string]any, key string) map[string]any {
 	t.Helper()
-	object, ok := requirement[key].(map[string]any)
-	if !ok {
-		t.Fatalf("%s = %#v, want object", key, requirement[key])
-	}
-	return object
+	return mappingField(t, key, requirement, key)
 }
 
 func catalogSource(t *testing.T, requirement map[string]any) map[string]any {
