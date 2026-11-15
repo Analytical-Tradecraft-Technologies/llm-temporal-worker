@@ -119,10 +119,7 @@ func (f *CloudFinalizer) saveGenerate(ctx context.Context, request llm.GenerateR
 	if err != nil {
 		return err
 	}
-	index := int64(0)
-	if request.Cache != nil {
-		index = int64(request.Cache.Variant)
-	}
+	index := generateSampleIndex(request)
 	return f.save(ctx, request.Context, "generate", request.OperationKey, index, input, checkpointScope, checkpointID, data, effects, checkpoint, known)
 }
 

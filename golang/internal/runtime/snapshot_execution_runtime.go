@@ -14,9 +14,7 @@ var _ activity.CachedExecutionRuntime = (*snapshotV1Runtime)(nil)
 // method is a method expression on the optional runtime interface T; a
 // current runtime that does not implement T is unavailable.
 func callV1[T, Q, R any](ctx context.Context, runtime *snapshotV1Runtime, request Q, method func(T, context.Context, Q) (R, error)) (R, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	var result R
 	err := runtime.with(ctx, func(current activity.V1Runtime) error {
 		capable, ok := current.(T)
@@ -37,9 +35,7 @@ func (runtime *snapshotV1Runtime) PrepareExecutionV1(ctx context.Context, reques
 // ResolveCachedV1 forwards to the current runtime. One without the cache-only
 // step prepares the request in full, and a completed result is found.
 func (runtime *snapshotV1Runtime) ResolveCachedV1(ctx context.Context, request llm.PrepareExecutionV1) (llm.ExecutionResultV1, bool, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	var result llm.ExecutionResultV1
 	var found bool
 	err := runtime.with(ctx, func(current activity.V1Runtime) error {
