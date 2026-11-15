@@ -1,13 +1,14 @@
 package openairesponses
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A replayed transcript still carries the citations a provider such as Exa
@@ -33,14 +34,11 @@ func TestCompileSkipsReplayedReferenceAnnotations(t *testing.T) {
 	}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}}
 	for name, strict := range map[string]bool{"strict": true, "best effort": false} {
 		t.Run(name, func(t *testing.T) {
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "openai-fixture", Family: provider.FamilyOpenAIResponses, Model: request.Model}, Strict: strict})
+			call, err := adaptertest.Compile(adapter, "openai-fixture", provider.FamilyOpenAIResponses, request, strict)
 			if err != nil {
 				t.Fatalf("compile replayed references: %v", err)
 			}
-			encoded, err := json.Marshal(call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := contract.MarshalJSON(t, call.SDKParams)
 			var wire struct {
 				Input []struct {
 					Type string `json:"type"`

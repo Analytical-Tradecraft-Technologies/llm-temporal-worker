@@ -1,8 +1,6 @@
 package anthropicmessages
 
 import (
-	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -68,10 +66,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, anthropicDirectFixtureEndpoint, provider.FamilyAnthropicMessages, request)
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil {
 		t.Fatal("fixture transport was not called")
 	}
@@ -114,15 +109,7 @@ func anthropicDirectFixtureProfile(t *testing.T) Profile {
 
 func assertAnthropicDirectFixtureClassifiedError(t *testing.T) {
 	t.Helper()
-	var fixture struct {
-		Status     int    `json:"status"`
-		RequestID  string `json:"request_id"`
-		RetryAfter string `json:"retry_after"`
-		Message    string `json:"message"`
-	}
-	if err := json.Unmarshal(anthropicDirectFixture.read(t, "classified-error.wire.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
+	fixture := contract.DecodeJSON[contract.ClassifiedErrorFixture](t, anthropicDirectFixture.read(t, "classified-error.wire.json"))
 	mapped := mapAPIError(&anthropic.Error{
 		StatusCode: fixture.Status,
 		RequestID:  fixture.RequestID,

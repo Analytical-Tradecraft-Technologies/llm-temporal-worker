@@ -83,10 +83,7 @@ func invokeOpenRouterRequest(t *testing.T, request llm.Request, body string) err
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "openrouter-a", Family: provider.FamilyOpenAIChat, Model: "router-model"}, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "openrouter-a", provider.FamilyOpenAIChat, request)
 	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	return err
 }

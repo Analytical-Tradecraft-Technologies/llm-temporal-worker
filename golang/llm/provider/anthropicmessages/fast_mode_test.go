@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A priority request is Anthropic fast mode: standard capacity at fast speed,
@@ -76,10 +77,7 @@ func TestPriorityInvokesFastMode(t *testing.T) {
 // Fast-mode usage on a call that did not attempt the fast tier still carries
 // a multiplier its catalog entry does not model.
 func TestFastUsageOutsideFastTierStaysUnknown(t *testing.T) {
-	var message anthropic.Message
-	if err := json.Unmarshal([]byte(`{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":1,"output_tokens":1,"service_tier":"standard","speed":"fast","inference_geo":"us"}}`), &message); err != nil {
-		t.Fatal(err)
-	}
+	message := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":1,"output_tokens":1,"service_tier":"standard","speed":"fast","inference_geo":"us"}}`))
 	for _, tier := range []string{"standard_only", FastTier} {
 		got, err := mustProfile(t, testProfile()).liftResponse(provider.Call{
 			OperationKey: "fast-usage", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard, Metadata: provider.CallMetadata{ProviderTier: tier},

@@ -1,8 +1,6 @@
 package openairesponses
 
 import (
-	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -10,19 +8,13 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
-	var response responses.Response
-	if err := json.Unmarshal(readContractFixture(t, "openai-responses", "response.completed.json"), &response); err != nil {
-		t.Fatal(err)
-	}
-	call := provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := liftResponse(call, &response, "req")
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[responses.Response](t, readContractFixture(t, "openai-responses", "response.completed.json"))
+	lifted := mustLift(t, liftCall("fixture-op", llm.ServiceClassStandard), &response, "req")
 	var state *llm.ProviderState
 	var produced []llm.Item
 	for _, item := range lifted.Output {
@@ -69,17 +61,10 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 func TestStrictCompileAcceptsReplayedReasoning(t *testing.T) {
 	response := loadContractResponseFixture(t, "openai-responses", "response.completed.json")
 	call := provider.Call{EndpointID: "openai-fixture", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := liftResponse(call, &response, "req")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, call, &response, "req")
 	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
 	request.Input = append(append(request.Input, lifted.Output...), llm.HumanText("follow-up"))
-	if _, err := fixtureAdapterForProfile(t, responsesFixtureProfiles[0]).Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "openai-fixture", Family: provider.FamilyOpenAIResponses, Model: request.Model},
-		Strict:  true,
-	}); err != nil {
+	if _, err := adaptertest.Compile(fixtureAdapterForProfile(t, responsesFixtureProfiles[0]), "openai-fixture", provider.FamilyOpenAIResponses, request, true); err != nil {
 		t.Fatalf("strict compile of replayed reasoning: %v", err)
 	}
 }
