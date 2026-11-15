@@ -86,47 +86,29 @@ func normalizeRequestCopy(request Request) (Request, bool) {
 	if result.Context, ok = copyRequestContext(request.Context); !ok {
 		return Request{}, false
 	}
-	result.Instructions = make([]Instruction, 0, len(request.Instructions))
-	for _, instruction := range request.Instructions {
-		copied, ok := copyInstruction(instruction)
-		if !ok {
-			return Request{}, false
-		}
-		result.Instructions = append(result.Instructions, copied)
+	if result.Instructions, ok = copyEach(request.Instructions, copyInstruction); !ok {
+		return Request{}, false
 	}
 	if result.Input, ok = copyItems(request.Input); !ok {
 		return Request{}, false
 	}
-	result.Tools = make([]Tool, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		copied, ok := copyTool(tool)
-		if !ok {
-			return Request{}, false
-		}
-		result.Tools = append(result.Tools, copied)
+	if result.Tools, ok = copyEach(request.Tools, copyTool); !ok {
+		return Request{}, false
 	}
 	if result.ToolPolicy, ok = copyToolPolicy(request.ToolPolicy); !ok {
 		return Request{}, false
 	}
-	if request.Output != nil {
-		if result.Output, ok = copyOutputSpec(*request.Output); !ok {
-			return Request{}, false
-		}
+	if result.Output, ok = copyOptional(request.Output, copyOutputSpec); !ok {
+		return Request{}, false
 	}
-	if request.Sampling != nil {
-		if result.Sampling, ok = copySamplingSpec(*request.Sampling); !ok {
-			return Request{}, false
-		}
+	if result.Sampling, ok = copyOptional(request.Sampling, copySamplingSpec); !ok {
+		return Request{}, false
 	}
-	if request.Reasoning != nil {
-		if result.Reasoning, ok = copyReasoningSpec(*request.Reasoning); !ok {
-			return Request{}, false
-		}
+	if result.Reasoning, ok = copyOptional(request.Reasoning, copyReasoningSpec); !ok {
+		return Request{}, false
 	}
-	if request.Continuation != nil {
-		if result.Continuation, ok = copyContinuation(*request.Continuation); !ok {
-			return Request{}, false
-		}
+	if result.Continuation, ok = copyOptional(request.Continuation, copyContinuation); !ok {
+		return Request{}, false
 	}
 	result.Extensions = make(map[string]json.RawMessage, len(request.Extensions))
 	for key, value := range request.Extensions {
@@ -165,14 +147,7 @@ func copyRequestContext(context RequestContext) (RequestContext, bool) {
 // it has content); a parts instruction keeps only its content. The decoder
 // fills the default level.
 func copyInstruction(instruction Instruction) (Instruction, bool) {
-	kind := instruction.Kind
-	if kind == "" {
-		if len(instruction.Content) == 0 {
-			kind = InstructionKindText
-		} else {
-			kind = InstructionKindParts
-		}
-	}
+	kind := instruction.effectiveKind()
 	level, err := defaultEnum(instruction.Level, InstructionLevelApplication, "instruction level", instructionLevels...)
 	if err != nil {
 		return Instruction{}, false
@@ -463,6 +438,29 @@ func copyContinuation(continuation Continuation) (*Continuation, bool) {
 		}
 	}
 	return result, true
+}
+
+// copyEach copies every value with copy into a new, non-nil slice and fails
+// when any copy fails.
+func copyEach[T any](values []T, copy func(T) (T, bool)) ([]T, bool) {
+	result := make([]T, 0, len(values))
+	for _, value := range values {
+		copied, ok := copy(value)
+		if !ok {
+			return nil, false
+		}
+		result = append(result, copied)
+	}
+	return result, true
+}
+
+// copyOptional copies *value with copy; a nil value copies as the zero R.
+func copyOptional[T, R any](value *T, copy func(T) (R, bool)) (R, bool) {
+	if value == nil {
+		var zero R
+		return zero, true
+	}
+	return copy(*value)
 }
 
 func copyPointer[T any](value *T) *T {

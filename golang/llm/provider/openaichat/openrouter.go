@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaiwire"
 )
 
 const openRouterBaseURL = "https://openrouter.ai/api/v1/"
@@ -26,25 +27,11 @@ type OpenRouterClientConfig struct {
 }
 
 func NewOpenRouterClient(config OpenRouterClientConfig) (*Client, error) {
-	baseURL, err := clientconfig.BaseURL(config.BaseURL)
+	baseURL, err := clientconfig.KeyedClient("openrouter chat", config.BaseURL, openRouterBaseURL, "OpenRouter API key", config.APIKey, config.HTTPClient)
 	if err != nil {
-		return nil, fmt.Errorf("openrouter chat: %w", err)
+		return nil, err
 	}
-	if baseURL != openRouterBaseURL {
-		return nil, fmt.Errorf("openrouter chat: base URL must be exactly %q", openRouterBaseURL)
-	}
-	if err := clientconfig.Secret("OpenRouter API key", config.APIKey); err != nil {
-		return nil, fmt.Errorf("openrouter chat: %w", err)
-	}
-	if config.HTTPClient == nil {
-		return nil, fmt.Errorf("openrouter chat: HTTP client is required")
-	}
-	options := []option.RequestOption{
-		option.WithAPIKey(config.APIKey),
-		option.WithBaseURL(baseURL),
-		option.WithHTTPClient(config.HTTPClient),
-		option.WithMaxRetries(0),
-	}
+	options, _ := openaiwire.ClientOptions(baseURL, config.APIKey, config.HTTPClient)
 	if strings.TrimSpace(config.HTTPReferer) != "" {
 		options = append(options, option.WithHeader("HTTP-Referer", config.HTTPReferer))
 	}

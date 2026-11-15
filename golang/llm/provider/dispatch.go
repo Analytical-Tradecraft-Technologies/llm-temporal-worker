@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 // The helpers in this file are the steps every adapter's non-streaming Invoke
@@ -113,4 +115,34 @@ func (dispatch *Dispatch) AfterResponseHeaders(metadata ResponseMetadata) error 
 // output items, is being lifted.
 func (dispatch *Dispatch) LiftProgress(outputItems int) {
 	dispatch.Observer.OnProgress(dispatch.Context, Progress{Phase: string(PhaseLift), OutputItems: outputItems})
+}
+
+// HTTPResponseMetadata returns the response metadata of one HTTP call: the
+// response ID and provider tier, plus, when raw is set, the HTTP status and
+// the first non-empty of the requestIDHeaders.
+func HTTPResponseMetadata(responseID, providerTier string, raw *http.Response, requestIDHeaders ...string) ResponseMetadata {
+	metadata := ResponseMetadata{ResponseID: responseID, ProviderTier: providerTier}
+	if raw != nil {
+		metadata.Status = raw.StatusCode
+		for _, header := range requestIDHeaders {
+			if metadata.RequestID = raw.Header.Get(header); metadata.RequestID != "" {
+				break
+			}
+		}
+	}
+	return metadata
+}
+
+// Lift runs AfterResponseHeaders, reports LiftProgress for outputItems and
+// then returns the response lift produces.
+func (dispatch *Dispatch) Lift(metadata ResponseMetadata, outputItems int, lift func() (llm.Response, error)) (Result, error) {
+	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
+		return Result{}, err
+	}
+	dispatch.LiftProgress(outputItems)
+	lifted, err := lift()
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Response: lifted}, nil
 }

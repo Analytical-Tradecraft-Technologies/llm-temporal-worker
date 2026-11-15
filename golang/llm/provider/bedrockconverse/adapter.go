@@ -321,8 +321,8 @@ func (adapter *Adapter) liftResponse(call provider.Call, response *bedrockruntim
 		diagnostics = append(diagnostics, reasoningDroppedDiagnostic(dropped))
 	}
 	return llm.Response{APIVersion: llm.APIVersion, OperationKey: call.OperationKey, Status: status, Output: output,
-		Route:   llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockConverse), RequestedModel: call.Model, ResolvedModel: call.Model},
-		Service: llm.ServiceFacts{Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual, ProviderValue: actualTier},
+		Route:   call.RouteFacts(provider.FamilyBedrockConverse, call.Model),
+		Service: call.ServiceFacts(actual, actualTier),
 		Usage:   usage, Provider: llm.ProviderFacts{RequestID: requestID, FinishReason: string(response.StopReason)},
 		Diagnostics: diagnostics}, nil
 }

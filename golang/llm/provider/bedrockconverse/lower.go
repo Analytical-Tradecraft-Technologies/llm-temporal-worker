@@ -54,7 +54,7 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string, stri
 		if err != nil {
 			return bedrockruntime.ConverseInput{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		if emptyModelMessage(item) {
+		if provider.EmptyModelMessage(item) {
 			continue
 		}
 		// A model turn can be split into text and tool-call items internally.
@@ -148,14 +148,6 @@ func lowerInstructions(instructions []llm.Instruction, input *bedrockruntime.Con
 	return nil
 }
 
-// emptyModelMessage reports a replayed model turn with no parts (for example a
-// lifted content_filter or empty stop reply). Bedrock Converse rejects an assistant message
-// without content, and it carries no history to preserve.
-func emptyModelMessage(item llm.Item) bool {
-	message, ok := item.(llm.Message)
-	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
-}
-
 func lowerItem(item llm.Item) (types.Message, error) {
 	switch value := item.(type) {
 	case llm.Message:
@@ -204,25 +196,25 @@ func lowerItem(item llm.Item) (types.Message, error) {
 }
 
 func lowerParts(parts []llm.Part) ([]types.ContentBlock, error) {
-	content := make([]types.ContentBlock, 0, len(parts))
-	for index, part := range parts {
-		text, ok := partText(part)
-		if !ok {
-			return nil, fmt.Errorf("part %d kind %q is not supported by Bedrock Converse", index, part.PartKind())
-		}
-		content = append(content, &types.ContentBlockMemberText{Value: text})
-	}
-	return content, nil
+	return lowerTextParts(parts, "part", func(text string) types.ContentBlock { return &types.ContentBlockMemberText{Value: text} })
 }
 
 func lowerToolResultParts(parts []llm.Part) ([]types.ToolResultContentBlock, error) {
-	content := make([]types.ToolResultContentBlock, 0, len(parts))
+	return lowerTextParts(parts, "tool result part", func(text string) types.ToolResultContentBlock {
+		return &types.ToolResultContentBlockMemberText{Value: text}
+	})
+}
+
+// lowerTextParts lowers parts that carry text (see partText) into blocks;
+// noun names a part in errors.
+func lowerTextParts[B any](parts []llm.Part, noun string, block func(string) B) ([]B, error) {
+	content := make([]B, 0, len(parts))
 	for index, part := range parts {
 		text, ok := partText(part)
 		if !ok {
-			return nil, fmt.Errorf("tool result part %d kind %q is not supported by Bedrock Converse", index, part.PartKind())
+			return nil, fmt.Errorf("%s %d kind %q is not supported by Bedrock Converse", noun, index, part.PartKind())
 		}
-		content = append(content, &types.ToolResultContentBlockMemberText{Value: text})
+		content = append(content, block(text))
 	}
 	return content, nil
 }

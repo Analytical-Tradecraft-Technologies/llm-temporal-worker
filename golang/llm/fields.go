@@ -139,6 +139,16 @@ func emptyIfNil[T any](values []T) []T {
 	return values
 }
 
+// firstError returns the first non-nil error in errs.
+func firstError(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // derefAs returns value as a T when it holds a T or a non-nil *T. Pointer
 // forms satisfy the item, part and query result interfaces too.
 func derefAs[T any](value any) (T, bool) {
@@ -163,13 +173,19 @@ type fieldReader struct {
 	err    error
 }
 
-func (reader *fieldReader) requiredString(key string) string {
+// readField runs read on the reader's fields unless an earlier read failed.
+func readField[T any](reader *fieldReader, key string, read func(map[string]json.RawMessage, string) (T, error)) T {
 	if reader.err != nil {
-		return ""
+		var zero T
+		return zero
 	}
-	value, err := requiredString(reader.fields, key)
+	value, err := read(reader.fields, key)
 	reader.err = err
 	return value
+}
+
+func (reader *fieldReader) requiredString(key string) string {
+	return readField(reader, key, requiredString)
 }
 
 func (reader *fieldReader) optionalString(key string) string {
@@ -189,21 +205,11 @@ func (reader *fieldReader) optionalStringPresent(key string) (string, bool) {
 }
 
 func (reader *fieldReader) requiredInt64(key string) int64 {
-	if reader.err != nil {
-		return 0
-	}
-	value, err := requiredInt64(reader.fields, key)
-	reader.err = err
-	return value
+	return readField(reader, key, requiredInt64)
 }
 
 func (reader *fieldReader) requiredBool(key string) bool {
-	if reader.err != nil {
-		return false
-	}
-	value, err := requiredBool(reader.fields, key)
-	reader.err = err
-	return value
+	return readField(reader, key, requiredBool)
 }
 
 func (reader *fieldReader) optionalBool(key string) bool {
@@ -216,12 +222,7 @@ func (reader *fieldReader) optionalBool(key string) bool {
 }
 
 func (reader *fieldReader) requireField(key string) json.RawMessage {
-	if reader.err != nil {
-		return nil
-	}
-	value, err := requireField(reader.fields, key)
-	reader.err = err
-	return value
+	return readField(reader, key, requireField)
 }
 
 // readOptionalField is decodeOptionalField on a fieldReader.

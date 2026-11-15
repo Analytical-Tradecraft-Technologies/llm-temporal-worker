@@ -114,6 +114,7 @@ func JSONModeContextError() error {
 }
 
 func lowerSchema(root, source map[string]any, path string) (map[string]any, error) {
+	lower := func(child any, path string) (map[string]any, error) { return lowerChild(root, child, path) }
 	if ref, ok := source["$ref"]; ok {
 		if err := checkRef(root, ref, schemawire.PointerJoin(path, "$ref")); err != nil {
 			return nil, err
@@ -122,7 +123,7 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 		// definitions it may point at are kept.
 		result := map[string]any{"$ref": ref}
 		if defs, ok := source["$defs"].(map[string]any); ok {
-			lowered, err := lowerChildren(root, defs, schemawire.PointerJoin(path, "$defs"))
+			lowered, err := schemawire.LowerMap(defs, schemawire.PointerJoin(path, "$defs"), lower)
 			if err != nil {
 				return nil, err
 			}
@@ -147,26 +148,22 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 		switch key {
 		case "$defs", "properties":
 			children, _ := value.(map[string]any)
-			lowered, err := lowerChildren(root, children, childPath)
+			lowered, err := schemawire.LowerMap(children, childPath, lower)
 			if err != nil {
 				return nil, err
 			}
 			result[key] = lowered
 		case "items":
-			nested, err := lowerChild(root, value, childPath)
+			nested, err := lower(value, childPath)
 			if err != nil {
 				return nil, err
 			}
 			result[key] = nested
 		case "anyOf", "oneOf":
 			children, _ := value.([]any)
-			lowered := make([]any, 0, len(children))
-			for index, child := range children {
-				nested, err := lowerChild(root, child, fmt.Sprintf("%s/%d", childPath, index))
-				if err != nil {
-					return nil, err
-				}
-				lowered = append(lowered, nested)
+			lowered, err := schemawire.LowerList(children, childPath, lower)
+			if err != nil {
+				return nil, err
 			}
 			result[key] = lowered
 		case "additionalProperties", "required":
@@ -175,16 +172,7 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 			result[key] = value
 		}
 	}
-	// oneOf is not accepted; anyOf is the nearest looser form, and the caller
-	// schema still enforces exclusivity on the final JSON.
-	if variants, ok := result["oneOf"]; ok {
-		if _, both := result["anyOf"]; both {
-			extras["oneOf"] = source["oneOf"]
-		} else {
-			result["anyOf"] = variants
-		}
-		delete(result, "oneOf")
-	}
+	schemawire.MergeOneOf(result, source, extras)
 	if schemawire.IsObjectSchema(source) {
 		if additional, present := source["additionalProperties"]; present && additional != false {
 			return nil, &UnsupportedError{Path: schemawire.PointerJoin(path, "additionalProperties"), Reason: "additionalProperties other than false is not supported by OpenAI strict structured output"}
@@ -207,15 +195,8 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 			}
 		}
 	}
-	if len(extras) > 0 {
-		note, err := schemawire.DescribeExtras(extras)
-		if err != nil {
-			return nil, fmt.Errorf("output schema at %s: %w", schemawire.DisplayPath(path), err)
-		}
-		if description, ok := result["description"].(string); ok && description != "" {
-			note = description + "\n\n" + note
-		}
-		result["description"] = note
+	if err := schemawire.NoteExtras(result, extras, path); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -263,18 +244,6 @@ func checkRef(root map[string]any, value any, path string) error {
 		return nil
 	}
 	return &UnsupportedError{Path: path, Reason: "only # and #/$defs/<name> references are supported by OpenAI strict structured output"}
-}
-
-func lowerChildren(root, children map[string]any, path string) (map[string]any, error) {
-	lowered := make(map[string]any, len(children))
-	for name, child := range children {
-		nested, err := lowerChild(root, child, schemawire.PointerJoin(path, name))
-		if err != nil {
-			return nil, err
-		}
-		lowered[name] = nested
-	}
-	return lowered, nil
 }
 
 func lowerChild(root map[string]any, value any, path string) (map[string]any, error) {

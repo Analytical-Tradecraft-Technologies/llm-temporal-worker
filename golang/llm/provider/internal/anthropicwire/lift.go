@@ -95,3 +95,92 @@ func ValidateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 	}
 	return anthropicschema.Validate(call.OutputSchema, output)
 }
+
+// LiftMessage lifts the content of response as LiftContent does, derives its
+// status with liftStatus and checks the final JSON output. A failure is an
+// invalid response carrying requestID and the response ID.
+func LiftMessage(call provider.Call, requestID string, response *anthropic.Message, stateProvider string, opaqueTypes []string, liftStatus func(anthropic.StopReason, bool, bool) (llm.ResponseStatus, error)) ([]llm.Item, []llm.ProviderState, llm.ResponseStatus, error) {
+	invalid := func(err error) ([]llm.Item, []llm.ProviderState, llm.ResponseStatus, error) {
+		return nil, nil, "", provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
+	}
+	output, states, hasToolCalls, err := LiftContent(response.Content, stateProvider, opaqueTypes)
+	if err != nil {
+		return invalid(err)
+	}
+	hasRefusal := string(response.StopReason) == "refusal" || response.StopDetails.Category != ""
+	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
+	if err != nil {
+		return invalid(err)
+	}
+	if err := ValidateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
+		return invalid(err)
+	}
+	return output, states, status, nil
+}
+
+// Usage returns the token usage of response, with its raw usage facts.
+func Usage(response *anthropic.Message) llm.Usage {
+	return llm.Usage{
+		InputTokens:      response.Usage.InputTokens,
+		OutputTokens:     response.Usage.OutputTokens,
+		ReasoningTokens:  response.Usage.OutputTokensDetails.ThinkingTokens,
+		CacheReadTokens:  response.Usage.CacheReadInputTokens,
+		CacheWriteTokens: response.Usage.CacheCreationInputTokens,
+		ProviderRaw:      rawUsageFacts(response),
+	}
+}
+
+func rawUsageFacts(response *anthropic.Message) map[string]json.RawMessage {
+	result := map[string]json.RawMessage{}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(response.Usage.RawJSON()), &fields); err != nil {
+		// Constructed SDK responses do not carry RawJSON; retain the typed fields
+		// that are useful for reconciliation instead.
+		for key, value := range map[string]any{
+			"service_tier":                string(response.Usage.ServiceTier),
+			"cache_creation_input_tokens": response.Usage.CacheCreationInputTokens,
+			"cache_read_input_tokens":     response.Usage.CacheReadInputTokens,
+			"thinking_tokens":             response.Usage.OutputTokensDetails.ThinkingTokens,
+		} {
+			encoded, _ := json.Marshal(value)
+			result[key] = encoded
+		}
+		return result
+	}
+	for key, raw := range fields {
+		result[key] = append(json.RawMessage(nil), raw...)
+	}
+	return result
+}
+
+// RawResponseFacts copies the response-level facts kept for reconciliation
+// out of the raw response body.
+func RawResponseFacts(response *anthropic.Message) map[string]json.RawMessage {
+	result := map[string]json.RawMessage{}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(response.RawJSON()), &fields); err != nil {
+		return result
+	}
+	for _, key := range []string{"stop_sequence", "container", "inference_geo", "stop_details"} {
+		if raw, ok := fields[key]; ok {
+			result[key] = append(json.RawMessage(nil), raw...)
+		}
+	}
+	return result
+}
+
+// Continuation returns the pinned continuation of response, whose handle is
+// handlePrefix followed by the response ID, or nil when the response has no
+// ID or no provider states.
+func Continuation(call provider.Call, response *anthropic.Message, states []llm.ProviderState, handlePrefix string) *llm.Continuation {
+	if response.ID == "" || len(states) == 0 {
+		return nil
+	}
+	return &llm.Continuation{
+		Handle:         handlePrefix + response.ID,
+		EndpointID:     call.EndpointID,
+		Model:          string(response.Model),
+		Pinned:         true,
+		ProviderStates: append([]llm.ProviderState(nil), states...),
+	}
+}

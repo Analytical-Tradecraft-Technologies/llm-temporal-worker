@@ -12,6 +12,7 @@ import (
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
 
@@ -26,24 +27,14 @@ type ClientConfig struct {
 // source of truth.
 type Client struct {
 	sdk      anthropic.Client
-	messages messageService
+	messages anthropicwire.MessageService
 	baseURL  string
 }
 
-type messageService interface {
-	New(context.Context, anthropic.MessageNewParams, ...option.RequestOption) (*anthropic.Message, error)
-}
-
 func NewClient(config ClientConfig) (*Client, error) {
-	baseURL, err := clientconfig.BaseURL(config.BaseURL)
+	baseURL, err := clientconfig.KeyedClient("anthropic messages", config.BaseURL, "", "Anthropic API key", config.APIKey, config.HTTPClient)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic messages: %w", err)
-	}
-	if err := clientconfig.Secret("Anthropic API key", config.APIKey); err != nil {
-		return nil, fmt.Errorf("anthropic messages: %w", err)
-	}
-	if config.HTTPClient == nil {
-		return nil, fmt.Errorf("anthropic messages: HTTP client is required")
+		return nil, err
 	}
 	sdk := anthropic.NewClient(
 		option.WithoutEnvironmentDefaults(),

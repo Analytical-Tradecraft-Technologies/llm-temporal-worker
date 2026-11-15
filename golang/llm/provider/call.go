@@ -62,3 +62,15 @@ type PriceCeiling struct {
 type Result struct {
 	Response llm.Response
 }
+
+// RouteFacts reports the call's endpoint and requested model, served through
+// family by resolvedModel.
+func (call Call) RouteFacts(family Family, resolvedModel string) llm.RouteFacts {
+	return llm.RouteFacts{EndpointID: call.EndpointID, APIFamily: string(family), RequestedModel: call.Model, ResolvedModel: resolvedModel}
+}
+
+// ServiceFacts reports the call's service class served without fallback as
+// actual, from the provider's providerValue.
+func (call Call) ServiceFacts(actual *llm.ServiceClass, providerValue string) llm.ServiceFacts {
+	return llm.ServiceFacts{Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual, ProviderValue: providerValue}
+}
