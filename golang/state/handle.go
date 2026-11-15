@@ -218,14 +218,7 @@ func (keyring *Keyring) VerifyReferenceCapability(tenant, project, requestID, ca
 }
 
 func (keyring *Keyring) referenceMAC(secret []byte, keyID, tenant, project, requestID string) []byte {
-	hash := hmac.New(sha256.New, secret)
-	for _, value := range []string{referenceVersion, keyID, tenant, project, requestID} {
-		var length [4]byte
-		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
-		hash.Write(length[:])
-		hash.Write([]byte(value))
-	}
-	return hash.Sum(nil)
+	return lengthPrefixedMAC(secret, []byte(referenceVersion), []byte(keyID), []byte(tenant), []byte(project), []byte(requestID))
 }
 
 func (keyring *Keyring) mac(keyID string, randomID []byte, tenant string) []byte {
@@ -233,16 +226,18 @@ func (keyring *Keyring) mac(keyID string, randomID []byte, tenant string) []byte
 }
 
 func (keyring *Keyring) macWith(secret []byte, keyID string, randomID []byte, tenant string) []byte {
+	return lengthPrefixedMAC(secret, []byte(handleVersion), []byte(keyID), randomID, []byte(tenant))
+}
+
+// lengthPrefixedMAC is the HMAC-SHA256 under secret of every field, each
+// preceded by its length as four big-endian bytes.
+func lengthPrefixedMAC(secret []byte, fields ...[]byte) []byte {
 	hash := hmac.New(sha256.New, secret)
-	writeField := func(value []byte) {
+	for _, value := range fields {
 		var length [4]byte
 		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
 		hash.Write(length[:])
 		hash.Write(value)
 	}
-	writeField([]byte(handleVersion))
-	writeField([]byte(keyID))
-	writeField(randomID)
-	writeField([]byte(tenant))
 	return hash.Sum(nil)
 }

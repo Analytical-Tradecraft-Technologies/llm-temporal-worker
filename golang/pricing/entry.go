@@ -16,6 +16,20 @@ type UnitPrices struct {
 	PerRequest DecimalUSD
 }
 
+// invalidPrice returns the name of an invalid price and its error, or a nil
+// error when every price is valid. Like a map range, it names no particular
+// invalid price first.
+func (prices UnitPrices) invalidPrice() (string, error) {
+	for name, price := range map[string]DecimalUSD{
+		"input": prices.InputPerMillion, "output": prices.OutputPerMillion, "cache_read": prices.CacheReadPerMillion, "cache_write": prices.CacheWritePerMillion, "reasoning": prices.ReasoningPerMillion, "per_request": prices.PerRequest,
+	} {
+		if err := price.valid(); err != nil {
+			return name, err
+		}
+	}
+	return "", nil
+}
+
 // PriceComponent identifies one independently quoted catalog component.
 // Unknown components are preserved by the catalog loader instead of being
 // represented by DecimalUSD's zero value, because zero is a known-free price.

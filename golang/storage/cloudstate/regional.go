@@ -98,7 +98,16 @@ type regionalPageToken struct {
 }
 
 func (s *regionalTable) QueryPartition(ctx context.Context, q kv.KeyValueQuery) (kv.KeyValueQueryPage, error) {
-	wrap := func(page kv.KeyValueQueryPage, i int) (kv.KeyValueQueryPage, error) {
+	// query reads region i's page of q and binds its continuation to region i.
+	query := func(ctx context.Context, i int) (kv.KeyValueQueryPage, error) {
+		store, err := s.store(ctx, i)
+		if err != nil {
+			return kv.KeyValueQueryPage{}, err
+		}
+		page, err := store.QueryPartition(ctx, q)
+		if err != nil {
+			return kv.KeyValueQueryPage{}, err
+		}
 		if page.NextPageToken != "" {
 			data, _ := json.Marshal(regionalPageToken{i, page.NextPageToken})
 			page.NextPageToken = base64.RawURLEncoding.EncodeToString(data)
@@ -122,27 +131,9 @@ func (s *regionalTable) QueryPartition(ctx context.Context, q kv.KeyValueQuery) 
 		q.PageToken = token.Token
 		attempt, cancel := regional.AttemptContext(ctx, s.router.Timeout, 1)
 		defer cancel()
-		store, err := s.store(attempt, token.Region)
-		if err != nil {
-			return kv.KeyValueQueryPage{}, err
-		}
-		page, err := store.QueryPartition(attempt, q)
-		if err != nil {
-			return kv.KeyValueQueryPage{}, err
-		}
-		return wrap(page, token.Region)
+		return query(attempt, token.Region)
 	}
-	return regional.Run(ctx, &s.router, regional.RetryRead, func(ctx context.Context, i int) (kv.KeyValueQueryPage, error) {
-		store, err := s.store(ctx, i)
-		if err != nil {
-			return kv.KeyValueQueryPage{}, err
-		}
-		page, err := store.QueryPartition(ctx, q)
-		if err != nil {
-			return kv.KeyValueQueryPage{}, err
-		}
-		return wrap(page, i)
-	})
+	return regional.Run(ctx, &s.router, regional.RetryRead, query)
 }
 
 // probe revalidates MRSC membership and schema for each endpoint it reaches.

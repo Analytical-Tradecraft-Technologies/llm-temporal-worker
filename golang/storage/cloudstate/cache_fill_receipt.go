@@ -3,7 +3,6 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -36,11 +35,11 @@ func (s *cacheFills) sealTerminal(ctx context.Context, record cache.FillRecord) 
 		}
 		return nil
 	}
-	if !errors.Is(err, contracts.ErrNotFound) || errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if !definitely(err, contracts.ErrNotFound) {
 		return err
 	}
 	_, err = s.responses.repository.table.Create(ctx, cacheItem(key, want))
-	if errors.Is(err, contracts.ErrAlreadyExists) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if definitely(err, contracts.ErrAlreadyExists) {
 		existing, _, err = s.responses.readPointer(ctx, key)
 		if err == nil && existing != want {
 			return contracts.ErrConflict
@@ -51,7 +50,7 @@ func (s *cacheFills) sealTerminal(ctx context.Context, record cache.FillRecord) 
 
 func (s *cacheFills) readTerminal(ctx context.Context, lease cache.FillLease) (cache.FillRecord, bool, error) {
 	pointer, _, err := s.responses.readPointer(ctx, s.terminalKey(lease))
-	if errors.Is(err, contracts.ErrNotFound) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if definitely(err, contracts.ErrNotFound) {
 		return cache.FillRecord{}, false, nil
 	}
 	if err != nil {
