@@ -128,10 +128,7 @@ func testGeneratePorts(events *[]string, failStage string) GeneratePorts {
 
 func TestGenerateV1RunsDurablePhasesInOrder(t *testing.T) {
 	events := []string{}
-	response, err := GenerateV1(context.Background(), testGenerateRequest(), testGeneratePorts(&events, ""))
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	response := mustGenerateV1(t, testGenerateRequest(), testGeneratePorts(&events, ""))
 	assertPhaseOrder(t, "phase order", events, "replay", "cache", "compaction", "route", "reserve", "claim", "dispatch", "finalize", "reconcile")
 	if response.OperationKey != "operation-1" || response.Checkpoint.Kind != "generation" {
 		t.Fatalf("response = %#v", response)
@@ -146,10 +143,7 @@ func TestGenerateV1CompletedReplayReturnsWithoutCacheOrProviderWork(t *testing.T
 		events = append(events, "replay")
 		return GenerateReplay{Completed: &completed}, nil
 	}
-	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	response := mustGenerateV1(t, testGenerateRequest(), ports)
 	if response.OperationKey != "operation-1" {
 		t.Fatalf("response operation key = %q", response.OperationKey)
 	}
@@ -159,10 +153,7 @@ func TestGenerateV1CompletedReplayReturnsWithoutCacheOrProviderWork(t *testing.T
 func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 	events := []string{}
 	ports := testGeneratePorts(&events, "")
-	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
-		events = append(events, "compaction")
-		return CompactionDecision{Required: true}, nil
-	}
+	requireCompaction(&ports, &events)
 	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
 		events = append(events, "compact")
 		return GenerateReplay{State: state.MaterializedState{Handle: "compacted", Tenant: "tenant", Project: "project"}}, nil
@@ -178,10 +169,7 @@ func TestGenerateV1CompactsBeforeRoutingWhenRequired(t *testing.T) {
 		dispatchHandle = replay.State.Handle
 		return DispatchResult{}, nil
 	}
-	response, err := GenerateV1(context.Background(), testGenerateRequest(), ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	response := mustGenerateV1(t, testGenerateRequest(), ports)
 	if routeHandle != "compacted" || dispatchHandle != "compacted" {
 		t.Fatalf("compacted state handles = route %q, dispatch %q", routeHandle, dispatchHandle)
 	}
@@ -271,10 +259,7 @@ func TestGenerateV1AllowsScopedPostCompactionParentReplacement(t *testing.T) {
 			Project: request.Context.Project,
 		}}, nil
 	}
-	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
-		events = append(events, "compaction")
-		return CompactionDecision{Required: true}, nil
-	}
+	requireCompaction(&ports, &events)
 	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
 		events = append(events, "compact")
 		return GenerateReplay{State: state.MaterializedState{
@@ -284,10 +269,7 @@ func TestGenerateV1AllowsScopedPostCompactionParentReplacement(t *testing.T) {
 		}}, nil
 	}
 
-	response, err := GenerateV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	response := mustGenerateV1(t, request, ports)
 	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != llm.CheckpointHandle(compacted) {
 		t.Fatalf("response checkpoint parent = %v, want %q", response.Checkpoint.Parent, compacted)
 	}
@@ -370,10 +352,7 @@ func TestGenerateV1CancellationAfterCompactStopsBeforeGenerateAdmission(t *testi
 	defer cancel()
 	events := []string{}
 	ports := testGeneratePorts(&events, "")
-	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
-		events = append(events, "compaction")
-		return CompactionDecision{Required: true}, nil
-	}
+	requireCompaction(&ports, &events)
 	ports.Compact = func(context.Context, llm.GenerateRequestV1, GenerateReplay) (GenerateReplay, error) {
 		events = append(events, "compact")
 		cancel()
@@ -704,10 +683,7 @@ func TestGenerateV1CompletedReplayAcceptsCommittedPostCompactionParent(t *testin
 		return GenerateReplay{Completed: &completed}, nil
 	}
 
-	response, err := GenerateV1(context.Background(), request, ports)
-	if err != nil {
-		t.Fatalf("GenerateV1 error = %v", err)
-	}
+	response := mustGenerateV1(t, request, ports)
 	if response.Checkpoint.Parent == nil || *response.Checkpoint.Parent != compactedParent {
 		t.Fatalf("response checkpoint parent = %v, want %q", response.Checkpoint.Parent, compactedParent)
 	}
@@ -799,6 +775,23 @@ func testCancellationStopsBeforeNextPhase(t *testing.T, phases []cancellationPha
 			}
 		})
 	}
+}
+
+// requireCompaction makes ports demand compaction, recording a "compaction" event.
+func requireCompaction(ports *GeneratePorts, events *[]string) {
+	ports.CompactionDecision = func(context.Context, llm.GenerateRequestV1, GenerateReplay, CacheDecision) (CompactionDecision, error) {
+		*events = append(*events, "compaction")
+		return CompactionDecision{Required: true}, nil
+	}
+}
+
+func mustGenerateV1(t *testing.T, request llm.GenerateRequestV1, ports GeneratePorts) llm.GenerateResponseV1 {
+	t.Helper()
+	response, err := GenerateV1(context.Background(), request, ports)
+	if err != nil {
+		t.Fatalf("GenerateV1 error = %v", err)
+	}
+	return response
 }
 
 func assertPhaseOrder(t *testing.T, label string, got []string, want ...string) {

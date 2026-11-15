@@ -8,7 +8,6 @@ import (
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 )
 
@@ -27,13 +26,9 @@ func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 			if state == StatusCompleted {
-				before, err = r.CompleteOperation(context.Background(), op.Scope, before.Request.ID, json.RawMessage(`{"version":1}`), op.Now)
-				if err != nil {
-					t.Fatal(err)
-				}
+				before = mustCompleteOperation(t, r, op.Scope, before.Request.ID, json.RawMessage(`{"version":1}`), op.Now)
 			}
-			table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("verification wrote to table"); return nil, nil }
-			blobs.hook = func(blob.BlobKey) (error, error) { t.Error("verification wrote a blob"); return nil, nil }
+			forbidWrites(t, table, blobs, "verification")
 			op.Now = op.Now.Add(time.Hour)
 			got, err := reopen(t, table, blobs).VerifyOperation(context.Background(), op)
 			if err != nil || got.Status != before.Status || got.Revision != before.Revision || got.Request.ID != before.Request.ID {
@@ -45,9 +40,7 @@ func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
 			} {
 				changed := op
 				mutate(&changed)
-				if _, err := r.VerifyOperation(context.Background(), changed); !errors.Is(err, contracts.ErrConflict) {
-					t.Fatalf("changed input accepted: %v", err)
-				}
+				requireErrorIs(t, errOf(r.VerifyOperation(context.Background(), changed)), contracts.ErrConflict, "changed input accepted")
 			}
 			for _, mutate := range []func(*Operation){
 				func(o *Operation) { o.Key += "-missing" },
@@ -56,9 +49,7 @@ func TestVerifyOperationNeverStartsOrRepairsRequests(t *testing.T) {
 			} {
 				changed := op
 				mutate(&changed)
-				if _, err := r.VerifyOperation(context.Background(), changed); !errors.Is(err, contracts.ErrNotFound) {
-					t.Fatalf("missing identity accepted: %v", err)
-				}
+				requireErrorIs(t, errOf(r.VerifyOperation(context.Background(), changed)), contracts.ErrNotFound, "missing identity accepted")
 			}
 		})
 	}
@@ -68,10 +59,7 @@ func TestVerifyOperationRequiresMatchingDiscoveryBinding(t *testing.T) {
 	for _, mode := range []string{"missing", "binding", "scope", "corrupt", "lagging"} {
 		t.Run(mode, func(t *testing.T) {
 			r, table, blobs, op := operationFixture(t)
-			record, err := r.BeginOperation(context.Background(), op)
-			if err != nil {
-				t.Fatal(err)
-			}
+			record := mustBeginOperation(t, r, op)
 			key := r.indexKey(record.Request.ID)
 			row, err := table.Get(context.Background(), key)
 			if err != nil {
@@ -83,9 +71,7 @@ func TestVerifyOperationRequiresMatchingDiscoveryBinding(t *testing.T) {
 			}
 			switch mode {
 			case "missing":
-				if err := table.Delete(context.Background(), key, row.Version); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, table.Delete(context.Background(), key, row.Version))
 			case "binding":
 				index.Binding = r.digest("different", []byte("input"))
 			case "scope":
@@ -98,15 +84,13 @@ func TestVerifyOperationRequiresMatchingDiscoveryBinding(t *testing.T) {
 				index.UpdatedAt = record.Request.CreatedAt
 			}
 			if mode != "missing" {
-				if _, err := table.Replace(context.Background(), r.indexItem(index), row.Version); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(table.Replace(context.Background(), r.indexItem(index), row.Version)))
 			}
 			table.hook = func(string, kv.KeyValueItem) (error, error) {
 				t.Error("verification repaired discovery index")
 				return nil, nil
 			}
-			blobs.hook = func(blob.BlobKey) (error, error) { t.Error("verification wrote blob"); return nil, nil }
+			forbidWrites(t, nil, blobs, "verification")
 			_, err = r.VerifyOperation(context.Background(), op)
 			switch mode {
 			case "missing":

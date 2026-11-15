@@ -20,30 +20,20 @@ import (
 func TestRequestLifecycleRestartAndScopedReads(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	ctx := context.Background()
-	record, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustCreate(t, r, request)
 	if record.Revision != 1 || record.Status != StatusPending || !bytes.Contains(record.Request.Manifest, []byte("9007199254740993")) {
 		t.Fatalf("bad initial record: %+v", record)
 	}
 	for _, status := range []Status{StatusRunning, StatusProviderPending, StatusProviderPending, StatusCompleted} {
 		r = reopen(t, table, blobs)
-		record, err = r.TryUpdate(ctx, request.Scope, request.ID, change(record, status, fmt.Sprint(record.Revision)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		record = mustTryUpdate(t, r, request.Scope, request.ID, change(record, status, fmt.Sprint(record.Revision)))
 		loaded, err := reopen(t, table, blobs).Read(ctx, request.Scope, request.ID)
 		if err != nil || !reflect.DeepEqual(loaded, record) {
 			t.Fatalf("restart read differs: %v", err)
 		}
 	}
-	if _, err := r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "other"}, request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("cross-scope read: %v", err)
-	}
-	if _, err := r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "terminal")); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("terminal changed: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "other"}, request.ID)), contracts.ErrNotFound, "cross-scope read")
+	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "terminal"))), ErrInvalid, "terminal changed")
 	shard, _ := PendingShard(request.ID)
 	page, err := r.ListPending(ctx, shard, 100, "")
 	if err != nil || len(page.Requests) != 0 {
@@ -59,16 +49,11 @@ func TestRequestWriteOrderAndEncryption(t *testing.T) {
 	var order []string
 	table.trace = func(s string) { order = append(order, s) }
 	blobs.trace = table.trace
-	record, err := r.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustCreate(t, r, request)
 	if len(order) != 4 || !strings.Contains(order[0], "/pending/") || order[1] != "blob" || !strings.Contains(order[2], "/request/") || !strings.HasPrefix(order[3], "replace:") {
 		t.Fatalf("unsafe write order: %v", order)
 	}
-	if _, err := r.TryUpdate(context.Background(), request.Scope, request.ID, change(record, StatusRunning, "private-update-token")); err != nil {
-		t.Fatal(err)
-	}
+	mustTryUpdate(t, r, request.Scope, request.ID, change(record, StatusRunning, "private-update-token"))
 	var stored [][]byte
 	for key, row := range table.rows {
 		data, _ := row.Item.Fields.MarshalBinary()
@@ -88,36 +73,24 @@ func TestRequestWriteOrderAndEncryption(t *testing.T) {
 
 func TestFingerprintIncludesSampleIndexButNotRequestID(t *testing.T) {
 	r, _, _, request := fixture(t)
-	first, err := r.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustCreate(t, r, request)
 	request.ID, _ = NewRequestID()
 	request.CreatedAt = request.CreatedAt.Add(time.Hour)
 	request.Manifest = json.RawMessage(`{"prompt":"private prompt", "account":9007199254740993,"version":1}`)
-	second, err := r.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := mustCreate(t, r, request)
 	if first.Fingerprint != second.Fingerprint {
 		t.Fatal("equivalent independently submitted requests differ")
 	}
 	request.ID, _ = NewRequestID()
 	request.RequestIndex++
-	third, err := r.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	third := mustCreate(t, r, request)
 	if first.Fingerprint == third.Fingerprint {
 		t.Fatal("sample index did not break identity")
 	}
 	request.ID, _ = NewRequestID()
 	request.RequestIndex = 0
 	request.Scope.Project = "different"
-	fourth, err := r.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fourth := mustCreate(t, r, request)
 	if first.Fingerprint == fourth.Fingerprint {
 		t.Fatal("scope did not break identity")
 	}
@@ -141,10 +114,7 @@ func TestConcurrentCreatesAndUpdates(t *testing.T) {
 			t.Fatalf("identical concurrent creation: %v", err)
 		}
 	}
-	initial, err := r.Read(ctx, request.Scope, request.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	initial := mustRead(t, r, request.Scope, request.ID)
 	results = make(chan error, workers)
 	for i := 0; i < workers; i++ {
 		client := reopen(t, table, blobs)
@@ -176,34 +146,21 @@ func TestConcurrentCreatesAndUpdates(t *testing.T) {
 	}
 	changed := request
 	changed.Manifest = json.RawMessage(`{"other":true}`)
-	if _, err := r.Create(ctx, changed); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("conflicting create accepted: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Create(ctx, changed)), contracts.ErrConflict, "conflicting create accepted")
 }
 
 func TestIdenticalUpdateRetryAfterLaterCompletionDoesNotRegressIndex(t *testing.T) {
 	r, _, _, request := fixture(t)
 	ctx := context.Background()
-	initial, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	initial := mustCreate(t, r, request)
 	update := change(initial, StatusRunning, "dispatch")
-	running, err := r.TryUpdate(ctx, request.Scope, request.ID, update)
-	if err != nil {
-		t.Fatal(err)
-	}
-	completed, err := r.TryUpdate(ctx, request.Scope, request.ID, change(running, StatusCompleted, "done"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	running := mustTryUpdate(t, r, request.Scope, request.ID, update)
+	completed := mustTryUpdate(t, r, request.Scope, request.ID, change(running, StatusCompleted, "done"))
 	retry, err := r.TryUpdate(ctx, request.Scope, request.ID, update)
 	if err != nil || !reflect.DeepEqual(retry, running) {
 		t.Fatalf("old update replay: %v", err)
 	}
-	if _, err := r.Create(ctx, request); err != nil {
-		t.Fatal(err)
-	}
+	mustCreate(t, r, request)
 	stored, err := r.table.Get(ctx, r.indexKey(request.ID))
 	if err != nil {
 		t.Fatal(err)
@@ -292,10 +249,7 @@ func TestUpdateLostAcknowledgementsAndIndexRepair(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			r, table, blobs, request := fixture(t)
 			ctx := context.Background()
-			initial, err := r.Create(ctx, request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			initial := mustCreate(t, r, request)
 			fired := false
 			table.hook = func(op string, item kv.KeyValueItem) (error, error) {
 				match := (stage == "event" && strings.Contains(item.PartitionKey, "/request/")) || (stage == "index" && op == "replace")
@@ -306,7 +260,7 @@ func TestUpdateLostAcknowledgementsAndIndexRepair(t *testing.T) {
 				return nil, nil
 			}
 			update := change(initial, StatusRunning, "start")
-			_, err = r.TryUpdate(ctx, request.Scope, request.ID, update)
+			_, err := r.TryUpdate(ctx, request.Scope, request.ID, update)
 			if !errors.Is(err, contracts.ErrOutcomeUnknown) {
 				t.Fatalf("lost uncertainty: %v", err)
 			}
@@ -333,15 +287,9 @@ func TestUpdateLostAcknowledgementsAndIndexRepair(t *testing.T) {
 func TestOutcomeUnknownRemainsDiscoverable(t *testing.T) {
 	r, _, _, request := fixture(t)
 	ctx := context.Background()
-	record, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustCreate(t, r, request)
 	for _, status := range []Status{StatusRunning, StatusOutcomeUnknown} {
-		record, err = r.TryUpdate(ctx, request.Scope, request.ID, change(record, status, string(status)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		record = mustTryUpdate(t, r, request.Scope, request.ID, change(record, status, string(status)))
 	}
 	shard, _ := PendingShard(request.ID)
 	page, err := r.ListPending(ctx, shard, 1, "")
@@ -355,9 +303,7 @@ func TestTamperingMissingPayloadAndWrongSecretFailClosed(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			r, table, blobs, request := fixture(t)
 			ctx := context.Background()
-			if _, err := r.Create(ctx, request); err != nil {
-				t.Fatal(err)
-			}
+			mustCreate(t, r, request)
 			switch mode {
 			case "ciphertext":
 				for key, data := range blobs.values {
@@ -397,9 +343,7 @@ func TestInvalidRequestsFailBeforeStorageAndCancellationPreserved(t *testing.T) 
 	} {
 		r, table, blobs, request := fixture(t)
 		mutate(&request)
-		if _, err := r.Create(context.Background(), request); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("invalid accepted: %v", err)
-		}
+		requireErrorIs(t, errOf(r.Create(context.Background(), request)), ErrInvalid, "invalid accepted")
 		if len(table.rows) != 0 || len(blobs.values) != 0 {
 			t.Fatal("invalid input caused I/O")
 		}
@@ -407,12 +351,8 @@ func TestInvalidRequestsFailBeforeStorageAndCancellationPreserved(t *testing.T) 
 	r, table, blobs, request := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := r.Create(ctx, request); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancellation lost: %v", err)
-	}
-	if _, err := r.Read(nil, request.Scope, request.ID); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("nil context: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Create(ctx, request)), context.Canceled, "cancellation lost")
+	requireErrorIs(t, errOf(r.Read(nil, request.Scope, request.ID)), ErrInvalid, "nil context")
 	if len(table.rows) != 0 || len(blobs.values) != 0 {
 		t.Fatal("canceled input caused I/O")
 	}
@@ -421,25 +361,16 @@ func TestInvalidRequestsFailBeforeStorageAndCancellationPreserved(t *testing.T) 
 func TestHistoricalRetryAcrossPagesAndFailedTerminalState(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	ctx := context.Background()
-	record, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustCreate(t, r, request)
 	var update Update
 	// The released event library defaults to 100 rows per page. Exercise both
 	// full replay and historical CAS retry after crossing that boundary.
 	for i := 0; i < 105; i++ {
 		update = change(record, StatusRunning, fmt.Sprint(i))
-		record, err = r.TryUpdate(ctx, request.Scope, request.ID, update)
-		if err != nil {
-			t.Fatal(err)
-		}
+		record = mustTryUpdate(t, r, request.Scope, request.ID, update)
 	}
 	for _, status := range []Status{StatusOutcomeUnknown, StatusRunning, StatusFailed} {
-		record, err = r.TryUpdate(ctx, request.Scope, request.ID, change(record, status, string(status)))
-		if err != nil {
-			t.Fatal(err)
-		}
+		record = mustTryUpdate(t, r, request.Scope, request.ID, change(record, status, string(status)))
 	}
 	r = reopen(t, table, blobs)
 	retried, err := r.TryUpdate(ctx, request.Scope, request.ID, update)
@@ -450,18 +381,13 @@ func TestHistoricalRetryAcrossPagesAndFailedTerminalState(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(loaded, record) {
 		t.Fatalf("paged replay: %v", err)
 	}
-	if _, err := r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "restart")); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("failed request was mutable: %v", err)
-	}
+	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "restart"))), ErrInvalid, "failed request was mutable")
 }
 
 func TestRejectedUpdatesDoNotWrite(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	ctx := context.Background()
-	record, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustCreate(t, r, request)
 	for _, mutate := range []func(*Update){
 		func(u *Update) { u.ExpectedRevision = 0 }, func(u *Update) { u.ExpectedRevision = maxRevisions },
 		func(u *Update) { u.Token = "" }, func(u *Update) { u.Status = "canceled" },
@@ -470,19 +396,13 @@ func TestRejectedUpdatesDoNotWrite(t *testing.T) {
 	} {
 		u := change(record, StatusRunning, "start")
 		mutate(&u)
-		if _, err := r.TryUpdate(ctx, request.Scope, request.ID, u); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("bad update: %v", err)
-		}
+		requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, u)), ErrInvalid, "bad update")
 	}
 	u := change(record, StatusRunning, "start")
 	u.ExpectedRevision++
-	if _, err := r.TryUpdate(ctx, request.Scope, request.ID, u); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("future revision: %v", err)
-	}
+	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, u)), contracts.ErrConflict, "future revision")
 	u.ExpectedRevision--
-	if _, err := r.TryUpdate(ctx, Scope{Tenant: "other", Project: request.Scope.Project}, request.ID, u); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("foreign update: %v", err)
-	}
+	requireErrorIs(t, errOf(r.TryUpdate(ctx, Scope{Tenant: "other", Project: request.Scope.Project}, request.ID, u)), contracts.ErrNotFound, "foreign update")
 	if len(table.rows) != 2 || len(blobs.values) != 1 {
 		t.Fatal("rejected update wrote state")
 	}

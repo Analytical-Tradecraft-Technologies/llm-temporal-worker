@@ -25,9 +25,7 @@ func TestCloudResponseCacheCompactionOriginAndReplay(t *testing.T) {
 	policy, prompt := "policy-v1", "prompt-v1"
 	cp.CompactionPolicyVersion, cp.CompactionPromptVersion = &policy, &prompt
 	cp.CompactedThroughID = &origin.ID
-	if err := publishCheckpoint(ctx, r.Checkpoints(), cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), cp)
 	parent := llm.CheckpointHandle("ckp_v1.parent")
 	cost := "0.25"
 	response := llm.CompactResponseV1{OperationKey: "compact-key", OperationID: string(cp.OriginOperationID),
@@ -40,13 +38,9 @@ func TestCloudResponseCacheCompactionOriginAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishResponse(t, r, entry)
 	r = reopen(t, table, blobs)
-	if got := lookupResponse(t, r, entry.Key, entry.CompletedAt.Add(365*24*time.Hour)); got == nil || got.ID != entry.ID {
-		t.Fatal("lost compaction artifact")
-	}
+	requireResponseHit(t, r, entry, entry.CompletedAt.Add(365*24*time.Hour), "lost compaction artifact")
 	key := entry.Key
 	key.Fingerprint[0]++ // A source-content/policy change gets a different fingerprint.
 	if got := lookupResponse(t, r, key, entry.CompletedAt); got != nil {
@@ -54,24 +48,15 @@ func TestCloudResponseCacheCompactionOriginAndReplay(t *testing.T) {
 	}
 	child := childCheckpoint(cp, "compact-consumer")
 	child.OriginCacheEntryID = &entry.ID
-	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), child)
 	// The finalization handoff and cache receipt must accept the same compact
 	// consumer row; checking those paths separately missed a kind mismatch.
 	manifest, _ := json.Marshal(map[string]string{"operation_key": string(child.OriginOperationID)})
-	record, err := r.BeginOperation(ctx, Operation{Scope: Scope{Tenant: "tenant", Project: "project"}, Kind: "compact", Key: string(child.OriginOperationID), Manifest: manifest, Now: child.CreatedAt})
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustBeginOperation(t, r, Operation{Scope: Scope{Tenant: "tenant", Project: "project"}, Kind: "compact", Key: string(child.OriginOperationID), Manifest: manifest, Now: child.CreatedAt})
 	handoff := FinalizationHandoff{OperationID: child.OriginOperationID, Mode: "cache", CheckpointScope: child.ScopeID, CheckpointID: child.ID, Payload: json.RawMessage(`{"version":1}`)}
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, child.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveHandoff(t, r, record.Request.Scope, record.Request.ID, handoff, child.CreatedAt)
 	use := cache.ResponseUse{ScopeID: cp.ScopeID, OperationID: child.OriginOperationID, EntryID: entry.ID, CheckpointID: child.ID, CompletedAt: entry.CompletedAt}
-	if err := r.Responses().RecordUse(ctx, use); err != nil {
-		t.Fatal(err)
-	}
+	mustRecordUse(t, r, use)
 	if got, err := r.Responses().ReadUse(ctx, use.ScopeID, use.OperationID); err != nil || got != use {
 		t.Fatalf("compact receipt: %#v %v", got, err)
 	}
@@ -83,9 +68,7 @@ func TestCloudResponseCacheLargeAndToolResponses(t *testing.T) {
 			r, table, blobs, entry, parent := responseCacheFixture(t)
 			ctx := context.Background()
 			var response llm.GenerateResponseV1
-			if err := json.Unmarshal(entry.Response, &response); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, json.Unmarshal(entry.Response, &response))
 			response.Output = []llm.Item{llm.ModelText(strings.Repeat("large answer ", 30000))}
 			if tools {
 				response.Status = llm.ResponseStatusToolCalls
@@ -100,9 +83,7 @@ func TestCloudResponseCacheLargeAndToolResponses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
-				t.Fatal(err)
-			}
+			mustPublishCheckpoint(t, r.Checkpoints(), child)
 			parentHandle := llm.CheckpointHandle("ckp_v1.parent")
 			response.OperationID, response.Checkpoint.Depth, response.Checkpoint.Parent = string(child.OriginOperationID), child.Depth, &parentHandle
 			entry.Response, err = json.Marshal(response)
@@ -110,9 +91,7 @@ func TestCloudResponseCacheLargeAndToolResponses(t *testing.T) {
 				t.Fatal(err)
 			}
 			entry.OriginOperationID, entry.OriginCheckpointID = child.OriginOperationID, child.ID
-			if err := r.Responses().Publish(ctx, entry); err != nil {
-				t.Fatal(err)
-			}
+			mustPublishResponse(t, r, entry)
 			got := lookupResponse(t, reopen(t, table, blobs), entry.Key, entry.CompletedAt)
 			if got == nil || len(got.Response) < len(entry.Response)-10 {
 				t.Fatal("result truncated")
@@ -154,9 +133,7 @@ func TestCloudResponseCacheReceiptFailureBoundaries(t *testing.T) {
 				r, table, blobs, entry, origin := responseCacheFixture(t)
 				ctx := context.Background()
 				child := publishEntryWithReplayChild(t, r, entry, origin)
-				if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
-					t.Fatal(err)
-				}
+				mustPublishCheckpoint(t, r.Checkpoints(), child)
 				use := replayUse(origin, child, entry, entry.CompletedAt)
 				fault := func() (error, error) {
 					if committed {
@@ -174,9 +151,7 @@ func TestCloudResponseCacheReceiptFailureBoundaries(t *testing.T) {
 						return nil, nil
 					}
 				}
-				if err := r.Responses().RecordUse(ctx, use); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-					t.Fatal(err)
-				}
+				requireErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrOutcomeUnknown, "")
 				_, err := r.Responses().ReadUse(ctx, use.ScopeID, use.OperationID)
 				if phase == "row" && committed {
 					if err != nil {
@@ -186,9 +161,7 @@ func TestCloudResponseCacheReceiptFailureBoundaries(t *testing.T) {
 					t.Fatalf("partial receipt: %v", err)
 				}
 				table.hook, blobs.hook = nil, nil
-				if err := reopen(t, table, blobs).Responses().RecordUse(ctx, use); err != nil {
-					t.Fatal(err)
-				}
+				mustRecordUse(t, reopen(t, table, blobs), use)
 			})
 		}
 	}

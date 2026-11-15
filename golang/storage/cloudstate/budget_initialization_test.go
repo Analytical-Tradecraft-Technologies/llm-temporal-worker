@@ -23,9 +23,7 @@ func TestBudgetInitializationHasOneCreatorAndNeverRegresses(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	identity := initializationIdentity()
 	ctx := context.Background()
-	if _, err := r.ReadBudgetInitialization(ctx, identity.Namespace); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("absent receipt = %v", err)
-	}
+	requireErrorIs(t, errOf(r.ReadBudgetInitialization(ctx, identity.Namespace)), contracts.ErrNotFound, "absent receipt =")
 	var wg sync.WaitGroup
 	var creators atomic.Int32
 	receipts := make(chan budget.Initialization, 24)
@@ -67,9 +65,7 @@ func TestBudgetInitializationHasOneCreatorAndNeverRegresses(t *testing.T) {
 	}
 	changed := identity
 	changed.KeyFingerprint = strings.Repeat("b", 64)
-	if _, err := r.PrepareBudgetInitialization(ctx, changed, request.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("key rotation created another budget: %v", err)
-	}
+	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(ctx, changed, request.CreatedAt)), contracts.ErrConflict, "key rotation created another budget")
 	if len(table.rows) != 1 || len(blobs.values) != 0 {
 		t.Fatal("initialization persisted balances or payloads")
 	}
@@ -96,9 +92,7 @@ func TestBudgetInitializationLostRepliesDoNotReissueCreationPermission(t *testin
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := r.CompleteBudgetInitialization(ctx, p.Receipt); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-					t.Fatal(err)
-				}
+				requireErrorIs(t, r.CompleteBudgetInitialization(ctx, p.Receipt), contracts.ErrOutcomeUnknown, "")
 			}
 			table.hook = nil
 			p, err = reopen(t, table, blobs).PrepareBudgetInitialization(ctx, identity, request.CreatedAt)
@@ -120,9 +114,7 @@ func TestBudgetInitializationRejectsConflictsAndCorruptReceipts(t *testing.T) {
 			}
 			other := p.Receipt
 			other.Epoch = "00000000-0000-4000-8000-000000000001"
-			if err := r.CompleteBudgetInitialization(ctx, other); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatalf("wrong epoch = %v", err)
-			}
+			requireErrorIs(t, r.CompleteBudgetInitialization(ctx, other), contracts.ErrConflict, "wrong epoch =")
 			key := r.budgetInitializationKey(p.Receipt.Identity.Namespace)
 			row := table.rows[key]
 			value := p.Receipt
@@ -150,12 +142,8 @@ func TestBudgetInitializationRejectsConflictsAndCorruptReceipts(t *testing.T) {
 				row.Item = r.budgetInitializationItem(value)
 			}
 			table.rows[key] = row
-			if _, err := r.ReadBudgetInitialization(ctx, p.Receipt.Identity.Namespace); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("read corrupt receipt = %v", err)
-			}
-			if err := r.CompleteBudgetInitialization(ctx, p.Receipt); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("repaired corrupt receipt = %v", err)
-			}
+			requireErrorIs(t, errOf(r.ReadBudgetInitialization(ctx, p.Receipt.Identity.Namespace)), ErrCorrupt, "read corrupt receipt =")
+			requireErrorIs(t, r.CompleteBudgetInitialization(ctx, p.Receipt), ErrCorrupt, "repaired corrupt receipt =")
 		})
 	}
 }
@@ -164,15 +152,9 @@ func TestBudgetInitializationRejectsCanceledOrInvalidPreparation(t *testing.T) {
 	r, table, _, request := fixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := r.PrepareBudgetInitialization(ctx, initializationIdentity(), request.CreatedAt); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if _, err := r.PrepareBudgetInitialization(context.Background(), budget.InitializationIdentity{}, request.CreatedAt); !errors.Is(err, ErrInvalid) {
-		t.Fatal(err)
-	}
-	if _, err := r.PrepareBudgetInitialization(context.Background(), initializationIdentity(), time.Time{}); !errors.Is(err, ErrInvalid) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(ctx, initializationIdentity(), request.CreatedAt)), context.Canceled, "")
+	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(context.Background(), budget.InitializationIdentity{}, request.CreatedAt)), ErrInvalid, "")
+	requireErrorIs(t, errOf(r.PrepareBudgetInitialization(context.Background(), initializationIdentity(), time.Time{})), ErrInvalid, "")
 	if len(table.rows) != 0 {
 		t.Fatal("invalid initialization wrote a receipt")
 	}

@@ -14,7 +14,6 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
-	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -22,10 +21,7 @@ import (
 func preparationFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Record, RequestPreparation) {
 	t.Helper()
 	r, table, blobs, op := operationFixture(t)
-	record, err := r.BeginOperation(context.Background(), op)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustBeginOperation(t, r, op)
 	decimal, _ := llm.NewDecimalV1("0.123456789012345678")
 	settings := state.RootModelState("private-model")
 	settings.TemperatureDecimal = &decimal
@@ -43,12 +39,8 @@ func preparationFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, 
 func TestRequestPreparationRestartAndEncryption(t *testing.T) {
 	r, table, blobs, record, preparation := preparationFixture(t)
 	ctx := context.Background()
-	if _, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrRequestPreparationMissing) {
-		t.Fatalf("initial read: %v", err)
-	}
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)), ErrRequestPreparationMissing, "initial read")
+	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
 	reopened := reopen(t, table, blobs)
 	got, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
 	if err != nil || !equalExecutionJSON(got, preparation) {
@@ -62,9 +54,7 @@ func TestRequestPreparationRestartAndEncryption(t *testing.T) {
 	if _, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); err != nil {
 		t.Fatal("returned data aliased storage", err)
 	}
-	if _, err := reopened.LoadRequestPreparation(ctx, Scope{Tenant: record.Request.Scope.Tenant, Project: "other"}, record.Request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("cross-scope: %v", err)
-	}
+	requireErrorIs(t, errOf(reopened.LoadRequestPreparation(ctx, Scope{Tenant: record.Request.Scope.Tenant, Project: "other"}, record.Request.ID)), contracts.ErrNotFound, "cross-scope")
 	var stored [][]byte
 	for key, row := range table.rows {
 		data, _ := row.Item.Fields.MarshalBinary()
@@ -80,11 +70,8 @@ func TestRequestPreparationRestartAndEncryption(t *testing.T) {
 			}
 		}
 	}
-	table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("healthy replay wrote a row"); return nil, nil }
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("healthy replay wrote a blob"); return nil, nil }
-	if err := reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
+	forbidWrites(t, table, blobs, "healthy replay")
+	mustSavePreparation(t, reopened, record.Request.Scope, record.Request.ID, preparation)
 }
 
 func TestRequestPreparationConcurrentProposalsHaveOneWinner(t *testing.T) {
@@ -129,16 +116,9 @@ func TestRequestPreparationCannotBeAddedAfterAdmission(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			r, _, _, record, preparation := preparationFixture(t)
 			data, _ := json.Marshal(map[string]any{"version": 1, key: map[string]any{}})
-			_, err := r.TryUpdate(context.Background(), record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "started", Status: StatusRunning, Progress: data, UpdatedAt: record.UpdatedAt})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := r.SaveRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID, preparation); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatalf("late save: %v", err)
-			}
-			if _, err := r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("missing started preparation treated as cache miss: %v", err)
-			}
+			mustTryUpdate(t, r, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "started", Status: StatusRunning, Progress: data, UpdatedAt: record.UpdatedAt})
+			requireErrorIs(t, r.SaveRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID, preparation), contracts.ErrConflict, "late save")
+			requireErrorIs(t, errOf(r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID)), ErrCorrupt, "missing started preparation treated as cache miss")
 		})
 	}
 }
@@ -146,13 +126,8 @@ func TestRequestPreparationCannotBeAddedAfterAdmission(t *testing.T) {
 func TestRequestPreparationPreservesOtherProgressAndRejectsReplacement(t *testing.T) {
 	r, _, _, record, p := preparationFixture(t)
 	ctx := context.Background()
-	_, err := r.TryUpdate(ctx, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "other", Status: StatusRunning, Progress: json.RawMessage(`{"version":1,"other":{"large":9007199254740993}}`), UpdatedAt: record.UpdatedAt})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, p); err != nil {
-		t.Fatal(err)
-	}
+	mustTryUpdate(t, r, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: "other", Status: StatusRunning, Progress: json.RawMessage(`{"version":1,"other":{"large":9007199254740993}}`), UpdatedAt: record.UpdatedAt})
+	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, p)
 	current, _ := r.Read(ctx, record.Request.Scope, record.Request.ID)
 	if !strings.Contains(string(current.Progress), `"large":9007199254740993`) {
 		t.Fatal("lost unrelated exact progress")
@@ -160,16 +135,12 @@ func TestRequestPreparationPreservesOtherProgressAndRejectsReplacement(t *testin
 	for _, mutate := range []func(*RequestPreparation){func(p *RequestPreparation) { p.ConfigDigest[0]++ }, func(p *RequestPreparation) { p.CheckpointScope += "-other" }, func(p *RequestPreparation) { p.PreparedAt = p.PreparedAt.Add(time.Second) }, func(p *RequestPreparation) { p.ParentSnapshot = nil }} {
 		changed := p
 		mutate(&changed)
-		if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed); !errors.Is(err, contracts.ErrConflict) {
-			t.Fatalf("replaced saved preparation: %v", err)
-		}
+		requireErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed), contracts.ErrConflict, "replaced saved preparation")
 	}
 	for _, mutate := range []func(*RequestPreparation){func(p *RequestPreparation) { p.Version = 2 }, func(p *RequestPreparation) { p.ConfigDigest = [32]byte{} }, func(p *RequestPreparation) { p.CheckpointScope = "" }, func(p *RequestPreparation) { p.ParentSnapshot = json.RawMessage(`{}`) }, func(p *RequestPreparation) { p.PreparedAt = time.Time{} }} {
 		invalid := p
 		mutate(&invalid)
-		if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("accepted invalid preparation: %v", err)
-		}
+		requireErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid), ErrInvalid, "accepted invalid preparation")
 	}
 }
 
@@ -183,9 +154,7 @@ func TestRequestPreparationUncertainWritesRepairWithoutChangingInput(t *testing.
 				t.Fatalf("fault not observed: %v", err)
 			}
 			table.hook, blobs.hook = nil, nil
-			if err := reopen(t, table, blobs).SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, plan); err != nil {
-				t.Fatal(err)
-			}
+			mustSavePreparation(t, reopen(t, table, blobs), record.Request.Scope, record.Request.ID, plan)
 			stored, err := reopen(t, table, blobs).LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil || !reflect.DeepEqual(stored.ConfigDigest, plan.ConfigDigest) {
 				t.Fatalf("recovery changed preparation: %v", err)
@@ -219,10 +188,7 @@ func rewritePreparation(t *testing.T, r *Repository, record Record, raw any) Rec
 	}
 	progress["request_preparation"], _ = json.Marshal(raw)
 	data, _ := json.Marshal(progress)
-	updated, err := r.TryUpdate(context.Background(), record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: fmt.Sprintf("rewrite-%d", record.Revision), Status: record.Status, Progress: data, UpdatedAt: record.UpdatedAt})
-	if err != nil {
-		t.Fatal(err)
-	}
+	updated := mustTryUpdate(t, r, record.Request.Scope, record.Request.ID, Update{ExpectedRevision: record.Revision, Token: fmt.Sprintf("rewrite-%d", record.Revision), Status: record.Status, Progress: data, UpdatedAt: record.UpdatedAt})
 	return updated
 }
 
@@ -233,13 +199,8 @@ func TestRequestPreparationStoresParentOnceByReference(t *testing.T) {
 	r, table, blobs, record, preparation := preparationFixture(t)
 	r.parentSnapshotBlob = true
 	ctx := context.Background()
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
-	current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
+	current := mustRead(t, r, record.Request.Scope, record.Request.ID)
 	stored := storedPreparationOf(t, current)
 	ref := stored.ParentSnapshotRef
 	if ref == nil || len(stored.ParentSnapshot) != 0 || bytes.Contains(current.Progress, []byte(`"parent_snapshot"`)) {
@@ -265,15 +226,11 @@ func TestRequestPreparationStoresParentOnceByReference(t *testing.T) {
 	_ = json.Unmarshal(current.Progress, &progress)
 	progress["other"] = json.RawMessage(`{"stage":1}`)
 	data, _ := json.Marshal(progress)
-	if _, err := r.TryUpdate(ctx, current.Request.Scope, current.Request.ID, Update{ExpectedRevision: current.Revision, Token: "other", Status: StatusRunning, Progress: data, UpdatedAt: current.UpdatedAt}); err != nil {
-		t.Fatal(err)
-	}
+	mustTryUpdate(t, r, current.Request.Scope, current.Request.ID, Update{ExpectedRevision: current.Revision, Token: "other", Status: StatusRunning, Progress: data, UpdatedAt: current.UpdatedAt})
 	if len(blobs.values) != before+1 {
 		t.Fatalf("progress write stored %d blobs", len(blobs.values)-before)
 	}
-	if _, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)))
 }
 
 // TestRequestPreparationLegacyInlineStillLoads keeps preparations saved before
@@ -288,22 +245,14 @@ func TestRequestPreparationLegacyInlineStillLoads(t *testing.T) {
 		t.Fatalf("legacy load: %v", err)
 	}
 	// An identical retry recognises the legacy form and writes nothing.
-	table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("legacy replay wrote a row"); return nil, nil }
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("legacy replay wrote a blob"); return nil, nil }
-	if err := reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
+	forbidWrites(t, table, blobs, "legacy replay")
+	mustSavePreparation(t, reopened, record.Request.Scope, record.Request.ID, preparation)
 	table.hook, blobs.hook = nil, nil
 	changed := preparation
 	changed.ConfigDigest[0]++
-	if err := reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("replaced legacy preparation: %v", err)
-	}
+	requireErrorIs(t, reopened.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, changed), contracts.ErrConflict, "replaced legacy preparation")
 	// A paid attempt copies the legacy preparation and loads it.
-	attempt, err := reopened.BeginRequestAttempt(ctx, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	attempt := mustBeginRequestAttempt(t, reopened, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
 	if child, err := reopened.LoadRequestPreparation(ctx, record.Request.Scope, attempt.ID); err != nil || !bytes.Equal(child.ParentSnapshot, preparation.ParentSnapshot) {
 		t.Fatalf("legacy attempt preparation: %v", err)
 	}
@@ -315,17 +264,9 @@ func TestRequestPreparationAttemptSharesParentReference(t *testing.T) {
 	r, _, _, record, preparation := preparationFixture(t)
 	r.parentSnapshotBlob = true
 	ctx := context.Background()
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
-	attempt, err := r.BeginRequestAttempt(ctx, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	child, err := r.Read(ctx, record.Request.Scope, attempt.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
+	attempt := mustBeginRequestAttempt(t, r, record.Request.Scope, record.Request.ID, "", record.UpdatedAt)
+	child := mustRead(t, r, record.Request.Scope, attempt.ID)
 	stored := storedPreparationOf(t, child)
 	if stored.ParentSnapshotRef == nil || *stored.ParentSnapshotRef != r.newParentSnapshotRef(record.Request.Scope, preparation.ParentSnapshot) || len(stored.ParentSnapshot) != 0 {
 		t.Fatal("attempt does not share the parent reference")
@@ -368,9 +309,7 @@ func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
 	for name, corrupt := range cases {
 		t.Run(name, func(t *testing.T) {
 			r, record, _ := corruptedPreparation(t, corrupt)
-			if _, err := r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
-				t.Fatalf("accepted a corrupt parent: %v", err)
-			}
+			requireErrorIsNot(t, errOf(r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID)), ErrCorrupt, contracts.ErrNotFound, "accepted a corrupt parent")
 		})
 	}
 }
@@ -386,14 +325,8 @@ func corruptedPreparation(t *testing.T, corrupt parentCorruption) (*Repository, 
 	t.Helper()
 	r, table, blobs, record, preparation := preparationFixture(t)
 	r.parentSnapshotBlob = true
-	ctx := context.Background()
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
-	current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
+	current := mustRead(t, r, record.Request.Scope, record.Request.ID)
 	corrupt(t, r, blobs, current, preparation, storedPreparationOf(t, current))
 	return reopen(t, table, blobs), record, preparation
 }
@@ -421,9 +354,7 @@ func extendParentLength(t *testing.T, r *Repository, _ *memoryBlobs, record Reco
 func moveParentToForeignScope(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
 	foreignScope := Scope{Tenant: "other-tenant", Project: "other-project"}
 	foreign := r.newParentSnapshotRef(foreignScope, p.ParentSnapshot)
-	if _, err := r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot)))
 	stored.ParentSnapshotRef = &foreign
 	rewritePreparation(t, r, record, stored)
 }
@@ -444,13 +375,8 @@ func TestRequestPreparationStorageSettingWritesAndReads(t *testing.T) {
 			}
 			r.parentSnapshotBlob = writerBlob
 			ctx := context.Background()
-			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-				t.Fatal(err)
-			}
-			current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
+			current := mustRead(t, r, record.Request.Scope, record.Request.ID)
 			stored := storedPreparationOf(t, current)
 			if (stored.ParentSnapshotRef != nil) != writerBlob || (len(stored.ParentSnapshot) != 0) == writerBlob {
 				t.Fatalf("stored form: reference=%t inline=%t", stored.ParentSnapshotRef != nil, len(stored.ParentSnapshot) != 0)
@@ -464,8 +390,7 @@ func TestRequestPreparationStorageSettingWritesAndReads(t *testing.T) {
 				}
 				// An identical save under the other setting accepts the winner
 				// and writes nothing.
-				table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("identical save wrote a row"); return nil, nil }
-				blobs.hook = func(blob.BlobKey) (error, error) { t.Error("identical save wrote a blob"); return nil, nil }
+				forbidWrites(t, table, blobs, "identical save")
 				if err := reader.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
 					t.Fatalf("identical save, blob=%t: %v", readerBlob, err)
 				}
@@ -517,13 +442,9 @@ func TestRequestPreparationConfigActivation(t *testing.T) {
 	ctx := context.Background()
 	invalid := preparation
 	invalid.ConfigActivatedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("invalid activation: %v", err)
-	}
+	requireErrorIs(t, r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, invalid), ErrInvalid, "invalid activation")
 	preparation.ConfigActivatedAt = preparation.PreparedAt.Add(-time.Hour).In(time.FixedZone("x", 3600))
-	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
+	mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
 	got, err := r.LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID)
 	if err != nil || !got.ConfigActivatedAt.Equal(preparation.ConfigActivatedAt) || got.ConfigActivatedAt.Location() != time.UTC {
 		t.Fatalf("activation = %v, %v", got.ConfigActivatedAt, err)

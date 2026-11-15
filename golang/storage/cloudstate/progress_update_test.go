@@ -23,10 +23,7 @@ func TestEncodeProgressRejectsOversizedPayload(t *testing.T) {
 func TestTryProgressUpdateClampsTimeAndReportsRaces(t *testing.T) {
 	r, _, _, request := fixture(t)
 	ctx := context.Background()
-	record, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustCreate(t, r, request)
 	progress := json.RawMessage(`{"version":1}`)
 	earlier := record.UpdatedAt.Add(-time.Hour)
 	if retry, err := r.tryProgressUpdate(ctx, request.Scope, request.ID, record, "first", StatusRunning, progress, earlier); retry || err != nil {

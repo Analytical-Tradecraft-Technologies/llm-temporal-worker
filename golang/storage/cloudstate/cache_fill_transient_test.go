@@ -87,22 +87,12 @@ func TestCloudFillsMissingBlobIsCorruption(t *testing.T) {
 	head := fillPointerBlob(t, table, store.responses.key("fill", lease.Key))
 	saved := blobs.values[head]
 	delete(blobs.values, head)
-	if _, err := store.Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
-		t.Fatal("dangling fill head treated as absent or transient", err)
-	}
-	if err := store.Complete(ctx, lease, completion); !errors.Is(err, ErrCorrupt) {
-		t.Fatal("dangling fill head completed", err)
-	}
+	requireErrorIs(t, errOf(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill head treated as absent or transient")
+	requireErrorIs(t, store.Complete(ctx, lease, completion), ErrCorrupt, "dangling fill head completed")
 	blobs.values[head] = saved
-	if err := store.Complete(ctx, lease, completion); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, store.Complete(ctx, lease, completion))
 	// The sealed receipt binds the terminal head's blob.
 	delete(blobs.values, fillPointerBlob(t, table, store.terminalKey(lease)))
-	if _, err := store.Acquire(ctx, lease, lease.AcquiredAt); !errors.Is(err, ErrCorrupt) {
-		t.Fatal("dangling fill receipt treated as absent or transient", err)
-	}
-	if err := store.Complete(ctx, lease, completion); !errors.Is(err, ErrCorrupt) {
-		t.Fatal("dangling fill receipt replayed", err)
-	}
+	requireErrorIs(t, errOf(store.Acquire(ctx, lease, lease.AcquiredAt)), ErrCorrupt, "dangling fill receipt treated as absent or transient")
+	requireErrorIs(t, store.Complete(ctx, lease, completion), ErrCorrupt, "dangling fill receipt replayed")
 }

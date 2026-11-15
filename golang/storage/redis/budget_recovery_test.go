@@ -3,7 +3,6 @@ package redis
 import (
 	"errors"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,18 +14,12 @@ import (
 
 func recoveryFixture(t *testing.T, quotedAt time.Time) (BudgetKeySpace, BudgetRecoveryOperation) {
 	t.Helper()
-	space, err := NewBudgetKeySpace(KeyOptions{Prefix: "test", HashTag: "budget", KeySecret: []byte(strings.Repeat("s", 32))})
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := mustCall(t, NewBudgetKeySpace, testBudgetKeyOptions("budget"))
 	request := durable.ReserveRequest{OperationID: "op", GenerationID: "gen", ExpiresAt: quotedAt.Add(durable.BudgetStartLease), Reservations: []admission.WindowReservation{{
 		PolicyID: "tenant", WindowID: "day", Bucket: quotedAt.UnixNano() / int64(time.Hour), BucketNanos: int64(time.Hour), DurationNanos: int64(24 * time.Hour),
 		AmountUSD: pricing.MustUSD("0.5"), LimitUSD: pricing.MustUSD("10"),
 	}}}
-	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, quotedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, quotedAt)
 	bucketStart, _ := strconv.ParseInt(reservations[0].BucketStart, 10, 64)
 	result := durable.ReserveResult{OperationID: "op", Accepted: true, GenerationID: "gen", IncarnationID: "inc", Events: []budget.ReservationEvent{{
 		EventID: reservations[0].EventID, GenerationID: "gen", OperationID: "op", WindowID: "day", BucketStart: time.Unix(0, bucketStart).UTC(),
@@ -112,14 +105,8 @@ func TestRecoveredRecordAppliesDurableSettlement(t *testing.T) {
 
 func TestRecoveredWindowExpiryRejectsUnrepresentableBounds(t *testing.T) {
 	value := durableReservation{BucketNanos: "3600000000000", DurationNanos: "86400000000000", WindowExpiresMillis: 1}
-	if _, err := recoveredWindowExpiry(value, time.Time{}, time.Unix(1<<50, 0)); !errors.Is(err, ErrBudgetRecoveryConflict) {
-		t.Fatalf("overflowing start = %v", err)
-	}
+	requireErrorIs(t, errOf(recoveredWindowExpiry(value, time.Time{}, time.Unix(1<<50, 0))), ErrBudgetRecoveryConflict, "overflowing start =")
 	value.BucketNanos = "1"
-	if _, err := recoveredWindowExpiry(value, time.Time{}, time.Unix(1700000000, 0)); !errors.Is(err, ErrBudgetRecoveryConflict) {
-		t.Fatalf("sub-millisecond bucket = %v", err)
-	}
-	if _, err := recoveredWindowExpiry(durableReservation{WindowExpiresMillis: 1}, time.UnixMilli(maxRecoveryInteger+1), time.Now()); !errors.Is(err, ErrBudgetRecoveryConflict) {
-		t.Fatalf("unrepresentable recorded expiry = %v", err)
-	}
+	requireErrorIs(t, errOf(recoveredWindowExpiry(value, time.Time{}, time.Unix(1700000000, 0))), ErrBudgetRecoveryConflict, "sub-millisecond bucket =")
+	requireErrorIs(t, errOf(recoveredWindowExpiry(durableReservation{WindowExpiresMillis: 1}, time.UnixMilli(maxRecoveryInteger+1), time.Now())), ErrBudgetRecoveryConflict, "unrepresentable recorded expiry =")
 }

@@ -55,9 +55,7 @@ func TestOpenUsesParsedProviderConfigAndStoreAliases(t *testing.T) {
 	}
 	// The caller may clear the input secret; the repository owns its own copy.
 	clear(secret)
-	if _, err := r.Create(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
+	mustCreate(t, r, request)
 	if _, err := reopen(t, table, blobs).Read(context.Background(), request.Scope, request.ID); err != nil {
 		t.Fatal("secret aliased caller memory", err)
 	}
@@ -93,9 +91,7 @@ func TestOpenAndConstructorRejectInvalidInputs(t *testing.T) {
 	} {
 		o := base
 		mutate(&o)
-		if _, err := NewRepository(o); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("constructor: %v", err)
-		}
+		requireErrorIs(t, errOf(NewRepository(o)), ErrInvalid, "constructor")
 	}
 	config := Config{RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
 	for _, mutate := range []func(*Config){func(c *Config) { c.Namespace = "" }, func(c *Config) { c.RequestTable = "" }, func(c *Config) { c.PayloadStore = "\n" }} {
@@ -153,18 +149,12 @@ func TestOpenProbeRejectsDeletedResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Probe(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, r.Probe(context.Background()))
 	p.blobErr = contracts.ErrNotFound
-	if err := r.Probe(context.Background()); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("missing bucket reported ready: %v", err)
-	}
+	requireErrorIs(t, r.Probe(context.Background()), contracts.ErrNotFound, "missing bucket reported ready")
 	p.blobErr = nil
 	p.tableErr = contracts.ErrPermissionDenied
-	if err := r.Probe(context.Background()); !errors.Is(err, contracts.ErrPermissionDenied) {
-		t.Fatalf("inaccessible table reported ready: %v", err)
-	}
+	requireErrorIs(t, r.Probe(context.Background()), contracts.ErrPermissionDenied, "inaccessible table reported ready")
 }
 
 // awsTableProvider keeps the real AWS DynamoDB provider but serves payloads from
@@ -202,14 +192,7 @@ func awsTableFixture(t *testing.T, status, queryError *atomic.Value) func(contex
 		}
 	}))
 	t.Cleanup(server.Close)
-	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", server.URL)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_SESSION_TOKEN", "")
-	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/absent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/absent")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	useFakeDynamoDB(t, server.URL)
 	_, _, blobs, _ := fixture(t)
 	config := Config{Provider: map[string]any{"type": "aws", "aws": map[string]any{"region": "us-east-1"}, "key_value_stores": map[string]any{"requests": "physical-table"}}, RequestTable: "requests", PayloadStore: "payloads", Namespace: "requests-v1"}
 	initialize := func(ctx context.Context, value map[string]any) (provider.StorageProvider, error) {
@@ -275,4 +258,18 @@ func TestOpenAcceptsUpdatingTable(t *testing.T) {
 			t.Fatalf("%s table opened: %v", state, err)
 		}
 	}
+}
+
+// useFakeDynamoDB points the AWS SDK at endpoint with static test
+// credentials and no shared config, profile or instance metadata.
+func useFakeDynamoDB(t *testing.T, endpoint string) {
+	t.Helper()
+	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", endpoint)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/absent")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/absent")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 }
