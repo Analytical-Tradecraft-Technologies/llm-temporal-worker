@@ -53,7 +53,7 @@ type pinnableDataConverter struct {
 
 var _ converter.ContextAware = (*pinnableDataConverter)(nil)
 
-func (dataConverter *pinnableDataConverter) WithWorkflowContext(ctx converter.WorkflowContext) converter.DataConverter {
+func (dataConverter *pinnableDataConverter) WithWorkflowContext(ctx workflow.Context) converter.DataConverter {
 	pinned, ok := pinnedPayloadLimits(ctx)
 	if !ok || pinned.inlineBytes() == dataConverter.limits.inlineBytes() {
 		return dataConverter
@@ -87,7 +87,7 @@ func WorkflowPayloadLimits(ctx workflow.Context, fallback PayloadLimits) Payload
 	return fallback
 }
 
-func pinnedPayloadLimits(ctx converter.WorkflowContext) (PayloadLimits, bool) {
+func pinnedPayloadLimits(ctx workflow.Context) (PayloadLimits, bool) {
 	if ctx == nil {
 		return PayloadLimits{}, false
 	}
