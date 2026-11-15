@@ -54,7 +54,8 @@ func (runtime *Runtime) reloadFile(ctx context.Context, path string, accept func
 	}
 	cleanupIncomplete := err != nil
 	version := ""
-	if current := runtime.App.Current(); current != nil && current.Config != nil {
+	current := runtime.App.Current()
+	if current != nil && current.Config != nil {
 		version = current.Config.ConfigVersion()
 	}
 	runtime.Metrics.RecordConfigReload("success")
@@ -63,6 +64,9 @@ func (runtime *Runtime) reloadFile(ctx context.Context, path string, accept func
 		message = "configuration reloaded; previous snapshot cleanup did not finish before reload returned"
 	}
 	runtime.Logger.Info(ctx, message, slog.String("outcome", "success"), slog.String("config_version", version))
+	if current != nil && current.Config != nil {
+		warnRotatableEnvSecrets(ctx, runtime.Logger, current.Config.Config())
+	}
 	return nil
 }
 

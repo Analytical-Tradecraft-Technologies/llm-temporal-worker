@@ -44,6 +44,15 @@ endpoints:
     auth: {kind: workload_identity, audience: https://cognitiveservices.azure.com}
 ```
 
+A reload re-reads every `file` reference, but a process cannot see a new
+value for an `env` reference. In production (any `environment` other than
+`development`) `validate-config` prints a `warning:` line on standard error,
+and the worker logs a warning with `config_field`, for each reloadable
+credential configured as `kind: env`: `state.redis.password`,
+`langfuse.public_key`, `langfuse.secret_key` and
+`continuation.handle_keys[*].secret`. The configuration stays valid. See
+[rotating runtime credentials](../runbooks/rotating-runtime-credentials.md).
+
 The effective non-secret configuration is canonicalized and hashed as
 `config_version`.
 
@@ -54,8 +63,13 @@ It is separate from `state.redis.username` and `state.redis.password`, which are
 only authentication credentials. All workers sharing a Redis prefix must use the
 same identity secret. Rotating the ACL credentials must leave it unchanged.
 A missing or short identity secret fails startup instead of selecting a new
-namespace. Do not rotate this key as an ordinary password rotation: that needs
-an explicit state migration.
+namespace. Do not rotate this key as an ordinary password rotation. Replacing
+it means a new Redis namespace (a new `key_prefix` or `admission_hash_tag`,
+initialized with `budget-initialize`) and a full drain of the task queue; see
+[key compromise and credential rotation](../architecture/key-compromise-and-credential-rotation.md#redis-namespace-identity-staterediskey_secret).
+In a production durable deployment, changed bytes behind the same reference
+and namespace fail the budget receipt check, so startup fails and a reload is
+rejected.
 
 For an existing pre-release namespace that used password-derived keys, preserve
 its names by provisioning the **raw 32-byte SHA-256 digest** of the UTF-8 prefix
@@ -190,7 +204,9 @@ The setting is opt-in. When it is omitted, behaviour, payload bytes and the
   Any configured key decrypts. To rotate: add the new key as non-primary to
   every worker and caller; then make it primary; remove the old key only after
   every history that used it has passed its retention period. A payload whose
-  key is not configured fails to decode rather than being skipped.
+  key is not configured fails to decode rather than being skipped. What a
+  leaked key exposes and how to revoke it are in
+  [key compromise and credential rotation](../architecture/key-compromise-and-credential-rotation.md#temporal-payload-codec-keys-temporalpayload_codec).
 - **Fail closed.** Validation rejects an unknown kind, an empty key list, a
   duplicate or malformed key ID, an invalid secret reference, and any count of
   primary keys other than one. At startup, a secret that cannot be resolved or
@@ -653,7 +669,10 @@ telemetry:
 `primary: true` key. Each ID is embedded in every handle it signs, so it must be
 1-32 characters from `A-Z a-z 0-9 _ -`. This is stricter than
 `temporal.payload_codec` key IDs: `.` is not allowed, so an ID such as
-`key.2026.07` is rejected.
+`key.2026.07` is rejected. The key list is reloadable, but the bytes behind an
+existing ID must never change: rotate by adding a new ID, promoting it on
+every worker, and removing the old one after `state.continuation_retention`.
+See [rotating runtime credentials](../runbooks/rotating-runtime-credentials.md#continuation-handle-keys).
 
 `continuation.allow_provider_hosted_state` is the global switch for provider-held
 conversation state. A Responses endpoint may store responses or continue from

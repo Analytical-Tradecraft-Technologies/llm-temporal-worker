@@ -90,6 +90,8 @@ worker database; the service has no deployed SQL data. See the
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
+- [Key compromise and credential rotation design (#1559)](architecture/key-compromise-and-credential-rotation.md)
+- [Rotating runtime credentials runbook](runbooks/rotating-runtime-credentials.md)
 
 ## v1 completion gate
 

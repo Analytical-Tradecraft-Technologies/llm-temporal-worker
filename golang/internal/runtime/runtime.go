@@ -267,6 +267,7 @@ func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
 		return nil, err
 	}
 	options.Logger = logger
+	warnRotatableEnvSecrets(ctx, logger, configuration)
 	temporalFactory := options.TemporalFactory
 	if temporalFactory == nil {
 		temporalFactory = DefaultTemporalClientFactory{Identity: options.Identity, Logger: logger, SecretResolver: secretResolver}

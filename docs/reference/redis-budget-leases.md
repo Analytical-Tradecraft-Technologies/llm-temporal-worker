@@ -25,10 +25,11 @@ It has no TTL and records no balances, limits, operations, or journal events;
 budget accounting remains entirely in Redis. Limits and the payload encryption
 key are excluded from its identity so changing them cannot reset accounting.
 The Redis marker is `<prefix>:{<admission_hash_tag>}:budget:authority`, a string
-without expiry. A changed Redis key secret fails the identity check and needs
-a separately designed migration. The default CLI derives that key secret from
-the Redis password, so password rotation also requires preserving accounting
-identity through an explicit migration.
+without expiry. A changed Redis key secret fails the identity check. The key
+secret is `state.redis.key_secret`, independent of the Redis password, so
+password rotation does not touch accounting identity. Replacing the key
+secret means a new namespace and a full drain; see
+[key compromise and credential rotation](../architecture/key-compromise-and-credential-rotation.md#redis-namespace-identity-staterediskey_secret).
 
 Production startup reads the ready receipt once for its snapshot. Readiness
 then checks the matching persistent **budget authority marker** using read-only

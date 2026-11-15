@@ -193,6 +193,12 @@ func executeConfigCommand(ctx context.Context, args []string, options CommandOpt
 		_, _ = io.WriteString(options.Out, "\n")
 		return 0
 	}
+	// Hardening warnings go to stderr and do not change the exit status: the
+	// configuration is valid, but these credentials cannot be rotated by a
+	// reload (#1559).
+	for _, field := range snapshot.Config().RotatableEnvSecretFields() {
+		_, _ = fmt.Fprintf(options.ErrOut, "warning: %s uses kind: env; rotating it needs a restart, so use a file reference and SIGHUP instead\n", field)
+	}
 	_, _ = fmt.Fprintf(options.Out, "valid config version %s\n", snapshot.ConfigVersion())
 	return 0
 }
