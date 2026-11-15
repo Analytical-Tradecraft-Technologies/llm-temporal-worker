@@ -191,14 +191,8 @@ func (store *BudgetWorkerLeaseStore) Register(ctx context.Context, generation Bu
 			}
 			lease.Cursor = cursor
 		}
-		if rosterRaw, rosterErr := store.client.HGet(ctx, store.keys.WorkersKey(), store.rosterField()).Result(); rosterErr == nil {
-			priorRoster, rosterDecodeErr := decodeBudgetWorkerRoster(rosterRaw)
-			if rosterDecodeErr != nil {
-				return BudgetWorkerLease{}, rosterDecodeErr
-			}
-			roster.RegisteredAt = priorRoster.RegisteredAt
-		} else if !errors.Is(rosterErr, redisclient.Nil) {
-			return BudgetWorkerLease{}, fmt.Errorf("read existing budget worker roster: %w", rosterErr)
+		if roster.RegisteredAt, err = store.registeredAt(ctx, roster.RegisteredAt, "read existing budget worker roster"); err != nil {
+			return BudgetWorkerLease{}, err
 		}
 	} else if !errors.Is(err, redisclient.Nil) {
 		return BudgetWorkerLease{}, fmt.Errorf("read existing budget worker lease: %w", err)
@@ -255,19 +249,30 @@ func (store *BudgetWorkerLeaseStore) Renew(ctx context.Context, generation Budge
 	}
 	lease := BudgetWorkerLease{Schema: BudgetWorkerLeaseSchema, SessionID: store.sessionID, GenerationID: generation, Cursor: cursor, LeaseExpiresAt: now.Add(ttl), UpdatedAt: now}
 	roster := BudgetWorkerRoster{Schema: BudgetWorkerLeaseSchema, SessionID: store.sessionID, GenerationID: generation, RegisteredAt: prior.UpdatedAt, LastSeenAt: now}
-	if rawRoster, rosterErr := store.client.HGet(ctx, store.keys.WorkersKey(), store.rosterField()).Result(); rosterErr == nil {
-		priorRoster, rosterDecodeErr := decodeBudgetWorkerRoster(rawRoster)
-		if rosterDecodeErr != nil {
-			return BudgetWorkerLease{}, rosterDecodeErr
-		}
-		roster.RegisteredAt = priorRoster.RegisteredAt
-	} else if !errors.Is(rosterErr, redisclient.Nil) {
-		return BudgetWorkerLease{}, fmt.Errorf("read budget worker roster: %w", rosterErr)
+	if roster.RegisteredAt, err = store.registeredAt(ctx, roster.RegisteredAt, "read budget worker roster"); err != nil {
+		return BudgetWorkerLease{}, err
 	}
 	if err := store.writeRecords(ctx, lease, roster, raw); err != nil {
 		return BudgetWorkerLease{}, err
 	}
 	return lease, nil
+}
+
+// registeredAt returns this session's persistent roster registration time,
+// or fallback when no roster entry exists. readError prefixes a read failure.
+func (store *BudgetWorkerLeaseStore) registeredAt(ctx context.Context, fallback time.Time, readError string) (time.Time, error) {
+	raw, err := store.client.HGet(ctx, store.keys.WorkersKey(), store.rosterField()).Result()
+	if errors.Is(err, redisclient.Nil) {
+		return fallback, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s: %w", readError, err)
+	}
+	prior, err := decodeBudgetWorkerRoster(raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return prior.RegisteredAt, nil
 }
 
 // Release removes only liveness. The roster deliberately remains available to
@@ -289,33 +294,9 @@ func (store *BudgetWorkerLeaseStore) Release(ctx context.Context) error {
 // records are ignored but not deleted; call PruneExpired with a bounded limit
 // from maintenance to avoid unbounded hash work in the readiness path.
 func (store *BudgetWorkerLeaseStore) Live(ctx context.Context, generation BudgetGenerationID, now time.Time) ([]BudgetWorkerLease, error) {
-	if store == nil || store.client == nil {
-		return nil, errors.New("Redis budget worker lease store is nil")
-	}
-	if err := validateGeneration(generation); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	values, err := store.client.HGetAll(ctx, store.keys.WorkersKey()).Result()
-	if err != nil {
-		return nil, fmt.Errorf("list budget worker leases: %w", err)
-	}
-	result := make([]BudgetWorkerLease, 0, len(values))
-	for field, raw := range values {
-		if !strings.HasPrefix(field, budgetWorkerLeaseFieldPrefix) {
-			continue
-		}
-		lease, err := decodeBudgetWorkerLease(raw)
-		if err != nil {
-			return nil, err
-		}
-		if lease.GenerationID == generation && lease.LeaseExpiresAt.After(now.UTC()) {
-			result = append(result, lease)
-		}
-	}
-	return result, nil
+	return listWorkerRecords(ctx, store, generation, budgetWorkerLeaseFieldPrefix, "budget worker leases", decodeBudgetWorkerLease, func(lease BudgetWorkerLease) bool {
+		return lease.GenerationID == generation && lease.LeaseExpiresAt.After(now.UTC())
+	})
 }
 
 // Roster returns persistent process sessions for a generation, including
@@ -323,6 +304,14 @@ func (store *BudgetWorkerLeaseStore) Live(ctx context.Context, generation Budget
 // mistaking an empty lease set for a cold fleet while a reconnecting process
 // can still present its in-memory session ID.
 func (store *BudgetWorkerLeaseStore) Roster(ctx context.Context, generation BudgetGenerationID) ([]BudgetWorkerRoster, error) {
+	return listWorkerRecords(ctx, store, generation, budgetWorkerRosterFieldPrefix, "budget worker roster", decodeBudgetWorkerRoster, func(roster BudgetWorkerRoster) bool {
+		return roster.GenerationID == generation
+	})
+}
+
+// listWorkerRecords decodes every worker hash field with prefix and returns
+// the records keep accepts. kind names the listed records in a read error.
+func listWorkerRecords[T any](ctx context.Context, store *BudgetWorkerLeaseStore, generation BudgetGenerationID, prefix, kind string, decode func(string) (T, error), keep func(T) bool) ([]T, error) {
 	if store == nil || store.client == nil {
 		return nil, errors.New("Redis budget worker lease store is nil")
 	}
@@ -334,19 +323,19 @@ func (store *BudgetWorkerLeaseStore) Roster(ctx context.Context, generation Budg
 	}
 	values, err := store.client.HGetAll(ctx, store.keys.WorkersKey()).Result()
 	if err != nil {
-		return nil, fmt.Errorf("list budget worker roster: %w", err)
+		return nil, fmt.Errorf("list %s: %w", kind, err)
 	}
-	result := make([]BudgetWorkerRoster, 0, len(values))
+	result := make([]T, 0, len(values))
 	for field, raw := range values {
-		if !strings.HasPrefix(field, budgetWorkerRosterFieldPrefix) {
+		if !strings.HasPrefix(field, prefix) {
 			continue
 		}
-		roster, err := decodeBudgetWorkerRoster(raw)
+		record, err := decode(raw)
 		if err != nil {
 			return nil, err
 		}
-		if roster.GenerationID == generation {
-			result = append(result, roster)
+		if keep(record) {
+			result = append(result, record)
 		}
 	}
 	return result, nil

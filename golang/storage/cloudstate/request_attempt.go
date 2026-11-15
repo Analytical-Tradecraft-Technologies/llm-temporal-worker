@@ -143,9 +143,9 @@ func (r *Repository) BeginRequestAttempt(ctx context.Context, scope Scope, rootI
 		proposal.CreatedAt = child.Request.CreatedAt
 		encoded, _ := json.Marshal(proposal)
 		progress["request_attempt"] = encoded
-		data, err := json.Marshal(progress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return RequestAttempt{}, ErrInvalid
+		data, err := encodeProgress(progress)
+		if err != nil {
+			return RequestAttempt{}, err
 		}
 		updatedAt := now.UTC()
 		if updatedAt.Before(child.UpdatedAt) {
@@ -333,9 +333,9 @@ func (r *Repository) retireRequestAttempt(ctx context.Context, scope Scope, acti
 			return contracts.ErrConflict
 		}
 		progress["attempt_retired"], _ = json.Marshal(attemptRetirement{1, active.RootID, reason, now.UTC()})
-		data, err := json.Marshal(progress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return ErrInvalid
+		data, err := encodeProgress(progress)
+		if err != nil {
+			return err
 		}
 		_, err = r.TryUpdate(ctx, scope, active.ID, Update{ExpectedRevision: record.Revision, Token: fmt.Sprintf("retire-attempt-%d", active.Number), Status: status, Progress: data, UpdatedAt: now.UTC()})
 		if errors.Is(err, contracts.ErrConflict) {
@@ -407,18 +407,13 @@ func (r *Repository) completeRequestAttempt(ctx context.Context, root Record, no
 			return contracts.ErrConflict
 		}
 		childProgress["attempt_completed"], _ = json.Marshal(root.Request.ID)
-		data, err := json.Marshal(childProgress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return ErrInvalid
+		data, err := encodeProgress(childProgress)
+		if err != nil {
+			return err
 		}
-		if now.Before(child.UpdatedAt) {
-			now = child.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, root.Request.Scope, active.ID, child, "attempt-complete", StatusCompleted, data, now); !retry {
+			return err
 		}
-		_, err = r.TryUpdate(ctx, root.Request.Scope, active.ID, Update{ExpectedRevision: child.Revision, Token: "attempt-complete", Status: StatusCompleted, Progress: data, UpdatedAt: now})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return err
 	}
 	return contracts.ErrConflict
 }

@@ -3,7 +3,6 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -74,12 +73,8 @@ func (r *Repository) FinishRequestFailure(ctx context.Context, scope Scope, root
 			return contracts.ErrConflict
 		}
 		if child.Status != StatusFailed {
-			at := now.UTC()
-			if at.Before(child.UpdatedAt) {
-				at = child.UpdatedAt
-			}
-			_, err = r.TryUpdate(ctx, scope, attemptID, Update{ExpectedRevision: child.Revision, Token: "attempt-failed", Status: StatusFailed, Progress: child.Progress, UpdatedAt: at})
-			if errors.Is(err, contracts.ErrConflict) {
+			retry, err := r.tryProgressUpdate(ctx, scope, attemptID, child, "attempt-failed", StatusFailed, child.Progress, now.UTC())
+			if retry {
 				continue
 			}
 			if err != nil {
@@ -107,15 +102,9 @@ func (r *Repository) FinishRequestFailure(ctx context.Context, scope Scope, root
 		if err != nil {
 			return ErrInvalid
 		}
-		at := now.UTC()
-		if at.Before(root.UpdatedAt) {
-			at = root.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, scope, rootID, root, "request-failed", StatusFailed, data, now.UTC()); !retry {
+			return err
 		}
-		_, err = r.TryUpdate(ctx, scope, rootID, Update{ExpectedRevision: root.Revision, Token: "request-failed", Status: StatusFailed, Progress: data, UpdatedAt: at})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return err
 	}
 	return contracts.ErrConflict
 }

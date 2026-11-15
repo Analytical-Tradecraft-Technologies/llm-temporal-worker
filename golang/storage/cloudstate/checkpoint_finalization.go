@@ -81,18 +81,13 @@ func (r *Repository) SaveCheckpointFinalization(ctx context.Context, scope Scope
 		if err != nil {
 			return ErrInvalid
 		}
-		data, err := json.Marshal(progress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return ErrInvalid
+		data, err := encodeProgress(progress)
+		if err != nil {
+			return err
 		}
-		if now.Before(record.UpdatedAt) {
-			now = record.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, scope, id, record, "checkpoint-finalization", StatusRunning, data, now); !retry {
+			return err
 		}
-		_, err = r.TryUpdate(ctx, scope, id, Update{ExpectedRevision: record.Revision, Token: "checkpoint-finalization", Status: StatusRunning, Progress: data, UpdatedAt: now})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return err
 	}
 	return contracts.ErrConflict
 }

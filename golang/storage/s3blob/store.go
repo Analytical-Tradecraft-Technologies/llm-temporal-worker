@@ -79,22 +79,12 @@ func (store *Store) Put(ctx context.Context, request blob.PutRequest) (blob.Ref,
 	if err := ctx.Err(); err != nil {
 		return blob.Ref{}, err
 	}
-	if request.Tenant == "" || request.MediaType == "" {
-		return blob.Ref{}, fmt.Errorf("blob tenant and media type are required")
-	}
-	if int64(len(request.Data)) > store.maxBytes {
-		return blob.Ref{}, fmt.Errorf("blob exceeds the configured size limit")
-	}
-	if request.ExpiresAt.IsZero() || !store.clock().Before(request.ExpiresAt) {
-		return blob.Ref{}, blob.ErrExpired
-	}
-	tenantPrefix, err := blob.TenantPrefix(request.Tenant)
+	tenantPrefix, digest, _, err := request.Check(store.maxBytes, store.clock)
 	if err != nil {
 		return blob.Ref{}, err
 	}
-	digest := blob.Digest(request.Data)
 	key := store.key(tenantPrefix, digest)
-	ref := blob.Ref{Store: "s3", Locator: key, Digest: digest, ByteLength: int64(len(request.Data)), MediaType: request.MediaType, ExpiresAt: request.ExpiresAt}
+	ref := request.Ref("s3", key, digest)
 	if err := ref.Validate(store.clock()); err != nil {
 		return blob.Ref{}, err
 	}

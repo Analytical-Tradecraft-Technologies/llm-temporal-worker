@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -88,18 +87,13 @@ func (r *Repository) SaveFinalizationHandoff(ctx context.Context, scope Scope, i
 		// duplicate large response payloads in the current operation view.
 		delete(progress, "checkpoint_finalization")
 		progress["finalization_handoff"] = encoded
-		data, err := json.Marshal(progress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return ErrInvalid
+		data, err := encodeProgress(progress)
+		if err != nil {
+			return err
 		}
-		if now.Before(record.UpdatedAt) {
-			now = record.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, scope, id, record, "finalization-handoff", StatusRunning, data, now); !retry {
+			return err
 		}
-		_, err = r.TryUpdate(ctx, scope, id, Update{ExpectedRevision: record.Revision, Token: "finalization-handoff", Status: StatusRunning, Progress: data, UpdatedAt: now})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return err
 	}
 	return contracts.ErrConflict
 }

@@ -3,7 +3,6 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -77,15 +76,9 @@ func (r *Repository) FinishRequestExhausted(ctx context.Context, scope Scope, ro
 		if err != nil {
 			return llm.ExecutionResultV1{}, ErrInvalid
 		}
-		at := now.UTC()
-		if at.Before(root.UpdatedAt) {
-			at = root.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, scope, rootID, root, "request-attempts-exhausted", StatusFailed, data, now.UTC()); !retry {
+			return failure, err
 		}
-		_, err = r.TryUpdate(ctx, scope, rootID, Update{ExpectedRevision: root.Revision, Token: "request-attempts-exhausted", Status: StatusFailed, Progress: data, UpdatedAt: at})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return failure, err
 	}
 	return llm.ExecutionResultV1{}, contracts.ErrConflict
 }
