@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -274,9 +275,7 @@ entries:
 		"unknown long-prompt field":    {tier: "      min_prompt_tokens: 200000\n      input_per_million: \"6\"\n      output_per_million: \"22.5\"\n      surcharge: \"1\"\n", want: "surcharge"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := LoadPricing(writeCatalog(t, entry+test.tier)); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("LoadPricing() error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(LoadPricing(writeCatalog(t, entry+test.tier))), test.want)
 		})
 	}
 }
@@ -364,16 +363,12 @@ entries:
     source: source-a
     provenance: source-b
 `)
-	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "provenance and source disagree") {
-		t.Fatalf("audit linkage error = %v, want source/provenance mismatch", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(LoadPricing(ref)), "provenance and source disagree")
 }
 
 func TestLoadPricingFailsClosedWhenSourceIsUnavailable(t *testing.T) {
 	ref := config.CatalogRef{File: filepath.Join(t.TempDir(), "unavailable.yaml"), SHA256: strings.Repeat("0", 64)}
-	if _, err := LoadPricing(ref); err == nil || !strings.Contains(err.Error(), "open catalog") {
-		t.Fatalf("source outage error = %v, want bounded open failure", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(LoadPricing(ref)), "open catalog")
 }
 
 func TestLoadRejectsUnknownFieldsDuplicateIDsDigestAndUnsafeSize(t *testing.T) {
@@ -448,22 +443,16 @@ profiles:
 			} else {
 				_, err = LoadCapabilities(ref)
 			}
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 
 	ref := writeCatalog(t, "version: v1\nprofiles: {}\n")
 	ref.SHA256 = strings.Repeat("0", 64)
-	if _, err := LoadCapabilities(ref); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
-		t.Fatalf("digest mismatch error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(LoadCapabilities(ref)), "digest mismatch")
 
 	large := writeCatalog(t, "version: v1\nprofiles: {}\n")
-	if _, err := LoadCapabilitiesWithOptions(large, Options{MaxBytes: 8}); err == nil || !strings.Contains(err.Error(), "exceeds 8 bytes") {
-		t.Fatalf("size error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(LoadCapabilitiesWithOptions(large, Options{MaxBytes: 8})), "exceeds 8 bytes")
 }
 
 func TestLoadRejectsMissingEndpointReferences(t *testing.T) {
@@ -493,13 +482,9 @@ entries:
 			"endpoint": {Family: "openai_chat", CapabilityProfile: "missing", PriceCatalog: "prices"},
 		},
 	}
-	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "missing capability profile") {
-		t.Fatalf("missing capability reference error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(Load(cfg)), "missing capability profile")
 	cfg.Endpoints["endpoint"] = config.EndpointConfig{Family: "openai_chat", CapabilityProfile: "profile", PriceCatalog: "missing"}
-	if _, err := Load(cfg); err == nil || !strings.Contains(err.Error(), "missing price catalog") {
-		t.Fatalf("missing price reference error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(Load(cfg)), "missing price catalog")
 }
 
 func TestEndpointFamilyMapsAnthropicAWSWithoutConflatingBedrock(t *testing.T) {
@@ -603,9 +588,7 @@ func TestLoadCapabilitiesRequiresAContextWindowForDocumentInput(t *testing.T) {
 	profile := func(context string) string {
 		return "version: local-mock-v1\nprofiles:\n  local-mock-v1:\n    family: openai_chat\n    model: demo-model\n    input: [text, document]\n    output: [text]\n" + context + "    max_output_tokens: 4096\n"
 	}
-	if _, err := LoadCapabilities(writeCatalog(t, profile(""))); err == nil || !strings.Contains(err.Error(), "context window") {
-		t.Fatalf("LoadCapabilities() error = %v, want a missing context window error", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(LoadCapabilities(writeCatalog(t, profile("")))), "context window")
 	if _, err := LoadCapabilities(writeCatalog(t, profile("    max_context_tokens: 32768\n"))); err != nil {
 		t.Fatalf("document profile with a context window rejected: %v", err)
 	}

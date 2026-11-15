@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestProbeStateFailsClosedAndDoesNotExposeDetails(t *testing.T) {
@@ -148,9 +149,7 @@ func TestServerReportsBindFailure(t *testing.T) {
 	requireListening(t, err)
 
 	server := newServer(t, httpserver.Options{Address: listener.Addr().String()})
-	if err := server.Start(); err == nil || !strings.Contains(err.Error(), "listen for health server") {
-		t.Fatalf("Start() error = %v, want wrapped listen error", err)
-	}
+	testassert.ErrorContains(t, server.Start(), "listen for health server")
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}

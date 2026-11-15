@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -26,9 +27,7 @@ func TestV1DecodersApplyTheSchemaBounds(t *testing.T) {
 		"query operation_key":   {data: sprintf(query, quote(long)), target: new(llm.QueryRequestV1), want: "operation_key"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := json.Unmarshal([]byte(test.data), test.target); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Unmarshal = %v, want an error naming %s", err, test.want)
-			}
+			testassert.ErrorContains(t, json.Unmarshal([]byte(test.data), test.target), test.want)
 		})
 	}
 	// The bounds are code points, so 256 multi-byte characters still fit.
@@ -73,9 +72,7 @@ func TestV1GenerateResponseRejectsANullActualClass(t *testing.T) {
 	}
 	service["actual"] = nil
 	null, _ := json.Marshal(fixture)
-	if err := json.Unmarshal(null, &response); err == nil || !strings.Contains(err.Error(), "actual") {
-		t.Fatalf("service.actual null: Unmarshal = %v, want an error naming actual", err)
-	}
+	testassert.ErrorContains(t, json.Unmarshal(null, &response), "actual")
 }
 
 func sprintf(format string, values ...string) string {

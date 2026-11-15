@@ -8,6 +8,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -106,9 +107,7 @@ func TestCompileRejectsToolResultWithoutPrecedingCall(t *testing.T) {
 		Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 		Strict: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "no preceding tool call") {
-		t.Fatalf("tool ordering error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "no preceding tool call")
 }
 
 // Chat tool messages carry only content and tool_call_id, so is_error is
@@ -215,18 +214,14 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 	_, err = lowerRequest(llm.Request{Model: "chat-model", Input: []llm.Item{
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{URL: "https://example.test/a.png", MediaType: "image/png"}}},
 	}}, testProfile(), "default")
-	if err == nil || !strings.Contains(err.Error(), "assistant history") {
-		t.Fatalf("assistant image error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "assistant history")
 }
 
 func TestAssistantHistoryRejectsNilPartWithoutPanicking(t *testing.T) {
 	_, err := lowerRequest(llm.Request{Model: "chat-model", Input: []llm.Item{
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{nil}},
 	}}, testProfile(), "default")
-	if err == nil || !strings.Contains(err.Error(), "<nil>") {
-		t.Fatalf("nil assistant part error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "<nil>")
 }
 
 // A successful result that already starts with the reserved prefix would be

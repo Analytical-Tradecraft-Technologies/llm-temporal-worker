@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
@@ -391,9 +392,7 @@ func TestComposeMetricScrapeRejectsOversizedResponse(t *testing.T) {
 	defer server.Close()
 
 	_, err := composeMetricValue(strings.TrimPrefix(server.URL, "http://"), "llmtw_worker_polling")
-	if err == nil || !strings.Contains(err.Error(), "exceeded") {
-		t.Fatalf("oversized metrics response error = %v, want bounded-response error", err)
-	}
+	testassert.ErrorContains(t, err, "exceeded")
 }
 
 func TestComposeMetricScrapeSanitizesParserErrors(t *testing.T) {

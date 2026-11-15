@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -123,9 +124,7 @@ func TestLowerRejectsUnsupportedProviderControlsAndMedia(t *testing.T) {
 	for _, test := range invalidRequests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := lowerRequest(test.request, mustBedrockProfile(t, ""))
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("lowerRequest() = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 	invalidParts := []struct {
@@ -141,9 +140,7 @@ func TestLowerRejectsUnsupportedProviderControlsAndMedia(t *testing.T) {
 	for _, test := range invalidParts {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := lowerPart(test.part)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("lowerPart() = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 }
@@ -177,9 +174,7 @@ func TestLowerReasoningMapsSupportedModesAndRejectsInvalidBudgets(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := wire.LowerReasoning("claude-contract", test.reasoning, true)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("wire.LowerReasoning() = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 }

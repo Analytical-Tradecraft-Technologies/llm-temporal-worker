@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,18 +48,14 @@ func TestMutationOverlaySmoke(t *testing.T) {
 		surviving := mutant
 		surviving.name = "allows-unchanged"
 		surviving.to = "return true"
-		if err := killMutant(root, "go", surviving); err == nil || !strings.Contains(err.Error(), "survived invariant") {
-			t.Fatalf("killMutant() error = %v, want surviving-mutation diagnostic", err)
-		}
+		testassert.ErrorContains(t, killMutant(root, "go", surviving), "survived invariant")
 	})
 
 	t.Run("non-test failure is rejected", func(t *testing.T) {
 		compileFailure := mutant
 		compileFailure.name = "allows-syntax-error"
 		compileFailure.to = "return ("
-		if err := killMutant(root, "go", compileFailure); err == nil || !strings.Contains(err.Error(), "did not fail through invariant") {
-			t.Fatalf("killMutant() error = %v, want invariant-failure diagnostic", err)
-		}
+		testassert.ErrorContains(t, killMutant(root, "go", compileFailure), "did not fail through invariant")
 	})
 }
 
@@ -74,9 +71,7 @@ func TestRunInvariantReportsTestOutput(t *testing.T) {
 
 func TestVerifyRejectsInvalidRepositoryRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing")
-	if err := verify(root, "go"); err == nil || !strings.Contains(err.Error(), "not a directory") {
-		t.Fatalf("verify() error = %v, want invalid-root diagnostic", err)
-	}
+	testassert.ErrorContains(t, verify(root, "go"), "not a directory")
 }
 
 func fixtureMutation() mutation {

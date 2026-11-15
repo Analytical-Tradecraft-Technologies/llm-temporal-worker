@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -332,9 +333,7 @@ func TestQueryServiceRejectsResponseRowsAboveRequestedPageSize(t *testing.T) {
 			request.Query = json.RawMessage(`{"page_size":1}`)
 			service := testQueryService(queryHandlerWith(func(response *llm.QueryResponseV1) { response.Result = test.result }), allowQuery)
 
-			if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page contains 2 rows; limit is 1") {
-				t.Fatalf("Execute() error = %v, want response page-size bound", err)
-			}
+			testassert.ErrorContains(t, testassert.Err(service.Execute(context.Background(), request)), "page contains 2 rows; limit is 1")
 		})
 	}
 }
@@ -346,9 +345,7 @@ func TestQueryServiceAppliesDefaultResponsePageSize(t *testing.T) {
 		response.Result = llm.ProviderStatusPage{Routes: providerRouteRows(101)}
 	}), allowQuery)
 
-	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page contains 101 rows; limit is 100") {
-		t.Fatalf("Execute() error = %v, want default response page-size bound", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(service.Execute(context.Background(), request)), "page contains 101 rows; limit is 100")
 }
 
 func TestQueryServiceRawHandlerAdmitsAllQueryKinds(t *testing.T) {
@@ -420,9 +417,7 @@ func TestQueryServiceRejectsUnsupportedKindAndAuthorization(t *testing.T) {
 	request = queryRequest()
 	request.Query = json.RawMessage(`{"page_size":1001}`)
 	service.Authorize = allowQuery
-	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "page_size") {
-		t.Fatalf("page-size bound error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(service.Execute(context.Background(), request)), "page_size")
 }
 
 func TestQueryServiceCursorsAreBoundToScopeAndFilter(t *testing.T) {
@@ -498,14 +493,10 @@ func TestQueryServiceValidatesOutgoingCursorAgainstFreshTime(t *testing.T) {
 func TestQueryServiceRejectsResponseMismatchAndUnsafeScope(t *testing.T) {
 	request := queryRequest()
 	service := testQueryService(queryHandlerWith(func(response *llm.QueryResponseV1) { response.OperationKey = "other" }), allowQuery)
-	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("response mismatch error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(service.Execute(context.Background(), request)), "does not match")
 	request = queryRequest()
 	request.Context.Actor = " workflow"
-	if _, err := service.Execute(context.Background(), request); err == nil || !strings.Contains(err.Error(), "unsafe") {
-		t.Fatalf("unsafe scope error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(service.Execute(context.Background(), request)), "unsafe")
 }
 
 func TestQueryServiceClassifiesRawHandlerFailureAsRetryableStateUnavailable(t *testing.T) {
@@ -751,9 +742,7 @@ func TestQueryServiceTypedHandlerResponseContractErrorIsNotMappedToStateUnavaila
 		return response, nil
 	}, &CursorCodec{Key: []byte("typed-query-key")}, base)
 	_, err := service.Execute(context.Background(), typedRequestWire(t, typedProviderRequest()))
-	if err == nil || !strings.Contains(err.Error(), "typed query response") {
-		t.Fatalf("typed response contract error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "typed query response")
 	var providerErr *provider.Error
 	if errors.As(err, &providerErr) {
 		t.Fatalf("typed response contract error was mapped to provider error: %#v", providerErr)

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -109,9 +110,7 @@ func TestLoadRejectsLegacyBudgetLimitOutsideTheRedisRange(t *testing.T) {
 	window := &loaded.Budgets.Policies[0].Windows[0]
 	*window = config.BudgetWindow{Duration: window.Duration, Bucket: window.Bucket, LimitMicroUSD: 1 << 53}
 	err := loaded.Validate()
-	if err == nil || !strings.Contains(err.Error(), "budgets.policies[0].windows[0].limit_micro_usd") {
-		t.Fatalf("legacy limit error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "budgets.policies[0].windows[0].limit_micro_usd")
 }
 
 func TestLoadRejectsBudgetMatchersThatCanNeverMatch(t *testing.T) {
@@ -232,7 +231,5 @@ func TestValidateRejectsBudgetEndpointOutsideTheMatchedModel(t *testing.T) {
 	}
 	match.LogicalModel = "invoice-summarizer"
 	err := loaded.Validate()
-	if err == nil || !strings.Contains(err.Error(), `budgets.policies[0].match.endpoint "exa-answer" is not used by a route of model "invoice-summarizer"`) {
-		t.Fatalf("endpoint of another model error = %v", err)
-	}
+	testassert.ErrorContains(t, err, `budgets.policies[0].match.endpoint "exa-answer" is not used by a route of model "invoice-summarizer"`)
 }

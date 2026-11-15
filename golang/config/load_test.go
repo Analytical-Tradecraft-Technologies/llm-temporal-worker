@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 )
@@ -113,14 +114,10 @@ func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
 	}
 
 	unsafe := strings.Replace(configured, "provider_response_bytes: 524288", "provider_response_bytes: 67108865", 1)
-	if _, err := config.Load([]byte(unsafe)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes") {
-		t.Fatalf("unsafe provider response bytes error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(unsafe))), "limits.provider_response_bytes")
 
 	negative := strings.Replace(configured, "provider_response_bytes: 524288", "provider_response_bytes: -1", 1)
-	if _, err := config.Load([]byte(negative)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes") {
-		t.Fatalf("negative provider response bytes error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(negative))), "limits.provider_response_bytes")
 }
 
 // TestLoadRejectsProviderResponseThatCannotBeSaved checks that every response
@@ -146,9 +143,7 @@ func TestLoadRejectsProviderResponseThatCannotBeSaved(t *testing.T) {
 	}
 	// A larger request leaves less of the record for the response.
 	larger := strings.Replace(string(replaceExample(t, setting, "provider_response_bytes: 1267029")), "inline_payload_bytes: 524288", "inline_payload_bytes: 2097152", 1)
-	if _, err := config.Load([]byte(larger)); err == nil || !strings.Contains(err.Error(), "limits.provider_response_bytes must be at most 1004885 with server.inline_payload_bytes 2097152") {
-		t.Fatalf("Load with a 2 MiB inline limit error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(larger))), "limits.provider_response_bytes must be at most 1004885 with server.inline_payload_bytes 2097152")
 }
 
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
@@ -156,9 +151,7 @@ func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
 	requireHeartbeatKeepaliveSecond(t, loaded, "default worker")
 
 	invalid := strings.Replace(string(exampleYAML(t)), "    heartbeat_keepalive_interval: 1s", "    heartbeat_keepalive_interval: -1s", 1)
-	if _, err := config.Load([]byte(invalid)); err == nil || !strings.Contains(err.Error(), "heartbeat_keepalive_interval") {
-		t.Fatalf("invalid heartbeat keepalive interval error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(invalid))), "heartbeat_keepalive_interval")
 }
 
 func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
@@ -202,16 +195,12 @@ func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
 func TestLoadRejectsFileBlobStoreOutsideDevelopment(t *testing.T) {
 	data := fileBlobStoreExample(t)
 	_, err := config.Load([]byte(data))
-	if err == nil || !strings.Contains(err.Error(), "development") {
-		t.Fatalf("file blob store outside development error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "development")
 }
 
 func TestLoadRejectsProductionRedisWithoutTLS(t *testing.T) {
 	_, err := config.Load(redisTLSDisabledYAML(t))
-	if err == nil || !strings.Contains(err.Error(), "state.redis.tls.enabled") {
-		t.Fatalf("production Redis without TLS error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "state.redis.tls.enabled")
 }
 
 func TestLoadAcceptsDevelopmentRedisWithoutTLS(t *testing.T) {
@@ -348,9 +337,7 @@ func TestLoadCanonicalizesAdmissionDigest(t *testing.T) {
 
 func TestLoadRejectsRedisOnlyStateInProduction(t *testing.T) {
 	data := strings.Replace(withoutCloudRequests(string(exampleYAML(t))), "  kind: durable\n", "  kind: redis\n", 1)
-	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "state.kind redis") {
-		t.Fatalf("Redis-only production state was accepted: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(data))), "state.kind redis")
 }
 
 func TestLoadCanonicalizesOutboundProviderHosts(t *testing.T) {
@@ -387,9 +374,7 @@ func TestLoadRejectsAnthropicAWSGatewayEndpointWithoutClosedAWSIdentity(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			data := strings.Replace(anthropicAWSGatewayYAML(t), test.old, test.new, 1)
 			_, err := config.Load([]byte(data))
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Load() error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 }
@@ -433,18 +418,14 @@ func TestLoadRejectsBedrockEndpointsWithoutClosedAWSIdentity(t *testing.T) {
 			if !strings.Contains(data, newBlock) {
 				t.Fatal("test fixture block was not found")
 			}
-			if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "auth.kind must be aws_default_chain for Bedrock") {
-				t.Fatalf("Load() error = %v, want Bedrock default-chain authentication rejection", err)
-			}
+			testassert.ErrorContains(t, testassert.Err(config.Load([]byte(data))), "auth.kind must be aws_default_chain for Bedrock")
 		})
 	}
 }
 
 func TestLoadRejectsAWSWorkspaceIDOnNonAWSGatewayEndpoint(t *testing.T) {
 	_, err := config.Load(replaceExample(t, "  anthropic-direct:\n", "  anthropic-direct:\n    aws_workspace_id: ws-example-123\n"))
-	if err == nil || !strings.Contains(err.Error(), "only valid for Anthropic AWS gateway") {
-		t.Fatalf("Load() error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "only valid for Anthropic AWS gateway")
 }
 
 func anthropicAWSGatewayYAML(t *testing.T) string {
@@ -644,9 +625,7 @@ func TestLoadRejectsFractionalMillisecondBudgetWindows(t *testing.T) {
 	if data == string(exampleYAML(t)) {
 		t.Skip("example has no one-minute bucket to rewrite")
 	}
-	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), "whole milliseconds") {
-		t.Fatalf("Load() error = %v, want a whole-millisecond rejection", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(data))), "whole milliseconds")
 }
 
 // The unauthenticated listener binds only the host in production unless the
@@ -672,9 +651,7 @@ func TestResponsesAPIListenerBindsTheHostInProduction(t *testing.T) {
 			t.Fatalf("acknowledged %s rejected: %v", address, err)
 		}
 	}
-	if _, err := config.Load(with("production", "  responses_api_private_network: true")); err == nil || !strings.Contains(err.Error(), "requires server.responses_api_listen_address") {
-		t.Fatalf("acknowledgement without a listener = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load(with("production", "  responses_api_private_network: true"))), "requires server.responses_api_listen_address")
 	// Development keeps the shape-only rule.
 	if _, err := config.Load(with("development", "  responses_api_listen_address: 0.0.0.0:8000")); err != nil && strings.Contains(err.Error(), "responses_api") {
 		t.Fatalf("development listener rejected: %v", err)

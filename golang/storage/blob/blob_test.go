@@ -2,6 +2,7 @@ package blob
 
 import (
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -74,9 +75,7 @@ func TestRefValidateEnforcesIntegrityMetadataAndExpiry(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Validate() = %v, want error containing %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 			if strings.Contains(test.want, "expired") && !errors.Is(err, ErrExpired) {
 				t.Fatalf("Validate() = %v, want ErrExpired", err)
 			}

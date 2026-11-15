@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"io"
 	"strings"
 	"testing"
@@ -54,9 +55,7 @@ func TestNewKeyringRejectsInvalidConfiguration(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := NewKeyring(test.keys, nil)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 }
@@ -66,9 +65,7 @@ func TestKeyringIssueRejectsEmptyTenantAndEntropyFailure(t *testing.T) {
 	if _, err := keyring.Issue(""); err != ErrInvalidHandle {
 		t.Fatalf("empty tenant error = %v, want ErrInvalidHandle", err)
 	}
-	if _, err := keyring.Issue("tenant"); err == nil || !strings.Contains(err.Error(), "generate continuation handle") {
-		t.Fatalf("entropy failure = %v, want generation error", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(keyring.Issue("tenant")), "generate continuation handle")
 }
 
 func mustKeyring(t testing.TB, keys []Key, reader io.Reader) *Keyring {

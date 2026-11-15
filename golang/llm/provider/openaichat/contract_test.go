@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -15,14 +16,10 @@ import (
 func TestProfileRequiresExplicitFeaturesAndClasses(t *testing.T) {
 	profile := testProfile()
 	delete(profile.Capabilities.Features, provider.FeatureDocument)
-	if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "document") {
-		t.Fatalf("missing feature error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(NewProfile(profile)), "document")
 	profile = testProfile()
 	delete(profile.ServiceTiers, llm.ServiceClassPriority)
-	if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "priority") {
-		t.Fatalf("missing tier error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(NewProfile(profile)), "priority")
 }
 
 func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
@@ -74,9 +71,7 @@ func TestCompileRejectsUnknownCapabilityInStrictMode(t *testing.T) {
 		}},
 		Strict: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "image") {
-		t.Fatalf("strict unknown capability error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "image")
 }
 
 func TestCompileRejectsContinuationBeforeInvocation(t *testing.T) {
@@ -90,9 +85,7 @@ func TestCompileRejectsContinuationBeforeInvocation(t *testing.T) {
 		Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 		Strict: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "continuation") {
-		t.Fatalf("continuation error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "continuation")
 }
 
 func TestInvokeSubmitsExactlyOnceAndLiftsResponse(t *testing.T) {

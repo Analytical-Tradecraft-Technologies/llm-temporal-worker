@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
@@ -227,17 +228,13 @@ func TestValidateResponseRejectsUnpinnedConditionalContinuation(t *testing.T) {
 	response := completedPinnedResponse(profile)
 	response.Continuation.Pinned = false
 
-	if _, err := validateResponse(profile, response); err == nil || !strings.Contains(err.Error(), "pinned continuation") {
-		t.Fatalf("validate unpinned continuation error = %v, want pinned-continuation rejection", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(validateResponse(profile, response)), "pinned continuation")
 }
 
 func TestValidateResponseRejectsEmptyStateConditionalContinuation(t *testing.T) {
 	profile := profileForTest(t, "anthropic-direct")
 
-	if _, err := validateResponse(profile, completedPinnedResponse(profile)); err == nil || !strings.Contains(err.Error(), "replayable provider state") {
-		t.Fatalf("validate empty-state continuation error = %v, want replayable-provider-state rejection", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(validateResponse(profile, completedPinnedResponse(profile))), "replayable provider state")
 }
 
 func TestValidateResponseFailsClosedOnMissingOrOverCeilingFacts(t *testing.T) {
@@ -269,9 +266,7 @@ func TestValidateResponseFailsClosedOnMissingOrOverCeilingFacts(t *testing.T) {
 				response.Continuation = nil
 			}
 			test.mutate(&response)
-			if _, err := validateResponse(test.profile, response); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validate response error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(validateResponse(test.profile, response)), test.want)
 		})
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestResolveOCIManifestDescriptorRejectsCyclicOCIIndexChain(t *testing.T) {
@@ -41,9 +42,7 @@ func TestResolveOCIManifestDescriptorRejectsCyclicOCIIndexChain(t *testing.T) {
 		Digest:    "sha256:" + digestA,
 		Size:      int64(len(indexA)),
 	}, map[string]struct{}{})
-	if err == nil || !strings.Contains(err.Error(), "cycle") {
-		t.Fatalf("cyclic OCI index chain error = %v, want cycle rejection", err)
-	}
+	testassert.ErrorContains(t, err, "cycle")
 }
 
 func TestRunRejectsUnknownOrIncompleteCommands(t *testing.T) {
@@ -88,9 +87,7 @@ func TestRejectAmbiguousJSONRequiresUniqueMembersAtEveryObjectDepth(t *testing.T
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := rejectAmbiguousJSON("test document", []byte(test.data))
-			if err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
-				t.Fatalf("rejectAmbiguousJSON() error = %v, want generic ambiguity rejection", err)
-			}
+			testassert.ErrorContains(t, err, "invalid or ambiguous JSON")
 			if strings.Contains(err.Error(), "severity") || strings.Contains(err.Error(), "status") {
 				t.Fatalf("ambiguity rejection disclosed an input member name: %v", err)
 			}
@@ -98,9 +95,7 @@ func TestRejectAmbiguousJSONRequiresUniqueMembersAtEveryObjectDepth(t *testing.T
 	}
 
 	deep := strings.Repeat("[", maxJSONDepth+2) + "null" + strings.Repeat("]", maxJSONDepth+2)
-	if err := rejectAmbiguousJSON("test document", []byte(deep)); err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
-		t.Fatalf("rejectAmbiguousJSON() excessive-depth error = %v, want generic rejection", err)
-	}
+	testassert.ErrorContains(t, rejectAmbiguousJSON("test document", []byte(deep)), "invalid or ambiguous JSON")
 }
 
 func TestArtifactArgumentsMapForRequiredRejectsMalformedInput(t *testing.T) {
@@ -186,9 +181,7 @@ func TestValidateEvidenceMetadataEnforcesImmutableReleaseSubjects(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			record := newValid()
 			test.mutate(&record)
-			if err := validateEvidenceMetadata(record); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateEvidenceMetadata() error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, validateEvidenceMetadata(record), test.want)
 		})
 	}
 }
@@ -264,9 +257,7 @@ func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			document := base("redis_log")
 			test.mutate(document)
-			if err := validateRedactedLogArtifact("redis_log", mustJSON(t, document)); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateRedactedLogArtifact() error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, validateRedactedLogArtifact("redis_log", mustJSON(t, document)), test.want)
 		})
 	}
 }
@@ -306,9 +297,7 @@ func TestRunLayoutDigestRejectsDuplicateDescriptorMembers(t *testing.T) {
 
 	var stdout bytes.Buffer
 	err := run([]string{"layout-digest", "-layout", root}, &stdout)
-	if err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
-		t.Fatalf("layout-digest duplicate descriptor error = %v, want ambiguity rejection", err)
-	}
+	testassert.ErrorContains(t, err, "invalid or ambiguous JSON")
 	if stdout.Len() != 0 {
 		t.Fatalf("layout-digest wrote output after rejecting duplicate descriptor: %q", stdout.String())
 	}
@@ -341,9 +330,7 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 
 	appendNewline(t, filepath.Join(artifactDir, canonicalArtifactPaths["test_summary"]))
-	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), &stdout); err == nil || !strings.Contains(err.Error(), "sha256 does not match") {
-		t.Fatalf("tampered evidence verification error = %v, want digest mismatch", err)
-	}
+	testassert.ErrorContains(t, run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), &stdout), "sha256 does not match")
 }
 
 func TestReleaseEvidenceRecordsTheImageIndexAsTheSubject(t *testing.T) {
@@ -485,9 +472,7 @@ func TestReleaseEvidenceRejectsMissingOrMismatchedPlatformEvidence(t *testing.T)
 			subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 			arguments := releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects)
 			test.mutate(t, artifactDir, &subjects, &arguments)
-			if err := run(arguments, io.Discard); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("record error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, run(arguments, io.Discard), test.want)
 			if _, err := os.Stat(filepath.Join(artifactDir, "evidence.json")); !os.IsNotExist(err) {
 				t.Fatalf("record left evidence after rejecting %s: %v", test.name, err)
 			}
@@ -539,9 +524,7 @@ func TestReleaseEvidenceVerifyRejectsDowngradedOrIncompleteMultiPlatformRecords(
 			test.mutate(record)
 			writeEvidenceRecord(t, artifactDir, record)
 			err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("verify error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 }
@@ -649,9 +632,7 @@ func TestReleaseEvidenceRejectsCurrentBenchmarkAtTargetBoundary(t *testing.T) {
 	})
 
 	schemaPath := releaseEvidenceSchemaPath(t)
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err == nil || !strings.Contains(err.Error(), "p99_ms_per_op") {
-		t.Fatalf("record accepted current target-boundary benchmark summary: %v", err)
-	}
+	testassert.ErrorContains(t, run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard), "p99_ms_per_op")
 }
 
 func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
@@ -1081,9 +1062,7 @@ func TestValidateImageIndexAcceptsThePublishedBuildxIndex(t *testing.T) {
 
 	swapped := subject
 	swapped.Platforms = &imagePlatforms{LinuxAMD64: subject.Platforms.LinuxARM64, LinuxARM64: subject.Platforms.LinuxAMD64}
-	if err := validateImageIndex(releaseEvidenceSchemaPath(t), path, swapped); err == nil || !strings.Contains(err.Error(), "linux/amd64 digest does not match") {
-		t.Fatalf("validateImageIndex() with swapped platforms error = %v", err)
-	}
+	testassert.ErrorContains(t, validateImageIndex(releaseEvidenceSchemaPath(t), path, swapped), "linux/amd64 digest does not match")
 }
 
 // ocimergeImageIndex is the exact image index that golang/tools/ocimerge wrote
@@ -1168,9 +1147,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 			document := cloneJSONMap(t, valid)
 			test.mutate(document)
 			writeTestFile(t, path, mustJSON(t, document))
-			if err := validateCycloneDXSBOM(path, image); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateCycloneDXSBOM() error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, validateCycloneDXSBOM(path, image), test.want)
 		})
 	}
 }
@@ -1203,9 +1180,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 			document := cloneJSONMap(t, valid)
 			test.mutate(document)
 			writeTestFile(t, path, mustJSON(t, document))
-			if err := validateTrivyScan(path, image); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateTrivyScan() error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, validateTrivyScan(path, image), test.want)
 		})
 	}
 }
@@ -1258,15 +1233,11 @@ func TestValidateFixtureManifestRejectsDuplicateProfilesAndUnsafeProvenance(t *t
 	invalid := valid
 	invalid.Fixtures = append(invalid.Fixtures, valid.Fixtures[0])
 	writeTestFile(t, path, mustJSON(t, invalid))
-	if err := validateFixtureManifest(path); err == nil || !strings.Contains(err.Error(), "duplicate profile") {
-		t.Fatalf("duplicate fixture profile error = %v", err)
-	}
+	testassert.ErrorContains(t, validateFixtureManifest(path), "duplicate profile")
 	invalid = valid
 	invalid.Fixtures[0].UpstreamURL = "https://user:secret@example.invalid/contracts"
 	writeTestFile(t, path, mustJSON(t, invalid))
-	if err := validateFixtureManifest(path); err == nil || !strings.Contains(err.Error(), "invalid upstream URL") {
-		t.Fatalf("unsafe fixture URL error = %v", err)
-	}
+	testassert.ErrorContains(t, validateFixtureManifest(path), "invalid upstream URL")
 }
 
 func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {

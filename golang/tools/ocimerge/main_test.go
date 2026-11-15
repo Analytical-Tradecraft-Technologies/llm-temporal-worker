@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"strings"
@@ -364,9 +365,7 @@ func TestMergeRejectsUnsafeInputs(t *testing.T) {
 			inputs := test.setup(t)
 			output := mergeOutput(t)
 			_, err := merge(output, inputs)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("merge error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 			if _, statErr := os.Lstat(output); !os.IsNotExist(statErr) {
 				t.Fatal("failed merge left an output layout behind")
 			}

@@ -164,12 +164,19 @@ provider state are sensitive by default. The worker:
   at-rest encryption;
 - records retention/expiry metadata; automatic production cleanup is deferred;
 - records provider storage/retention choices in endpoint profiles;
-- is intended to provide content-free audit events for access and deletion;
-  these are not yet emitted for allowed Generate/Compact access (#1541). A
-  request-scope denial logs one warn line, `request scope access decision`,
-  with `outcome=denied`, truncated hashes of the tenant and project and the
-  Activity type (`activity_type`); query audit, configuration reloads and route rejections
+- emits content-free access events for durable Generate and Compact (#1541):
+  `request scope access decision` with `outcome=allowed` at info when a step
+  prepares an authorized request, and `request access completed` when a step
+  returns its terminal result. They carry the request kind, Activity type,
+  status, error code and route ID, and only truncated hashes of the tenant,
+  project, actor, operation key, operation ID and checkpoint handles (see
+  [access audit events](../reference/durable-v1-runtime.md#access-audit-events)).
+  A request-scope denial logs the same message at warn with `outcome=denied`,
+  truncated hashes of the tenant and project and the Activity type
+  (`activity_type`); query audit, configuration reloads and route rejections
   during provider planning (route ID and a bounded cause) are logged too.
+  These are best-effort logs, not a durable audit store; deletion audit events
+  are not yet emitted.
 
 ### Langfuse content export
 

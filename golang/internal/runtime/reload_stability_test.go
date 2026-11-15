@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // manualConfigFileWatcher returns a watcher whose ticker never fires in a
@@ -247,9 +248,7 @@ func TestConfigValidationAgreesWithBudgetCompilationBounds(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			value, err := config.Load([]byte(strings.Replace(base, window, test.replacement, 1)))
 			if !test.valid {
-				if err == nil || !strings.Contains(err.Error(), "budgets.policies[0].windows[2]") {
-					t.Fatalf("validation error = %v, want one naming the window", err)
-				}
+				testassert.ErrorContains(t, err, "budgets.policies[0].windows[2]")
 				return
 			}
 			if err != nil {

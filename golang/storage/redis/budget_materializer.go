@@ -1,13 +1,14 @@
 package redis
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 
@@ -539,14 +540,8 @@ func canonicalDurableReservations(operation durable.OperationID, generation dura
 			AmountUSD: amount.String(), LimitUSD: limit.String(),
 		})
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].PolicyID != result[j].PolicyID {
-			return result[i].PolicyID < result[j].PolicyID
-		}
-		if result[i].WindowID != result[j].WindowID {
-			return result[i].WindowID < result[j].WindowID
-		}
-		return result[i].Bucket < result[j].Bucket
+	slices.SortFunc(result, func(a, b durableReservation) int {
+		return cmp.Or(cmp.Compare(a.PolicyID, b.PolicyID), cmp.Compare(a.WindowID, b.WindowID), cmp.Compare(a.Bucket, b.Bucket))
 	})
 	return result, nil
 }

@@ -111,8 +111,10 @@ The first release is complete only when all of these statements are true:
 - The worker passes Temporal Activity tests for retry, heartbeat, cancellation,
   graceful shutdown, and non-retryable error typing.
 - The container runs as a non-root user, readiness probes exercise real Redis
-  and configured blob-store dependencies, and two-replica Redis-backed smoke
-  tests pass.
+  and configured blob-store dependencies, and the two-replica Redis-backed
+  Compose smoke in `make compose-live-integration` passes: two worker
+  containers poll one task queue and complete requests through shared Redis
+  admission.
 - Pull-request and master GitHub Actions are green; master also builds daily at
   05:00 in `Australia/Sydney`.
 

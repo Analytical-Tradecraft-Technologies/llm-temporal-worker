@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -45,9 +46,7 @@ func TestListModelsRejectsEndpointMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "other", Limit: 1})
-	if err == nil || !strings.Contains(err.Error(), "endpoint does not match") {
-		t.Fatalf("mismatched endpoint error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "endpoint does not match")
 }
 
 func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
@@ -68,9 +67,7 @@ func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 1})
-	if err == nil || !strings.Contains(err.Error(), "snapshot changed") {
-		t.Fatalf("changed snapshot error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "snapshot changed")
 }
 
 // newInventoryAdapter builds the "openai-direct" model-listing adapter over

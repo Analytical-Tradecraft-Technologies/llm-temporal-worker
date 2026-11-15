@@ -10,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/temporalcodec"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -166,9 +167,7 @@ func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dataConverter.FromPayload(oversized, &decoded); err == nil || !strings.Contains(err.Error(), "encrypted payload is") {
-		t.Fatalf("oversized ciphertext = %v, want a pre-decryption size error", err)
-	}
+	testassert.ErrorContains(t, dataConverter.FromPayload(oversized, &decoded), "encrypted payload is")
 
 	// Within the ciphertext ceiling but above the plaintext limit, including
 	// a payload the inline-derived ceiling used to refuse before decrypting.
@@ -176,9 +175,7 @@ func TestTemporalFactoryBoundsCiphertextBeforeDecrypting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dataConverter.FromPayload(overInline, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is") {
-		t.Fatalf("over-limit plaintext = %v, want the bounded converter's error", err)
-	}
+	testassert.ErrorContains(t, dataConverter.FromPayload(overInline, &decoded), "Temporal payload is")
 }
 
 // rootWorkflowContext stands in for a workflow context with no values.
@@ -215,9 +212,7 @@ func TestTemporalFactoryCodecHonoursPinnedWorkflowLimit(t *testing.T) {
 	if err := pinned.FromPayload(payload, &decoded); err != nil || decoded != recorded {
 		t.Fatalf("pinned FromPayload = %v", err)
 	}
-	if err := dataConverter.FromPayload(payload, &decoded); err == nil || !strings.Contains(err.Error(), "Temporal payload is") {
-		t.Fatalf("configured FromPayload = %v, want the configured plaintext limit", err)
-	}
+	testassert.ErrorContains(t, dataConverter.FromPayload(payload, &decoded), "Temporal payload is")
 }
 
 func TestConfigResolverResolvesPayloadCodecKeys(t *testing.T) {

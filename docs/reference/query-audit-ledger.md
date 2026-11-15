@@ -19,7 +19,9 @@ Tenant, project, and operation keys are hashed. Request/response JSON, prompts,
 credentials, and raw provider payloads are never passed to the log handler.
 Log levels apply normally, and an unavailable log destination does not fail
 the query. Only validated successful responses reach the hook; these events
-are not a complete security or access log.
+are not a complete security or access log. Generate and Compact access is
+logged separately, with the same hashing and best-effort contract; see
+[access audit events](durable-v1-runtime.md#access-audit-events).
 
 This does not change the durable lifecycle or cost records for paid generation
 and compaction attempts. Normal query reads no longer add entries to the SQL

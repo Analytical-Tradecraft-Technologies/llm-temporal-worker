@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"sync"
 	"testing"
@@ -99,15 +100,11 @@ func TestDeleteBlobPayloadIsTypedAndBoundToAggregate(t *testing.T) {
 
 	wrongAggregateType := event
 	wrongAggregateType.AggregateType = "provider_state"
-	if err := wrongAggregateType.Validate(); err == nil || !strings.Contains(err.Error(), "aggregate type") {
-		t.Fatalf("wrong aggregate type accepted: %v", err)
-	}
+	testassert.ErrorContains(t, wrongAggregateType.Validate(), "aggregate type")
 
 	reserved := event
 	reserved.Kind = EventRefreshInventory
-	if err := reserved.Validate(); err == nil || !strings.Contains(err.Error(), "typed payload contract") {
-		t.Fatalf("untyped reserved event accepted: %v", err)
-	}
+	testassert.ErrorContains(t, reserved.Validate(), "typed payload contract")
 }
 
 func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {

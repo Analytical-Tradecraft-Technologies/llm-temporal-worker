@@ -92,7 +92,7 @@ func (s *cacheFills) Acquire(ctx context.Context, lease cache.FillLease, now tim
 	}
 	for range 16 {
 		current, version, err := s.read(ctx, lease.Key)
-		if err != nil && (!errors.Is(err, contracts.ErrNotFound) || errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrOutcomeUnknown)) {
+		if err != nil && (!definitely(err, contracts.ErrNotFound) || errors.Is(err, ErrCorrupt)) {
 			return cache.FillDecision{}, err
 		}
 		if err == nil {
@@ -164,7 +164,7 @@ func decideFill(current cache.FillRecord, lease cache.FillLease, now time.Time) 
 }
 
 func retryFillConflict(err error) bool {
-	return !errors.Is(err, contracts.ErrOutcomeUnknown) && (errors.Is(err, contracts.ErrConflict) || errors.Is(err, contracts.ErrAlreadyExists))
+	return definitely(err, contracts.ErrConflict) || definitely(err, contracts.ErrAlreadyExists)
 }
 
 // Start deliberately does not return a reusable dispatch token. Repeated calls
@@ -287,7 +287,7 @@ func (s *cacheFills) validatePublished(ctx context.Context, lease cache.FillLeas
 	// Do not apply the caller's completion-time freshness filter here: a newer
 	// success may have arrived while this older finalization was being retried.
 	headPointer, _, err := s.responses.readPointer(ctx, s.responses.key("success", lease.Key))
-	if errors.Is(err, contracts.ErrNotFound) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if definitely(err, contracts.ErrNotFound) {
 		return contracts.ErrConflict
 	}
 	if err != nil {

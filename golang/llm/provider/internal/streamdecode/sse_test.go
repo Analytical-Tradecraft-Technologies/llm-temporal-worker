@@ -1,6 +1,7 @@
 package streamdecode
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"reflect"
 	"strings"
 	"testing"
@@ -46,12 +47,8 @@ func TestParseRejectsInvalidStreamBoundaries(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Parse(strings.NewReader(test.input))
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
-	if _, err := Parse(nil); err == nil || !strings.Contains(err.Error(), "nil") {
-		t.Fatalf("nil reader error = %v, want nil-reader failure", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(Parse(nil)), "nil")
 }

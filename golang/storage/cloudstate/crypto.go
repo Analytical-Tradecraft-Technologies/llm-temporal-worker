@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 
@@ -56,7 +55,7 @@ func (r *Repository) writeBlob(ctx context.Context, stream string, data []byte) 
 	}
 	// Never reinterpret an uncertain write as a definite conflict. A later
 	// retry may safely reconcile an existing immutable object by reading it.
-	if errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, contracts.ErrAlreadyExists) {
+	if !definitely(err, contracts.ErrAlreadyExists) {
 		return "", err
 	}
 	stored, err := r.readBlob(ctx, stream, key)
@@ -78,7 +77,7 @@ func (r *Repository) writeBlob(ctx context.Context, stream string, data []byte) 
 // retryable storage errors.
 func (r *Repository) readReferencedBlob(ctx context.Context, stream, key string) ([]byte, error) {
 	data, err := r.readBlob(ctx, stream, key)
-	if errors.Is(err, contracts.ErrNotFound) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if definitely(err, contracts.ErrNotFound) {
 		return nil, fmt.Errorf("%w: referenced blob is missing: %v", ErrCorrupt, err)
 	}
 	return data, err

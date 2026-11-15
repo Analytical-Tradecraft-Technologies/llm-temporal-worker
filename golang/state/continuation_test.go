@@ -5,10 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -86,9 +86,7 @@ func TestPinningValidationAndEmpty(t *testing.T) {
 		"lineage":  {Provider: valid.Provider, EndpointID: valid.EndpointID, Family: valid.Family},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := ValidatePinning(pin); err == nil || !strings.Contains(err.Error(), "provider pinning") {
-				t.Fatalf("ValidatePinning() = %v", err)
-			}
+			testassert.ErrorContains(t, ValidatePinning(pin), "provider pinning")
 		})
 	}
 }
@@ -112,9 +110,7 @@ func TestCanonicalTranscriptIsStableAndRejectsInvalidItems(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := CanonicalTranscript(items)
-			if err == nil || !strings.Contains(err.Error(), "transcript item 0") {
-				t.Fatalf("CanonicalTranscript() = %v", err)
-			}
+			testassert.ErrorContains(t, err, "transcript item 0")
 		})
 	}
 }
@@ -169,9 +165,7 @@ func TestContinuationValidateEnforcesIntegrityAndLifetime(t *testing.T) {
 			value := base.Clone()
 			test.mutate(&value)
 			err := value.Validate(now)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("Validate() = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 			if test.want == "state record expired" && !errors.Is(err, ErrExpired) {
 				t.Fatalf("Validate() = %v, want ErrExpired", err)
 			}
@@ -226,23 +220,17 @@ func TestContinuationValidateRejectsRequiredStateWithoutMatchingPinning(t *testi
 	base := validContinuation(t, now)
 	base.ProviderState[0].Required = true
 	base.Pinning = Pinning{}
-	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "requires complete continuation pinning") {
-		t.Fatalf("required state without pinning Validate() = %v", err)
-	}
+	testassert.ErrorContains(t, base.Validate(now), "requires complete continuation pinning")
 	base.Pinning = Pinning{Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude"}
 	base.ProviderState[0].ModelLineage = "other-lineage"
-	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "does not match continuation pinning") {
-		t.Fatalf("mismatched required state Validate() = %v", err)
-	}
+	testassert.ErrorContains(t, base.Validate(now), "does not match continuation pinning")
 }
 
 func TestContinuationValidateRejectsOptionalStateWithoutPinning(t *testing.T) {
 	now := time.Unix(100, 0)
 	base := validContinuation(t, now)
 	base.Pinning = Pinning{}
-	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "requires complete continuation pinning") {
-		t.Fatalf("optional state without pinning Validate() = %v", err)
-	}
+	testassert.ErrorContains(t, base.Validate(now), "requires complete continuation pinning")
 }
 
 func TestContinuationValidateRejectsOptionalStateWithMismatchedProvenance(t *testing.T) {
@@ -254,7 +242,5 @@ func TestContinuationValidateRejectsOptionalStateWithMismatchedProvenance(t *tes
 		t.Fatal(err)
 	}
 	base.ProviderState[0].Provider = "openai"
-	if err := base.Validate(now); err == nil || !strings.Contains(err.Error(), "does not match continuation pinning") {
-		t.Fatalf("mismatched optional state Validate() = %v", err)
-	}
+	testassert.ErrorContains(t, base.Validate(now), "does not match continuation pinning")
 }

@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"cmp"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -9,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -295,6 +297,16 @@ func inventoryIdentity(provider, endpoint string, account [32]byte) string {
 	return provider + "\x00" + endpoint + "\x00" + hex.EncodeToString(account[:])
 }
 
+// inventoryLocation returns the hash key and field that hold snapshot, and the
+// stable identity that names its record and binds its encrypted cursor. The
+// identity makes retried writes and query positions deterministic.
+func (store *ProviderStateStore) inventoryLocation(snapshot control.InventorySnapshot) (key, field, identity string) {
+	key = store.key("inventory", snapshot.ConfigDigest)
+	field = store.space.digest("provider-inventory", inventoryIdentity(snapshot.Provider, snapshot.EndpointID, snapshot.EndpointAccountHMAC))
+	identity = key + "\x00" + field + "\x00" + snapshot.ObservedAt.UTC().Format(time.RFC3339Nano) + "\x00" + hex.EncodeToString(snapshot.InventoryDigest[:])
+	return key, field, identity
+}
+
 func validateInventorySnapshot(snapshot control.InventorySnapshot) error {
 	if err := snapshot.Validate(); err != nil {
 		return err
@@ -327,11 +339,8 @@ func (store *ProviderStateStore) PersistInventorySnapshot(ctx context.Context, s
 	if err := validateInventorySnapshot(snapshot); err != nil {
 		return false, err
 	}
-	key := store.key("inventory", snapshot.ConfigDigest)
-	field := store.space.digest("provider-inventory", inventoryIdentity(snapshot.Provider, snapshot.EndpointID, snapshot.EndpointAccountHMAC))
+	key, field, identity := store.inventoryLocation(snapshot)
 	record := inventoryCacheRecord{Schema: providerStateSchema, Snapshot: snapshot}
-	// Stable identity makes retried writes and query positions deterministic.
-	identity := key + "\x00" + field + "\x00" + snapshot.ObservedAt.UTC().Format(time.RFC3339Nano) + "\x00" + hex.EncodeToString(snapshot.InventoryDigest[:])
 	record.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(identity))
 	if snapshot.NextCursor != "" {
 		nonce := make([]byte, store.cursorCipher.NonceSize())
@@ -375,9 +384,7 @@ func (store *ProviderStateStore) decodeInventory(raw string, digest [32]byte) (i
 	if snapshot.NextCursor != "" {
 		return record, ErrUnavailable
 	}
-	key := store.key("inventory", digest)
-	field := store.space.digest("provider-inventory", inventoryIdentity(snapshot.Provider, snapshot.EndpointID, snapshot.EndpointAccountHMAC))
-	identity := key + "\x00" + field + "\x00" + snapshot.ObservedAt.UTC().Format(time.RFC3339Nano) + "\x00" + hex.EncodeToString(snapshot.InventoryDigest[:])
+	_, _, identity := store.inventoryLocation(*snapshot)
 	if record.ID != uuid.NewSHA1(uuid.NameSpaceOID, []byte(identity)) {
 		return record, ErrUnavailable
 	}
@@ -502,17 +509,9 @@ func (store *ProviderStateStore) statusView(ctx context.Context, digest [32]byte
 			result = append(result, record)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Status.RouteID != result[j].Status.RouteID {
-			return result[i].Status.RouteID < result[j].Status.RouteID
-		}
-		if result[i].Status.EndpointID != result[j].Status.EndpointID {
-			return result[i].Status.EndpointID < result[j].Status.EndpointID
-		}
-		if result[i].Status.Model != result[j].Status.Model {
-			return result[i].Status.Model < result[j].Status.Model
-		}
-		return result[i].Status.ProviderTier < result[j].Status.ProviderTier
+	slices.SortFunc(result, func(a, b providerStatusRecord) int {
+		x, y := a.Status, b.Status
+		return cmp.Or(cmp.Compare(x.RouteID, y.RouteID), cmp.Compare(x.EndpointID, y.EndpointID), cmp.Compare(x.Model, y.Model), cmp.Compare(x.ProviderTier, y.ProviderTier))
 	})
 	return result, nil
 }

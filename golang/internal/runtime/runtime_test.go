@@ -20,6 +20,7 @@ import (
 	appactivity "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -308,9 +309,7 @@ func TestRuntimeStartCanRetryAfterInitialBindFailure(t *testing.T) {
 	var closed atomic.Bool
 	runtime := newTestRuntime(t, context.Background(), []byte(data), testRuntimeOptions(t, controller, &closed))
 
-	if err := runtime.Start(); err == nil || !strings.Contains(err.Error(), "listen for health server") {
-		t.Fatalf("Start() error = %v, want wrapped listen error", err)
-	}
+	testassert.ErrorContains(t, runtime.Start(), "listen for health server")
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -529,9 +528,7 @@ func TestSnapshotQueryServiceFailsClosedWithoutComposition(t *testing.T) {
 	}
 	defer func() { _ = appInstance.Close(context.Background()) }()
 	_, err = (&snapshotQueryService{application: appInstance}).Execute(context.Background(), llm.QueryRequestV1{})
-	if err == nil || !strings.Contains(err.Error(), "runtime query service is not configured") {
-		t.Fatalf("unconfigured query error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "runtime query service is not configured")
 }
 
 func TestFactoryErrorsDoNotLeakSecretText(t *testing.T) {
@@ -1021,9 +1018,7 @@ func TestLoadTLSConfigDoesNotExposeCertificateBytes(t *testing.T) {
 	_, err := loadTLSConfig(config.TLSConfig{Enabled: true, CAFile: "/redacted"}, func(string) ([]byte, error) {
 		return []byte(marker), nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "invalid") {
-		t.Fatalf("error = %v, want invalid certificate", err)
-	}
+	testassert.ErrorContains(t, err, "invalid")
 	if strings.Contains(err.Error(), marker) {
 		t.Fatalf("TLS error leaked certificate bytes: %v", err)
 	}

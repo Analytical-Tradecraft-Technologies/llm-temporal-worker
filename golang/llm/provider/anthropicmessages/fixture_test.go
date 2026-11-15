@@ -2,11 +2,11 @@ package anthropicmessages
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -57,9 +57,7 @@ func TestMediaRejectionFixture(t *testing.T) {
 			default:
 				t.Fatalf("unknown fixture case %q", test.Kind)
 			}
-			if _, err := lowerPart(part); err == nil || !strings.Contains(err.Error(), test.ExpectedErrorContains) {
-				t.Fatalf("error = %v, want substring %q", err, test.ExpectedErrorContains)
-			}
+			testassert.ErrorContains(t, testassert.Err(lowerPart(part)), test.ExpectedErrorContains)
 		})
 	}
 }

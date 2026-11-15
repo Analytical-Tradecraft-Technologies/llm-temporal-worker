@@ -10,6 +10,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -58,9 +59,7 @@ func TestExaRejectsNegativeReportedCost(t *testing.T) {
 	if err := json.Unmarshal([]byte(responseJSON), response); err != nil {
 		t.Fatal(err)
 	}
-	if err := profile.ResponseAugment(provider.Call{}, response, lifted); err == nil || !strings.Contains(err.Error(), "negative") {
-		t.Fatalf("negative cost error = %v", err)
-	}
+	testassert.ErrorContains(t, profile.ResponseAugment(provider.Call{}, response, lifted), "negative")
 }
 
 func TestExaLiftsCitationsFromSelectedMessage(t *testing.T) {

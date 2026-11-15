@@ -46,6 +46,10 @@ var allowedLogAttrs = map[string]struct{}{
 	"finish_reason": {},
 	// activity_type is the registered Temporal Activity type name.
 	"activity_type": {},
+	// Request access events (#1541): request_kind is generate or compact,
+	// and the rest are truncated hashes, never the raw identifiers.
+	"request_kind": {}, "actor_hash": {}, "operation_id_hash": {},
+	"parent_checkpoint_hash": {}, "checkpoint_hash": {},
 }
 
 var unsafeMessageWords = []string{

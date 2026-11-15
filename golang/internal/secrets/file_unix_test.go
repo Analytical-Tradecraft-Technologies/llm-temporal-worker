@@ -4,9 +4,9 @@ package secrets
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 )
@@ -44,9 +44,7 @@ func TestReadSecretFileRejectsUnixSpecialTargets(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := ReadSecretFile(context.Background(), test.setup(t), 64)
-			if err == nil || !strings.Contains(err.Error(), "secret file must be regular") {
-				t.Fatalf("error = %v, want non-regular-file rejection", err)
-			}
+			testassert.ErrorContains(t, err, "secret file must be regular")
 		})
 	}
 }

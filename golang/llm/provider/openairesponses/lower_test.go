@@ -8,6 +8,7 @@ import (
 
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -143,17 +144,11 @@ func TestLoweringMapsOnlyPublicServiceClasses(t *testing.T) {
 func TestLoweringRejectsLossyFields(t *testing.T) {
 	topK := 4
 	_, err := lowerRequest(llm.Request{Model: "gpt", OperationKey: "op", Sampling: &llm.SamplingSpec{TopK: &topK}}, llm.ServiceClassStandard)
-	if err == nil || !strings.Contains(err.Error(), "sampling") {
-		t.Fatalf("unsupported sampling error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "sampling")
 	_, err = lowerRequest(llm.Request{Model: "gpt", OperationKey: "op", Input: []llm.Item{llm.ProviderState{Provider: "x", EndpointFamily: "y", MediaType: "z"}}}, llm.ServiceClassStandard)
-	if err == nil || !strings.Contains(err.Error(), "not accepted") {
-		t.Fatalf("provider state error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "not accepted")
 	_, err = lowerRequest(llm.Request{Model: "gpt", OperationKey: "op", Extensions: map[string]json.RawMessage{"other": json.RawMessage(`{}`)}}, llm.ServiceClassStandard)
-	if err == nil || !strings.Contains(err.Error(), "namespace") {
-		t.Fatalf("extension error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "namespace")
 }
 
 // Responses rejects an input_file carrying file_data without a filename, and
@@ -307,18 +302,14 @@ func TestReplayAssistantHistoryUsesOutputContentTypes(t *testing.T) {
 	_, err = lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: []llm.Item{
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{URL: "https://example.test/a.png", MediaType: "image/png"}}},
 	}}, llm.ServiceClassStandard)
-	if err == nil || !strings.Contains(err.Error(), "assistant history") {
-		t.Fatalf("assistant image error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "assistant history")
 }
 
 func TestAssistantHistoryRejectsNilPartWithoutPanicking(t *testing.T) {
 	_, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: []llm.Item{
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{nil}},
 	}}, llm.ServiceClassStandard)
-	if err == nil || !strings.Contains(err.Error(), "<nil>") {
-		t.Fatalf("nil assistant part error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "<nil>")
 }
 
 // A successful result that already starts with the reserved prefix would be

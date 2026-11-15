@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -64,9 +65,7 @@ func TestDurableV1RuntimeQueryRejectsMismatchedResponse(t *testing.T) {
 		return llm.QueryResponseV1{APIVersion: llm.QueryAPIVersion, OperationKey: "other", Kind: llm.QueryProviderStatus}, nil
 	}}
 	_, err := runtime.QueryV1(context.Background(), validQueryV1Request())
-	if err == nil || !strings.Contains(err.Error(), "identity") {
-		t.Fatalf("QueryV1 error = %v, want identity mismatch", err)
-	}
+	testassert.ErrorContains(t, err, "identity")
 }
 
 func TestDurableV1RuntimeQueryFailsClosedWithoutCallback(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -102,9 +103,7 @@ func TestLoweringRejectsReasoningAndExtensionsItCannotSend(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("lowerRequest() error = %v, want %q", err, test.wantErr)
-			}
+			testassert.ErrorContains(t, err, test.wantErr)
 			var mapped *provider.Error
 			if strings.Contains(test.wantErr, "reasoning controls") && (!errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability) {
 				t.Fatalf("strict reasoning rejection = %v, want unsupported_capability", err)

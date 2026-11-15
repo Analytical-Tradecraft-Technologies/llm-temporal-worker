@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 )
@@ -104,9 +105,7 @@ func TestVerifyRenderedRejectsPodSelectorOnlyStateDestination(t *testing.T) {
 
 func TestVerifyRenderedRejectsInsufficientShutdownGrace(t *testing.T) {
 	workload := strings.Replace(validRenderedWorkload, "terminationGracePeriodSeconds: 120", "terminationGracePeriodSeconds: 90", 1)
-	if err := verifyRendered("base", []byte(workload)); err == nil || !strings.Contains(err.Error(), "must exceed server.shutdown_timeout") {
-		t.Fatalf("verify rendered shutdown grace error = %v, want insufficient shutdown grace error", err)
-	}
+	testassert.ErrorContains(t, verifyRendered("base", []byte(workload)), "must exceed server.shutdown_timeout")
 }
 
 func TestVerifyRenderedRejectsDuplicateRequiredResources(t *testing.T) {
@@ -186,9 +185,7 @@ func TestVerifyRenderedAllowsOnlyAnnotatedIdentityOverlays(t *testing.T) {
 		t.Fatalf("verify rendered AWS workload identity: %v", err)
 	}
 
-	if err := verifyRendered("azure-workload-identity", []byte(awsWorkload)); err == nil || !strings.Contains(err.Error(), "Azure workload identity") {
-		t.Fatalf("verify rendered Azure workload identity error = %v", err)
-	}
+	testassert.ErrorContains(t, verifyRendered("azure-workload-identity", []byte(awsWorkload)), "Azure workload identity")
 }
 
 const validRenderedWorkload = `apiVersion: v1

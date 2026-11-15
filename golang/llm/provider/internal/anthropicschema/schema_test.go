@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
@@ -98,9 +99,7 @@ func TestLowerRejectsRecursiveAndUnrepresentableReferences(t *testing.T) {
 
 func TestLowerRejectsSchemasOutsideTheLocalSubset(t *testing.T) {
 	_, err := Lower(json.RawMessage(`{"type":"object","patternProperties":{"^x":{"type":"string"}}}`), false)
-	if err == nil || !strings.Contains(err.Error(), "patternProperties") {
-		t.Fatalf("subset error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "patternProperties")
 }
 
 // The local v1 subset only allows a boolean schema under additionalProperties,
@@ -126,9 +125,7 @@ func TestValidateAppliesTheCallerSchema(t *testing.T) {
 	if err := Validate(schema, output(`{"name":"abc"}`)); err != nil {
 		t.Fatalf("conforming JSON = %v", err)
 	}
-	if err := Validate(schema, output(`{"name":"ab"}`)); err == nil || !strings.Contains(err.Error(), "does not satisfy schema") {
-		t.Fatalf("short string = %v", err)
-	}
+	testassert.ErrorContains(t, Validate(schema, output(`{"name":"ab"}`)), "does not satisfy schema")
 	if err := Validate(schema, nil); err == nil {
 		t.Fatal("missing text accepted")
 	}

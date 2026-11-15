@@ -194,10 +194,7 @@ func (materializer *DurableCheckpointMaterializer) MaterializeHandle(ctx context
 }
 
 func (materializer *DurableCheckpointMaterializer) readItems(ctx context.Context, scopeID string, reference CheckpointBlobReference, codec CheckpointBlobCodec, kind CheckpointBlobKind) ([]llm.Item, error) {
-	if reference.MediaType != "application/json" {
-		return nil, fmt.Errorf("unsupported media type %q", reference.MediaType)
-	}
-	data, err := materializer.Blobs.Read(ctx, scopeID, reference)
+	data, err := materializer.readJSON(ctx, scopeID, reference)
 	if err != nil {
 		return nil, err
 	}
@@ -212,10 +209,7 @@ func (materializer *DurableCheckpointMaterializer) readItems(ctx context.Context
 // ancestors they describe are not read again.
 func (materializer *DurableCheckpointMaterializer) readSnapshot(ctx context.Context, scopeID string, row DurableCheckpoint, codec CheckpointBlobCodec) (CheckpointSnapshot, error) {
 	reference := *row.MaterializedSnapshotBlob
-	if reference.MediaType != "application/json" {
-		return CheckpointSnapshot{}, fmt.Errorf("unsupported media type %q", reference.MediaType)
-	}
-	data, err := materializer.Blobs.Read(ctx, scopeID, reference)
+	data, err := materializer.readJSON(ctx, scopeID, reference)
 	if err != nil {
 		return CheckpointSnapshot{}, err
 	}
@@ -246,14 +240,19 @@ func (materializer *DurableCheckpointMaterializer) readSnapshot(ctx context.Cont
 }
 
 func (materializer *DurableCheckpointMaterializer) readPatch(ctx context.Context, scopeID string, reference CheckpointBlobReference, codec CheckpointBlobCodec) (SettingsPatch, error) {
-	if reference.MediaType != "application/json" {
-		return SettingsPatch{}, fmt.Errorf("unsupported media type %q", reference.MediaType)
-	}
-	data, err := materializer.Blobs.Read(ctx, scopeID, reference)
+	data, err := materializer.readJSON(ctx, scopeID, reference)
 	if err != nil {
 		return SettingsPatch{}, err
 	}
 	return codec.DecodeSettingsPatch(data)
+}
+
+// readJSON reads a checkpoint blob that must be stored as JSON.
+func (materializer *DurableCheckpointMaterializer) readJSON(ctx context.Context, scopeID string, reference CheckpointBlobReference) ([]byte, error) {
+	if reference.MediaType != "application/json" {
+		return nil, fmt.Errorf("unsupported media type %q", reference.MediaType)
+	}
+	return materializer.Blobs.Read(ctx, scopeID, reference)
 }
 
 func (materializer *DurableCheckpointMaterializer) clock() time.Time {

@@ -94,7 +94,8 @@ current-layout reference.
 │   │   ├── repotest/               Checkout lookup and file reading for verification tests
 │   │   ├── responsesapi/           Optional OpenAI Responses API over Generate
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
-│   │   └── secrets/                Environment/file secret resolution
+│   │   ├── secrets/                Environment/file secret resolution
+│   │   └── testassert/             Assertions shared by tests across the module
 │   ├── tools/                      Repository verification and generation commands
 │   │   ├── deploymentpolicy/       Offline Kubernetes workload policy checks
 │   │   ├── modelsyncdefaults/      Regenerates the built-in model-sync rules
