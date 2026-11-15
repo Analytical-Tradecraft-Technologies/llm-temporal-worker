@@ -96,7 +96,13 @@ func safeErrorReason(value string) string {
 }
 
 func safeErrorIdentifier(value string) string {
-	if value == "" || len(value) > maxSafeErrorIdentifierBytes {
+	return safeIdentifier(value, maxSafeErrorIdentifierBytes)
+}
+
+// safeIdentifier returns value when it is non-empty, at most maxBytes long and
+// free of control characters, and "" otherwise.
+func safeIdentifier(value string, maxBytes int) string {
+	if value == "" || len(value) > maxBytes {
 		return ""
 	}
 	for _, runeValue := range value {

@@ -292,9 +292,36 @@ func run(args []string, stdout io.Writer) error {
 	}
 }
 
-func runLayoutDigest(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("layout-digest", flag.ContinueOnError)
+// quietFlagSet is a subcommand flag set that reports parse errors to the
+// caller instead of printing usage.
+func quietFlagSet(name string) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	return flags
+}
+
+// rejectUnsafeArtifact rejects secret-like or ambiguous JSON content in the
+// named artifact read from path.
+func rejectUnsafeArtifact(name, path string, data []byte) error {
+	if err := rejectSecretLikeContent(filepath.Base(path), data); err != nil {
+		return err
+	}
+	return rejectAmbiguousJSON(fmt.Sprintf("artifact %q", name), data)
+}
+
+// validateEvidenceDirectory requires the artifact directory to hold exactly
+// the evidence record and the named artifact paths.
+func validateEvidenceDirectory(artifactDirectory, evidencePath string, paths map[string]string) error {
+	expectedPaths := make([]string, 0, len(paths)+1)
+	expectedPaths = append(expectedPaths, evidencePath)
+	for _, path := range paths {
+		expectedPaths = append(expectedPaths, path)
+	}
+	return validateArtifactDirectoryContents(artifactDirectory, expectedPaths...)
+}
+
+func runLayoutDigest(args []string, stdout io.Writer) error {
+	flags := quietFlagSet("layout-digest")
 	layoutPath := flags.String("layout", "", "temporary OCI image layout directory")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -311,8 +338,7 @@ func runLayoutDigest(args []string, stdout io.Writer) error {
 }
 
 func runVerify(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := quietFlagSet("verify")
 	schemaPath := flags.String("schema", "", "evidence JSON Schema path")
 	artifactDir := flags.String("artifact-dir", "", "directory containing evidence artifacts")
 	evidencePath := flags.String("evidence", "", "machine-readable evidence record")
@@ -330,8 +356,7 @@ func runVerify(args []string, stdout io.Writer) error {
 }
 
 func runRecord(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("record", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := quietFlagSet("record")
 	schemaPath := flags.String("schema", "", "evidence JSON Schema path")
 	artifactDir := flags.String("artifact-dir", "", "directory containing evidence artifacts")
 	outputPath := flags.String("output", "", "evidence record output path")
@@ -383,10 +408,7 @@ func runRecord(args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("artifact %q cannot be read", name)
 		}
-		if err := rejectSecretLikeContent(filepath.Base(artifactPath), data); err != nil {
-			return err
-		}
-		if err := rejectAmbiguousJSON(fmt.Sprintf("artifact %q", name), data); err != nil {
+		if err := rejectUnsafeArtifact(name, artifactPath, data); err != nil {
 			return err
 		}
 		paths[name] = artifactPath
@@ -409,12 +431,7 @@ func runRecord(args []string, stdout io.Writer) error {
 	if safeOutputPath != filepath.Join(artifactDirectory, "evidence.json") {
 		return errors.New("evidence output path must be artifact-dir/evidence.json")
 	}
-	expectedPaths := make([]string, 0, len(paths)+1)
-	expectedPaths = append(expectedPaths, safeOutputPath)
-	for _, path := range paths {
-		expectedPaths = append(expectedPaths, path)
-	}
-	if err := validateArtifactDirectoryContents(artifactDirectory, expectedPaths...); err != nil {
+	if err := validateEvidenceDirectory(artifactDirectory, safeOutputPath, paths); err != nil {
 		return err
 	}
 	record := evidence{
@@ -565,10 +582,7 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 		if int64(len(data)) != artifact.Bytes {
 			return fmt.Errorf("artifact %q byte length does not match evidence", name)
 		}
-		if err := rejectSecretLikeContent(filepath.Base(path), data); err != nil {
-			return err
-		}
-		if err := rejectAmbiguousJSON(fmt.Sprintf("artifact %q", name), data); err != nil {
+		if err := rejectUnsafeArtifact(name, path, data); err != nil {
 			return err
 		}
 		paths[name] = path
@@ -576,12 +590,7 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 	if len(record.Artifacts) != len(artifactNames) {
 		return errors.New("evidence record has an unexpected artifact entry")
 	}
-	expectedPaths := make([]string, 0, len(paths)+1)
-	expectedPaths = append(expectedPaths, safeEvidencePath)
-	for _, path := range paths {
-		expectedPaths = append(expectedPaths, path)
-	}
-	if err := validateArtifactDirectoryContents(artifactDirectory, expectedPaths...); err != nil {
+	if err := validateEvidenceDirectory(artifactDirectory, safeEvidencePath, paths); err != nil {
 		return err
 	}
 	if err := validateSummaryArtifacts(schemaPath, paths, artifactNames); err != nil {

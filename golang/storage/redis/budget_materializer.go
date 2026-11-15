@@ -223,12 +223,7 @@ func (m *RedisBudgetMaterializer) Accept(ctx context.Context, request durable.Re
 		return durable.ReserveResult{}, err
 	}
 	operation := string(request.OperationID)
-	keys := []string{m.space.durableBudgetOperationKey(string(request.GenerationID), operation)}
-	for _, reservation := range reservations {
-		keys = append(keys,
-			m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID),
-			m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
-	}
+	keys := m.durableKeys(m.space.durableBudgetOperationKey(string(request.GenerationID), operation), reservations)
 	ttl := durableTTLSeconds(request.ExpiresAt, m.clock(), reservations)
 	if ttl <= 0 {
 		ttl = 1
@@ -339,10 +334,7 @@ func (m *RedisBudgetMaterializer) Claim(ctx context.Context, request durable.Cla
 	if err := json.Unmarshal([]byte(raw), &record); err != nil {
 		return durable.ClaimReceipt{}, err
 	}
-	keys := []string{key}
-	for _, reservation := range record.Reservations {
-		keys = append(keys, m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID), m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
-	}
+	keys := m.durableKeys(key, record.Reservations)
 	result, err := m.run(ctx, keys, "durable_claim", string(request.GenerationID), string(request.IncarnationID), string(request.OperationID))
 	if err != nil {
 		return durable.ClaimReceipt{}, resolveMutationError(ctx, err)
@@ -404,12 +396,7 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 	if record.Status != "accepted" {
 		return ErrRedisBudgetReservationNotFound
 	}
-	keys := []string{operationKey}
-	for _, reservation := range record.Reservations {
-		keys = append(keys,
-			m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID),
-			m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
-	}
+	keys := m.durableKeys(operationKey, record.Reservations)
 	events := make([]durableEvent, 0, len(request.Events))
 	for _, event := range request.Events {
 		reservedDecrease, err := pricing.CeilNanoUSD(event.ReservedDecreaseUSD)
@@ -472,6 +459,18 @@ func (m *RedisBudgetMaterializer) run(ctx context.Context, keys []string, args .
 	keys = append(keys, m.space.admissionPrefix()+BudgetOperationsSuffix)
 	args = append(args, strconv.FormatInt(m.horizon, 10))
 	return m.invoke.Run(ctx, m.function, keys, args...)
+}
+
+// durableKeys lists the Function keys for an operation: its record key, then
+// each reservation's budget and expiry keys.
+func (m *RedisBudgetMaterializer) durableKeys(operationKey string, reservations []durableReservation) []string {
+	keys := []string{operationKey}
+	for _, reservation := range reservations {
+		keys = append(keys,
+			m.space.durableBudgetKey(reservation.PolicyID, reservation.WindowID),
+			m.space.durableBudgetExpiryKey(reservation.PolicyID, reservation.WindowID))
+	}
+	return keys
 }
 
 func canonicalDurableReservations(operation durable.OperationID, generation durable.GenerationID, values []admission.WindowReservation, expiresAt, now time.Time) ([]durableReservation, error) {

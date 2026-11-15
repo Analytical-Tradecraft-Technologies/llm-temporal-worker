@@ -139,15 +139,36 @@ func (usd USD) IsZero() bool { return usd.units == nil || usd.units.Sign() == 0 
 
 func (usd USD) Validate() error { return usd.valid() }
 
+// unitsOrZero is the amount's fixed-scale units, treating the zero USD as 0.
+// Callers must not modify the result.
+func (usd USD) unitsOrZero() *big.Int {
+	if usd.units == nil {
+		return new(big.Int)
+	}
+	return usd.units
+}
+
+// checkedUSD returns units as a USD within the NUMERIC(38,18) range.
+func checkedUSD(units *big.Int) (USD, error) {
+	result := USD{units: units}
+	if err := result.valid(); err != nil {
+		return USD{}, err
+	}
+	return result, nil
+}
+
+// ceilQuo is numerator / denominator rounded up, for non-negative operands.
+func ceilQuo(numerator, denominator *big.Int) *big.Int {
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
+	if remainder.Sign() != 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient
+}
+
 func (usd USD) Cmp(other USD) int {
-	left, right := usd.units, other.units
-	if left == nil {
-		left = new(big.Int)
-	}
-	if right == nil {
-		right = new(big.Int)
-	}
-	return left.Cmp(right)
+	return usd.unitsOrZero().Cmp(other.unitsOrZero())
 }
 
 func (usd USD) String() string {
@@ -201,19 +222,7 @@ func (usd USD) Add(other USD) (USD, error) {
 	if err := other.valid(); err != nil {
 		return USD{}, err
 	}
-	left, right := new(big.Int), new(big.Int)
-	if usd.units != nil {
-		left.Set(usd.units)
-	}
-	if other.units != nil {
-		right.Set(other.units)
-	}
-	left.Add(left, right)
-	result := USD{units: left}
-	if err := result.valid(); err != nil {
-		return USD{}, err
-	}
-	return result, nil
+	return checkedUSD(new(big.Int).Add(usd.unitsOrZero(), other.unitsOrZero()))
 }
 
 func (usd USD) Sub(other USD) (USD, error) {
@@ -226,14 +235,7 @@ func (usd USD) Sub(other USD) (USD, error) {
 	if usd.Cmp(other) < 0 {
 		return USD{}, fmt.Errorf("USD subtraction would be negative")
 	}
-	result := new(big.Int)
-	if usd.units != nil {
-		result.Set(usd.units)
-	}
-	if other.units != nil {
-		result.Sub(result, other.units)
-	}
-	return USD{units: result}, nil
+	return USD{units: new(big.Int).Sub(usd.unitsOrZero(), other.unitsOrZero())}, nil
 }
 
 func (usd USD) SubOrZero(other USD) USD {
@@ -253,21 +255,8 @@ func (usd USD) MulRatio(numerator, denominator *big.Int) (USD, error) {
 	if numerator == nil || denominator == nil || numerator.Sign() < 0 || denominator.Sign() <= 0 {
 		return USD{}, fmt.Errorf("USD ratio must be non-negative with a positive denominator")
 	}
-	value := new(big.Int)
-	if usd.units != nil {
-		value.Set(usd.units)
-	}
-	value.Mul(value, numerator)
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(value, denominator, remainder)
-	if remainder.Sign() != 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	result := USD{units: quotient}
-	if err := result.valid(); err != nil {
-		return USD{}, err
-	}
-	return result, nil
+	value := new(big.Int).Mul(usd.unitsOrZero(), numerator)
+	return checkedUSD(ceilQuo(value, denominator))
 }
 
 // CeilUSD computes ceil(priceUSD * units / unitsPerPrice) at 18 fractional
@@ -286,16 +275,7 @@ func CeilUSD(price DecimalUSD, units, unitsPerPrice int64) (USD, error) {
 	// Convert the exact rational to the fixed USD scale, rounding up only at
 	// the final boundary.
 	numerator.Mul(numerator, usdScaleFactor)
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(numerator, denominator, remainder)
-	if remainder.Sign() != 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	result := USD{units: quotient}
-	if err := result.valid(); err != nil {
-		return USD{}, err
-	}
-	return result, nil
+	return checkedUSD(ceilQuo(numerator, denominator))
 }
 
 // DecimalUSD is a non-negative exact decimal configuration price. It keeps
@@ -422,11 +402,7 @@ func CeilMicroUSD(price DecimalUSD, units, unitsPerPrice int64) (MicroUSD, error
 	numerator.Mul(numerator, big.NewInt(1_000_000))
 	denominator := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(price.scale)), nil)
 	denominator.Mul(denominator, big.NewInt(unitsPerPrice))
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(numerator, denominator, remainder)
-	if remainder.Sign() != 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
+	quotient := ceilQuo(numerator, denominator)
 	if !quotient.IsInt64() {
 		return 0, fmt.Errorf("microUSD result overflows int64")
 	}

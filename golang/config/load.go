@@ -83,40 +83,26 @@ func canonicalize(config *Config) {
 // terminology.
 func Parse(data []byte) (Config, error) { return Load(data) }
 
+// setDefault assigns value to a field left at its zero value.
+func setDefault[T comparable](field *T, value T) {
+	var zero T
+	if *field == zero {
+		*field = value
+	}
+}
+
 func applyDefaults(config *Config) {
-	if config.Server.ShutdownTimeout == 0 {
-		config.Server.ShutdownTimeout = Duration(45 * time.Second)
-	}
-	if config.Server.FinalizationTimeout == 0 {
-		config.Server.FinalizationTimeout = Duration(10 * time.Second)
-	}
-	if config.Server.InlinePayloadBytes == 0 {
-		config.Server.InlinePayloadBytes = 512 << 10
-	}
-	if config.Temporal.Worker.GracefulStopTimeout == 0 {
-		config.Temporal.Worker.GracefulStopTimeout = Duration(30 * time.Second)
-	}
-	if config.Temporal.Worker.HeartbeatKeepaliveInterval == 0 {
-		config.Temporal.Worker.HeartbeatKeepaliveInterval = Duration(time.Second)
-	}
-	if config.State.Kind == "" {
-		config.State.Kind = StateKindDurable
-	}
-	if config.State.OperationTerminalRetention == 0 {
-		config.State.OperationTerminalRetention = Duration(45 * 24 * time.Hour)
-	}
-	if config.State.AmbiguousRetention == 0 {
-		config.State.AmbiguousRetention = Duration(90 * 24 * time.Hour)
-	}
-	if config.State.ContinuationRetention == 0 {
-		config.State.ContinuationRetention = Duration(30 * 24 * time.Hour)
-	}
-	if config.State.ReservationLease == 0 {
-		config.State.ReservationLease = Duration(15 * time.Minute)
-	}
-	if config.State.Redis.KeyPrefix == "" {
-		config.State.Redis.KeyPrefix = "llmtw"
-	}
+	setDefault(&config.Server.ShutdownTimeout, Duration(45*time.Second))
+	setDefault(&config.Server.FinalizationTimeout, Duration(10*time.Second))
+	setDefault(&config.Server.InlinePayloadBytes, 512<<10)
+	setDefault(&config.Temporal.Worker.GracefulStopTimeout, Duration(30*time.Second))
+	setDefault(&config.Temporal.Worker.HeartbeatKeepaliveInterval, Duration(time.Second))
+	setDefault(&config.State.Kind, StateKindDurable)
+	setDefault(&config.State.OperationTerminalRetention, Duration(45*24*time.Hour))
+	setDefault(&config.State.AmbiguousRetention, Duration(90*24*time.Hour))
+	setDefault(&config.State.ContinuationRetention, Duration(30*24*time.Hour))
+	setDefault(&config.State.ReservationLease, Duration(15*time.Minute))
+	setDefault(&config.State.Redis.KeyPrefix, "llmtw")
 	if config.State.Redis.CoordinationStreamEnabled == nil {
 		enabled := config.State.Kind == StateKindDurable
 		config.State.Redis.CoordinationStreamEnabled = &enabled
@@ -125,12 +111,8 @@ func applyDefaults(config *Config) {
 		config.State.Redis.StreamTrimSafety = Duration(10 * time.Minute)
 	}
 	if config.ModelSync != nil {
-		if config.ModelSync.RefreshIntervalMin == 0 {
-			config.ModelSync.RefreshIntervalMin = Duration(DefaultModelSyncRefreshMin)
-		}
-		if config.ModelSync.RefreshIntervalMax == 0 {
-			config.ModelSync.RefreshIntervalMax = Duration(DefaultModelSyncRefreshMax)
-		}
+		setDefault(&config.ModelSync.RefreshIntervalMin, Duration(DefaultModelSyncRefreshMin))
+		setDefault(&config.ModelSync.RefreshIntervalMax, Duration(DefaultModelSyncRefreshMax))
 	}
 	if config.BlobStore.Kind == "" {
 		if config.State.Kind == StateKindMemory {
@@ -139,61 +121,27 @@ func applyDefaults(config *Config) {
 			config.BlobStore.Kind = "s3"
 		}
 	}
-	if config.Limits.RequestBytes == 0 {
-		config.Limits.RequestBytes = 1 << 20
-	}
-	if config.Limits.Items == 0 {
-		config.Limits.Items = 512
-	}
-	if config.Limits.PartsPerItem == 0 {
-		config.Limits.PartsPerItem = 64
-	}
-	if config.Limits.Tools == 0 {
-		config.Limits.Tools = 128
-	}
-	if config.Limits.SchemaBytes == 0 {
-		config.Limits.SchemaBytes = 256 << 10
-	}
-	if config.Limits.JSONDepth == 0 {
-		config.Limits.JSONDepth = 64
-	}
-	if config.Limits.ContinuationDepth == 0 {
-		config.Limits.ContinuationDepth = 256
-	}
-	if config.Limits.RouteAttempts == 0 {
-		config.Limits.RouteAttempts = 6
-	}
-	if config.Limits.ProviderTimeout == 0 {
-		config.Limits.ProviderTimeout = Duration(120 * time.Second)
-	}
-	if config.Limits.ProviderResponseBytes == 0 {
-		config.Limits.ProviderResponseBytes = DefaultProviderResponseBytes
-	}
-	if config.Limits.MaxOutputTokens == 0 {
-		config.Limits.MaxOutputTokens = 32768
-	}
-	if config.Limits.MaxBudgetBucketsPerWindow == 0 {
-		config.Limits.MaxBudgetBucketsPerWindow = 2048
-	}
-	if config.Limits.TokenEstimateSafetyRatio == "" {
-		config.Limits.TokenEstimateSafetyRatio = "1.35"
-	}
+	setDefault(&config.Limits.RequestBytes, 1<<20)
+	setDefault(&config.Limits.Items, 512)
+	setDefault(&config.Limits.PartsPerItem, 64)
+	setDefault(&config.Limits.Tools, 128)
+	setDefault(&config.Limits.SchemaBytes, 256<<10)
+	setDefault(&config.Limits.JSONDepth, 64)
+	setDefault(&config.Limits.ContinuationDepth, 256)
+	setDefault(&config.Limits.RouteAttempts, 6)
+	setDefault(&config.Limits.ProviderTimeout, Duration(120*time.Second))
+	setDefault(&config.Limits.ProviderResponseBytes, DefaultProviderResponseBytes)
+	setDefault(&config.Limits.MaxOutputTokens, 32768)
+	setDefault(&config.Limits.MaxBudgetBucketsPerWindow, 2048)
+	setDefault(&config.Limits.TokenEstimateSafetyRatio, "1.35")
 	if config.Continuation.RetainCanonicalTranscript == nil {
 		retain := true
 		config.Continuation.RetainCanonicalTranscript = &retain
 	}
-	if config.Capabilities.UnknownInStrictMode == "" {
-		config.Capabilities.UnknownInStrictMode = "reject"
-	}
-	if config.Telemetry.Logs.Format == "" {
-		config.Telemetry.Logs.Format = "json"
-	}
-	if config.Telemetry.Logs.Level == "" {
-		config.Telemetry.Logs.Level = "info"
-	}
-	if config.Telemetry.ContentLogging == "" {
-		config.Telemetry.ContentLogging = "disabled"
-	}
+	setDefault(&config.Capabilities.UnknownInStrictMode, "reject")
+	setDefault(&config.Telemetry.Logs.Format, "json")
+	setDefault(&config.Telemetry.Logs.Level, "info")
+	setDefault(&config.Telemetry.ContentLogging, "disabled")
 	for name, endpoint := range config.Endpoints {
 		if endpoint.Timeout == 0 {
 			endpoint.Timeout = Duration(115 * time.Second)

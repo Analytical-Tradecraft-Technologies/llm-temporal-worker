@@ -98,11 +98,11 @@ func (engine *Engine) finalizeSuccess(ctx context.Context, request llm.Request, 
 	// stop the heartbeats or writes that persist it, or the result is lost and
 	// a retry finds the operation still dispatching; each heartbeat and write
 	// phase is bounded by FinalizationTimeout instead.
-	if err := engine.shieldedBeat(ctx, Progress{OperationID: operation.ID, Phase: "finalization", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+	if err := engine.shieldedBeat(ctx, engine.candidateProgress(operation.ID, "finalization", candidate.candidate)); err != nil {
 		return llm.Response{}, err
 	}
 	if response.Continuation != nil {
-		if err := engine.shieldedBeat(ctx, Progress{OperationID: operation.ID, Phase: "continuation_write", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+		if err := engine.shieldedBeat(ctx, engine.candidateProgress(operation.ID, "continuation_write", candidate.candidate)); err != nil {
 			return llm.Response{}, err
 		}
 		continuationCtx, cancelContinuation := engine.finalizationContext(ctx)

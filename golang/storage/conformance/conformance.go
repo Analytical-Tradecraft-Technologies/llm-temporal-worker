@@ -119,13 +119,7 @@ func testLedger(t *testing.T, factory StoreFactory) {
 	if completed.State != admission.StateCompleted || completed.ReservedMicroUSD != 0 || completed.FinalMicroUSD != 3 || completed.ResultRef == nil || completed.ResultRef.Media != "application/octet-stream" {
 		t.Fatalf("completed operation = %#v", completed)
 	}
-	if err := stores.Admission.Complete(ctx, admission.CompleteRequest{
-		OperationID:   operation.ID,
-		DispatchToken: operation.DispatchToken,
-		Actual:        9,
-	}); err != nil {
-		t.Fatalf("complete replay: %v", err)
-	}
+	complete(t, stores.Admission, operation.ID, operation.DispatchToken, 9, admission.AttemptFacts{}, "complete replay")
 	replay, err := stores.Admission.Begin(ctx, request)
 	if err != nil || !replay.Existing || replay.Operation.State != admission.StateCompleted || replay.Operation.FinalMicroUSD != 3 {
 		t.Fatalf("completed begin replay = %#v, %v", replay, err)
@@ -141,14 +135,7 @@ func testLedger(t *testing.T, factory StoreFactory) {
 
 	excess := begin(t, stores.Admission, beginRequest("excess", "excess-policy", 5, 10, now))
 	dispatch(t, stores.Admission, excess, now)
-	if err := stores.Admission.Complete(ctx, admission.CompleteRequest{
-		OperationID:   excess.ID,
-		DispatchToken: excess.DispatchToken,
-		Actual:        8,
-		Attempt:       admission.AttemptFacts{RouteID: "primary"},
-	}); err != nil {
-		t.Fatalf("complete excess-cost operation: %v", err)
-	}
+	complete(t, stores.Admission, excess.ID, excess.DispatchToken, 8, admission.AttemptFacts{RouteID: "primary"}, "complete excess-cost operation")
 	requireReserved(t, stores.Admission, beginRequest("excess-within", "excess-policy", 2, 10, now), "excess capacity operation")
 	requireDenied(t, stores.Admission, beginRequest("excess-over", "excess-policy", 1, 10, now), "excess-cost limit")
 
@@ -211,14 +198,7 @@ func testLedger(t *testing.T, factory StoreFactory) {
 	}); err != nil {
 		t.Fatalf("dispatch continued operation: %v", err)
 	}
-	if err := stores.Admission.Complete(ctx, admission.CompleteRequest{
-		OperationID:   continued.ID,
-		DispatchToken: next.Operation.DispatchToken,
-		Actual:        8,
-		Attempt:       admission.AttemptFacts{RouteID: "fallback", AttemptNumber: 3},
-	}); err != nil {
-		t.Fatalf("complete continued operation: %v", err)
-	}
+	complete(t, stores.Admission, continued.ID, next.Operation.DispatchToken, 8, admission.AttemptFacts{RouteID: "fallback", AttemptNumber: 3}, "complete continued operation")
 	completedContinuation, err := stores.Admission.Get(ctx, continued.ID)
 	if err != nil || completedContinuation.State != admission.StateCompleted || completedContinuation.FinalMicroUSD != 8 {
 		t.Fatalf("completed continuation = %#v, %v", completedContinuation, err)
@@ -518,6 +498,14 @@ func dispatch(t *testing.T, store admission.AdmissionStore, operation admission.
 		LeaseUntil:    now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("mark dispatching %q: %v", operation.ID, err)
+	}
+}
+
+// complete records the dispatched operation's actual cost with token.
+func complete(t *testing.T, store admission.AdmissionStore, operationID, token string, actual int, attempt admission.AttemptFacts, label string) {
+	t.Helper()
+	if err := store.Complete(context.Background(), admission.CompleteRequest{OperationID: operationID, DispatchToken: token, Actual: admissionAmount(actual), Attempt: attempt}); err != nil {
+		t.Fatalf("%s: %v", label, err)
 	}
 }
 

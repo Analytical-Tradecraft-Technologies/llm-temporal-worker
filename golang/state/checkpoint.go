@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -404,7 +405,7 @@ func (graph *CheckpointGraph) Materialize(tenant string, handle Handle) (Materia
 		for lineageIndex := len(path) - 1; lineageIndex >= index; lineageIndex-- {
 			wantLineage = append(wantLineage, path[lineageIndex].Handle)
 		}
-		if !sameHandles(checkpoint.Snapshot.Lineage, wantLineage) {
+		if !slices.Equal(checkpoint.Snapshot.Lineage, wantLineage) {
 			return MaterializedState{}, fmt.Errorf("checkpoint snapshot lineage mismatch")
 		}
 		result.Items = cloneItems(checkpoint.Snapshot.Items)
@@ -570,18 +571,6 @@ func (snapshot CheckpointSnapshot) writeDigestJSON(write func([]byte)) error {
 	write(lineage)
 	write([]byte{'}'})
 	return nil
-}
-
-func sameHandles(left, right []Handle) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func (checkpoint Checkpoint) clone() Checkpoint {

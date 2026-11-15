@@ -19,6 +19,30 @@ type LangfuseRuntime interface {
 	ExportLangfuseV1(context.Context, llm.ExecutionReferenceV1) error
 }
 
+// langfuseExportFailures maps each classified export error to its metric
+// reason, which also names the Temporal error. In order:
+//   - A full in-flight limit only means other exports are on the wire. The
+//     export workflow waits for nobody and a retry holds no slot while it
+//     backs off, so retry after a jittered delay rather than drop the trace
+//     (#1459). The jitter spreads a burst that hit the limit together.
+//   - A throttled Langfuse is healthy and asked for a slower rate, so the
+//     export backs off the same way rather than dropping the trace (#1670).
+//   - An open breaker sent nothing and signals a Langfuse outage; it stays a
+//     fast-fail so an outage cannot pile retries up behind the cooldown.
+//   - Oversized, redirected and rejected exports are never retried.
+var langfuseExportFailures = []struct {
+	err     error
+	reason  string
+	backoff bool
+}{
+	{langfuse.ErrSaturated, "saturated", true},
+	{langfuse.ErrThrottled, "throttled", true},
+	{langfuse.ErrUnavailable, "unavailable", false},
+	{langfuse.ErrOversized, "oversized", false},
+	{langfuse.ErrRedirected, "redirected", false},
+	{langfuse.ErrRejected, "rejected", false},
+}
+
 func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter.RawValue) error {
 	ref, err := decodeV1ActivityInput[llm.ExecutionReferenceV1](ctx, a, input)
 	if err != nil {
@@ -32,37 +56,16 @@ func (a *Activities) exportLangfuseTemporal(ctx context.Context, input converter
 		return nil
 	}
 	if err := runtime.ExportLangfuseV1(ctx, ref); err != nil {
-		// A full in-flight limit only means other exports are on the wire. The
-		// export workflow waits for nobody and a retry holds no slot while it
-		// backs off, so retry after a jittered delay rather than drop the trace
-		// (#1459). The jitter spreads a burst that hit the limit together.
-		if errors.Is(err, langfuse.ErrSaturated) {
-			a.Metrics.RecordLangfuseExportFailure("saturated")
-			return temporal.NewApplicationErrorWithOptions("Langfuse export saturated", "langfuse_export_saturated", temporal.ApplicationErrorOptions{NextRetryDelay: saturatedRetryDelay(sdkactivity.GetInfo(ctx).Attempt)})
-		}
-		// A throttled Langfuse is healthy and asked for a slower rate, so the
-		// export backs off the same way rather than dropping the trace (#1670).
-		if errors.Is(err, langfuse.ErrThrottled) {
-			a.Metrics.RecordLangfuseExportFailure("throttled")
-			return temporal.NewApplicationErrorWithOptions("Langfuse export throttled", "langfuse_export_throttled", temporal.ApplicationErrorOptions{NextRetryDelay: saturatedRetryDelay(sdkactivity.GetInfo(ctx).Attempt)})
-		}
-		// An open breaker sent nothing and signals a Langfuse outage; it stays
-		// a fast-fail so an outage cannot pile retries up behind the cooldown.
-		if errors.Is(err, langfuse.ErrUnavailable) {
-			a.Metrics.RecordLangfuseExportFailure("unavailable")
-			return temporal.NewNonRetryableApplicationError("Langfuse export unavailable", "langfuse_export_unavailable", nil)
-		}
-		if errors.Is(err, langfuse.ErrOversized) {
-			a.Metrics.RecordLangfuseExportFailure("oversized")
-			return temporal.NewNonRetryableApplicationError("Langfuse export oversized", "langfuse_export_oversized", nil)
-		}
-		if errors.Is(err, langfuse.ErrRedirected) {
-			a.Metrics.RecordLangfuseExportFailure("redirected")
-			return temporal.NewNonRetryableApplicationError("Langfuse export redirected", "langfuse_export_redirected", nil)
-		}
-		if errors.Is(err, langfuse.ErrRejected) {
-			a.Metrics.RecordLangfuseExportFailure("rejected")
-			return temporal.NewNonRetryableApplicationError("Langfuse export rejected", "langfuse_export_rejected", nil)
+		for _, failure := range langfuseExportFailures {
+			if !errors.Is(err, failure.err) {
+				continue
+			}
+			a.Metrics.RecordLangfuseExportFailure(failure.reason)
+			message, kind := "Langfuse export "+failure.reason, "langfuse_export_"+failure.reason
+			if failure.backoff {
+				return temporal.NewApplicationErrorWithOptions(message, kind, temporal.ApplicationErrorOptions{NextRetryDelay: saturatedRetryDelay(sdkactivity.GetInfo(ctx).Attempt)})
+			}
+			return temporal.NewNonRetryableApplicationError(message, kind, nil)
 		}
 		a.Metrics.RecordLangfuseExportFailure("failed")
 		return temporal.NewApplicationError("Langfuse export failed", "langfuse_export_failed")
