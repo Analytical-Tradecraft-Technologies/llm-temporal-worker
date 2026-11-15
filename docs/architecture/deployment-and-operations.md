@@ -296,6 +296,19 @@ A rollout may raise `server.inline_payload_bytes`, but may lower it only after
 draining open Generate and Compact workflows; see
 [the configuration reference](../reference/configuration.md) for why.
 
+## Upgrade and rollback
+
+The [fleet upgrade and rollback runbook](../runbooks/fleet-upgrade-and-rollback.md)
+is the single ordered procedure for changing the binary, its configuration,
+the Redis admission Function and the durable record formats across a fleet. It
+holds the pre-rollout checklist (the inline payload limit, the provider
+response limit, endpoint recovery identity, durable identity, budget window
+identity and key sets), which configuration changes are reload-safe and which
+need a rollout, how to drain and verify the drain with the task-queue backlog
+and `llmtw_worker_polling`, and the no-rollback gates: workflow changes,
+new-format rows, `blob` parent snapshots, keyring versions and the endpoint
+recovery digest.
+
 ## Required metrics
 
 Metric labels use bounded configured IDs, never tenant-provided free text.

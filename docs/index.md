@@ -60,7 +60,8 @@ worker database; the service has no deployed SQL data. See the
 7. [Temporal worker](architecture/temporal-worker.md)
 8. [State and storage](architecture/state-and-storage.md)
 9. [Deployment and operations](architecture/deployment-and-operations.md)
-10. [Security and privacy](architecture/security-and-privacy.md)
+10. [Security and privacy](architecture/security-and-privacy.md) and its
+    [threat model](architecture/threat-model.md)
 11. [Testing strategy](testing/strategy.md)
 12. [Master implementation sequence](superpowers/plans/2026-07-13-master-sequence.md)
 13. [V1 completion execution plan](superpowers/plans/2026-07-14-v1-completion.md)
@@ -92,6 +93,7 @@ worker database; the service has no deployed SQL data. See the
 - [Architecture decisions](decisions/)
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
 - [Terminated workflow pending-recovery runbook](runbooks/terminated-workflow-pending-recovery.md)
+- [Fleet upgrade and rollback runbook](runbooks/fleet-upgrade-and-rollback.md)
 
 ## v1 completion gate
 
