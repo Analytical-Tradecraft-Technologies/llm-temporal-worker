@@ -469,36 +469,42 @@ identifiers.
 
 ## Alerts
 
-Release dashboards and runbooks alert on these signals, each emitted by the
-worker or by Temporal:
+Release dashboards alert on these signals, each emitted by the worker or by
+Temporal. Every row links to the runbook section that gives its signal,
+readiness reason code, safe action and forbidden action; start from
+[on-call escalation and severity](../runbooks/on-call.md) for severity
+definitions and the rules that apply to every incident:
 
-| Alert | Signal |
-| --- | --- |
-| Ambiguous dispatch above zero | `llmtw_ambiguous_total{endpoint}` |
-| Priority requests downgraded or actual tier unknown | `llmtw_service_class_actual_total{requested,actual,endpoint}`, `actual` below `requested` or `unknown` |
-| Budget denials | `llmtw_budget_admission_total{policy,outcome}` and `llmtw_activity_failure_total{origin="budget"}` |
-| Paid work charged at its reservation because cost is unknown | `llmtw_cost_status_total{status="unknown"}` with `method="retained_reservation"` |
-| Redis persistence, eviction, memory or Function digest failures | `/health/ready` returning `503` and `llmtw_worker_polling` at 0 |
-| No eligible routes | `llmtw_activity_failure_total{origin="caller"}` (planning) or `{origin="worker"}` (pricing), and the `requested model is not in the route catalog` warning (`cause=model_not_in_catalog`) |
-| Failed configuration reload | `llmtw_config_reload_total{outcome="failure"}` and its `config_field` log |
-| Request scope denials (a caller outside `authorization.allowed_scopes`, or a misused execution reference) | `request scope access decision` warnings with `outcome=denied`, grouped by `tenant_hash`, `project_hash` and `activity_type`; they also count in `llmtw_activity_failure_total{origin="caller"}` |
-| Unusual access to a tenant or checkpoint | `request scope access decision` (`outcome=allowed`) and `request access completed` info events, by `tenant_hash`, `actor_hash` or `parent_checkpoint_hash`, for example many actors continuing one checkpoint |
-| Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` |
-| Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` |
-| Route circuit opened, even on a route with no traffic | `llmtw_route_health_transition_total{endpoint,to="circuit_open"}` and the `route circuit opened; planning holds the route` warning (`endpoint`, `route_id`, `model`) |
-| Route turned unavailable or degraded | `llmtw_route_health_transition_total{endpoint,to="unavailable"\|"degraded"}`; `to="circuit_closed"` counts recoveries |
-| Priced route approaching or past its catalog `effective_until` | `llmtw_catalog_price_expiry_timestamp_seconds - time()` below the catalog renewal lead time; negative once a route's price has lapsed |
-| Stuck Activities | `llmtw_heartbeat_age_seconds` |
-| Redis growth toward the sized capacity | `llmtw_budget_operation_records{retention}` against the [sizing formula](../reference/redis-budget-leases.md#redis-growth-and-sizing), and `llmtw_budget_stream_length` above 12,000 for 10 minutes (the Stream `MAXLEN` bound is not applied) |
-| Task queue backlog | Temporal's task-queue backlog metrics for `temporal.task_queue` |
-| Continuation corruption or digest mismatch | `llmtw_activity_failure_total{origin="worker"}`, with the `llm_state_corrupt` Temporal failure type |
+| Alert | Signal | Runbook |
+| --- | --- | --- |
+| Ambiguous dispatch above zero | `llmtw_ambiguous_total{endpoint}` | [Runbook](../runbooks/stuck-ambiguous-attempt.md#ambiguous-dispatch-above-zero) |
+| Priority requests downgraded or actual tier unknown | `llmtw_service_class_actual_total{requested,actual,endpoint}`, `actual` below `requested` or `unknown` | [Runbook](../runbooks/provider-and-routing.md#priority-requests-downgraded-or-actual-tier-unknown) |
+| Budget denials | `llmtw_budget_admission_total{policy,outcome}` and `llmtw_activity_failure_total{origin="budget"}` | [Runbook](../runbooks/budget-and-cost.md#budget-denials) |
+| Paid work charged at its reservation because cost is unknown | `llmtw_cost_status_total{status="unknown"}`, recorded with `method="other"` | [Runbook](../runbooks/budget-and-cost.md#paid-work-charged-at-its-reservation-because-cost-is-unknown) |
+| Redis persistence, eviction, memory or Function digest failures | `/health/ready` returning `503` and `llmtw_worker_polling` at 0 | [Runbook](../runbooks/state-stores.md#redis-readiness-failures) |
+| No eligible routes | `llmtw_activity_failure_total{origin="caller"}` (planning) or `{origin="worker"}` (pricing), and the `requested model is not in the route catalog` warning (`cause=model_not_in_catalog`) | [Runbook](../runbooks/provider-and-routing.md#no-eligible-routes) |
+| Failed configuration reload | `llmtw_config_reload_total{outcome="failure"}` and its `config_field` log | [Runbook](../runbooks/configuration-and-credentials.md#failed-configuration-reload) |
+| Request scope denials (a caller outside `authorization.allowed_scopes`, or a misused execution reference) | `request scope access decision` warnings with `outcome=denied`, grouped by `tenant_hash`, `project_hash` and `activity_type`; they also count in `llmtw_activity_failure_total{origin="caller"}` | [Runbook](../runbooks/access.md#request-scope-denials) |
+| Unusual access to a tenant or checkpoint | `request scope access decision` (`outcome=allowed`) and `request access completed` info events, by `tenant_hash`, `actor_hash` or `parent_checkpoint_hash`, for example many actors continuing one checkpoint | [Runbook](../runbooks/access.md#unusual-access-to-a-tenant-or-checkpoint) |
+| Provider failures | `llmtw_provider_attempt_total{outcome="failure"}` and `llmtw_activity_failure_total{origin="provider"}` | [Runbook](../runbooks/provider-and-routing.md#provider-failures) |
+| Route held by an open circuit, exhausted credit or a billing issue | `llmtw_route_held_total{endpoint,reason}` | [Runbook](../runbooks/provider-and-routing.md#route-held) |
+| Route circuit opened, even on a route with no traffic | `llmtw_route_health_transition_total{endpoint,to="circuit_open"}` and the `route circuit opened; planning holds the route` warning (`endpoint`, `route_id`, `model`) | [Runbook](../runbooks/provider-and-routing.md#route-circuit-opened) |
+| Route turned unavailable or degraded | `llmtw_route_health_transition_total{endpoint,to="unavailable"\|"degraded"}`; `to="circuit_closed"` counts recoveries | [Runbook](../runbooks/provider-and-routing.md#route-unavailable-or-degraded) |
+| Priced route approaching or past its catalog `effective_until` | `llmtw_catalog_price_expiry_timestamp_seconds - time()` below the catalog renewal lead time; negative once a route's price has lapsed | [Runbook](../runbooks/provider-and-routing.md#catalog-price-approaching-or-past-expiry) |
+| Stuck Activities | `llmtw_heartbeat_age_seconds` | [Runbook](../runbooks/temporal.md#stuck-activities) |
+| Redis growth toward the sized capacity | `llmtw_budget_operation_records{retention}` against the [sizing formula](../reference/redis-budget-leases.md#redis-growth-and-sizing), and `llmtw_budget_stream_length` above 12,000 for 10 minutes (the Stream `MAXLEN` bound is not applied) | [Runbook](../runbooks/budget-and-cost.md#redis-growth-toward-the-sized-capacity) |
+| Task queue backlog | Temporal's task-queue backlog metrics for `temporal.task_queue` | [Runbook](../runbooks/temporal.md#task-queue-backlog) |
+| Continuation corruption or digest mismatch | `llmtw_activity_failure_total{origin="worker"}`, with the `llm_state_corrupt` Temporal failure type | [Runbook](../runbooks/state-stores.md#continuation-corruption-or-digest-mismatch) |
 
-Not yet observable: no metric or log separates these, so runbooks cannot alert
-on them directly (#1538):
+Not yet observable in metrics (#1538):
 
-- reservation underestimation (reservation versus settled cost);
+- reservation underestimation (reservation versus settled cost): no metric or
+  log separates it, so no alert can fire on it directly;
 - provider authentication failures as distinct from other provider-origin
-  failures (rate limits, 5xx).
+  failures (rate limits, 5xx): no metric label separates them, but the
+  `provider attempt failed` warning's `error_code=authentication` does, so
+  alert on that log (see
+  [provider credential rotation](../runbooks/configuration-and-credentials.md#provider-credential-rotation)).
 
 Route health transitions are counted by the worker whose observation changed
 the shared Redis record, so the sum across workers counts each flip once.
