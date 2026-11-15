@@ -34,14 +34,8 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			keys := liveKeyOptions("operation-retention")
 			cleanupLivePrefix(t, client, keys.Prefix)
 			now := time.Now().UTC()
-			materializer, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Mode: test.mode, Keys: keys, GenerationID: "retention-gen", IncarnationID: "retention-inc", Clock: time.Now, CoordinationStreamEnabled: true, OperationKeyReuseHorizon: test.horizon})
-			if err != nil {
-				t.Fatal(err)
-			}
-			space, err := newKeySpace(keys)
-			if err != nil {
-				t.Fatal(err)
-			}
+			materializer := mustCall(t, NewRedisBudgetMaterializer, RedisBudgetMaterializerOptions{Client: client, Mode: test.mode, Keys: keys, GenerationID: "retention-gen", IncarnationID: "retention-inc", Clock: time.Now, CoordinationStreamEnabled: true, OperationKeyReuseHorizon: test.horizon})
+			space := mustCall(t, newKeySpace, keys)
 			sampler, err := NewBudgetGrowthSampler(client, keys, time.Now)
 			if err != nil {
 				t.Fatal(err)
@@ -75,7 +69,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			}
 			reserve := func(id string) durable.ReserveResult {
 				t.Helper()
-				result, err := materializer.Accept(ctx, durable.ReserveRequest{OperationID: durable.OperationID(id), GenerationID: "retention-gen", ExpiresAt: now.Add(time.Minute), Reservations: []admission.WindowReservation{{PolicyID: "policy", WindowID: "hour", Bucket: now.Unix() / 60, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour), AmountUSD: pricing.MustUSD("0.10"), LimitUSD: pricing.MustUSD("10")}}})
+				result, err := materializer.Accept(ctx, durable.ReserveRequest{OperationID: durable.OperationID(id), GenerationID: "retention-gen", ExpiresAt: now.Add(time.Minute), Reservations: []admission.WindowReservation{liveMinuteReservation("policy", now, "0.10", "10")}})
 				if err != nil || !result.Accepted {
 					t.Fatalf("%s: %#v %v", id, result, err)
 				}
@@ -101,9 +95,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			}
 			claim := func(result durable.ReserveResult) {
 				t.Helper()
-				if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: result.OperationID, GenerationID: "retention-gen", IncarnationID: "retention-inc"}); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(materializer.Claim(ctx, durable.ClaimRequest{OperationID: result.OperationID, GenerationID: "retention-gen", IncarnationID: "retention-inc"})))
 			}
 
 			unclaimed := reserve("unclaimed")
@@ -141,9 +133,7 @@ func TestLiveRedisOperationRecordRetention(t *testing.T) {
 			}
 			// An index entry whose expiry has passed is pruned by the next
 			// mutation and no longer counted.
-			if err := client.ZAdd(ctx, index, redisclient.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "stale"}).Err(); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, client.ZAdd(ctx, index, redisclient.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "stale"}).Err())
 			if growth, err := sampler.Sample(ctx); err != nil || growth.OperationRecords != 3 {
 				t.Fatalf("growth with a stale entry = %+v, %v", growth, err)
 			}
@@ -165,25 +155,16 @@ func TestLiveRedisProviderStateRetiresUnloadedConfigs(t *testing.T) {
 	keys := liveKeyOptions("provider-retirement")
 	cleanupLivePrefix(t, client, keys.Prefix)
 	now := time.Now().UTC()
-	store, err := NewProviderStateStore(ProviderStateOptions{Client: client, Keys: keys, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewProviderStateStore, ProviderStateOptions{Client: client, Keys: keys, Clock: func() time.Time { return now }})
 	current, recent, retired := [32]byte{1}, [32]byte{2}, [32]byte{3}
 	for _, digest := range [][32]byte{current, recent, retired} {
-		if err := client.HSet(ctx, store.key("status", digest), "field", "value").Err(); err != nil {
-			t.Fatal(err)
-		}
-		if err := client.HSet(ctx, store.key("inventory", digest), "field", "value").Err(); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, client.HSet(ctx, store.key("status", digest), "field", "value").Err())
+		mustNoError(t, client.HSet(ctx, store.key("inventory", digest), "field", "value").Err())
 	}
 	report := func(digest [32]byte, at time.Time) {
 		t.Helper()
 		now = at
-		if err := store.MarkConfigLoaded(ctx, digest); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, store.MarkConfigLoaded(ctx, digest))
 	}
 	start := now
 	report(retired, start.Add(-8*24*time.Hour))
@@ -202,9 +183,7 @@ func TestLiveRedisProviderStateRetiresUnloadedConfigs(t *testing.T) {
 	}
 	// A digest reported again after the scan observed it stale is kept.
 	report(retired, start.Add(-8*24*time.Hour))
-	if err := client.HSet(ctx, store.key("status", retired), "field", "value").Err(); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, client.HSet(ctx, store.key("status", retired), "field", "value").Err())
 	applied, err := providerRetireScript.Run(ctx, client, []string{store.loadedConfigsKey(), store.key("status", retired), store.key("inventory", retired)}, fmt.Sprintf("%x", retired[:]), "0").Int()
 	if err != nil || applied != 0 {
 		t.Fatalf("retire with a changed marker = %d, %v; want 0", applied, err)

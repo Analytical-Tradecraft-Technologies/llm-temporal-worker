@@ -139,9 +139,7 @@ func TestAdmissionInvocationModesNeverAutoLoadOrReplaceRedisCode(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := &functionInvocationClient{}
 			invoker := redisInvoker{client: client, mode: test.mode, version: AdmissionFunctionVersion}
-			if _, err := invoker.Run(context.Background(), AdmissionFunctionVersion, []string{"{admission}:key"}, "begin"); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, errOf(invoker.Run(context.Background(), AdmissionFunctionVersion, []string{"{admission}:key"}, "begin")))
 			if client.scriptLoadCalls != 0 || client.evalCalls != 0 {
 				t.Fatalf("invocation mutated Redis code: SCRIPT LOAD=%d EVAL=%d", client.scriptLoadCalls, client.evalCalls)
 			}

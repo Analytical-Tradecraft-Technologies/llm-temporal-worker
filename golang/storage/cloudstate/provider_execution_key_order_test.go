@@ -19,7 +19,7 @@ func TestProviderExecutionSettlementIgnoresArgumentKeyOrder(t *testing.T) {
 	response := func(arguments string) *llm.Response {
 		return &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusToolCalls, Output: []llm.Item{llm.ToolCall{ID: "call", Name: "search", Arguments: json.RawMessage(arguments)}}}
 	}
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting; e.Claim = executionClaim(reservation) })
+	saved = markExecutionSubmitting(t, r, record, saved, reservation)
 	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
 		e.Stage = ExecutionSucceeded
 		e.CompletedAt = e.UpdatedAt.Add(time.Second)

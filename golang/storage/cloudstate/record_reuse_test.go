@@ -2,7 +2,6 @@ package cloudstate
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"sync"
 	"testing"
@@ -13,10 +12,7 @@ import (
 
 func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 	r, table, blobs, request := fixture(t)
-	want, err := r.Create(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	want := mustCreate(t, r, request)
 	opens := 0
 	blobs.open = func(blob.BlobKey) error { opens++; return nil }
 	ctx := WithRecordReuse(context.Background())
@@ -32,10 +28,7 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 	}
 	// A different repository commits a new revision while this invocation
 	// holds the old one. Resolving events must observe that revision.
-	want, err = reopen(t, table, blobs).TryUpdate(context.Background(), request.Scope, request.ID, change(want, StatusRunning, "other-writer"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	want = mustTryUpdate(t, reopen(t, table, blobs), request.Scope, request.ID, change(want, StatusRunning, "other-writer"))
 	opens = 0
 	for range 2 {
 		got, err := r.Read(ctx, request.Scope, request.ID)
@@ -46,14 +39,10 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 	if opens != 1 {
 		t.Fatalf("new revision opened %d times", opens)
 	}
-	if _, err := r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "another"}, request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("scope bypass: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Read(ctx, Scope{Tenant: request.Scope.Tenant, Project: "another"}, request.ID)), contracts.ErrNotFound, "scope bypass")
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := r.Read(cancelled, request.Scope, request.ID); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancellation bypass: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Read(cancelled, request.Scope, request.ID)), context.Canceled, "cancellation bypass")
 	// Removing the event stream must not make the reused record authority.
 	table.mu.Lock()
 	for key := range table.rows {
@@ -62,9 +51,7 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 		}
 	}
 	table.mu.Unlock()
-	if _, err := r.Read(ctx, request.Scope, request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("removed authority bypass: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Read(ctx, request.Scope, request.ID)), contracts.ErrNotFound, "removed authority bypass")
 }
 
 // reusedRecordFixture creates the fixture record and reads it once in a
@@ -72,13 +59,9 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 func reusedRecordFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, CreateRequest, context.Context) {
 	t.Helper()
 	r, table, blobs, request := fixture(t)
-	if _, err := r.Create(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
+	mustCreate(t, r, request)
 	ctx := WithRecordReuse(context.Background())
-	if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.Read(ctx, request.Scope, request.ID)))
 	return r, table, blobs, request, ctx
 }
 
@@ -98,9 +81,7 @@ func TestRecordReuseDoesNotCrossInvocationOrRepository(t *testing.T) {
 		"another repository": func() error { _, err := reopen(t, table, blobs).Read(ctx, request.Scope, request.ID); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := read(); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
-				t.Fatalf("lost blob was hidden: %v", err)
-			}
+			requireErrorIsNot(t, read(), ErrCorrupt, contracts.ErrNotFound, "lost blob was hidden")
 		})
 	}
 }
@@ -120,9 +101,7 @@ func TestRecordReuseConcurrentCopies(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.Read(ctx, request.Scope, request.ID)))
 }
 
 func TestRecordReuseDoesNotTreatPublicationAsReadableStorage(t *testing.T) {
@@ -139,21 +118,15 @@ func TestRecordReuseDoesNotTreatPublicationAsReadableStorage(t *testing.T) {
 				t.Fatal(err)
 			}
 			if update {
-				if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "published")); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(r.Read(ctx, request.Scope, request.ID)))
+				mustNoError(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusRunning, "published"))))
 			}
 			// An acknowledged publication does not prove that its bytes can
 			// still be read. The old revision must not hide this new loss.
 			blobs.mu.Lock()
 			clear(blobs.values)
 			blobs.mu.Unlock()
-			if _, err := r.Read(ctx, request.Scope, request.ID); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("published revision bypassed storage validation: %v", err)
-			}
+			requireErrorIs(t, errOf(r.Read(ctx, request.Scope, request.ID)), ErrCorrupt, "published revision bypassed storage validation")
 		})
 	}
 }
@@ -174,9 +147,7 @@ func TestRecordReuseRequiresEntireValidatedPointer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			pointer := state.Value
 			mutate(&pointer)
-			if _, err := r.loadRecord(ctx, pointer); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("changed pointer used a validated record: %v", err)
-			}
+			requireErrorIs(t, errOf(r.loadRecord(ctx, pointer)), ErrCorrupt, "changed pointer used a validated record")
 		})
 	}
 }

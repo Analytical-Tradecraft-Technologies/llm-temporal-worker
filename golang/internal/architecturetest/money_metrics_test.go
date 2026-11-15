@@ -1,7 +1,6 @@
 package architecturetest
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,9 +32,5 @@ func TestMetricsDoNotAcceptLegacyMoneyAmounts(t *testing.T) {
 
 func readMetricsArchitectureSource(t *testing.T, relativePath string) string {
 	t.Helper()
-	contents, err := os.ReadFile(filepath.Join(moduleRoot(t), relativePath))
-	if err != nil {
-		t.Fatalf("read %s: %v", relativePath, err)
-	}
-	return string(contents)
+	return readText(t, moduleRoot(t), relativePath)
 }

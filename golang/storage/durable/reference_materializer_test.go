@@ -15,7 +15,7 @@ func TestReferenceMaterializerIsIdempotentAndAtomic(t *testing.T) {
 	now := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
 	m := newReferenceMaterializer(t, func() time.Time { return now })
 	reservation := referenceTestReservation(now, 0, "0.75")
-	request := ReserveRequest{OperationID: "op-1", GenerationID: "gen-1", Reservations: []admission.WindowReservation{reservation}}
+	request := referenceRequest("op-1", reservation)
 
 	first, err := m.Accept(context.Background(), request)
 	if err != nil || !first.Accepted {
@@ -38,15 +38,10 @@ func TestReferenceMaterializerIsIdempotentAndAtomic(t *testing.T) {
 		referenceTestReservation(now, 0, "0.30"),
 	}}
 	denied.Reservations[0].WindowID = "other-window"
-	result, err := m.Accept(context.Background(), denied)
-	if err != nil || result.Accepted {
-		t.Fatalf("multi-window denial = %#v, %v", result, err)
-	}
-	followup := ReserveRequest{OperationID: "op-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 1, "0.10")}}
+	assertReferenceAccept(t, m, denied, false, "multi-window denial =")
+	followup := referenceRequest("op-followup", referenceTestReservation(now, 1, "0.10"))
 	followup.Reservations[0].WindowID = "other-window"
-	if result, err := m.Accept(context.Background(), followup); err != nil || !result.Accepted {
-		t.Fatalf("atomic denial consumed capacity: %#v, %v", result, err)
-	}
+	assertReferenceAccept(t, m, followup, true, "atomic denial consumed capacity:")
 }
 
 func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
@@ -54,17 +49,11 @@ func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 	m := newReferenceMaterializer(t, func() time.Time { return now })
 	first := referenceTestReservation(now, 0, "0.40")
 	second := referenceTestReservation(now, 1, "0.40")
-	request := ReserveRequest{OperationID: "op-multi", GenerationID: "gen-1", Reservations: []admission.WindowReservation{first, second}}
-	accepted, err := m.Accept(context.Background(), request)
-	if err != nil || !accepted.Accepted {
-		t.Fatalf("acceptance = %#v, %v", accepted, err)
-	}
-
-	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
-		t.Fatal(err)
-	}
+	request := referenceRequest("op-multi", first, second)
+	assertReferenceAccept(t, m, request, true, "acceptance =")
+	claimReference(t, m, request)
 	completion := exactCompletion("completion-second", request.OperationID, request.GenerationID, second, 2, "0.10")
-	reconcile := ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{completion}}
+	reconcile := referenceReconcile(request, completion)
 	if err := m.Reconcile(context.Background(), reconcile); err != nil {
 		t.Fatalf("reconcile = %v", err)
 	}
@@ -74,20 +63,14 @@ func TestReferenceMaterializerReconcilesByWindowAndBucket(t *testing.T) {
 	changed := completion
 	changed.ActualCostUSD = ptr(pricing.MustUSD("0.11"))
 	changed.AccountedIncreaseUSD = pricing.MustUSD("0.11")
-	if err := m.Reconcile(context.Background(), ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{changed}}); !errors.Is(err, ErrReferenceMaterializerConflict) {
+	if err := m.Reconcile(context.Background(), referenceReconcile(request, changed)); !errors.Is(err, ErrReferenceMaterializerConflict) {
 		t.Fatalf("changed completion error = %v, want conflict", err)
 	}
 
 	// The completion above targeted only bucket 1. Bucket 0 remains at 0.40,
 	// while bucket 1 has only 0.10 accounted cost.
-	firstFollowup := ReserveRequest{OperationID: "op-first-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "0.60")}}
-	if result, err := m.Accept(context.Background(), firstFollowup); err != nil || result.Accepted {
-		t.Fatalf("bucket 0 was reconciled accidentally: %#v, %v", result, err)
-	}
-	secondFollowup := ReserveRequest{OperationID: "op-second-followup", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 1, "0.50")}}
-	if result, err := m.Accept(context.Background(), secondFollowup); err != nil || !result.Accepted {
-		t.Fatalf("bucket 1 did not reconcile independently: %#v, %v", result, err)
-	}
+	assertReferenceAccept(t, m, referenceRequest("op-first-followup", referenceTestReservation(now, 0, "0.60")), false, "bucket 0 was reconciled accidentally:")
+	assertReferenceAccept(t, m, referenceRequest("op-second-followup", referenceTestReservation(now, 1, "0.50")), true, "bucket 1 did not reconcile independently:")
 }
 
 func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
@@ -95,26 +78,16 @@ func TestReferenceMaterializerExpiryRemovesReservedAndAccounted(t *testing.T) {
 	m := newReferenceMaterializer(t, func() time.Time { return now })
 	reservation := referenceTestReservation(now, 0, "0.40")
 	request := ReserveRequest{OperationID: "op-expiring", GenerationID: "gen-1", ExpiresAt: now.Add(time.Minute), Reservations: []admission.WindowReservation{reservation}}
-	if result, err := m.Accept(context.Background(), request); err != nil || !result.Accepted {
-		t.Fatalf("acceptance = %#v, %v", result, err)
-	}
-	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
-		t.Fatal(err)
-	}
+	assertReferenceAccept(t, m, request, true, "acceptance =")
+	claimReference(t, m, request)
 	completion := exactCompletion("completion-expiring", request.OperationID, request.GenerationID, reservation, 2, "0.20")
-	if err := m.Reconcile(context.Background(), ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: []budget.CompletionEvent{completion}}); err != nil {
+	if err := m.Reconcile(context.Background(), referenceReconcile(request, completion)); err != nil {
 		t.Fatalf("reconcile = %v", err)
 	}
 	now = now.Add(2 * time.Minute)
-	stillActive := ReserveRequest{OperationID: "still-accounted", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1.00")}}
-	if result, err := m.Accept(context.Background(), stillActive); err != nil || result.Accepted {
-		t.Fatalf("start deadline refunded accounted cost: %#v, %v", result, err)
-	}
+	assertReferenceAccept(t, m, referenceRequest("still-accounted", referenceTestReservation(now, 0, "1.00")), false, "start deadline refunded accounted cost:")
 	now = now.Add(3 * time.Hour)
-	newRequest := ReserveRequest{OperationID: "op-after-expiry", GenerationID: "gen-1", Reservations: []admission.WindowReservation{referenceTestReservation(now, 0, "1.00")}}
-	if result, err := m.Accept(context.Background(), newRequest); err != nil || !result.Accepted {
-		t.Fatalf("expired reserved/accounted values still consume capacity: %#v, %v", result, err)
-	}
+	assertReferenceAccept(t, m, referenceRequest("op-after-expiry", referenceTestReservation(now, 0, "1.00")), true, "expired reserved/accounted values still consume capacity:")
 }
 
 func newReferenceMaterializer(t *testing.T, now func() time.Time) *ReferenceBudgetMaterializer {
@@ -124,6 +97,32 @@ func newReferenceMaterializer(t *testing.T, now func() time.Time) *ReferenceBudg
 		t.Fatalf("new reference materializer: %v", err)
 	}
 	return m
+}
+
+// referenceRequest reserves reservations for operation id in "gen-1".
+func referenceRequest(id OperationID, reservations ...admission.WindowReservation) ReserveRequest {
+	return ReserveRequest{OperationID: id, GenerationID: "gen-1", Reservations: reservations}
+}
+
+// assertReferenceAccept requires request to be accepted (want) or denied
+// without error, failing with "<label> <result>, <err>" otherwise.
+func assertReferenceAccept(t *testing.T, m *ReferenceBudgetMaterializer, request ReserveRequest, want bool, label string) {
+	t.Helper()
+	if result, err := m.Accept(context.Background(), request); err != nil || result.Accepted != want {
+		t.Fatalf("%s %#v, %v", label, result, err)
+	}
+}
+
+func claimReference(t *testing.T, m *ReferenceBudgetMaterializer, request ReserveRequest) {
+	t.Helper()
+	if _, err := m.Claim(context.Background(), ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// referenceReconcile settles request's "inc-1" claim with events.
+func referenceReconcile(request ReserveRequest, events ...budget.CompletionEvent) ReconcileRequest {
+	return ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "inc-1", Events: events}
 }
 
 func referenceTestReservation(now time.Time, bucketOffset int64, amount string) admission.WindowReservation {

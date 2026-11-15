@@ -2,54 +2,22 @@ package anthropicmessages
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	profile := testProfile()
 	adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, profile)}
-	maxTokens := 321
-	temperature := 0.25
-	topK := 5
-	request := llm.Request{
-		OperationKey: "anthropic-lower",
-		Model:        "claude-contract",
-		ServiceClass: llm.ServiceClassPriority,
-		Portability:  llm.PortabilityBestEffort,
-		Instructions: []llm.Instruction{
-			{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"},
-			{Level: llm.InstructionLevelApplication, Kind: llm.InstructionKindParts, Content: []llm.Part{
-				llm.TextPart{Text: "application"}, llm.JSONPart{Value: json.RawMessage(`{"kind":"context"}`)},
-			}},
-		},
-		Input: []llm.Item{
-			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-				llm.TextPart{Text: "hello"},
-				llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png"},
-				llm.DocumentPart{Bytes: []byte("plain document"), MediaType: "text/plain", Title: "notes"},
-			}},
-			llm.ModelText("prior"),
-			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
-			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
-		},
-		Tools:      []llm.Tool{{Name: "lookup", Description: "look up a place", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)}},
-		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
-		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
-		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopK: &topK, StopSequences: []string{"END"}},
-		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone},
-		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"tag":"us"}`)},
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  false,
-	})
+	request := multimodalToolRequest("anthropic-lower")
+	request.ServiceClass = llm.ServiceClassPriority
+	request.Portability = llm.PortabilityBestEffort
+	call, err := adaptertest.Compile(adapter, "anthropic-prod", provider.FamilyAnthropicMessages, request, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +25,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 		t.Fatalf("call metadata = %#v", call)
 	}
 	wire := contract.JSONObject(t, call.SDKParams)
-	if wire["model"] != "claude-contract" || wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["max_tokens"] != float64(maxTokens) {
+	if wire["model"] != "claude-contract" || wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["max_tokens"] != float64(*request.Output.MaxTokens) {
 		t.Fatalf("wire identity = %#v", wire)
 	}
 	system := wire["system"].([]any)
@@ -122,11 +90,7 @@ func TestCompileServiceTierPolicy(t *testing.T) {
 				profile.ServiceTiers[test.class] = test.tier
 			}
 			adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, profile)}
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: llm.Request{OperationKey: "tier-" + test.name, Model: "claude-contract", ServiceClass: test.class},
-				Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-				Strict:  true,
-			})
+			call, err := adaptertest.Compile(adapter, "anthropic-prod", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "tier-" + test.name, Model: "claude-contract", ServiceClass: test.class}, true)
 			if test.wantFailure != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantFailure) {
 					t.Fatalf("error = %v, want %q", err, test.wantFailure)
@@ -171,14 +135,7 @@ func TestCompileMapsAdaptiveReasoningEffortToOutputConfig(t *testing.T) {
 		Model:        "claude-contract",
 		Reasoning:    &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortHigh},
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-prod", provider.FamilyAnthropicMessages, request)
 	wire := contract.JSONObject(t, call.SDKParams)
 	thinking, ok := wire["thinking"].(map[string]any)
 	if !ok || thinking["type"] != "adaptive" {
@@ -220,14 +177,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 			// A manual budget must stay below max_tokens.
 			request := llm.Request{OperationKey: "default-reasoning", Model: "claude-contract", Reasoning: test.reasoning, Output: &llm.OutputSpec{MaxTokens: intPtr(4096)}}
 			adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: request,
-				Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-				Strict:  true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := adaptertest.CompileStrict(t, adapter, "anthropic-prod", provider.FamilyAnthropicMessages, request)
 			wire := contract.JSONObject(t, call.SDKParams)
 			thinking, exists := wire["thinking"]
 			if test.wantType == "" {

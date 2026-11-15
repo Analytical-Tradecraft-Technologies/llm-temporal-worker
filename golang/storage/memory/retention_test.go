@@ -62,13 +62,21 @@ func retentionChild(t *testing.T, parent state.Continuation, parentHandle state.
 	return child
 }
 
-func retentionRoot(t *testing.T, store *ContinuationStore, expiresAt time.Time) (state.Handle, state.Continuation) {
+// createTextRoot stores a complete root continuation for "tenant" holding
+// one human message with text, returning its handle and transcript.
+func createTextRoot(t *testing.T, store *ContinuationStore, text string, expiresAt time.Time) (state.Handle, []llm.Item) {
 	t.Helper()
-	items, digest := textTranscript(t, llm.ActorHuman, "hello")
+	items, digest := textTranscript(t, llm.ActorHuman, text)
 	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: expiresAt, LastOperationID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return handle, items
+}
+
+func retentionRoot(t *testing.T, store *ContinuationStore, expiresAt time.Time) (state.Handle, state.Continuation) {
+	t.Helper()
+	handle, _ := createTextRoot(t, store, "hello", expiresAt)
 	root, err := store.Get(context.Background(), handle)
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +98,23 @@ func putShortLivedRetentionChild(t *testing.T, store *ContinuationStore, now tim
 	return request, first
 }
 
+// assertRetryStoresNewChild retries request with a fresh expiry and requires
+// a resolvable child other than the stale (swept or expired) first handle.
+func assertRetryStoresNewChild(t *testing.T, store *ContinuationStore, request state.PutChildRequest, first state.Handle, now time.Time, stale string) {
+	t.Helper()
+	request.Child.ExpiresAt = now.Add(time.Minute)
+	retry, err := store.PutChild(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry == first {
+		t.Fatalf("PutChild returned the %s child handle %q", stale, retry)
+	}
+	if _, err := store.Get(context.Background(), retry); err != nil {
+		t.Fatalf("Get(new child) = %v", err)
+	}
+}
+
 // A retry of PutChild with the same parent and operation key after the child
 // expired and was swept must not return the deleted handle.
 func TestContinuationPutChildAfterChildSweepCreatesResolvableChild(t *testing.T) {
@@ -106,17 +131,7 @@ func TestContinuationPutChildAfterChildSweepCreatesResolvableChild(t *testing.T)
 	if indexed != 0 {
 		t.Fatalf("Sweep retained %d operation-index entries for deleted children", indexed)
 	}
-	request.Child.ExpiresAt = now.Add(time.Minute)
-	retry, err := store.PutChild(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if retry == first {
-		t.Fatalf("PutChild returned the swept child handle %q", retry)
-	}
-	if _, err := store.Get(context.Background(), retry); err != nil {
-		t.Fatalf("Get(new child) = %v", err)
-	}
+	assertRetryStoresNewChild(t, store, request, first, now, "swept")
 }
 
 // Even without an explicit Sweep, an indexed child that has expired must be
@@ -126,17 +141,7 @@ func TestContinuationPutChildAfterChildExpiryWithoutSweep(t *testing.T) {
 	store := newTestContinuationStore(t, &now, nil)
 	request, first := putShortLivedRetentionChild(t, store, now)
 	now = now.Add(2 * time.Minute)
-	request.Child.ExpiresAt = now.Add(time.Minute)
-	retry, err := store.PutChild(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if retry == first {
-		t.Fatalf("PutChild returned the expired child handle %q", retry)
-	}
-	if _, err := store.Get(context.Background(), retry); err != nil {
-		t.Fatalf("Get(new child) = %v", err)
-	}
+	assertRetryStoresNewChild(t, store, request, first, now, "expired")
 	if _, err := store.Get(context.Background(), first); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("Get(expired child) = %v, want ErrNotFound", err)
 	}

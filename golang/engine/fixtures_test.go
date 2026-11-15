@@ -191,3 +191,68 @@ func (trace testTrace) shutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// newFakeHarness returns a harness around a fresh successful "fake" adapter.
+func newFakeHarness(t *testing.T) (*fakeAdapter, testHarness) {
+	t.Helper()
+	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
+	return adapter, newHarness(t, adapter)
+}
+
+// mustGenerate runs Generate and fails the test on error.
+func (harness testHarness) mustGenerate(t *testing.T, request llm.Request) llm.Response {
+	t.Helper()
+	response, err := harness.engine.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+// recordAdmission wraps the engine's admission store so the test can observe
+// the reservation it begins.
+func (harness testHarness) recordAdmission() *recordingAdmission {
+	recording := &recordingAdmission{AdmissionStore: harness.admission}
+	harness.engine.dependencies.Admission = recording
+	return recording
+}
+
+// priorityRequest is baseRequest asking for the priority class with no
+// fallback.
+func priorityRequest(operationKey string) llm.Request {
+	request := baseRequest(operationKey)
+	request.ServiceClass = llm.ServiceClassPriority
+	return request
+}
+
+// requireNothingDispatched requires that request was neither admitted nor sent
+// to the provider.
+func requireNothingDispatched(t *testing.T, harness testHarness, adapter *fakeAdapter, request llm.Request) {
+	t.Helper()
+	requireNoOperation(t, harness, request)
+	adapter.requireInvokes(t, 0, "provider invoke count = %d, want zero")
+}
+
+// isZeroCostNoDispatchFailure reports whether operation definitely failed
+// before dispatch without incurring or finalizing any cost.
+func isZeroCostNoDispatchFailure(operation admission.Operation) bool {
+	return operation.State == admission.StateDefiniteFailed && operation.Attempt.Dispatch == admission.NotDispatched && operation.IncurredMicroUSD == 0 && operation.FinalMicroUSD == 0
+}
+
+// generateFailure runs Generate and requires a provider error, failing with
+// unexpectedSuccess when the call succeeds.
+func (harness testHarness) generateFailure(t *testing.T, request llm.Request, unexpectedSuccess string) *provider.Error {
+	t.Helper()
+	_, err := harness.engine.Generate(context.Background(), request)
+	return requireProviderError(t, err, unexpectedSuccess)
+}
+
+// mustStream opens an engine stream and fails the test on error.
+func (harness testHarness) mustStream(t *testing.T, ctx context.Context, request llm.Request) llm.EventStream {
+	t.Helper()
+	stream, err := harness.engine.Stream(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stream
+}

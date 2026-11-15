@@ -47,8 +47,7 @@ func generatePriorityServedAtStandard(t *testing.T, name string, entries ...pric
 	response.Service = llm.ServiceFacts{Actual: &standard, ProviderValue: "standard-tier"}
 	harness := newHarness(t, &fakeAdapter{name: name, response: response})
 	harness.updateSnapshot(func(snapshot *Snapshot) { snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, entries...)) })
-	request := baseRequest(name)
-	request.ServiceClass = llm.ServiceClassPriority
+	request := priorityRequest(name)
 	return harness.engine.Generate(context.Background(), request)
 }
 

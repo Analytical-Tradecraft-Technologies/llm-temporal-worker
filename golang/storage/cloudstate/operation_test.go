@@ -31,36 +31,27 @@ func TestOperationRestartReplayAndInputBinding(t *testing.T) {
 		t.Fatalf("retry changed identity/revision: %v", err)
 	}
 	progress := json.RawMessage(`{"version":1,"response":{"text":"paid response"}}`)
-	complete, err := r.CompleteOperation(context.Background(), op.Scope, first.Request.ID, progress, op.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	complete := mustCompleteOperation(t, r, op.Scope, first.Request.ID, progress, op.Now)
 	// A healthy completed replay is read-only, including for object storage.
 	table.hook = func(string, kv.KeyValueItem) (error, error) {
 		t.Error("replay attempted a table write")
 		return nil, nil
 	}
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("replay attempted a blob write"); return nil, nil }
+	forbidWrites(t, nil, blobs, "replay")
 	replayed, err := reopen(t, table, blobs).BeginOperation(context.Background(), op)
 	if err != nil || replayed.Status != StatusCompleted || string(replayed.Progress) != string(complete.Progress) {
 		t.Fatalf("replay: %v", err)
 	}
 	table.hook, blobs.hook = nil, nil
-	if _, err := r.CompleteOperation(context.Background(), op.Scope, first.Request.ID, progress, op.Now.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.CompleteOperation(context.Background(), op.Scope, first.Request.ID, json.RawMessage(`{"version":1,"different":true}`), op.Now); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("replaced completion: %v", err)
-	}
+	mustCompleteOperation(t, r, op.Scope, first.Request.ID, progress, op.Now.Add(time.Hour))
+	requireErrorIs(t, errOf(r.CompleteOperation(context.Background(), op.Scope, first.Request.ID, json.RawMessage(`{"version":1,"different":true}`), op.Now)), contracts.ErrConflict, "replaced completion")
 	for _, mutate := range []func(*Operation){
 		func(o *Operation) { o.Manifest = json.RawMessage(`{"different":true}`) },
 		func(o *Operation) { o.RequestIndex++ },
 	} {
 		changed := op
 		mutate(&changed)
-		if _, err := r.BeginOperation(context.Background(), changed); !errors.Is(err, contracts.ErrConflict) {
-			t.Fatalf("input change accepted: %v", err)
-		}
+		requireErrorIs(t, errOf(r.BeginOperation(context.Background(), changed)), contracts.ErrConflict, "input change accepted")
 	}
 	for _, mutate := range []func(*Operation){
 		func(o *Operation) { o.Key += "-new" },
@@ -168,9 +159,7 @@ func TestOperationRecoversInterruptedAndUnacknowledgedWrites(t *testing.T) {
 				if _, err := r.CompleteOperation(context.Background(), op.Scope, record.Request.ID, progress, op.Now); err == nil || !fired {
 					t.Fatal("missing completion failure")
 				}
-				if _, err := reopen(t, table, blobs).CompleteOperation(context.Background(), op.Scope, record.Request.ID, progress, op.Now.Add(time.Hour)); err != nil {
-					t.Fatal(err)
-				}
+				mustCompleteOperation(t, reopen(t, table, blobs), op.Scope, record.Request.ID, progress, op.Now.Add(time.Hour))
 				shard, _ := PendingShard(record.Request.ID)
 				page, err := r.ListPending(context.Background(), shard, 100, "")
 				if err != nil || len(page.Requests) != 0 {
@@ -183,20 +172,14 @@ func TestOperationRecoversInterruptedAndUnacknowledgedWrites(t *testing.T) {
 
 func TestOperationValidationAndReadiness(t *testing.T) {
 	r, _, _, op := operationFixture(t)
-	if err := r.Probe(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, r.Probe(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := r.Probe(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.Probe(ctx), context.Canceled, "")
 	for _, mutate := range []func(*Operation){func(o *Operation) { o.Key = "" }, func(o *Operation) { o.Kind = "query" }, func(o *Operation) { o.Now = time.Time{} }, func(o *Operation) { o.Manifest = json.RawMessage(`[]`) }, func(o *Operation) { o.RequestIndex = -1 }} {
 		bad := op
 		mutate(&bad)
-		if _, err := r.BeginOperation(context.Background(), bad); !errors.Is(err, ErrInvalid) {
-			t.Fatal(err)
-		}
+		requireErrorIs(t, errOf(r.BeginOperation(context.Background(), bad)), ErrInvalid, "")
 	}
 }
 
@@ -207,10 +190,8 @@ func TestLookupOperationIsReadOnlyAndScoped(t *testing.T) {
 		t.Error("lookup attempted a table write")
 		return nil, nil
 	}
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("lookup attempted a blob write"); return nil, nil }
-	if _, err := r.LookupOperation(ctx, op); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("missing operation: %v", err)
-	}
+	forbidWrites(t, nil, blobs, "lookup")
+	requireErrorIs(t, errOf(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "missing operation")
 	for shard := range PendingShards {
 		page, err := r.ListPending(ctx, shard, 100, "")
 		if err != nil || len(page.Requests) != 0 {
@@ -218,28 +199,19 @@ func TestLookupOperationIsReadOnlyAndScoped(t *testing.T) {
 		}
 	}
 	table.hook, blobs.hook = nil, nil
-	begun, err := r.BeginOperation(ctx, op)
-	if err != nil {
-		t.Fatal(err)
-	}
+	begun := mustBeginOperation(t, r, op)
 	found, err := r.LookupOperation(ctx, op)
 	if err != nil || found.Request.ID != begun.Request.ID || found.Revision != begun.Revision {
 		t.Fatalf("lookup: %v", err)
 	}
 	other := op
 	other.Scope.Project = "other"
-	if _, err := r.LookupOperation(ctx, other); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("lookup crossed scope: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LookupOperation(ctx, other)), contracts.ErrNotFound, "lookup crossed scope")
 	other = op
 	other.Key = "different-key"
-	if _, err := r.LookupOperation(ctx, other); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("lookup matched another key: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LookupOperation(ctx, other)), contracts.ErrNotFound, "lookup matched another key")
 	other.Key = ""
-	if _, err := r.LookupOperation(ctx, other); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("empty key: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LookupOperation(ctx, other)), ErrInvalid, "empty key")
 }
 
 func TestBeginOperationValidatedRejectsNewInputBeforePublication(t *testing.T) {
@@ -248,12 +220,8 @@ func TestBeginOperationValidatedRejectsNewInputBeforePublication(t *testing.T) {
 	rejected := errors.New("invalid new request")
 	reject := func() error { return rejected }
 
-	if _, err := r.BeginOperationValidated(ctx, op, reject); !errors.Is(err, rejected) {
-		t.Fatalf("validation error = %v", err)
-	}
-	if _, err := r.LookupOperation(ctx, op); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("rejected operation became discoverable: %v", err)
-	}
+	requireErrorIs(t, errOf(r.BeginOperationValidated(ctx, op, reject)), rejected, "validation error =")
+	requireErrorIs(t, errOf(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "rejected operation became discoverable")
 
 	first, err := r.BeginOperationValidated(ctx, op, func() error { return nil })
 	if err != nil {
@@ -264,7 +232,5 @@ func TestBeginOperationValidatedRejectsNewInputBeforePublication(t *testing.T) {
 		t.Fatalf("replay changed or reapplied validation: %v", err)
 	}
 	op.Manifest = json.RawMessage(`{"different":true}`)
-	if _, err := r.BeginOperationValidated(ctx, op, reject); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("changed operation binding = %v", err)
-	}
+	requireErrorIs(t, errOf(r.BeginOperationValidated(ctx, op, reject)), contracts.ErrConflict, "changed operation binding =")
 }

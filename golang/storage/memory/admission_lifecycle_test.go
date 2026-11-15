@@ -67,12 +67,19 @@ func dispatchMemoryOperation(t *testing.T, store *AdmissionStore, now time.Time,
 	return operation
 }
 
-func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
+// newDispatchedMemoryOperation begins id with a reservation of amount against
+// a limit of 10, on a store whose clock is fixed at time.Unix(100, 0), and
+// marks it dispatching on route "initial".
+func newDispatchedMemoryOperation(t *testing.T, id string, amount pricing.MicroUSD) (*AdmissionStore, time.Time, admission.Operation) {
+	t.Helper()
 	now := time.Unix(100, 0)
 	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
-	reservation := memoryReservation(10, 10)
-	operation := beginMemoryOperation(t, store, now, "complete", reservation)
-	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
+	operation := beginMemoryOperation(t, store, now, id, memoryReservation(amount, 10))
+	return store, now, dispatchMemoryOperation(t, store, now, operation, "initial")
+}
+
+func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
+	store, now, operation := newDispatchedMemoryOperation(t, "complete", 10)
 
 	ref := &state.BlobRef{Digest: [32]byte{1}, Size: 3, Media: "application/octet-stream"}
 	if err := store.Complete(context.Background(), admission.CompleteRequest{
@@ -110,10 +117,7 @@ func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
 }
 
 func TestAdmissionProviderPendingRetainsPollGuidance(t *testing.T) {
-	now := time.Unix(100, 0)
-	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
-	operation := beginMemoryOperation(t, store, now, "pending-guidance", memoryReservation(1, 10))
-	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
+	store, now, operation := newDispatchedMemoryOperation(t, "pending-guidance", 1)
 	pollAfter := now.Add(5 * time.Second)
 	if err := store.MarkProviderPending(context.Background(), admission.ProviderPendingRequest{
 		OperationID: operation.ID, DispatchToken: operation.DispatchToken,
@@ -135,10 +139,7 @@ func TestAdmissionProviderPendingRetainsPollGuidance(t *testing.T) {
 }
 
 func TestAdmissionDefiniteFailureReconcilesIncurredCost(t *testing.T) {
-	now := time.Unix(100, 0)
-	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
-	operation := beginMemoryOperation(t, store, now, "failed", memoryReservation(10, 10))
-	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
+	store, now, operation := newDispatchedMemoryOperation(t, "failed", 10)
 
 	if err := store.Fail(context.Background(), admission.FailRequest{
 		OperationID:   operation.ID,
@@ -161,10 +162,7 @@ func TestAdmissionDefiniteFailureReconcilesIncurredCost(t *testing.T) {
 }
 
 func TestAdmissionContinueReconcilesAndRotatesDispatchToken(t *testing.T) {
-	now := time.Unix(100, 0)
-	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
-	operation := beginMemoryOperation(t, store, now, "continue", memoryReservation(10, 10))
-	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
+	store, now, operation := newDispatchedMemoryOperation(t, "continue", 10)
 
 	next := memoryReservation(7, 10)
 	continued, err := continueAfterRejection(store, now, operation, "fallback", 7, next)
@@ -190,10 +188,7 @@ func TestAdmissionContinueReconcilesAndRotatesDispatchToken(t *testing.T) {
 }
 
 func TestAdmissionContinueDenialFinalizesWithoutGhostReservation(t *testing.T) {
-	now := time.Unix(100, 0)
-	store := NewAdmissionStore(AdmissionOptions{Clock: func() time.Time { return now }})
-	operation := beginMemoryOperation(t, store, now, "continue-denied", memoryReservation(10, 10))
-	operation = dispatchMemoryOperation(t, store, now, operation, "initial")
+	store, now, operation := newDispatchedMemoryOperation(t, "continue-denied", 10)
 
 	deniedReservation := memoryReservation(8, 10)
 	continued, err := continueAfterRejection(store, now, operation, "initial", 8, deniedReservation)

@@ -14,12 +14,7 @@ import (
 func TestContinuationStoreBranchesImmutably(t *testing.T) {
 	now := time.Unix(100, 0)
 	store := newTestContinuationStore(t, &now, deterministicKeyringRandom())
-	items, digest := textTranscript(t, llm.ActorHuman, "hello")
-	root := state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"}
-	rootHandle, err := store.CreateRoot(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rootHandle, _ := createTextRoot(t, store, "hello", now.Add(time.Hour))
 	got, err := store.GetForTenant(context.Background(), "tenant", rootHandle)
 	if err != nil {
 		t.Fatal(err)
@@ -48,14 +43,7 @@ func TestContinuationStoreBranchesImmutably(t *testing.T) {
 func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 	now := time.Unix(100, 0)
 	store := newTestContinuationStore(t, &now, nil)
-	items, digest := textTranscript(t, llm.ActorHuman, "same-key")
-	root, err := store.CreateRoot(context.Background(), state.Continuation{
-		Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true,
-		ExpiresAt: now.Add(time.Hour), LastOperationID: "root",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	root, items := createTextRoot(t, store, "same-key", now.Add(time.Hour))
 	childItems := append(append([]llm.Item(nil), items...), llm.ModelText("child"))
 	childDigest := canonicalDigest(t, childItems)
 	child := state.Continuation{
@@ -64,35 +52,13 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 	}
 
 	const callers = 100
-	start := make(chan struct{})
-	handles := make(chan state.Handle, callers)
-	errs := make(chan error, callers)
-	var group sync.WaitGroup
-	group.Add(callers)
-	for index := 0; index < callers; index++ {
-		go func(index int) {
-			defer group.Done()
-			<-start
-			handle, putErr := store.PutChild(context.Background(), state.PutChildRequest{
-				Parent: root, Child: child, OperationKey: fmt.Sprintf("same-operation-%d", index),
-			})
-			// Each distinct key should produce a distinct sibling; the same-key
-			// replay is exercised below after this concurrent fan-out.
-			handles <- handle
-			errs <- putErr
-		}(index)
-	}
-	close(start)
-	group.Wait()
-	close(handles)
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	// Each distinct key should produce a distinct sibling; the same-key
+	// replay is exercised below after this concurrent fan-out.
+	handles := putChildrenConcurrently(t, store, callers, func(index int) state.PutChildRequest {
+		return state.PutChildRequest{Parent: root, Child: child, OperationKey: fmt.Sprintf("same-operation-%d", index)}
+	})
 	unique := make(map[state.Handle]struct{}, callers)
-	for handle := range handles {
+	for _, handle := range handles {
 		unique[handle] = struct{}{}
 	}
 	if len(unique) != callers {
@@ -101,32 +67,11 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 
 	// A retry storm for one operation key must elect one immutable child and
 	// return that handle to every caller, never minting duplicate branches.
-	const replays = 100
-	replayStart := make(chan struct{})
-	replayHandles := make(chan state.Handle, replays)
-	replayErrs := make(chan error, replays)
-	group = sync.WaitGroup{}
-	group.Add(replays)
-	for index := 0; index < replays; index++ {
-		go func() {
-			defer group.Done()
-			<-replayStart
-			handle, putErr := store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: child, OperationKey: "same-operation"})
-			replayHandles <- handle
-			replayErrs <- putErr
-		}()
-	}
-	close(replayStart)
-	group.Wait()
-	close(replayHandles)
-	close(replayErrs)
-	for err := range replayErrs {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	replayHandles := putChildrenConcurrently(t, store, 100, func(int) state.PutChildRequest {
+		return state.PutChildRequest{Parent: root, Child: child, OperationKey: "same-operation"}
+	})
 	var elected state.Handle
-	for handle := range replayHandles {
+	for _, handle := range replayHandles {
 		if elected == "" {
 			elected = handle
 		}
@@ -140,6 +85,30 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 	if got, err := store.Get(context.Background(), elected); err != nil || got.LastOperationID != child.LastOperationID {
 		t.Fatalf("elected child=%#v err=%v", got, err)
 	}
+}
+
+// putChildrenConcurrently releases callers concurrent PutChild calls built by
+// request at once and returns their handles, failing the test on any error.
+func putChildrenConcurrently(t *testing.T, store *ContinuationStore, callers int, request func(index int) state.PutChildRequest) []state.Handle {
+	t.Helper()
+	start := make(chan struct{})
+	handles := make([]state.Handle, callers)
+	errs := make([]error, callers)
+	var group sync.WaitGroup
+	for index := range callers {
+		group.Go(func() {
+			<-start
+			handles[index], errs[index] = store.PutChild(context.Background(), request(index))
+		})
+	}
+	close(start)
+	group.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return handles
 }
 
 func TestContinuationStoreDetachesNestedTranscriptData(t *testing.T) {

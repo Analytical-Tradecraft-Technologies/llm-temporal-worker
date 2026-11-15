@@ -7,10 +7,7 @@ import (
 )
 
 func TestNewPolicyAndWireAge(t *testing.T) {
-	policy, err := NewPolicy(60, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	policy := mustPolicy(t, 60, 2)
 	if policy.MaxAge != time.Minute || policy.Variant != 2 {
 		t.Fatalf("policy=%#v", policy)
 	}
@@ -42,10 +39,7 @@ func TestValidateOptionalCachePolicy(t *testing.T) {
 	}
 	positive := 0.7
 	zero := 0.0
-	valid, err := NewPolicy(60, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	valid := mustPolicy(t, 60, 2)
 	if err := valid.Validate(OperationGenerate, &positive); err != nil {
 		t.Fatalf("positive temperature rejected: %v", err)
 	}
@@ -70,10 +64,7 @@ func TestValidateOptionalCachePolicy(t *testing.T) {
 			t.Fatalf("invalid temperature %v unexpectedly accepted", value)
 		}
 	}
-	compact, err := NewPolicy(60, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compact := mustPolicy(t, 60, 0)
 	if err := compact.Validate(OperationCompact, &positive); err != nil {
 		t.Fatalf("compact variant zero rejected: %v", err)
 	}
@@ -89,14 +80,20 @@ func TestPolicyMaxAgeSecondsRejectsSubsecond(t *testing.T) {
 }
 
 func TestOmittedMaximumAgePolicy(t *testing.T) {
-	policy, err := NewPolicy(0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	policy := mustPolicy(t, 0, 0)
 	if err := policy.Validate(OperationGenerate, nil); err != nil {
 		t.Fatal(err)
 	}
 	if seconds, err := policy.MaxAgeSeconds(); err != nil || seconds != 0 {
 		t.Fatalf("age=%d error=%v", seconds, err)
 	}
+}
+
+func mustPolicy(t *testing.T, maxAgeSeconds int64, variant int32) Policy {
+	t.Helper()
+	policy, err := NewPolicy(maxAgeSeconds, variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
 }

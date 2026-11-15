@@ -12,14 +12,11 @@ import (
 // package directory under golang/ must appear in it, and every directory it
 // names under golang/ must exist (#1686).
 func TestPackageLayoutTreeMatchesTheModule(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "architecture", "package-layout.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := packageLayoutTreePaths(t, string(data))
+	data := readText(t, repositoryRoot(t), "docs", "architecture", "package-layout.md")
+	listed := packageLayoutTreePaths(t, data)
 	module := moduleRoot(t)
 	var missing []string
-	err = filepath.WalkDir(module, func(path string, entry os.DirEntry, err error) error {
+	err := filepath.WalkDir(module, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

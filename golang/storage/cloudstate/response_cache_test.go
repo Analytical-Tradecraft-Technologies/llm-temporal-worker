@@ -22,9 +22,7 @@ import (
 func responseCacheFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, cache.ResponseEntry, state.DurableCheckpoint) {
 	t.Helper()
 	r, table, blobs, cp := checkpointFixture(t)
-	if err := publishCheckpoint(context.Background(), r.Checkpoints(), cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), cp)
 	cost := "0.12"
 	value := llm.GenerateResponseV1{OperationKey: "private-key", OperationID: string(cp.OriginOperationID), Status: llm.ResponseStatusCompleted,
 		Output:     []llm.Item{llm.ModelText("private answer")},
@@ -49,19 +47,23 @@ func lookupResponse(t *testing.T, r *Repository, key cache.ResponseKey, now time
 	return entry
 }
 
+// requireResponseHit requires a lookup of entry's key at now to return entry.
+func requireResponseHit(t *testing.T, r *Repository, entry cache.ResponseEntry, now time.Time, failure string) {
+	t.Helper()
+	if hit := lookupResponse(t, r, entry.Key, now); hit == nil || hit.ID != entry.ID {
+		t.Fatal(failure)
+	}
+}
+
 func TestCloudResponseCacheFreshnessIsolationAndRestart(t *testing.T) {
 	r, table, blobs, entry, _ := responseCacheFixture(t)
 	ctx := context.Background()
 	if got := lookupResponse(t, r, entry.Key, entry.CompletedAt); got != nil {
 		t.Fatal("initial hit")
 	}
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishResponse(t, r, entry)
 	r = reopen(t, table, blobs)
-	if got := lookupResponse(t, r, entry.Key, entry.CompletedAt.Add(10*365*24*time.Hour)); got == nil || got.ID != entry.ID {
-		t.Fatal("omitted age did not preserve old success")
-	}
+	requireResponseHit(t, r, entry, entry.CompletedAt.Add(10*365*24*time.Hour), "omitted age did not preserve old success")
 	age := time.Hour
 	for _, test := range []struct {
 		now time.Time
@@ -148,9 +150,7 @@ func TestCloudResponseCacheConcurrentPublicationAndMonotonicHead(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishResponse(t, r, entry)
 	if got := lookupResponse(t, r, entry.Key, entry.CompletedAt.Add(time.Hour)); got.ID != "entry-29" {
 		t.Fatalf("head regressed: %s", got.ID)
 	}
@@ -162,17 +162,13 @@ func TestCloudResponseCacheConcurrentPublicationAndMonotonicHead(t *testing.T) {
 	}
 	conflict := entry
 	conflict.CompletedAt = conflict.CompletedAt.Add(time.Second)
-	if err := r.Responses().Publish(ctx, conflict); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("ID reused: %v", err)
-	}
+	requireErrorIs(t, r.Responses().Publish(ctx, conflict), contracts.ErrConflict, "ID reused")
 }
 
 func TestCloudResponseCacheIncompleteResultsPreserveSuccess(t *testing.T) {
 	r, _, _, entry, _ := responseCacheFixture(t)
 	ctx := context.Background()
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishResponse(t, r, entry)
 	for _, status := range []string{"length", "refused", "content_filtered", "failed", "pending"} {
 		candidate := entry
 		candidate.ID = state.CacheEntryID(status)
@@ -202,9 +198,7 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 				ctx := context.Background()
 				var previous *cache.ResponseEntry
 				if phase == "replace" {
-					if err := r.Responses().Publish(ctx, entry); err != nil {
-						t.Fatal(err)
-					}
+					mustPublishResponse(t, r, entry)
 					copy := entry
 					previous = &copy
 					entry.ID = "newer"
@@ -226,9 +220,7 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 						return nil, nil
 					}
 				}
-				if err := r.Responses().Publish(ctx, entry); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-					t.Fatalf("uncertain publication: %v", err)
-				}
+				requireErrorIs(t, r.Responses().Publish(ctx, entry), contracts.ErrOutcomeUnknown, "uncertain publication")
 				got := lookupResponse(t, r, entry.Key, entry.CompletedAt)
 				visible := committed && (phase == "success" || phase == "replace")
 				if visible {
@@ -247,9 +239,7 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 				if err := r.Responses().Publish(ctx, entry); err != nil {
 					t.Fatalf("restart retry: %v", err)
 				}
-				if got := lookupResponse(t, r, entry.Key, entry.CompletedAt); got == nil || got.ID != entry.ID {
-					t.Fatal("retry lost result")
-				}
+				requireResponseHit(t, r, entry, entry.CompletedAt, "retry lost result")
 			})
 		}
 	}
@@ -259,9 +249,7 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 // cache-replay child of origin that consumes it.
 func publishEntryWithReplayChild(t *testing.T, r *Repository, entry cache.ResponseEntry, origin state.DurableCheckpoint) state.DurableCheckpoint {
 	t.Helper()
-	if err := r.Responses().Publish(context.Background(), entry); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishResponse(t, r, entry)
 	child := childCheckpoint(origin, "consumer")
 	child.Kind, child.OriginCacheEntryID = state.CheckpointCacheReplay, &entry.ID
 	return child
@@ -277,16 +265,10 @@ func TestCloudResponseCacheUseReceipts(t *testing.T) {
 	ctx := context.Background()
 	child := publishEntryWithReplayChild(t, r, entry, origin)
 	use := replayUse(origin, child, entry, entry.CompletedAt.Add(time.Hour))
-	if err := r.Responses().RecordUse(ctx, use); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("uncommitted checkpoint consumed: %v", err)
-	}
-	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrNotFound, "uncommitted checkpoint consumed")
+	mustPublishCheckpoint(t, r.Checkpoints(), child)
 	table.hook = failTableWrites("", "/cache/use/", nil, contracts.ErrOutcomeUnknown)
-	if err := r.Responses().RecordUse(ctx, use); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.Responses().RecordUse(ctx, use), contracts.ErrOutcomeUnknown, "")
 	table.hook = nil
 	r = reopen(t, table, blobs)
 	var wg sync.WaitGroup
@@ -316,12 +298,8 @@ func TestCloudResponseCacheUseReceipts(t *testing.T) {
 	}
 	conflict := use
 	conflict.CompletedAt = conflict.CompletedAt.Add(time.Second)
-	if err := r.Responses().RecordUse(ctx, conflict); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("receipt changed: %v", err)
-	}
-	if _, err := r.Responses().ReadUse(ctx, "other-scope", use.OperationID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("cross-scope receipt: %v", err)
-	}
+	requireErrorIs(t, r.Responses().RecordUse(ctx, conflict), contracts.ErrConflict, "receipt changed")
+	requireErrorIs(t, errOf(r.Responses().ReadUse(ctx, "other-scope", use.OperationID)), contracts.ErrNotFound, "cross-scope receipt")
 	age := time.Minute
 	if got, err := r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: use.CompletedAt, MaxAge: &age}); err != nil || got != nil {
 		t.Fatal("use refreshed age")
@@ -340,25 +318,15 @@ func TestCloudResponseCacheInvalidInputsAndCorruption(t *testing.T) {
 	} {
 		candidate := entry
 		edit(&candidate)
-		if err := r.Responses().Publish(ctx, candidate); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("invalid accepted: %v", err)
-		}
+		requireErrorIs(t, r.Responses().Publish(ctx, candidate), ErrInvalid, "invalid accepted")
 	}
-	if err := r.Responses().Publish(nil, entry); !errors.Is(err, ErrInvalid) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.Responses().Publish(nil, entry), ErrInvalid, "")
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := r.Responses().Publish(canceled, entry); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.Responses().Publish(canceled, entry), context.Canceled, "")
+	mustPublishResponse(t, r, entry)
 	for _, age := range []time.Duration{0, -time.Second} {
-		if _, err := r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt, MaxAge: &age}); !errors.Is(err, ErrInvalid) {
-			t.Fatal(err)
-		}
+		requireErrorIs(t, errOf(r.Responses().Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt, MaxAge: &age})), ErrInvalid, "")
 	}
 	s := r.Responses().(*responseCache)
 	head := s.key("success", entry.Key)
@@ -367,9 +335,7 @@ func TestCloudResponseCacheInvalidInputsAndCorruption(t *testing.T) {
 	bad.Item = cloneItem(row.Item)
 	bad.Item.Fields["cache"] = kv.String("bad")
 	table.rows[head] = bad
-	if _, err := s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt}); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("corruption hidden: %v", err)
-	}
+	requireErrorIs(t, errOf(s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt})), ErrCorrupt, "corruption hidden")
 	table.rows[head] = row
 	pointer, _, err := s.readPointer(ctx, head)
 	if err != nil {
@@ -377,7 +343,5 @@ func TestCloudResponseCacheInvalidInputsAndCorruption(t *testing.T) {
 	}
 	data := blobs.values[blob.BlobKey(pointer.Blob)]
 	data[len(data)-1] ^= 1
-	if _, err := s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt}); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("tampering hidden: %v", err)
-	}
+	requireErrorIs(t, errOf(s.Lookup(ctx, cache.ResponseLookup{Key: entry.Key, Now: entry.CompletedAt})), ErrCorrupt, "tampering hidden")
 }

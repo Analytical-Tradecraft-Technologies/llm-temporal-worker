@@ -3,8 +3,6 @@ package architecturetest
 import (
 	"fmt"
 	"iter"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -59,9 +57,7 @@ func TestSecurityRunsDifferentiallyOnPullRequestsAndFullyOnSchedule(t *testing.T
 	if jobHasRunCommand(workflowJob(t, pullRequest, "security"), "make security-verify") {
 		t.Fatal("pull-request security job still runs the full current-tree gate")
 	}
-	if strings.Contains(master.raw, "security-verify") {
-		t.Fatal("master workflow still runs security verification on every master build")
-	}
+	assertOmits(t, master.raw, "security-verify", "master workflow still runs security verification on every master build")
 	collector := readRepositoryFile(t, repositoryRoot(t), "scripts", "release", "collect.sh")
 	if strings.Contains(collector, "security-verify") || strings.Contains(collector, "vulnerability-results") {
 		t.Fatal("master release-evidence collection still runs or retains the vulnerability scan")
@@ -140,16 +136,7 @@ func TestWorkflowNativeCISetupHelpersVerifyPinnedDownloads(t *testing.T) {
 	} {
 		t.Run(test.file, func(t *testing.T) {
 			setup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", test.file)
-			for _, want := range []string{
-				test.version,
-				test.checksum,
-				"sha256sum --check --status",
-				"RUNNER_TEMP",
-			} {
-				if !strings.Contains(setup, want) {
-					t.Fatalf("%s does not retain %q", test.file, want)
-				}
-			}
+			assertContainsEach(t, setup, test.file+" does not retain %q", test.version, test.checksum, "sha256sum --check --status", "RUNNER_TEMP")
 		})
 	}
 
@@ -174,16 +161,12 @@ func TestWorkflowContainerBuildCacheV2BridgeAndIsolation(t *testing.T) {
 		assertJobActionPrecedesRunContains(t, workflow, "container", githubScriptAction, "docker buildx build")
 		assertJobRunContains(t, workflow, "container", "--cache-from type=gha,scope="+test.scope+",version=2")
 		assertJobRunContains(t, workflow, "container", "--cache-to type=gha,mode=max,scope="+test.scope+",version=2,ignore-error=true")
-		for _, want := range []string{
+		assertContainsEach(t, workflow.raw, workflow.name+" does not export %s through the GitHub-owned runtime bridge",
 			"ACTIONS_CACHE_URL",
 			"ACTIONS_RESULTS_URL",
 			"ACTIONS_RUNTIME_TOKEN",
 			"ACTIONS_CACHE_SERVICE_V2",
-		} {
-			if !strings.Contains(workflow.raw, want) {
-				t.Fatalf("%s does not export %s through the GitHub-owned runtime bridge", workflow.name, want)
-			}
-		}
+		)
 	}
 }
 
@@ -218,9 +201,7 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 		"opam switch set --yes",
 		"opam init --bare --no-setup --yes",
 	)
-	if strings.Contains(opamSetup, "--disable-sandboxing") {
-		t.Fatal("native OPAM setup disables sandboxing")
-	}
+	assertOmits(t, opamSetup, "--disable-sandboxing", "native OPAM setup disables sandboxing")
 	if strings.Contains(opamSetup, "printf 'PATH=") || strings.Count(opamSetup, `>> "${GITHUB_PATH}"`) != 1 {
 		t.Fatal("native OPAM setup does not persist its executable path exactly once through GITHUB_PATH")
 	}
@@ -379,7 +360,7 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 	}
 
 	buildxSetup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "setup-buildx.sh")
-	for _, want := range []string{
+	assertContainsEach(t, buildxSetup, "native Buildx setup does not retain %q",
 		"readonly buildx_version=\"v0.21.2\"",
 		"readonly buildx_sha256=\"b13bee81c3db12a4be7d0b9d042b64d0dd9ed116f7674dfac0ffdf2a71acfe3d\"",
 		"moby/buildkit:v0.20.2@sha256:c457984bd29f04d6acc90c8d9e717afe3922ae14665f3187e0096976fe37b1c8",
@@ -387,11 +368,7 @@ func TestWorkflowContainerBuildContract(t *testing.T) {
 		"--driver docker-container",
 		"docker buildx create",
 		"docker buildx inspect --bootstrap",
-	} {
-		if !strings.Contains(buildxSetup, want) {
-			t.Fatalf("native Buildx setup does not retain %q", want)
-		}
-	}
+	)
 }
 
 func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testing.T) {
@@ -403,7 +380,7 @@ func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testin
 		if workflow.name == "master.yml" {
 			lower = strings.ReplaceAll(lower, "${{ secrets.docker_access_token }}", "")
 		}
-		for _, forbidden := range []string{
+		assertOmitsEach(t, lower, workflow.name+" contains forbidden credential or deployment reference %q",
 			"secrets.",
 			"openai_api_key",
 			"anthropic_api_key",
@@ -418,11 +395,7 @@ func TestWorkflowPolicyDoesNotReferenceProviderCredentialsOrDeployment(t *testin
 			"gh release",
 			"id-token: write",
 			"packages: write",
-		} {
-			if strings.Contains(lower, forbidden) {
-				t.Fatalf("%s contains forbidden credential or deployment reference %q", workflow.name, forbidden)
-			}
-		}
+		)
 	}
 }
 
@@ -457,17 +430,13 @@ func TestWorkflowReleaseEvidenceBoundary(t *testing.T) {
 			t.Fatalf("release-evidence job does not run %q", command)
 		}
 	}
-	for _, want := range []string{
+	assertContainsEach(t, master.raw, "master release-evidence job does not retain exact OCI evidence boundary %q",
 		"oci-dir:\"$RUNNER_TEMP/image.oci\"",
 		"--input \"$RUNNER_TEMP/image.oci\"",
 		"--config scripts/release/trivy.yaml",
 		"RELEASE_EVIDENCE_KUBECTL_VERSION: v1.32.6",
 		"retention-days: 14",
-	} {
-		if !strings.Contains(master.raw, want) {
-			t.Fatalf("master release-evidence job does not retain exact OCI evidence boundary %q", want)
-		}
-	}
+	)
 	for _, test := range []struct {
 		name string
 		file string
@@ -784,11 +753,7 @@ func TestWorkflowLiveHarnessVerificationIsUncredentialed(t *testing.T) {
 		if workflow.name == "master.yml" {
 			lower = strings.ReplaceAll(lower, "${{ secrets.docker_access_token }}", "")
 		}
-		for _, forbidden := range []string{"llmtw_live_", "secrets."} {
-			if strings.Contains(lower, forbidden) {
-				t.Fatalf("%s combines offline live-harness verification with %q", workflow.name, forbidden)
-			}
-		}
+		assertOmitsEach(t, lower, workflow.name+" combines offline live-harness verification with %q", "llmtw_live_", "secrets.")
 	}
 }
 
@@ -799,13 +764,9 @@ func TestWorkflowVerificationEntrypoint(t *testing.T) {
 	}
 
 	script := readRepositoryFile(t, moduleRoot(t), "scripts", "check-workflow-policy.sh")
-	if !strings.Contains(script, "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12") {
-		t.Fatal("workflow policy helper does not pin actionlint v1.7.12")
-	}
+	assertContains(t, script, "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12", "workflow policy helper does not pin actionlint v1.7.12")
 	const workflowPolicyTests = "go test ./internal/architecturetest -run '^(TestWorkflow.*|TestLiveProviderContractsWorkflowIsManualProtectedAndSingleProfile)$'"
-	if !strings.Contains(script, workflowPolicyTests) {
-		t.Fatal("workflow policy helper does not execute the live-provider workflow contract test")
-	}
+	assertContains(t, script, workflowPolicyTests, "workflow policy helper does not execute the live-provider workflow contract test")
 }
 
 func TestWorkflowsRunHardenedImageVerification(t *testing.T) {
@@ -860,18 +821,7 @@ func assertMasterTriggers(t *testing.T, workflow workflowDocument) {
 	if len(branches) != 1 || branches[0] != "master" {
 		t.Fatalf("%s push branches = %v, want [master]", workflow.name, branches)
 	}
-	if _, ok := triggers["workflow_dispatch"]; !ok {
-		t.Fatalf("%s does not support workflow_dispatch", workflow.name)
-	}
-
-	schedules, ok := triggers["schedule"].([]any)
-	if !ok || len(schedules) != 1 {
-		t.Fatalf("%s schedule = %#v, want one daily schedule", workflow.name, triggers["schedule"])
-	}
-	schedule, ok := schedules[0].(map[string]any)
-	if !ok {
-		t.Fatalf("%s schedule entry = %#v, want mapping", workflow.name, schedules[0])
-	}
+	schedule := dispatchAndDailySchedule(t, workflow, triggers)
 	if scalarString(t, workflow.name, schedule, "cron") != "0 5 * * *" {
 		t.Fatalf("%s cron = %q, want exact 05:00 daily schedule", workflow.name, scalarString(t, workflow.name, schedule, "cron"))
 	}
@@ -886,6 +836,19 @@ func assertScheduledSecurityTriggers(t *testing.T, workflow workflowDocument) {
 	if len(triggers) != 2 {
 		t.Fatalf("%s triggers = %#v, want only workflow_dispatch and schedule", workflow.name, triggers)
 	}
+	schedule := dispatchAndDailySchedule(t, workflow, triggers)
+	if scalarString(t, workflow.name, schedule, "cron") != "30 5 * * *" {
+		t.Fatalf("%s does not retain the 05:30 daily schedule", workflow.name)
+	}
+	if scalarString(t, workflow.name, schedule, "timezone") != "Australia/Sydney" {
+		t.Fatalf("%s does not retain the Australia/Sydney timezone", workflow.name)
+	}
+}
+
+// dispatchAndDailySchedule fails unless triggers allow workflow_dispatch and
+// declare exactly one schedule, and returns that schedule entry.
+func dispatchAndDailySchedule(t *testing.T, workflow workflowDocument, triggers map[string]any) map[string]any {
+	t.Helper()
 	if _, ok := triggers["workflow_dispatch"]; !ok {
 		t.Fatalf("%s does not support workflow_dispatch", workflow.name)
 	}
@@ -897,12 +860,7 @@ func assertScheduledSecurityTriggers(t *testing.T, workflow workflowDocument) {
 	if !ok {
 		t.Fatalf("%s schedule entry = %#v, want mapping", workflow.name, schedules[0])
 	}
-	if scalarString(t, workflow.name, schedule, "cron") != "30 5 * * *" {
-		t.Fatalf("%s does not retain the 05:30 daily schedule", workflow.name)
-	}
-	if scalarString(t, workflow.name, schedule, "timezone") != "Australia/Sydney" {
-		t.Fatalf("%s does not retain the Australia/Sydney timezone", workflow.name)
-	}
+	return schedule
 }
 
 func assertWorkflowControls(t *testing.T, workflow workflowDocument) {
@@ -925,7 +883,7 @@ func assertVerificationStep(t *testing.T, workflow workflowDocument) {
 
 func assertRequiredOfflineGates(t *testing.T, workflow workflowDocument) {
 	t.Helper()
-	for _, command := range []string{
+	assertContainsEach(t, workflow.raw, workflow.name+" does not retain required offline gate %q",
 		"scripts/check-go-format.sh",
 		"make schema-verify",
 		"make docs-verify",
@@ -933,11 +891,7 @@ func assertRequiredOfflineGates(t *testing.T, workflow workflowDocument) {
 		"go vet ./...",
 		raceGateCommand(workflow),
 		"go build ./...",
-	} {
-		if !strings.Contains(workflow.raw, command) {
-			t.Fatalf("%s does not retain required offline gate %q", workflow.name, command)
-		}
-	}
+	)
 }
 
 // raceGateCommand is the full race-enabled suite each workflow must run.
@@ -968,11 +922,7 @@ func parseWorkflow(t *testing.T, name, raw string) workflowDocument {
 
 func readRepositoryFile(t *testing.T, root string, path ...string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(append([]string{root}, path...)...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(data)
+	return readText(t, append([]string{root}, path...)...)
 }
 
 func workflowMapping(t *testing.T, workflow workflowDocument, key string) map[string]any {
@@ -980,29 +930,29 @@ func workflowMapping(t *testing.T, workflow workflowDocument, key string) map[st
 	return nestedMapping(t, workflow.name, workflow.fields, key)
 }
 
-func nestedMapping(t *testing.T, name string, fields map[string]any, key string) map[string]any {
+// typedField returns fields[key] as a T, failing when it is missing or has
+// another type; name labels fields and kind names T in failures.
+func typedField[T any](t *testing.T, name string, fields map[string]any, key, kind string) T {
 	t.Helper()
 	value, ok := fields[key]
 	if !ok {
 		t.Fatalf("%s is missing %q", name, key)
 	}
-	mapping, ok := value.(map[string]any)
+	typed, ok := value.(T)
 	if !ok {
-		t.Fatalf("%s %q = %#v, want mapping", name, key, value)
+		t.Fatalf("%s %q = %#v, want %s", name, key, value, kind)
 	}
-	return mapping
+	return typed
+}
+
+func nestedMapping(t *testing.T, name string, fields map[string]any, key string) map[string]any {
+	t.Helper()
+	return typedField[map[string]any](t, name, fields, key, "mapping")
 }
 
 func stringSequence(t *testing.T, name string, fields map[string]any, key string) []string {
 	t.Helper()
-	value, ok := fields[key]
-	if !ok {
-		t.Fatalf("%s is missing %q", name, key)
-	}
-	sequence, ok := value.([]any)
-	if !ok {
-		t.Fatalf("%s %q = %#v, want sequence", name, key, value)
-	}
+	sequence := typedField[[]any](t, name, fields, key, "sequence")
 	result := make([]string, len(sequence))
 	for index, item := range sequence {
 		stringValue, ok := item.(string)
@@ -1016,15 +966,7 @@ func stringSequence(t *testing.T, name string, fields map[string]any, key string
 
 func scalarString(t *testing.T, name string, fields map[string]any, key string) string {
 	t.Helper()
-	value, ok := fields[key]
-	if !ok {
-		t.Fatalf("%s is missing %q", name, key)
-	}
-	stringValue, ok := value.(string)
-	if !ok {
-		t.Fatalf("%s %q = %#v, want string", name, key, value)
-	}
-	return stringValue
+	return typedField[string](t, name, fields, key, "string")
 }
 
 func actionReferences(t *testing.T, workflow workflowDocument) []string {

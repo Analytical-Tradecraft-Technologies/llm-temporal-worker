@@ -8,10 +8,7 @@ import (
 
 func TestFingerprintRouteIdentityFieldsNeverShare(t *testing.T) {
 	base := testInput()
-	baseFingerprint, err := Compute([]byte("secret"), base)
-	if err != nil {
-		t.Fatal(err)
-	}
+	baseFingerprint := mustCompute(t, []byte("secret"), base)
 	cases := []struct {
 		name string
 		edit func(*Input)
@@ -35,10 +32,7 @@ func TestFingerprintRouteIdentityFieldsNeverShare(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			input := base
 			test.edit(&input)
-			fingerprint, err := Compute([]byte("secret"), input)
-			if err != nil {
-				t.Fatal(err)
-			}
+			fingerprint := mustCompute(t, []byte("secret"), input)
 			if fingerprint == baseFingerprint {
 				t.Fatalf("%s did not change route-isolated fingerprint", test.name)
 			}

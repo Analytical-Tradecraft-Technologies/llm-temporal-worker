@@ -13,26 +13,19 @@ func TestReleaseEvidenceGateCapturesOnlySuccessfulRedactedResults(t *testing.T) 
 		t.Run(status, func(t *testing.T) {
 			summary := filepath.Join(t.TempDir(), "nested", "race-summary.json")
 			output, err := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts/release/run-gate.sh"), "race_summary", summary, "bash", "-c", "echo secret-sentinel; exit "+status).CombinedOutput()
-			if strings.Contains(string(output), "secret-sentinel") {
-				t.Fatal("raw output leaked")
-			}
+			assertOmits(t, string(output), "secret-sentinel", "raw output leaked")
 			if status != "0" {
 				if err == nil {
 					t.Fatal("failed gate accepted")
 				}
-				if _, err := os.Stat(summary); !os.IsNotExist(err) {
-					t.Fatal("failed gate retained a summary")
-				}
+				assertPathAbsent(t, summary, "failed gate retained a summary")
 				return
 			}
 			if err != nil {
 				t.Fatalf("%v: %s", err, output)
 			}
-			data, err := os.ReadFile(summary)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(data), `"status":"pass"`) {
+			data := readText(t, summary)
+			if !strings.Contains(data, `"status":"pass"`) {
 				t.Fatalf("invalid summary %s", data)
 			}
 			if !strings.Contains(string(output), "passed (") {
@@ -135,11 +128,7 @@ func TestWorkflowReleaseEvidenceReusesSuccessfulRunInputs(t *testing.T) {
 	for _, raw := range job["steps"].([]any) {
 		step := raw.(map[string]any)
 		run, _ := step["run"].(string)
-		for _, forbidden := range []string{"go test", "make image-verify", "setup-build-cloud.sh"} {
-			if strings.Contains(run, forbidden) {
-				t.Fatalf("evidence job repeats %s", forbidden)
-			}
-		}
+		assertOmitsEach(t, run, "evidence job repeats %s", "go test", "make image-verify", "setup-build-cloud.sh")
 		if uses, _ := step["uses"].(string); strings.HasPrefix(uses, "actions/download-artifact@") {
 			with := step["with"].(map[string]any)
 			for _, forbidden := range []string{"run-id", "repository", "github-token"} {
@@ -163,9 +152,7 @@ case "$1" in
  *) exit 99 ;;
 esac
 `
-			if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(fake), 0700); err != nil {
-				t.Fatal(err)
-			}
+			writeFile(t, filepath.Join(dir, "docker"), []byte(fake), 0o700)
 			dest := filepath.Join(dir, "evidence")
 			cmd := exec.Command("bash", filepath.Join(repositoryRoot(t), "scripts/release/collect-compose.sh"), "tested-project", dest)
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "FAKE_HEALTH="+health)
@@ -180,13 +167,8 @@ esac
 				t.Fatalf("%v: %s", err, output)
 			}
 			for _, name := range []string{"redis-summary", "temporal-summary", "compose-summary", "redis-log", "temporal-log", "compose-log"} {
-				data, err := os.ReadFile(filepath.Join(dest, name+".json"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if strings.Contains(string(data), "secret-sentinel") {
-					t.Fatal("raw service text leaked")
-				}
+				data := readText(t, dest, name+".json")
+				assertOmits(t, data, "secret-sentinel", "raw service text leaked")
 			}
 		})
 	}

@@ -146,10 +146,7 @@ func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 		Input:        []llm.Item{llm.HumanText("first turn")},
 		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)},
 	})
-	firstResult, err := adapter.Invoke(context.Background(), first, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	firstResult := adaptertest.Invoke(t, adapter, first)
 	if firstResult.Response.Continuation == nil {
 		t.Fatal("stored response did not yield a continuation")
 	}
@@ -179,10 +176,7 @@ func TestInvokeOmitsContinuationForUnstoredResponse(t *testing.T) {
 		Model:        "gpt-contract",
 		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":false}`)},
 	})
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if result.Response.Continuation != nil {
 		t.Fatalf("unstored response continuation = %#v, want nil", result.Response.Continuation)
 	}

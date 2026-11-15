@@ -2,11 +2,10 @@ package bedrockconverse
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // The SDK decodes tool input into a float64 document, so the lift must take
@@ -54,10 +53,7 @@ func TestToolUseLiftRejectsInvalidRawInput(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := invokeCannedConverse(t, `{"output":{"message":{"role":"assistant","content":[{"toolUse":{"toolUseId":"tooluse_1","name":"lookup","input":`+input+`}}]}},"stopReason":"tool_use","usage":{"inputTokens":4,"outputTokens":3,"totalTokens":7}}`)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
-				t.Fatalf("tool input error = %#v", err)
-			}
+			adaptertest.RequireLiftInvalidResponse(t, err, "tool input error")
 		})
 	}
 }

@@ -227,9 +227,7 @@ func TestReleaseEvidenceShardMergeRequiresEverySuccessfulShard(t *testing.T) {
 			if err == nil {
 				t.Fatal("incomplete shard evidence accepted")
 			}
-			if _, err := os.Stat(dest); !os.IsNotExist(err) {
-				t.Fatal("invalid evidence retained")
-			}
+			assertPathAbsent(t, dest, "invalid evidence retained")
 		})
 	}
 }

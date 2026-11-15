@@ -55,6 +55,11 @@ func (adapter *resumableTestAdapter) RecoverByIdempotencyKey(context.Context, pr
 var _ provider.ResumableAdapter = (*resumableTestAdapter)(nil)
 
 // completedProviderOp is a completed poll of provider-op for operation-key.
+// pendingProviderOp is an accepted, still-pending provider-op poll result.
+func pendingProviderOp(nextPollAfter time.Duration) provider.ResumableResult {
+	return provider.ResumableResult{State: provider.ResumablePending, ProviderOperationID: "provider-op", NextPollAfter: nextPollAfter, Dispatch: provider.DispatchAccepted}
+}
+
 func completedProviderOp() provider.ResumableResult {
 	return provider.ResumableResult{
 		State: provider.ResumableCompleted, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted,
@@ -97,7 +102,7 @@ func (observer *pollProgressObserver) OnProgress(_ context.Context, progress pro
 
 func TestPollProviderOperationNeverSubmitsAndResumesPendingID(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{
-		{State: provider.ResumablePending, ProviderOperationID: "provider-op", NextPollAfter: 5 * time.Second, Dispatch: provider.DispatchAccepted},
+		pendingProviderOp(5 * time.Second),
 		completedProviderOp(),
 	}}
 	observer := &pollProgressObserver{}
@@ -163,8 +168,8 @@ func TestPollProviderOperationCapsInitialGuidance(t *testing.T) {
 
 func TestPollProviderOperationCapsGuidanceAndLeavesPendingRetryable(t *testing.T) {
 	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{
-		{State: provider.ResumablePending, ProviderOperationID: "provider-op", NextPollAfter: 10 * time.Second, Dispatch: provider.DispatchAccepted},
-		{State: provider.ResumablePending, ProviderOperationID: "provider-op", NextPollAfter: 10 * time.Second, Dispatch: provider.DispatchAccepted},
+		pendingProviderOp(10 * time.Second),
+		pendingProviderOp(10 * time.Second),
 	}}
 	var slept []time.Duration
 	_, err := PollProviderOperation(context.Background(), adapter, provider.Call{}, "provider-op", nil, ProviderPollOptions{
@@ -247,7 +252,7 @@ func TestPollProviderOperationRejectsCompletedResponseForAnotherOperation(t *tes
 func TestPollProviderOperationPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{{State: provider.ResumablePending, ProviderOperationID: "provider-op", Dispatch: provider.DispatchAccepted}}}
+	adapter := &resumableTestAdapter{responses: []provider.ResumableResult{pendingProviderOp(0)}}
 	mapped, err := pollOnceError(t, ctx, adapter, provider.Call{}, "canceled polling unexpectedly completed")
 	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Retry != provider.RetryNever {
 		t.Fatalf("error = %#v, want non-retryable canceled result", err)

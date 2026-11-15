@@ -2,6 +2,7 @@ package observability_test
 
 import (
 	"context"
+	"iter"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -15,13 +16,10 @@ import (
 )
 
 func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{
+	metrics := newMetrics(t, observability.AllowedValues{
 		Endpoints: []string{"endpoint-a"}, Models: []string{"model-a"},
 		Outcomes: []string{"success"}, Methods: []string{"provider"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	metrics.RecordProviderAttempt("endpoint-a", "model-a", "priority", "success", time.Second)
 	metrics.RecordProviderAttempt("secret-endpoint", "secret-model", "secret-class", "secret-outcome", time.Second)
 	metrics.RecordActivityFailure("worker")
@@ -30,10 +28,7 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 	metrics.RecordCostStatus("endpoint-a", "model-a", "standard", "exact", "provider")
 
 	response := &strings.Builder{}
-	metricFamilies, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	metricFamilies := gather(t, metrics)
 	encoder := expfmt.NewEncoder(response, expfmt.NewFormat(expfmt.TypeTextPlain))
 	for _, family := range metricFamilies {
 		if err := encoder.Encode(family); err != nil {
@@ -58,7 +53,7 @@ func TestMetricsBoundLabelsAndNeverExposeTenantText(t *testing.T) {
 }
 
 func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{
+	metrics := newMetrics(t, observability.AllowedValues{
 		Endpoints:             []string{"endpoint-a"},
 		Models:                []string{"model-a"},
 		Policies:              []string{"policy-a"},
@@ -71,9 +66,6 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 		OperationStates:       []string{"started"},
 		ContinuationDecisions: []string{"continue"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx := observability.WithMetrics(context.Background(), metrics)
 	if got := observability.MetricsFromContext(ctx); got != metrics {
 		t.Fatalf("metrics from context = %p, want %p", got, metrics)
@@ -112,10 +104,7 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 	metrics.SetWorkerPolling(false)
 	metrics.SetHeartbeatAge(-time.Second)
 
-	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	families := gather(t, metrics)
 	wantFamilies := []string{
 		"llmtw_activity_total", "llmtw_activity_duration_seconds", "llmtw_activity_failure_total",
 		"llmtw_provider_attempt_total", "llmtw_provider_duration_seconds", "llmtw_service_class_actual_total",
@@ -137,65 +126,35 @@ func TestMetricsRecordersExposeEveryBoundedSignal(t *testing.T) {
 			t.Fatalf("metric family %q was not gathered; families = %v", name, seen)
 		}
 	}
-	if got := metricValue(families, "llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "circuit_open"}); got != 1 {
-		t.Fatalf("route held = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "other"}); got != 1 {
-		t.Fatalf("route held with an unknown reason = %v, want it bounded to other", got)
-	}
-	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-a", "to": "circuit_open"}); got != 1 {
-		t.Fatalf("route circuit openings = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-a", "to": "degraded"}); got != 0 {
-		t.Fatalf("pre-registered degraded transitions = %v, want 0", got)
-	}
-	if got := metricValue(families, "llmtw_route_health_transition_total", map[string]string{"endpoint": "other", "to": "other"}); got != 1 {
-		t.Fatalf("unknown endpoint and transition = %v, want both bounded to other", got)
-	}
+	requireMetricValues(t, families, []metricExpectation{
+		{"llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "circuit_open"}, 1, "route held = %v, want 1"},
+		{"llmtw_route_held_total", map[string]string{"endpoint": "endpoint-a", "reason": "other"}, 1, "route held with an unknown reason = %v, want it bounded to other"},
+		{"llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-a", "to": "circuit_open"}, 1, "route circuit openings = %v, want 1"},
+		{"llmtw_route_health_transition_total", map[string]string{"endpoint": "endpoint-a", "to": "degraded"}, 0, "pre-registered degraded transitions = %v, want 0"},
+		{"llmtw_route_health_transition_total", map[string]string{"endpoint": "other", "to": "other"}, 1, "unknown endpoint and transition = %v, want both bounded to other"},
+	})
 	if got := metricValue(families, "llmtw_catalog_price_expiry_timestamp_seconds", nil); got != float64(expiry.Unix()) {
 		t.Fatalf("catalog price expiry = %v, want %v", got, expiry.Unix())
 	}
 	metrics.SetCatalogPriceExpirySource(func(time.Time) time.Time { return time.Time{} })
-	if families, err = metrics.Gather(); err != nil {
-		t.Fatal(err)
-	}
+	families = gather(t, metrics)
 	if got := metricValue(families, "llmtw_catalog_price_expiry_timestamp_seconds", nil); !math.IsInf(got, 1) {
 		t.Fatalf("catalog price expiry without a bound = %v, want +Inf", got)
 	}
-	if got := metricValue(families, "llmtw_worker_polling", nil); got != 0 {
-		t.Fatalf("worker polling = %v, want 0 after stop", got)
-	}
-	if got := metricValue(families, "llmtw_heartbeat_age_seconds", nil); got != 0 {
-		t.Fatalf("heartbeat age = %v, want negative ages clamped to 0", got)
-	}
-	if got := metricValue(families, "llmtw_cost_usd_total", map[string]string{
-		"endpoint": "endpoint-a", "model": "model-a", "class": "standard", "method": "provider",
-	}); got != 1 {
-		t.Fatalf("exact cost event count = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_maintenance_rows_total", map[string]string{"resource": "cache", "outcome": "tombstoned"}); got != 2 {
-		t.Fatalf("maintenance tombstone count = %v, want 2", got)
-	}
-	if got := metricValue(families, "llmtw_maintenance_failures_total", map[string]string{"resource": "cache"}); got != 1 {
-		t.Fatalf("maintenance failure count = %v, want 1", got)
-	}
+	requireMetricValues(t, families, []metricExpectation{
+		{"llmtw_worker_polling", nil, 0, "worker polling = %v, want 0 after stop"},
+		{"llmtw_heartbeat_age_seconds", nil, 0, "heartbeat age = %v, want negative ages clamped to 0"},
+		{"llmtw_cost_usd_total", map[string]string{"endpoint": "endpoint-a", "model": "model-a", "class": "standard", "method": "provider"}, 1, "exact cost event count = %v, want 1"},
+		{"llmtw_maintenance_rows_total", map[string]string{"resource": "cache", "outcome": "tombstoned"}, 2, "maintenance tombstone count = %v, want 2"},
+		{"llmtw_maintenance_failures_total", map[string]string{"resource": "cache"}, 1, "maintenance failure count = %v, want 1"},
+		{"llmtw_maintenance_rows_total", map[string]string{"resource": "budget", "outcome": "deleted"}, 3, "budget maintenance delete count = %v, want 3"},
+		{"llmtw_maintenance_failures_total", map[string]string{"resource": "budget"}, 1, "budget maintenance failure count = %v, want 1"},
+		{"llmtw_cache_events_total", map[string]string{"event": "use"}, 1, "cache use count = %v, want 1"},
+		{"llmtw_provider_poll_total", map[string]string{"outcome": "retry"}, 1, "provider poll retry count = %v, want 1"},
+		{"llmtw_cost_status_total", map[string]string{"status": "unknown"}, 1, "unknown cost count = %v, want 1"},
+	})
 	if got := histogramCount(families, "llmtw_maintenance_duration_seconds", map[string]string{"resource": "cache"}); got != 1 {
 		t.Fatalf("maintenance duration samples = %v, want one sample per pass", got)
-	}
-	if got := metricValue(families, "llmtw_maintenance_rows_total", map[string]string{"resource": "budget", "outcome": "deleted"}); got != 3 {
-		t.Fatalf("budget maintenance delete count = %v, want 3", got)
-	}
-	if got := metricValue(families, "llmtw_maintenance_failures_total", map[string]string{"resource": "budget"}); got != 1 {
-		t.Fatalf("budget maintenance failure count = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_cache_events_total", map[string]string{"event": "use"}); got != 1 {
-		t.Fatalf("cache use count = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_provider_poll_total", map[string]string{"outcome": "retry"}); got != 1 {
-		t.Fatalf("provider poll retry count = %v, want 1", got)
-	}
-	if got := metricValue(families, "llmtw_cost_status_total", map[string]string{"status": "unknown"}); got != 1 {
-		t.Fatalf("unknown cost count = %v, want 1", got)
 	}
 
 	response := httptest.NewRecorder()
@@ -239,15 +198,9 @@ func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
 	metrics.SetWorkerPolling(true)
 	metrics.SetHeartbeatAge(time.Second)
 
-	defaults, err := observability.NewMetrics(observability.AllowedValues{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	defaults := newMetrics(t, observability.AllowedValues{})
 	defaults.RecordActivity("completed", "none", time.Second, "total")
-	families, err := defaults.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	families := gather(t, defaults)
 	if got := metricValue(families, "llmtw_activity_total", map[string]string{
 		"status": "completed", "error_class": "none",
 	}); got != 1 {
@@ -256,79 +209,103 @@ func TestMetricsNilBindingsAndDefaultBuiltInsAreSafe(t *testing.T) {
 }
 
 func histogramCount(families []*dto.MetricFamily, name string, labels map[string]string) uint64 {
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			matched := true
-			for key, want := range labels {
-				found := false
-				for _, label := range metric.GetLabel() {
-					if label.GetName() == key && label.GetValue() == want {
-						found = true
-						break
-					}
-				}
-				if !found {
-					matched = false
-					break
-				}
-			}
-			if matched && metric.Histogram != nil {
-				return metric.Histogram.GetSampleCount()
-			}
+	for metric := range seriesWithLabels(families, name, labels) {
+		if metric.Histogram != nil {
+			return metric.Histogram.GetSampleCount()
 		}
 	}
 	return 0
 }
 
 func metricValue(families []*dto.MetricFamily, name string, labels map[string]string) float64 {
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
+	for metric := range seriesWithLabels(families, name, labels) {
+		if metric.Gauge != nil {
+			return metric.GetGauge().GetValue()
 		}
-		for _, metric := range family.GetMetric() {
-			matched := true
-			for key, want := range labels {
-				found := false
-				for _, label := range metric.GetLabel() {
-					if label.GetName() == key && label.GetValue() == want {
-						found = true
-						break
-					}
-				}
-				if !found {
-					matched = false
-					break
-				}
-			}
-			if matched {
-				if metric.Gauge != nil {
-					return metric.GetGauge().GetValue()
-				}
-				if metric.Counter != nil {
-					return metric.GetCounter().GetValue()
-				}
-			}
+		if metric.Counter != nil {
+			return metric.GetCounter().GetValue()
 		}
 	}
 	return 0
 }
 
-func TestExtendAllowedLabelsIdentifiersIntroducedByReload(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint-a"}, Models: []string{"model-a"}, Policies: []string{"policy-a"}, Outcomes: []string{"success", "accepted"}})
+// seriesWithLabels yields, in gather order, every series of the named family
+// that carries all of labels (extra labels are allowed).
+func seriesWithLabels(families []*dto.MetricFamily, name string, labels map[string]string) iter.Seq[*dto.Metric] {
+	return func(yield func(*dto.Metric) bool) {
+		for _, family := range families {
+			if family.GetName() != name {
+				continue
+			}
+			for _, metric := range family.GetMetric() {
+				if !hasLabels(metric, labels) {
+					continue
+				}
+				if !yield(metric) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func hasLabels(metric *dto.Metric, labels map[string]string) bool {
+	for key, want := range labels {
+		found := false
+		for _, label := range metric.GetLabel() {
+			if label.GetName() == key && label.GetValue() == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+type metricExpectation struct {
+	name    string
+	labels  map[string]string
+	want    float64
+	message string // format with one %v for the observed value
+}
+
+func requireMetricValues(t *testing.T, families []*dto.MetricFamily, expectations []metricExpectation) {
+	t.Helper()
+	for _, expectation := range expectations {
+		if got := metricValue(families, expectation.name, expectation.labels); got != expectation.want {
+			t.Fatalf(expectation.message, got)
+		}
+	}
+}
+
+func newMetrics(t *testing.T, allowed observability.AllowedValues) *observability.Metrics {
+	t.Helper()
+	metrics, err := observability.NewMetrics(allowed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	metrics.RecordBudgetAdmission("policy-b", "accepted")
-	metrics.ExtendAllowed(observability.AllowedValues{Endpoints: []string{"endpoint-b"}, Models: []string{"model-b"}, Policies: []string{"policy-b"}})
-	metrics.RecordBudgetAdmission("policy-b", "accepted")
-	metrics.RecordBudgetAdmission("policy-a", "accepted")
+	return metrics
+}
+
+func gather(t *testing.T, metrics *observability.Metrics) []*dto.MetricFamily {
+	t.Helper()
 	families, err := metrics.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
+	return families
+}
+
+func TestExtendAllowedLabelsIdentifiersIntroducedByReload(t *testing.T) {
+	metrics := newMetrics(t, observability.AllowedValues{Endpoints: []string{"endpoint-a"}, Models: []string{"model-a"}, Policies: []string{"policy-a"}, Outcomes: []string{"success", "accepted"}})
+	metrics.RecordBudgetAdmission("policy-b", "accepted")
+	metrics.ExtendAllowed(observability.AllowedValues{Endpoints: []string{"endpoint-b"}, Models: []string{"model-b"}, Policies: []string{"policy-b"}})
+	metrics.RecordBudgetAdmission("policy-b", "accepted")
+	metrics.RecordBudgetAdmission("policy-a", "accepted")
+	families := gather(t, metrics)
 	for policy, want := range map[string]float64{"other": 1, "policy-b": 1, "policy-a": 1} {
 		if got := metricValue(families, "llmtw_budget_admission_total", map[string]string{"policy": policy, "outcome": "accepted"}); got != want {
 			t.Errorf("policy %q admissions = %v, want %v", policy, got, want)
@@ -346,18 +323,12 @@ func TestExtendAllowedLabelsIdentifiersIntroducedByReload(t *testing.T) {
 // Provider calls and v1 Activities run for minutes; their latency histograms
 // must resolve observations past the Prometheus default 10 s ceiling (#1359).
 func TestLatencyHistogramsResolveMinuteLongObservations(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Models: []string{"model"}, Outcomes: []string{"success"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	metrics := newMetrics(t, observability.AllowedValues{Endpoints: []string{"endpoint"}, Models: []string{"model"}, Outcomes: []string{"success"}})
 	for _, duration := range []time.Duration{30 * time.Second, 240 * time.Second} {
 		metrics.RecordProviderAttempt("endpoint", "model", "standard", "success", duration)
 		metrics.RecordActivity("completed", "none", duration, "generate")
 	}
-	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	families := gather(t, metrics)
 	for _, name := range []string{"llmtw_provider_duration_seconds", "llmtw_activity_duration_seconds"} {
 		var histogram *dto.Histogram
 		for _, family := range families {
@@ -390,10 +361,7 @@ func TestLatencyHistogramsResolveMinuteLongObservations(t *testing.T) {
 // per-step v1 execution histogram, must place those targets on exact bucket
 // bounds so production metrics can show whether a step met them (#1497).
 func TestLatencyHistogramsResolveAdmissionObjectives(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Models: []string{"model"}, Outcomes: []string{"success"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	metrics := newMetrics(t, observability.AllowedValues{Endpoints: []string{"endpoint"}, Models: []string{"model"}, Outcomes: []string{"success"}})
 	for _, duration := range []time.Duration{20 * time.Millisecond, 60 * time.Millisecond, 90 * time.Millisecond} {
 		metrics.RecordProviderAttempt("endpoint", "model", "standard", "success", duration)
 		metrics.RecordActivity("completed", "none", duration, "total")
@@ -401,10 +369,7 @@ func TestLatencyHistogramsResolveAdmissionObjectives(t *testing.T) {
 	}
 	metrics.RecordExecutionStep("unbounded-step", time.Millisecond)
 	metrics.RecordExecutionStep(observability.ExecutionStepAcquire, -time.Second)
-	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
+	families := gather(t, metrics)
 	for name, labels := range map[string]map[string]string{
 		"llmtw_provider_duration_seconds":       {"endpoint": "endpoint", "model": "model", "class": "standard"},
 		"llmtw_activity_duration_seconds":       {"phase": "total"},
@@ -447,23 +412,8 @@ func labelsMatch(metric *dto.Metric, labels map[string]string) bool {
 }
 
 func hasSeries(families []*dto.MetricFamily, name string, labels map[string]string) bool {
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-	series:
-		for _, metric := range family.GetMetric() {
-			for key, want := range labels {
-				found := false
-				for _, label := range metric.GetLabel() {
-					found = found || (label.GetName() == key && label.GetValue() == want)
-				}
-				if !found {
-					continue series
-				}
-			}
-			return true
-		}
+	for range seriesWithLabels(families, name, labels) {
+		return true
 	}
 	return false
 }

@@ -190,10 +190,7 @@ func TestBudgetStreamTailerRejectsUntrustedConfiguration(t *testing.T) {
 
 func newTestBudgetStreamTailer(t *testing.T, options BudgetStreamTailerOptions) *BudgetStreamTailer {
 	t.Helper()
-	tailer, err := NewBudgetStreamTailer(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tailer := mustCall(t, NewBudgetStreamTailer, options)
 	return tailer
 }
 
@@ -208,9 +205,7 @@ func reloadTailerTo(generation, cursor string) func(context.Context) (BudgetStre
 func appendTailerEvents(t *testing.T, port *MemoryBudgetEventPort, generation string, count int64) {
 	t.Helper()
 	for index := int64(1); index <= count; index++ {
-		if _, err := port.Append(context.Background(), testTailerEvent(generation, index)); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, errOf(port.Append(context.Background(), testTailerEvent(generation, index))))
 	}
 }
 

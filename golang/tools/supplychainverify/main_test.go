@@ -18,14 +18,9 @@ import (
 func TestVerifyAcceptsReviewedInventoryAndApprovedFinding(t *testing.T) {
 	t.Parallel()
 
-	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
-
-	report, err := verify(
-		baseline,
-		testRequirements(),
-		strings.NewReader(`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}`),
-		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
+	report, err := verifyStream(
+		testBaselineWith(testVulnerabilityException("GO-2099-0001", "module_only")),
+		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}`,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +39,6 @@ func TestVerifyAcceptsReviewedInventoryAndApprovedFinding(t *testing.T) {
 func TestVerifyRejectsUnreviewedAndExpiredVulnerabilityFindings(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name     string
 		baseline baseline
@@ -57,13 +51,9 @@ func TestVerifyRejectsUnreviewedAndExpiredVulnerabilityFindings(t *testing.T) {
 		},
 		{
 			name: "expired exception",
-			baseline: func() baseline {
-				value := testBaseline()
-				exception := testVulnerabilityException("GO-2099-0001", "module_only")
+			baseline: testBaselineWith(editedException(func(exception *vulnerabilityException) {
 				exception.Expires = "2026-07-13T00:00:00Z"
-				value.VulnerabilityExceptions = []vulnerabilityException{exception}
-				return value
-			}(),
+			})),
 			want: "expired",
 		},
 	}
@@ -71,7 +61,7 @@ func TestVerifyRejectsUnreviewedAndExpiredVulnerabilityFindings(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := verify(test.baseline, testRequirements(), strings.NewReader(`{"finding":{"osv":"GO-2099-0001"}}`), now)
+			_, err := verify(test.baseline, testRequirements(), strings.NewReader(`{"finding":{"osv":"GO-2099-0001"}}`), julyNow)
 			if err == nil {
 				t.Fatal("verify accepted an unreviewed or expired finding")
 			}
@@ -98,26 +88,14 @@ func TestVerifyRejectsInventoryDriftAndIncompleteExceptions(t *testing.T) {
 			want:         "example.test/new",
 		},
 		{
-			name: "missing exception owner",
-			baseline: func() baseline {
-				value := testBaseline()
-				exception := testVulnerabilityException("GO-2099-0001", "module_only")
-				exception.Owner = ""
-				value.VulnerabilityExceptions = []vulnerabilityException{exception}
-				return value
-			}(),
+			name:         "missing exception owner",
+			baseline:     testBaselineWith(editedException(func(exception *vulnerabilityException) { exception.Owner = "" })),
 			requirements: testRequirements(),
 			want:         "owner",
 		},
 		{
-			name: "missing exception scope",
-			baseline: func() baseline {
-				value := testBaseline()
-				exception := testVulnerabilityException("GO-2099-0001", "module_only")
-				exception.Scope = ""
-				value.VulnerabilityExceptions = []vulnerabilityException{exception}
-				return value
-			}(),
+			name:         "missing exception scope",
+			baseline:     testBaselineWith(editedException(func(exception *vulnerabilityException) { exception.Scope = "" })),
 			requirements: testRequirements(),
 			want:         "scope",
 		},
@@ -126,7 +104,7 @@ func TestVerifyRejectsInventoryDriftAndIncompleteExceptions(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := verify(test.baseline, test.requirements, strings.NewReader(""), time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC))
+			_, err := verify(test.baseline, test.requirements, strings.NewReader(""), julyNow)
 			if err == nil {
 				t.Fatal("verify accepted an invalid inventory or vulnerability exception")
 			}
@@ -140,13 +118,9 @@ func TestVerifyRejectsInventoryDriftAndIncompleteExceptions(t *testing.T) {
 func TestReportDoesNotRetainRawScannerTrace(t *testing.T) {
 	t.Parallel()
 
-	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "reachable")}
-	report, err := verify(
-		baseline,
-		testRequirements(),
-		strings.NewReader(`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"raw-provider-response.txt"}}}]}}`),
-		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
+	report, err := verifyStream(
+		testBaselineWith(testVulnerabilityException("GO-2099-0001", "reachable")),
+		`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"raw-provider-response.txt"}}}]}}`,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -221,15 +195,10 @@ func TestReadGoModRejectsReplacements(t *testing.T) {
 func TestVerifyRejectsReachableTraceOutsideModuleOnlyException(t *testing.T) {
 	t.Parallel()
 
-	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
-
-	_, err := verify(
-		baseline,
-		testRequirements(),
-		strings.NewReader(`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}
-{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"},{"package":"example.test/module/vulnerable","function":"Parse"}]}}`),
-		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
+	_, err := verifyStream(
+		testBaselineWith(testVulnerabilityException("GO-2099-0001", "module_only")),
+		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"}]}}
+{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/module","version":"v1.2.3"},{"package":"example.test/module/vulnerable","function":"Parse"}]}}`,
 	)
 	if err == nil {
 		t.Fatal("verify accepted a reachable trace outside the module-only exception scope")
@@ -243,7 +212,6 @@ func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.
 	t.Parallel()
 
 	policy := testBaseline()
-	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
 	base := `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`
 
 	report, err := verifyPullRequest(
@@ -251,7 +219,7 @@ func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.
 		testRequirements(),
 		strings.NewReader(base),
 		strings.NewReader(base),
-		now,
+		julyNow,
 	)
 	if err != nil {
 		t.Fatalf("unchanged finding failed PR verification: %v", err)
@@ -265,7 +233,7 @@ func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.
 		testRequirements(),
 		strings.NewReader(base),
 		strings.NewReader(base+"\n"+`{"finding":{"osv":"GO-2099-0002"}}`),
-		now,
+		julyNow,
 	)
 	if err == nil || !strings.Contains(err.Error(), "GO-2099-0002") {
 		t.Fatalf("new finding error = %v, want GO-2099-0002", err)
@@ -275,8 +243,7 @@ func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.
 func TestPullRequestVerificationRejectsReachabilityEscalation(t *testing.T) {
 	t.Parallel()
 
-	policy := testBaseline()
-	policy.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
+	policy := testBaselineWith(testVulnerabilityException("GO-2099-0001", "module_only"))
 	base := `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`
 	head := base + "\n" + `{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"},{"package":"example.test/one/vulnerable"}]}}`
 	_, err := verifyPullRequest(
@@ -284,7 +251,7 @@ func TestPullRequestVerificationRejectsReachabilityEscalation(t *testing.T) {
 		testRequirements(),
 		strings.NewReader(base),
 		strings.NewReader(head),
-		time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC),
+		julyNow,
 	)
 	if err == nil || !strings.Contains(err.Error(), "reachable") {
 		t.Fatalf("reachability escalation error = %v, want reachable", err)
@@ -335,10 +302,7 @@ func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 	t.Parallel()
 
 	root := repositoryRoot(t)
-	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	makefile := readTestFile(t, filepath.Join(moduleRoot(t), "Makefile"))
 	for _, expected := range []string{
 		"GOTOOLCHAIN=$(SECURITY_GO_TOOLCHAIN)",
 		"$(GO) tool govulncheck",
@@ -349,31 +313,19 @@ func TestMakefileAndWorkflowsComposeBoundedSecurityVerification(t *testing.T) {
 		"$(GO) run ./tools/supplychainverify",
 		"SECURITY_REPORT",
 	} {
-		if !strings.Contains(string(makefile), expected) {
+		if !strings.Contains(makefile, expected) {
 			t.Fatalf("Makefile does not contain %q", expected)
 		}
 	}
 
-	pullRequest, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "pull-request.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(pullRequest), "make security-pr-verify") {
+	if !strings.Contains(readTestFile(t, filepath.Join(root, ".github", "workflows", "pull-request.yml")), "make security-pr-verify") {
 		t.Fatal("PR workflow does not run security-pr-verify")
 	}
 
-	master, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "master.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(master), "security-verify") {
+	if strings.Contains(readTestFile(t, filepath.Join(root, ".github", "workflows", "master.yml")), "security-verify") {
 		t.Fatal("master workflow still runs security verification")
 	}
-	scheduled, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "security-scheduled.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(scheduled), "make security-verify") {
+	if !strings.Contains(readTestFile(t, filepath.Join(root, ".github", "workflows", "security-scheduled.yml")), "make security-verify") {
 		t.Fatal("scheduled workflow does not run security-verify")
 	}
 }
@@ -415,14 +367,14 @@ func TestHasReachableTraceClassifiesScannerShapes(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "no trace", trace: nil},
-		{name: "module only", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one"}`)}, reachable: true},
-		{name: "complete module frame", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":"v1.2.3"}`)}},
-		{name: "blank module frame", trace: []json.RawMessage{json.RawMessage(`{"module":"","version":"v1.2.3"}`)}, reachable: true},
-		{name: "extra frame fields", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":"v1.2.3","package":"vulnerable"}`)}, reachable: true},
-		{name: "multiple frames", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":"v1.2.3"}`), json.RawMessage(`{"package":"vulnerable"}`)}, reachable: true},
-		{name: "malformed frame", trace: []json.RawMessage{json.RawMessage(`"not-an-object"`)}, wantErr: true},
-		{name: "malformed module", trace: []json.RawMessage{json.RawMessage(`{"module":123,"version":"v1.2.3"}`)}, wantErr: true},
-		{name: "malformed version", trace: []json.RawMessage{json.RawMessage(`{"module":"example.test/one","version":123}`)}, wantErr: true},
+		{name: "module only", trace: traceFrames(`{"module":"example.test/one"}`), reachable: true},
+		{name: "complete module frame", trace: traceFrames(`{"module":"example.test/one","version":"v1.2.3"}`)},
+		{name: "blank module frame", trace: traceFrames(`{"module":"","version":"v1.2.3"}`), reachable: true},
+		{name: "extra frame fields", trace: traceFrames(`{"module":"example.test/one","version":"v1.2.3","package":"vulnerable"}`), reachable: true},
+		{name: "multiple frames", trace: traceFrames(`{"module":"example.test/one","version":"v1.2.3"}`, `{"package":"vulnerable"}`), reachable: true},
+		{name: "malformed frame", trace: traceFrames(`"not-an-object"`), wantErr: true},
+		{name: "malformed module", trace: traceFrames(`{"module":123,"version":"v1.2.3"}`), wantErr: true},
+		{name: "malformed version", trace: traceFrames(`{"module":"example.test/one","version":123}`), wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -444,10 +396,12 @@ func TestHasReachableTraceClassifiesScannerShapes(t *testing.T) {
 func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
 	t.Parallel()
 
-	validException := func() vulnerabilityException {
-		return testVulnerabilityException("GO-2099-0001", "module_only")
+	// withException replaces the exceptions with one edited valid exception.
+	withException := func(edit func(*vulnerabilityException)) func(*baseline) {
+		return func(value *baseline) {
+			value.VulnerabilityExceptions = []vulnerabilityException{editedException(edit)}
+		}
 	}
-	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
 	tests := []struct {
 		name   string
 		mutate func(*baseline)
@@ -463,37 +417,21 @@ func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
 		}, want: "repeats trusted module root"},
 		{name: "unapproved license", mutate: func(value *baseline) { value.TrustedModuleRoots[0].License = "GPL-3.0" }, want: "unapproved license"},
 		{name: "invalid module source", mutate: func(value *baseline) { value.TrustedModuleRoots[0].Source = "http://example.test/one" }, want: "invalid source"},
-		{name: "invalid exception id", mutate: func(value *baseline) {
-			exception := validException()
-			exception.ID = "CVE-2099-0001"
-			value.VulnerabilityExceptions = []vulnerabilityException{exception}
-		}, want: "requires an id"},
+		{name: "invalid exception id", mutate: withException(func(exception *vulnerabilityException) { exception.ID = "CVE-2099-0001" }), want: "requires an id"},
 		{name: "duplicate exception", mutate: func(value *baseline) {
-			exception := validException()
+			exception := testVulnerabilityException("GO-2099-0001", "module_only")
 			value.VulnerabilityExceptions = []vulnerabilityException{exception, exception}
 		}, want: "repeats vulnerability exception"},
-		{name: "expired exception", mutate: func(value *baseline) {
-			exception := validException()
-			exception.Expires = "2026-07-13T00:00:00Z"
-			value.VulnerabilityExceptions = []vulnerabilityException{exception}
-		}, want: "expired"},
-		{name: "invalid remediation", mutate: func(value *baseline) {
-			exception := validException()
-			exception.Remediation = "http://example.test/remediation"
-			value.VulnerabilityExceptions = []vulnerabilityException{exception}
-		}, want: "invalid remediation"},
-		{name: "invalid scope", mutate: func(value *baseline) {
-			exception := validException()
-			exception.Scope = "package_only"
-			value.VulnerabilityExceptions = []vulnerabilityException{exception}
-		}, want: "invalid scope"},
+		{name: "expired exception", mutate: withException(func(exception *vulnerabilityException) { exception.Expires = "2026-07-13T00:00:00Z" }), want: "expired"},
+		{name: "invalid remediation", mutate: withException(func(exception *vulnerabilityException) { exception.Remediation = "http://example.test/remediation" }), want: "invalid remediation"},
+		{name: "invalid scope", mutate: withException(func(exception *vulnerabilityException) { exception.Scope = "package_only" }), want: "invalid scope"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			value := testBaseline()
 			test.mutate(&value)
-			if _, err := validateBaseline(value, now); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := validateBaseline(value, julyNow); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateBaseline error = %v, want %q", err, test.want)
 			}
 		})
@@ -534,7 +472,7 @@ func TestValidateComponentStatusRequiresPass(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			status := componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
+			status := passingComponents()
 			test.edit(&status)
 			if err := validateComponentStatus(status); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateComponentStatus error = %v, want %q", err, test.want)
@@ -557,14 +495,7 @@ func TestWriteReportFileCreatesPrivateNestedReport(t *testing.T) {
 	if permission := info.Mode().Perm(); permission != 0o600 {
 		t.Fatalf("report permissions = %o, want 600", permission)
 	}
-	var report verificationReport
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(contents, &report); err != nil {
-		t.Fatal(err)
-	}
+	report, _ := readReport(t, path)
 	if report.Status != "fail" || report.Version != baselineVersion {
 		t.Fatalf("report = %#v", report)
 	}
@@ -585,34 +516,19 @@ func writeTestFile(t *testing.T, root, name string, contents []byte) string {
 }
 
 func TestCommandSmokeWritesRedactedReport(t *testing.T) {
-	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "reachable")}
 	root := t.TempDir()
-	write := func(name string, contents []byte) string { return writeTestFile(t, root, name, contents) }
-	baselineJSON, err := json.Marshal(baseline)
-	if err != nil {
-		t.Fatal(err)
+	writeJSON := func(name string, value any) string {
+		contents, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return writeTestFile(t, root, name, contents)
 	}
-	goModJSON, err := json.Marshal(goMod{Require: []moduleRequirement{{Path: "example.test/one", Version: "v1.2.3"}, {Path: "example.test/two", Version: "v2.3.4"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	baselinePath := write("baseline.json", baselineJSON)
-	goModPath := write("go-mod.json", goModJSON)
-	vulnerabilityPath := write("vulnerabilities.json", []byte(`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"/private/raw-scanner-trace.txt"}}}]}}`))
+	baselinePath := writeJSON("baseline.json", testBaselineWith(testVulnerabilityException("GO-2099-0001", "reachable")))
+	goModPath := writeJSON("go-mod.json", goMod{Require: testRequirements()})
+	vulnerabilityPath := writeTestFile(t, root, "vulnerabilities.json", []byte(`{"finding":{"osv":"GO-2099-0001","trace":[{"frame":{"position":{"filename":"/private/raw-scanner-trace.txt"}}}]}}`))
 	reportPath := filepath.Join(root, "reports", "security-verify.json")
-
-	moduleDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	binaryPath := filepath.Join(root, "supplychainverify")
-	build := exec.Command("go", "build", "-o", binaryPath, ".")
-	build.Dir = moduleDirectory
-	build.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "go-cache"))
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build failed: %v\n%s", err, output)
-	}
+	binaryPath := buildSupplyChainVerify(t, root, "GOCACHE="+filepath.Join(root, "go-cache"))
 
 	command := exec.Command(binaryPath, "-baseline", baselinePath, "-go-mod", goModPath, "-vulnerability-output", vulnerabilityPath, "-report", reportPath)
 	output, err := command.CombinedOutput()
@@ -622,16 +538,9 @@ func TestCommandSmokeWritesRedactedReport(t *testing.T) {
 	if !strings.Contains(string(output), "supply chain verification passed") {
 		t.Fatalf("command output = %s", output)
 	}
-	report, err := os.ReadFile(reportPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(report), "raw-scanner-trace.txt") || strings.Contains(string(report), "trace") {
+	value, report := readReport(t, reportPath)
+	if strings.Contains(report, "raw-scanner-trace.txt") || strings.Contains(report, "trace") {
 		t.Fatalf("report retained scanner detail: %s", report)
-	}
-	var value verificationReport
-	if err := json.Unmarshal(report, &value); err != nil {
-		t.Fatal(err)
 	}
 	if value.Status != "pass" || !reflect.DeepEqual(value.ApprovedFindings, []string{"GO-2099-0001"}) {
 		t.Fatalf("report = %#v", value)
@@ -646,10 +555,9 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 	baselinePath := write("baseline.json", minimalBaselineJSON)
 	goModPath := write("go-mod.json", `{"Require":[{"Path":"example.test/one","Version":"v1.2.3"}]}`)
 	vulnerabilityPath := write("vulnerabilities.json", "")
-	components := componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
-	now := time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	components := passingComponents()
 
-	report, err := execute(baselinePath, goModPath, vulnerabilityPath, components, now)
+	report, err := execute(baselinePath, goModPath, vulnerabilityPath, components, julyNow)
 	if err != nil || report.Status != "pass" || report.DirectModuleCount != 1 {
 		t.Fatalf("execute success = %#v, %v", report, err)
 	}
@@ -674,10 +582,8 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			report, err := execute(test.baseline, test.goMod, test.vulnerable, test.components, now)
-			if err == nil || report.Status != "fail" || !strings.Contains(err.Error(), test.want) || report.Error != err.Error() {
-				t.Fatalf("execute error = %#v, %v; want %q", report, err, test.want)
-			}
+			report, err := execute(test.baseline, test.goMod, test.vulnerable, test.components, julyNow)
+			assertFailedReport(t, "execute error", report, err, test.want)
 		})
 	}
 }
@@ -685,20 +591,19 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 func TestReleaseTagVerificationAppliesExceptionScopesWithoutRequiringUse(t *testing.T) {
 	t.Parallel()
 
-	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{
+	baseline := testBaselineWith(
 		testVulnerabilityException("GO-2099-0001", "module_only"),
 		testVulnerabilityException("GO-2099-0002", "reachable"),
 		// The trusted master baseline may cover findings an older tag lacks.
 		testVulnerabilityException("GO-2099-0003", "module_only"),
-	}
+	)
 	output := strings.Join([]string{
 		`{"config":{"scanner_name":"govulncheck"}}`,
 		`{"finding":{"osv":"GO-2099-0001","trace":[{"module":"example.test/one","version":"v1.2.3"}]}}`,
 		`{"finding":{"osv":"GO-2099-0002","trace":[{"module":"stdlib","version":"v1.26.7","package":"net/http","function":"Serve"}]}}`,
 	}, "\n")
 
-	report, err := verifyReleaseTag(baseline, strings.NewReader(output), time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC))
+	report, err := verifyReleaseTag(baseline, strings.NewReader(output), octoberNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -716,8 +621,7 @@ func TestReleaseTagVerificationAppliesExceptionScopesWithoutRequiringUse(t *test
 func TestReleaseTagVerificationNamesEveryRejectedFinding(t *testing.T) {
 	t.Parallel()
 
-	baseline := testBaseline()
-	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "module_only")}
+	baseline := testBaselineWith(testVulnerabilityException("GO-2099-0001", "module_only"))
 	output := strings.Join([]string{
 		// An imported package is reachable for the baseline, not only a called
 		// function; govulncheck's text exit status counts only the latter.
@@ -726,7 +630,7 @@ func TestReleaseTagVerificationNamesEveryRejectedFinding(t *testing.T) {
 		`{"finding":{"osv":"GO-2099-0002","trace":[{"module":"stdlib","version":"v1.26.7","package":"net/http","function":"Serve"}]}}`,
 	}, "\n")
 
-	report, err := verifyReleaseTag(baseline, strings.NewReader(output), time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC))
+	report, err := verifyReleaseTag(baseline, strings.NewReader(output), octoberNow)
 	if err == nil {
 		t.Fatal("release tag verification accepted unreviewed and out-of-scope findings")
 	}
@@ -748,11 +652,9 @@ func TestReleaseTagVerificationNamesEveryRejectedFinding(t *testing.T) {
 func TestReleaseTagVerificationRejectsInvalidPolicyAndOutput(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
-	expired := testBaseline()
 	exception := testVulnerabilityException("GO-2099-0001", "reachable")
 	exception.Expires = "2026-10-16T00:00:00Z"
-	expired.VulnerabilityExceptions = []vulnerabilityException{exception}
+	expired := testBaselineWith(exception)
 	wrongVersion := testBaseline()
 	wrongVersion.Version = 1
 
@@ -769,7 +671,7 @@ func TestReleaseTagVerificationRejectsInvalidPolicyAndOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := verifyReleaseTag(test.baseline, strings.NewReader(test.output), now); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := verifyReleaseTag(test.baseline, strings.NewReader(test.output), octoberNow); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("verifyReleaseTag error = %v, want %q", err, test.want)
 			}
 		})
@@ -783,9 +685,8 @@ func TestExecuteReleaseTagRequiresTheScanToCompleteAndSkipsOtherComponents(t *te
 	write := func(name, contents string) string { return writeTestFile(t, root, name, []byte(contents)) }
 	baselinePath := write("baseline.json", minimalBaselineJSON)
 	vulnerabilityPath := write("vulnerabilities.json", "")
-	now := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
 
-	report, err := executeReleaseTag(baselinePath, vulnerabilityPath, "pass", now)
+	report, err := executeReleaseTag(baselinePath, vulnerabilityPath, "pass", octoberNow)
 	if err != nil || report.Status != "pass" {
 		t.Fatalf("executeReleaseTag success = %#v, %v", report, err)
 	}
@@ -810,26 +711,15 @@ func TestExecuteReleaseTagRequiresTheScanToCompleteAndSkipsOtherComponents(t *te
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			report, err := executeReleaseTag(test.baseline, test.vulnerability, test.status, now)
-			if err == nil || report.Status != "fail" || !strings.Contains(err.Error(), test.want) || report.Error != err.Error() {
-				t.Fatalf("executeReleaseTag = %#v, %v; want %q", report, err, test.want)
-			}
+			report, err := executeReleaseTag(test.baseline, test.vulnerability, test.status, octoberNow)
+			assertFailedReport(t, "executeReleaseTag", report, err, test.want)
 		})
 	}
 }
 
 func TestCommandReleaseTagModeRejectsInventoryInputs(t *testing.T) {
 	root := t.TempDir()
-	binaryPath := filepath.Join(root, "supplychainverify")
-	moduleDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	build := exec.Command("go", "build", "-o", binaryPath, ".")
-	build.Dir = moduleDirectory
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build failed: %v\n%s", err, output)
-	}
+	binaryPath := buildSupplyChainVerify(t, root)
 	baselinePath := writeTestFile(t, root, "baseline.json", []byte(minimalBaselineJSON))
 	vulnerabilityPath := writeTestFile(t, root, "vulnerabilities.json", nil)
 	reportPath := filepath.Join(root, "report.json")
@@ -850,6 +740,98 @@ func TestCommandReleaseTagModeRejectsInventoryInputs(t *testing.T) {
 			t.Fatalf("release tag command with %v = %v\n%s", extra, err, output)
 		}
 	}
+}
+
+// julyNow and octoberNow are the fixed verification times of the inventory and
+// release tag tests.
+var (
+	julyNow    = time.Date(2026, time.July, 14, 0, 0, 0, 0, time.UTC)
+	octoberNow = time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
+)
+
+// verifyStream verifies the scanner stream against policy, the test
+// requirements and julyNow.
+func verifyStream(policy baseline, stream string) (verificationReport, error) {
+	return verify(policy, testRequirements(), strings.NewReader(stream), julyNow)
+}
+
+// testBaselineWith is testBaseline with the given vulnerability exceptions.
+func testBaselineWith(exceptions ...vulnerabilityException) baseline {
+	value := testBaseline()
+	value.VulnerabilityExceptions = exceptions
+	return value
+}
+
+// editedException is the valid module_only GO-2099-0001 exception after edit.
+func editedException(edit func(*vulnerabilityException)) vulnerabilityException {
+	exception := testVulnerabilityException("GO-2099-0001", "module_only")
+	edit(&exception)
+	return exception
+}
+
+// traceFrames converts JSON frame literals into a scanner trace.
+func traceFrames(frames ...string) []json.RawMessage {
+	trace := make([]json.RawMessage, 0, len(frames))
+	for _, frame := range frames {
+		trace = append(trace, json.RawMessage(frame))
+	}
+	return trace
+}
+
+// passingComponents is a component status in which every component passed.
+func passingComponents() componentStatus {
+	return componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
+}
+
+// assertFailedReport requires err to name want and the report to record it as
+// a failure.
+func assertFailedReport(t *testing.T, label string, report verificationReport, err error, want string) {
+	t.Helper()
+	if err == nil || report.Status != "fail" || !strings.Contains(err.Error(), want) || report.Error != err.Error() {
+		t.Fatalf("%s = %#v, %v; want %q", label, report, err, want)
+	}
+}
+
+// readTestFile returns the contents of path.
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
+}
+
+// readReport decodes the verification report at path and returns it with its
+// raw JSON.
+func readReport(t *testing.T, path string) (verificationReport, string) {
+	t.Helper()
+	contents := readTestFile(t, path)
+	var report verificationReport
+	if err := json.Unmarshal([]byte(contents), &report); err != nil {
+		t.Fatal(err)
+	}
+	return report, contents
+}
+
+// buildSupplyChainVerify builds the command into root, adding env to the
+// build environment when given, and returns the binary path.
+func buildSupplyChainVerify(t *testing.T, root string, env ...string) string {
+	t.Helper()
+	moduleDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(root, "supplychainverify")
+	build := exec.Command("go", "build", "-o", binaryPath, ".")
+	build.Dir = moduleDirectory
+	if len(env) > 0 {
+		build.Env = append(os.Environ(), env...)
+	}
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, output)
+	}
+	return binaryPath
 }
 
 func testBaseline() baseline {

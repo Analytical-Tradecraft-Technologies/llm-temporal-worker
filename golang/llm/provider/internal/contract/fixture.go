@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -20,6 +21,18 @@ func ReadFixture(t testing.TB, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// ValidateRepository validates every contract profile in the module. It
+// must run from an adapter package directly under llm/provider, three
+// levels below the module root.
+func ValidateRepository(t testing.TB) contracttest.Report {
+	t.Helper()
+	report, err := contracttest.ValidateRepository(filepath.Clean(filepath.Join("..", "..", "..")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report
 }
 
 // DecodeJSON decodes the JSON in data into a T.
@@ -89,4 +102,42 @@ func NormalizeRequest(t testing.TB, request llm.Request) (llm.Request, llm.Servi
 		t.Fatal(err)
 	}
 	return normalized, serviceClass
+}
+
+// ClassifiedErrorFixture is a profile's classified-error.wire.json: a
+// provider error response the adapter must classify without leaking its body.
+// Code is empty for providers that report none.
+type ClassifiedErrorFixture struct {
+	Status     int    `json:"status"`
+	Code       string `json:"code"`
+	RequestID  string `json:"request_id"`
+	RetryAfter string `json:"retry_after"`
+	Message    string `json:"message"`
+}
+
+// ClassFact is one row of a profile's class-facts.wire.json: whether the
+// profile supports class, the tier it requests for it, the tier a response
+// reports and, for profiles that model it, the priority capacity assumed.
+type ClassFact struct {
+	Class            llm.ServiceClass `json:"class"`
+	Supported        bool             `json:"supported"`
+	RequestedTier    string           `json:"requested_tier"`
+	ActualTier       string           `json:"actual_tier"`
+	PriorityCapacity *bool            `json:"priority_capacity"`
+}
+
+// ClassFacts decodes a profile's class-facts.semantic.json and
+// class-facts.wire.json. It returns the wire facts and, for each class, the
+// actual class its semantic fact expects.
+func ClassFacts(t testing.TB, semantic, wire []byte) ([]ClassFact, map[llm.ServiceClass]llm.ServiceClass) {
+	t.Helper()
+	semanticFacts := DecodeJSON[[]struct {
+		Class  llm.ServiceClass `json:"class"`
+		Actual llm.ServiceClass `json:"actual"`
+	}](t, semantic)
+	actualByClass := make(map[llm.ServiceClass]llm.ServiceClass, len(semanticFacts))
+	for _, fact := range semanticFacts {
+		actualByClass[fact.Class] = fact.Actual
+	}
+	return DecodeJSON[[]ClassFact](t, wire), actualByClass
 }

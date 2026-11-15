@@ -245,13 +245,10 @@ func assertProjectedSecretNames(t *testing.T, projected *projectedVolume, want [
 // Secret, so no Secret key goes undocumented and two sources never project
 // onto one path, which the kubelet rejects (#1683).
 func TestProjectedSecretsProvideEveryConfiguredFileOnce(t *testing.T) {
-	config, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "kubernetes", "base", "config.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	config := readRepositoryFile(t, "deploy", "kubernetes", "base", "config.yaml")
 	const mount = "/var/run/secrets/llmtw/"
 	wanted := map[string]bool{}
-	for _, field := range strings.Fields(string(config)) {
+	for _, field := range strings.Fields(config) {
 		if strings.HasPrefix(field, mount) {
 			wanted[strings.TrimPrefix(field, mount)] = true
 		}
@@ -259,10 +256,7 @@ func TestProjectedSecretsProvideEveryConfiguredFileOnce(t *testing.T) {
 	if len(wanted) < 9 {
 		t.Fatalf("base config reads %d runtime secret files, want at least 9", len(wanted))
 	}
-	readme, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "README.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	readme := readRepositoryFile(t, "deploy", "README.md")
 	for _, manifest := range [][]string{
 		{"deploy", "kubernetes", "base", "deployment.yaml"},
 		{"deploy", "kubernetes", "examples", "redis-tls", "deployment-patch.yaml"},
@@ -284,7 +278,7 @@ func TestProjectedSecretsProvideEveryConfiguredFileOnce(t *testing.T) {
 					t.Fatalf("%s projects %s from both %s and %s", filepath.Join(manifest...), item.Path, owner, source.Secret.Name)
 				}
 				paths[item.Path] = source.Secret.Name
-				if !strings.Contains(string(readme), "`"+item.Key+"`") {
+				if !strings.Contains(readme, "`"+item.Key+"`") {
 					t.Errorf("deploy/README.md does not document %s key %s", source.Secret.Name, item.Key)
 				}
 			}

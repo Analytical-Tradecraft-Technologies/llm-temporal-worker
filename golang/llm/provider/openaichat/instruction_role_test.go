@@ -10,14 +10,12 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func wireMessages(t *testing.T, params openai.ChatCompletionNewParams) []map[string]any {
 	t.Helper()
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, params)
 	var wire struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -32,7 +30,7 @@ func TestEmptyLiftedAssistantReplyIsNotReplayed(t *testing.T) {
 		ID: "filtered", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault,
 		Choices: []openai.ChatCompletionChoice{{FinishReason: "content_filter", Message: openai.ChatCompletionMessage{}}},
 	}
-	lifted, err := testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &filtered, "req")
+	lifted, err := liftStandard(&filtered)
 	if err != nil {
 		t.Fatal(err)
 	}

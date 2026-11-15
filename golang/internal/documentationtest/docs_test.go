@@ -17,13 +17,8 @@ var markdownLink = regexp.MustCompile(`(?m)(?:^|[^!])\[[^\]]+\]\(([^)]+)\)`)
 
 func TestDocumentationLinksAndInvariants(t *testing.T) {
 	root := repositoryRoot(t)
-	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(makefile), "test ./internal/documentationtest -run") {
-		t.Fatal("docs-verify must not filter documentation tests")
-	}
+	makefile := readText(t, moduleRoot(t), "Makefile")
+	assertOmits(t, makefile, "test ./internal/documentationtest -run", "docs-verify must not filter documentation tests")
 	required := []string{
 		"README.md",
 		"docs/index.md",
@@ -36,7 +31,7 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 	}
 	var files []string
 	files = append(files, filepath.Join(root, "README.md"))
-	err = filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join(root, "docs"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -49,11 +44,7 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range files {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(data)
+		text := readText(t, path)
 		if strings.Contains(text, "TBD") || strings.Contains(text, "TODO") || strings.Contains(text, "FIXME") || strings.Contains(text, "PLACEHOLDER") {
 			t.Fatalf("planning placeholder found in %s", path)
 		}
@@ -73,11 +64,8 @@ func TestDocumentationLinksAndInvariants(t *testing.T) {
 			}
 		}
 	}
-	decision, err := os.ReadFile(filepath.Join(root, "docs/decisions/0002-service-classes.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(string(decision), "economy | standard | priority") != 1 {
+	decision := readText(t, root, "docs/decisions/0002-service-classes.md")
+	if strings.Count(decision, "economy | standard | priority") != 1 {
 		t.Fatal("service-class decision must state the exact public enum once")
 	}
 }
@@ -86,12 +74,9 @@ func TestConfigurationReferenceCompleteShapeLoads(t *testing.T) {
 	withoutConfigEnvironmentOverrides(t)
 
 	path := filepath.Join(repositoryRoot(t), "docs/reference/configuration.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readText(t, path)
 
-	example := fencedYAMLForSection(t, string(data), "## Complete shape")
+	example := fencedYAMLForSection(t, data, "## Complete shape")
 	if _, err := config.Load([]byte(example)); err != nil {
 		t.Fatalf("complete configuration example must pass the strict loader: %v", err)
 	}
@@ -157,25 +142,15 @@ func TestActivityRuntimeReferencesCurrentQueryContract(t *testing.T) {
 func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.T) {
 	root := repositoryRoot(t)
 	text := readNormalizedText(t, filepath.Join(root, "docs/testing/strategy.md"))
-	if !strings.Contains(text, "protected manual live-provider workflow") {
-		t.Fatal("live-provider documentation must name the protected manual live-provider workflow")
-	}
-	if !strings.Contains(text, "redacted live-provider evidence") {
-		t.Fatal("live-provider documentation must distinguish its redacted evidence")
-	}
-	if strings.Contains(text, "protected manual release workflow") {
-		t.Fatal("live-provider workflow must not be documented as a release workflow")
-	}
+	assertContains(t, text, "protected manual live-provider workflow", "live-provider documentation must name the protected manual live-provider workflow")
+	assertContains(t, text, "redacted live-provider evidence", "live-provider documentation must distinguish its redacted evidence")
+	assertOmits(t, text, "protected manual release workflow", "live-provider workflow must not be documented as a release workflow")
 }
 
 func TestFixtureMatrixListsEveryEnforcedProfile(t *testing.T) {
 	root := repositoryRoot(t)
 	matrixPath := filepath.Join(root, "docs", "testing", "fixture-matrix.md")
-	matrixBytes, err := os.ReadFile(matrixPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	matrix := string(matrixBytes)
+	matrix := readText(t, matrixPath)
 
 	report, err := contracttest.ValidateRepository(moduleRoot(t))
 	if err != nil {
@@ -228,11 +203,8 @@ func TestDockerBuildInstructionsUseGoModuleContext(t *testing.T) {
 		"docs/superpowers/plans/2026-07-14-v1-completion.md",
 	} {
 		t.Run(relative, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(root, relative))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, line := range strings.Split(string(data), "\n") {
+			data := readText(t, root, relative)
+			for _, line := range strings.Split(data, "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), "docker build ") {
 					t.Fatalf("%s must build from the nested golang module context: %s", relative, strings.TrimSpace(line))
 				}
@@ -319,11 +291,8 @@ func TestV1DocumentationStatesFinalResponseBoundary(t *testing.T) {
 			if strings.HasPrefix(test.path, "llm/") || strings.HasPrefix(test.path, "engine/") {
 				base = moduleRoot(t)
 			}
-			data, err := os.ReadFile(filepath.Join(base, test.path))
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := strings.Join(strings.Fields(strings.ReplaceAll(string(data), "// ", "")), " ")
+			data := readText(t, base, test.path)
+			text := strings.Join(strings.Fields(strings.ReplaceAll(data, "// ", "")), " ")
 			required := strings.Join(strings.Fields(test.required), " ")
 			if !strings.Contains(text, required) {
 				t.Fatalf("%s must state %q", test.path, test.required)
@@ -354,17 +323,21 @@ func TestProviderAdapterDocumentationListsBedrockConverseProfile(t *testing.T) {
 // collapsed to one space, so checks ignore Markdown line wrapping.
 func readNormalizedText(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.Join(strings.Fields(string(data)), " ")
+	data := readText(t, path)
+	return strings.Join(strings.Fields(data), " ")
 }
 
 // repositoryRoot and moduleRoot locate the checkout these tests verify.
 var (
 	repositoryRoot = repotest.RepositoryRoot
 	moduleRoot     = repotest.ModuleRoot
+	readText       = repotest.ReadText
+	writeFile      = repotest.WriteFile
+
+	assertContains     = repotest.AssertContains
+	assertOmits        = repotest.AssertOmits
+	assertContainsEach = repotest.AssertContainsEach
+	assertOmitsEach    = repotest.AssertOmitsEach
 )
 
 func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
@@ -383,12 +356,9 @@ func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 	if err := json.Unmarshal(baselineBytes, &baseline); err != nil {
 		t.Fatal(err)
 	}
-	docBytes, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "reference", "dependency-baseline.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	docBytes := readText(t, repositoryRoot(t), "docs", "reference", "dependency-baseline.md")
 	documented := 0
-	for _, line := range strings.Split(string(docBytes), "\n") {
+	for _, line := range strings.Split(docBytes, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "| `GO-") {
 			documented++
 		}
@@ -399,7 +369,7 @@ func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 	for _, exception := range baseline.VulnerabilityExceptions {
 		prefix := "| `" + exception.ID + "` | `" + exception.Owner + "` | `" + exception.Expires + "` |"
 		found := false
-		for _, line := range strings.Split(string(docBytes), "\n") {
+		for _, line := range strings.Split(docBytes, "\n") {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, prefix) && strings.HasSuffix(trimmed, "| `"+exception.Scope+"` |") {
 				found = true

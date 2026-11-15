@@ -9,10 +9,7 @@ func TestLiveRedisBudgetWorkerRegistrationRejectsInterveningWrites(t *testing.T)
 	runBudgetWorkerRegistrationInterleavings(t, func(t *testing.T) (BudgetWorkerLeaseRedisClient, BudgetKeySpace) {
 		options := liveKeyOptions("worker-register")
 		cleanupLivePrefix(t, client, options.Prefix)
-		keys, err := NewBudgetKeySpace(options)
-		if err != nil {
-			t.Fatal(err)
-		}
+		keys := mustCall(t, NewBudgetKeySpace, options)
 		return client, keys
 	})
 }

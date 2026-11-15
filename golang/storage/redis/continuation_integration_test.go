@@ -25,14 +25,8 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 		KeySecret: []byte("01234567890123456789012345678901"),
 	}
 	keyring := testKeyring(t)
-	store, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: keys, Keyring: keyring, Clock: time.Now})
-	if err != nil {
-		t.Fatal(err)
-	}
-	space, err := newKeySpace(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewContinuationStore, ContinuationOptions{Client: client, Keys: keys, Keyring: keyring, Clock: time.Now})
+	space := mustCall(t, newKeySpace, keys)
 	cleanup := make([]string, 0, 8)
 	t.Cleanup(func() {
 		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
@@ -64,10 +58,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 			if test.name == "key secret" {
 				test.keys.KeySecret[len(test.keys.KeySecret)-1] ^= 1
 			}
-			other, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: test.keys, Keyring: keyring, Clock: time.Now})
-			if err != nil {
-				t.Fatal(err)
-			}
+			other := mustCall(t, NewContinuationStore, ContinuationOptions{Client: client, Keys: test.keys, Keyring: keyring, Clock: time.Now})
 			if _, err := other.Get(ctx, parent); !errors.Is(err, state.ErrNotFound) {
 				t.Fatalf("different key namespace read = %v, want not found", err)
 			}
@@ -95,9 +86,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 			t.Fatalf("force expiry for %q: %v", key, err)
 		}
 	}
-	if err := waitForLiveRedisKeysAbsent(ctx, client, childKeys); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, waitForLiveRedisKeysAbsent(ctx, client, childKeys))
 	if _, err := store.Get(ctx, first); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("fully expired child read = %v, want not found", err)
 	}
