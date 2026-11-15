@@ -50,9 +50,14 @@ A codec passes the kit when, for every fixture:
   - satisfies the contract's schema;
   - decodes with the worker's own strict codec;
   - carries the fixture's value. The worker codec's re-encodings of the
-    fixture and of your encoding must match. They may differ only in member
-    order, number spelling, how one RFC 3339 instant is written, or an
-    optional member written as `null` or `[]` instead of being omitted.
+    fixture and of your encoding must be equal as JSON: member order and
+    number spelling carry no meaning. Beyond that, only a short list of
+    closed contract members (`contractLeniency` in
+    `golang/contractkit/runner.go`) may differ: the optional `diagnostics`,
+    query `cursor` and nullable query-result members may be written as `null`
+    or `[]` instead of being omitted, and query date-time members may spell
+    the same instant differently. Open JSON payloads, such as JSON content
+    values, tool arguments and metadata, must be carried exactly.
 - **Negative fixture**: the codec rejects it. `negative-fixtures.tsv` names the
   contract and the field each one breaks. The Go and OCaml codecs in this
   repository also name that field in their error, but the kit only requires

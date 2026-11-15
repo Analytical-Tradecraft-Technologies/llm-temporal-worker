@@ -66,18 +66,68 @@ func (kit *Kit) CheckEncoding(fixture string, encoded []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := sameJSONValue(want, got); err != nil {
+	if err := sameJSONValue(entry.Contract, want, got); err != nil {
 		return fmt.Errorf("encoding does not carry the fixture's value: %w", err)
 	}
 	return nil
 }
 
+// contractLeniency names, per contract, the closed contract members where
+// two encodings may legitimately differ. Paths start at "$" and write every
+// array index as [*]. Everywhere else, open JSON payloads included (tool
+// arguments, JSON content values, metadata), values must be equal as JSON.
+type leniency struct {
+	// emptyEquivalent members are optional, and writing them as null or []
+	// means the same as omitting them.
+	emptyEquivalent map[string]bool
+	// instants are RFC 3339 date-time members, equal when they name the
+	// same instant however it is spelled.
+	instants map[string]bool
+}
+
+func pathSet(paths ...string) map[string]bool {
+	set := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		set[path] = true
+	}
+	return set
+}
+
+var contractLeniency = map[Contract]leniency{
+	GenerateResponse: {emptyEquivalent: pathSet("$.diagnostics")},
+	CompactResponse:  {emptyEquivalent: pathSet("$.diagnostics")},
+	QueryRequest: {
+		emptyEquivalent: pathSet("$.query.cursor"),
+		instants:        pathSet("$.query.active_at", "$.query.start_time", "$.query.end_time"),
+	},
+	QueryResponse: {
+		emptyEquivalent: pathSet(
+			"$.next_cursor",
+			"$.result.models[*].display_name",
+			"$.result.endpoints[*].confirmed_at",
+			"$.result.windows[*].retry_after_seconds",
+			"$.result.buckets[*].group.operation_kind",
+			"$.result.buckets[*].group.provider",
+			"$.result.buckets[*].group.model",
+		),
+		instants: pathSet(
+			"$.observed_at",
+			"$.stale_after",
+			"$.result.active_at",
+			"$.result.start_time",
+			"$.result.end_time",
+			"$.result.windows[*].coverage_start",
+			"$.result.windows[*].coverage_end",
+			"$.result.endpoints[*].confirmed_at",
+		),
+	},
+}
+
 // sameJSONValue compares the worker codec's re-encodings of a fixture and
 // of a consumer's encoding of it. Two encodings carry the same value when
-// they differ only in ways the contract gives no meaning to: member order,
-// number spelling, the spelling of one RFC 3339 instant, and an optional
-// member written as null or [] instead of being omitted.
-func sameJSONValue(want, got []byte) error {
+// they are equal as JSON (member order and number spelling carry no
+// meaning) except where contractLeniency allows a difference.
+func sameJSONValue(contract Contract, want, got []byte) error {
 	decode := func(data []byte) (any, error) {
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.UseNumber()
@@ -93,17 +143,19 @@ func sameJSONValue(want, got []byte) error {
 	if err != nil {
 		return err
 	}
-	return compareJSON("$", left, right)
+	return contractLeniency[contract].compare("$", "$", left, right)
 }
 
-func compareJSON(location string, want, got any) error {
+// compare reports the first difference between want and got. location is
+// the reported path; pattern is the same path with [*] for array indices.
+func (rules leniency) compare(location, pattern string, want, got any) error {
 	switch want := want.(type) {
 	case map[string]any:
 		got, ok := got.(map[string]any)
 		if !ok {
 			return fmt.Errorf("%s: want an object, got %s", location, describeJSON(got))
 		}
-		names := make([]string, 0, len(want)+len(got))
+		names := make([]string, 0, len(want))
 		for name := range want {
 			names = append(names, name)
 		}
@@ -114,16 +166,20 @@ func compareJSON(location string, want, got any) error {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			member := location + "." + name
+			member, memberPattern := location+"."+name, pattern+"."+name
 			left, inWant := want[name]
 			right, inGot := got[name]
+			optional := rules.emptyEquivalent[memberPattern]
 			switch {
-			case !inWant && !emptyJSON(right):
+			case !inWant && !(optional && emptyJSON(right)):
 				return fmt.Errorf("%s: unexpected member %s", member, describeJSON(right))
-			case !inGot && !emptyJSON(left):
+			case !inGot && !(optional && emptyJSON(left)):
 				return fmt.Errorf("%s: missing, want %s", member, describeJSON(left))
 			case inWant && inGot:
-				if err := compareJSON(member, left, right); err != nil {
+				if optional && emptyJSON(left) && emptyJSON(right) {
+					continue
+				}
+				if err := rules.compare(member, memberPattern, left, right); err != nil {
 					return err
 				}
 			}
@@ -135,7 +191,7 @@ func compareJSON(location string, want, got any) error {
 			return fmt.Errorf("%s: want %s, got %s", location, describeJSON(want), describeJSON(got))
 		}
 		for index := range want {
-			if err := compareJSON(fmt.Sprintf("%s[%d]", location, index), want[index], got[index]); err != nil {
+			if err := rules.compare(fmt.Sprintf("%s[%d]", location, index), pattern+"[*]", want[index], got[index]); err != nil {
 				return err
 			}
 		}
@@ -151,7 +207,7 @@ func compareJSON(location string, want, got any) error {
 		}
 	case string:
 		got, ok := got.(string)
-		if ok && (got == want || sameInstant(want, got)) {
+		if ok && (got == want || rules.instants[pattern] && sameInstant(want, got)) {
 			return nil
 		}
 	default:
@@ -232,8 +288,12 @@ func (kit *Kit) fixture(name string) (Fixture, bool) {
 	return Fixture{}, false
 }
 
-// maxCommandOutput bounds what a command codec may write per fixture.
-const maxCommandOutput = 16 << 20
+// maxCommandOutput bounds what a command codec may write per fixture, and
+// commandWaitDelay how long a timed-out run waits for its pipes to close.
+const (
+	maxCommandOutput = 16 << 20
+	commandWaitDelay = 100 * time.Millisecond
+)
 
 // Command returns a Codec that runs an external codec once per fixture: the
 // fixture bytes on standard input, LLMTW_CONTRACT and LLMTW_FIXTURE in the
@@ -245,6 +305,11 @@ func Command(timeout time.Duration, name string, args ...string) Codec {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		command := exec.CommandContext(ctx, name, args...)
+		// On timeout, kill the codec's whole process group where the platform
+		// has one, and stop waiting for output pipes a surviving descendant
+		// still holds, so the timeout bounds the run.
+		killProcessGroupOnCancel(command)
+		command.WaitDelay = commandWaitDelay
 		command.Env = append(os.Environ(), "LLMTW_CONTRACT="+string(contract), "LLMTW_FIXTURE="+fixture)
 		command.Stdin = bytes.NewReader(data)
 		var stdout, stderr limitedBuffer
