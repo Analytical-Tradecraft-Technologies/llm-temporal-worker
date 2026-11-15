@@ -1,4 +1,9 @@
-# Require Michael Fowlie's approval for all GitHub configuration.
+# GitHub requests Michael Fowlie's review on pull requests that change these
+# paths. This file only requests review: the "Protect master" ruleset does not
+# require code-owner review or any approval, so it does not block a merge. See
+# docs/architecture/deployment-and-operations.md#code-owners-and-merge-controls.
+
+# GitHub configuration, workflows, and this file.
 /.github/ @mfow
 /.github/** @mfow
 /.github/CODEOWNERS @mfow
@@ -6,5 +11,5 @@
 # Dependency trust and vulnerability exceptions are security policy.
 /golang/tools/supplychainverify/baseline.json @mfow
 
-# Require Michael Fowlie's approval for the repository license.
+# The repository license.
 /LICENSE @mfow

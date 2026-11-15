@@ -674,3 +674,50 @@ that split, the exact Sydney schedule, and the restricted-credential/no-deployme
 boundary enforceable from a checkout. This checkout contains the Go
 implementation and Dockerfile, so the full implementation gates run on pull
 requests and master pushes.
+
+## Code owners and merge controls
+
+[`.github/CODEOWNERS`](../../.github/CODEOWNERS) names `@mfow` as the code
+owner of these paths:
+
+| Path | Why it is code-owned |
+| --- | --- |
+| `/.github/` and `/.github/**` | GitHub configuration, including workflows and their `permissions:` |
+| `/.github/CODEOWNERS` | The code-owner list itself |
+| `/golang/tools/supplychainverify/baseline.json` | Dependency trust and vulnerability exceptions (see [Dependency Baseline](../reference/dependency-baseline.md#verified-supply-chain-gate)) |
+| `/LICENSE` | The repository license |
+
+GitHub requests the code owner's review on any pull request that changes one
+of these paths. That request is not a merge gate. The active "Protect master"
+ruleset sets `require_code_owner_review: false` and
+`required_approving_review_count: 0`, so no human approval, from the code owner
+or anyone else, is required to merge. This applies to every author, including
+Dependabot and other bots.
+
+What does constrain a change to `master`, including a change to a code-owned
+file, is:
+
+- the "Protect master" ruleset: changes arrive through a pull request (no
+  deletion or force push of `master`), review threads must be resolved, and
+  stale reviews are dismissed on push;
+- the "Verify master changes" ruleset: the `Verify`, `Test with race detector`,
+  `OCaml package`, `Verify source safety and supply chain`, and
+  `Container image` status checks must pass on an up-to-date branch (one
+  organization team may bypass these checks when merging a pull request);
+- the "Queue master changes" ruleset: pull requests merge through the merge
+  queue, which squashes them and reruns the required checks on the queued
+  result.
+
+These checks verify a change mechanically. For example,
+`Verify source safety and supply chain` rejects an incomplete or expired
+vulnerability exception in `baseline.json`, and `make workflow-verify` (part
+of `Verify`) rejects a workflow that breaks the restricted-credential and
+no-deployment contract described above. They do not judge whether a new
+exception or a widened workflow permission should be accepted; that depends on
+the requested review being done before merge.
+
+To make code-owner review enforcing, enable `require_code_owner_review` (with
+`required_approving_review_count` of at least 1) in the "Protect master"
+ruleset. That is a repository setting held by the owner; no file in this
+repository can turn it on. Update this section and the header of
+`.github/CODEOWNERS` if it changes.

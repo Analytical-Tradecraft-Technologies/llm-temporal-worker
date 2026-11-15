@@ -65,6 +65,11 @@ module must be ATT-owned or fall under a reviewed, well-known module root;
 version changes and new submodules from an already reviewed root do not require
 policy churn. Release evidence combines this policy with the current `go.mod`,
 so it still records the exact versions that were built.
+`baseline.json` is code-owned: GitHub requests the code owner's review on any
+change to it, but the `master` rulesets do not require that review or any
+approval before merge. "Reviewed" in this section describes the intended
+review, not a merge gate; see
+[Code owners and merge controls](../architecture/deployment-and-operations.md#code-owners-and-merge-controls).
 The Go vulnerability scan still analyzes reachable code across the complete
 module graph, including indirect dependencies. A baseline exception does not
 narrow that scanner input; it only limits which already-reported trace may be
