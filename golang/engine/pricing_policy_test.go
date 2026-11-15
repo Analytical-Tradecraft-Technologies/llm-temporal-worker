@@ -9,6 +9,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -140,10 +141,7 @@ func TestGenerateRejectsUnbudgetedUnpricedCandidateWhenPolicyIsStrict(t *testing
 	if err == nil {
 		t.Fatal("strict unpriced request unexpectedly dispatched")
 	}
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute || mapped.Phase != provider.PhasePrice {
-		t.Fatalf("error = %#v, want no-route price failure", err)
-	}
+	mapped := testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeNoRoute, Phase: provider.PhasePrice})
 	if mapped.SafeDetails["reason"] != "no_eligible_price" {
 		t.Fatalf("safe details = %#v, want no_eligible_price", mapped.SafeDetails)
 	}

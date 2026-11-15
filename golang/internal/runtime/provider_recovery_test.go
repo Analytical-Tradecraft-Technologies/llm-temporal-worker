@@ -54,13 +54,13 @@ func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testin
 			binding, err := original.RecoveryBinding(route)
 			testassert.NoError(t, err)
 			// The projection round-trips without SDK objects or the raw key.
-			data := encodeJSON(t, binding)
+			data := testassert.MarshalJSON(t, binding)
 			for _, value := range []string{"SDKParams", "Adapter", "sensitive prompt", "sensitive history", `"OperationKey"`} {
 				if strings.Contains(string(data), value) {
 					t.Fatal("recovery binding contains invocation-local data")
 				}
 			}
-			stored := decodeJSON[ProviderRecoveryBinding](t, data)
+			stored := testassert.UnmarshalJSON[ProviderRecoveryBinding](t, data)
 			var restored PlannedProviderCall
 			if kind == "generate" {
 				restored, err = recovery.Generate(context.Background(), generate, stored)

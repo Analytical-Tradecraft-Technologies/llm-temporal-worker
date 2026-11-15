@@ -3,7 +3,6 @@ package workflows
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -31,9 +30,7 @@ func (callerEncodeConverter) ToPayloads(values ...interface{}) (*commonpb.Payloa
 // wireFixture returns a v1 fixture verbatim, as a caller would send it.
 func wireFixture(t *testing.T, fixture string) json.RawMessage {
 	t.Helper()
-	data, err := os.ReadFile("../llm/testdata/v1/" + fixture + ".json")
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, "../llm/testdata/v1/"+fixture+".json")
 }
 
 // wireJSON returns a v1 fixture as the JSON object a caller would send, after

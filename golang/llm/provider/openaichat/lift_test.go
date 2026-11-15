@@ -2,12 +2,12 @@ package openaichat
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -99,10 +99,7 @@ func TestLiftMapsFinishReasonsAndKeepsUnreportedTierUnclassified(t *testing.T) {
 func TestLiftRejectsMalformedToolArguments(t *testing.T) {
 	response := openai.ChatCompletion{ID: "id", Model: "model", ServiceTier: openai.ChatCompletionServiceTierDefault, Choices: []openai.ChatCompletionChoice{{FinishReason: "tool_calls", Message: openai.ChatCompletionMessage{Role: "assistant", ToolCalls: []openai.ChatCompletionMessageToolCallUnion{{ID: "call", Type: "function", Function: openai.ChatCompletionMessageFunctionToolCallFunction{Name: "lookup", Arguments: "{"}}}}}}}
 	_, err := testProfile().liftResponse(liftCall("op", llm.ServiceClassStandard), &response, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse {
-		t.Fatalf("malformed args error = %#v", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse}, "malformed args error")
 }
 
 func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
@@ -176,7 +173,7 @@ func TestLiftToolCallsWithStopReason(t *testing.T) {
 		{name: "refusal takes precedence", reason: "stop", refusal: "Cannot comply", want: llm.ResponseStatusRefused},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(`{"id":"chat-tool","model":"model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"Checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"Sydney\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`))
+			response := testassert.UnmarshalJSON[openai.ChatCompletion](t, []byte(`{"id":"chat-tool","model":"model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"Checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"Sydney\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`))
 			response.Choices[0].FinishReason = test.reason
 			response.Choices[0].Message.Refusal = test.refusal
 			got := mustLift(t, testProfile(), liftCall("op", llm.ServiceClassStandard), &response, "req")
@@ -209,7 +206,7 @@ func TestLiftAcceptsNullFinishReason(t *testing.T) {
 		{message: `{"role":"assistant","content":"hello"}`, want: llm.ResponseStatusCompleted},
 		{message: `{"role":"assistant","content":null,"tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}`, want: llm.ResponseStatusToolCalls},
 	} {
-		response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(`{"id":"gen","object":"chat.completion","model":"model","choices":[{"index":0,"finish_reason":null,"message":`+test.message+`}]}`))
+		response := testassert.UnmarshalJSON[openai.ChatCompletion](t, []byte(`{"id":"gen","object":"chat.completion","model":"model","choices":[{"index":0,"finish_reason":null,"message":`+test.message+`}]}`))
 		got, err := testProfile().liftResponse(call, &response, "req")
 		if err != nil || got.Status != test.want || got.Provider.FinishReason != "" {
 			t.Fatalf("null finish reason = %#v, %v", got, err)

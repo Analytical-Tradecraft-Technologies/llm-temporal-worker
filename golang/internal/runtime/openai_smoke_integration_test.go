@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -77,7 +78,7 @@ func configureOpenAISmoke(t *testing.T, f *boundedCloudFixture, key string) (llm
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	t.Cleanup(transport.CloseIdleConnections)
-	sdk, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: key, HTTPClient: &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("smoke redirects disabled") }, Transport: planningTransportFunc(func(r *http.Request) (*http.Response, error) {
+	sdk, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: key, HTTPClient: &http.Client{Timeout: 90 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("smoke redirects disabled") }, Transport: testkit.RoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Scheme != "https" || r.URL.Host != "api.openai.com" || r.URL.Path != "/v1/responses" || r.Method != http.MethodPost {
 			return nil, errors.New("smoke only permits OpenAI response creation")
 		}

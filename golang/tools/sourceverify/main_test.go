@@ -281,12 +281,7 @@ func TestVerifyFailsClosedForOversizeTextRegardlessOfExtension(t *testing.T) {
 	t.Parallel()
 
 	err := verifyFile(t, "config.runtime", strings.Repeat("x", sourceVerifierTestSourceLimit+1))
-	if err == nil {
-		t.Fatal("verify accepted oversized text with an unrecognized extension")
-	}
-	if !strings.Contains(err.Error(), "config.runtime") {
-		t.Fatalf("verify error %q does not identify the oversized text file", err)
-	}
+	testassert.ErrorContains(t, err, "config.runtime", "verify")
 }
 
 func TestVerifyDetectsUnquotedCredentialLiteralsInExecutableSource(t *testing.T) {

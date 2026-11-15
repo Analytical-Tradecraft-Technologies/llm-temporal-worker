@@ -3,6 +3,8 @@ package testassert
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -82,6 +84,38 @@ func TestErrorContains(t *testing.T) {
 		{name: "matching error", assert: func(t testing.TB) { ErrorContains(t, errors.New("profile is unsupported here"), "unsupported") }},
 		{name: "nil error", assert: func(t testing.TB) { ErrorContains(t, nil, "unsupported") }, wantMessage: `error = nil, want an error containing "unsupported"`},
 		{name: "other error", assert: func(t testing.TB) { ErrorContains(t, errOther, "unsupported") }, wantMessage: `error = timeout, want an error containing "unsupported"`},
+		{name: "nil error with context", assert: func(t testing.TB) { ErrorContains(t, nil, "unsupported", "Load") }, wantMessage: `Load: error = nil, want an error containing "unsupported"`},
+		{name: "other error with context", assert: func(t testing.TB) { ErrorContains(t, errOther, "unsupported", "Load") }, wantMessage: `Load: error = timeout, want an error containing "unsupported"`},
+	})
+}
+
+func TestMarshalJSON(t *testing.T) {
+	if got := string(MarshalJSON(t, map[string]int{"a": 1})); got != `{"a":1}` {
+		t.Fatalf("MarshalJSON() = %s, want {\"a\":1}", got)
+	}
+	runAssertions(t, []assertion{
+		{name: "unencodable value", assert: func(t testing.TB) { MarshalJSON(t, func() {}) }, wantMessage: "json: unsupported type: func()"},
+	})
+}
+
+func TestUnmarshalJSON(t *testing.T) {
+	if got := UnmarshalJSON[map[string]int](t, []byte(`{"a":1}`)); got["a"] != 1 {
+		t.Fatalf("UnmarshalJSON() = %v, want a=1", got)
+	}
+	runAssertions(t, []assertion{
+		{name: "malformed JSON", assert: func(t testing.TB) { UnmarshalJSON[int](t, []byte(`{`)) }, wantMessage: "unexpected end of JSON input"},
+		{name: "malformed JSON with context", assert: func(t testing.TB) { UnmarshalJSON[int](t, []byte(`{`), "fixture") }, wantMessage: "fixture: unexpected end of JSON input"},
+	})
+}
+
+func TestReadFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture.txt")
+	NoError(t, os.WriteFile(path, []byte("contents"), 0o600))
+	if got := string(ReadFile(t, path)); got != "contents" {
+		t.Fatalf("ReadFile() = %q, want %q", got, "contents")
+	}
+	runAssertions(t, []assertion{
+		{name: "missing file", assert: func(t testing.TB) { ReadFile(t, filepath.Join(path, "missing")) }, wantMessage: "open " + filepath.Join(path, "missing") + ": not a directory"},
 	})
 }
 

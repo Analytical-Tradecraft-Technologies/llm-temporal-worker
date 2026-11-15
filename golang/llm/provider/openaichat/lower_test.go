@@ -9,6 +9,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -128,7 +129,7 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("strict=%t is_error=%t: %v", strict, isError, err)
 			}
-			encoded := contract.MarshalJSON(t, call.SDKParams)
+			encoded := testassert.MarshalJSON(t, call.SDKParams)
 			want := `{"content":"upstream timed out","tool_call_id":"call-1","role":"tool"}`
 			if isError {
 				want = `{"content":"[is_error=true] The tool call failed; its output follows.\nupstream timed out","tool_call_id":"call-1","role":"tool"}`
@@ -192,7 +193,7 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 	input = append(input, llm.HumanText("a benign follow-up"))
 	params, err := lowerRequest(llm.Request{Model: "chat-model", Input: input}, testProfile(), "default")
 	testassert.NoError(t, err, "replaying a lifted refusal")
-	encoded := contract.MarshalJSON(t, params)
+	encoded := testassert.MarshalJSON(t, params)
 	var wire struct {
 		Messages []struct {
 			Role    string           `json:"role"`
@@ -232,11 +233,11 @@ func TestCompileStrictRejectsSuccessfulToolResultWithReservedPrefix(t *testing.T
 			Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 			Strict: strict,
 		})
-		if strict && (err == nil || !strings.Contains(err.Error(), "reserved tool-error prefix") || !isUnsupportedCapability(err)) {
-			t.Fatalf("strict error = %v", err)
+		if !strict {
+			testassert.NoError(t, err, "best-effort error")
+			continue
 		}
-		if !strict && err != nil {
-			t.Fatalf("best-effort error = %v", err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "strict error")
+		testassert.ErrorContains(t, err, "reserved tool-error prefix", "strict error")
 	}
 }

@@ -13,7 +13,7 @@ import (
 func TestGenerateResponseV1RequiresServiceFallbackIndex(t *testing.T) {
 	data, err := os.ReadFile("testdata/v1/generate-response-all-kinds.json")
 	testassert.NoError(t, err)
-	mustUnmarshalJSON[GenerateResponseV1](t, data, "decode fixture")
+	testassert.UnmarshalJSON[GenerateResponseV1](t, data, "decode fixture")
 	missing := bytes.Replace(data, []byte(`, "fallback_index": 0}`), []byte(`}`), 1)
 	if bytes.Equal(missing, data) {
 		t.Fatal("fixture no longer contains the service fallback_index")

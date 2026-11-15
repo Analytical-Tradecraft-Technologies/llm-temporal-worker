@@ -3,12 +3,12 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -54,7 +54,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 	}}}
 	requestMap, err := lowerRequestMap(request, testProfile(), "default")
 	testassert.NoError(t, err)
-	got := contract.MarshalJSON(t, requestMap["response_format"])
+	got := testassert.MarshalJSON(t, requestMap["response_format"])
 	want := `{"json_schema":{"name":"invoice","schema":{"additionalProperties":false,"properties":{"lines":{"description":"{uniqueItems: true}","items":{"type":"string"},"type":"array"},"total":{"type":"number"}},"required":["total","lines"],"type":"object"},"strict":true},"type":"json_schema"}`
 	if string(got) != want {
 		t.Fatalf("response_format\n got: %s\nwant: %s", got, want)
@@ -81,15 +81,10 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 			request.OperationKey = "op-structured"
 			request.Model = "chat-model"
 			_, err := adaptertest.Compile(testAdapter(t), "chat-prod", provider.FamilyOpenAIChat, request, false)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("compile = %#v, want an unsupported compile rejection", err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Phase: provider.PhaseCompile, Dispatch: provider.DispatchNotDispatched}, "compile")
 			// The engine asks before admission, so nothing is reserved.
 			err = testAdapter(t).ValidateRequest(context.Background(), request)
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {
-				t.Fatalf("validate = %#v, want an unsupported rejection", err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "validate")
 		})
 	}
 	// An instruction mentioning the word satisfies the provider's rule.

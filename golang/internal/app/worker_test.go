@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/httpserver"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
@@ -77,15 +78,6 @@ func signalWorkerEvent(event chan struct{}) {
 	select {
 	case event <- struct{}{}:
 	default:
-	}
-}
-
-func waitForWorkerEvent(t *testing.T, event <-chan struct{}, description string) {
-	t.Helper()
-	select {
-	case <-event:
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", description)
 	}
 }
 
@@ -164,7 +156,7 @@ func requireDrainGatesResume(t *testing.T, temporalWorker *app.TemporalWorker, h
 	}
 
 	release()
-	waitForWorkerEvent(t, first.stopExited, drain+" completion")
+	testkit.WaitForEvent(t, first.stopExited, drain+" completion")
 	resumeWorkerAfterDrain(t, temporalWorker, "the "+drain)
 	if len(*controllers) != 2 || !health.Ready() || !temporalWorker.Started() {
 		t.Fatalf("resume after %s controllers=%d ready=%v started=%v", drain, len(*controllers), health.Ready(), temporalWorker.Started())
@@ -403,7 +395,7 @@ func TestWorkerResumeWaitsForFailedStartCleanup(t *testing.T) {
 
 	started := make(chan error, 1)
 	go func() { started <- temporalWorker.Start() }()
-	waitForWorkerEvent(t, failed.stopEntered, "failed controller cleanup")
+	testkit.WaitForEvent(t, failed.stopEntered, "failed controller cleanup")
 	if err := temporalWorker.Resume(); err == nil {
 		t.Fatal("Resume during failed controller cleanup = nil, want an error")
 	}
@@ -432,13 +424,13 @@ func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
 
 	started := make(chan error, 1)
 	go func() { started <- temporalWorker.Start() }()
-	waitForWorkerEvent(t, failed.stopEntered, "failed controller cleanup")
+	testkit.WaitForEvent(t, failed.stopEntered, "failed controller cleanup")
 	stopped := runInBackground(temporalWorker.Stop)
 	requireStillRunning(t, stopped, "Stop returned before failed controller cleanup completed")
 
 	release()
 	testassert.ErrorIs(t, <-started, startErr, "Start()")
-	waitForWorkerEvent(t, stopped, "Stop after failed controller cleanup")
+	testkit.WaitForEvent(t, stopped, "Stop after failed controller cleanup")
 	if failed.stopCalls.Load() != 1 {
 		t.Fatalf("failed controller stop calls = %d, want 1", failed.stopCalls.Load())
 	}
@@ -571,8 +563,8 @@ func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) 
 	mustStartWorker(t, temporalWorker)
 
 	paused := runInBackground(temporalWorker.Pause)
-	waitForWorkerEvent(t, first.stopEntered, "first controller drain")
-	waitForWorkerEvent(t, paused, "Pause to return before the graceful drain completes")
+	testkit.WaitForEvent(t, first.stopEntered, "first controller drain")
+	testkit.WaitForEvent(t, paused, "Pause to return before the graceful drain completes")
 	if health.Ready() || temporalWorker.Started() {
 		t.Fatal("Pause did not fail readiness closed while draining")
 	}
@@ -589,8 +581,8 @@ func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 	mustStartWorker(t, temporalWorker)
 
 	paused := runInBackground(temporalWorker.Pause)
-	waitForWorkerEvent(t, first.stopEntered, "first controller drain")
-	waitForWorkerEvent(t, paused, "Pause to return before the graceful drain completes")
+	testkit.WaitForEvent(t, first.stopEntered, "first controller drain")
+	testkit.WaitForEvent(t, paused, "Pause to return before the graceful drain completes")
 
 	stopped := runInBackground(temporalWorker.Stop)
 	requireStillRunning(t, stopped, "permanent Stop returned before the owned pause drain completed")
@@ -600,8 +592,8 @@ func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 	}
 
 	release()
-	waitForWorkerEvent(t, first.stopExited, "first controller drain completion")
-	waitForWorkerEvent(t, stopped, "permanent Stop after the owned pause drain")
+	testkit.WaitForEvent(t, first.stopExited, "first controller drain completion")
+	testkit.WaitForEvent(t, stopped, "permanent Stop after the owned pause drain")
 	if first.stopCalls.Load() != 1 {
 		t.Fatalf("permanent Stop double-stopped the pause drain: %d calls", first.stopCalls.Load())
 	}
@@ -618,7 +610,7 @@ func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t
 
 	started := make(chan error, 1)
 	go func() { started <- temporalWorker.Start() }()
-	waitForWorkerEvent(t, first.startEntered, "first controller start")
+	testkit.WaitForEvent(t, first.startEntered, "first controller start")
 	// Start has passed its authorization point, so Pause may return promptly;
 	// startController must drain this controller once Start returns.
 	temporalWorker.Pause()
@@ -633,7 +625,7 @@ func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t
 	case <-time.After(time.Second):
 		t.Fatal("Start waited for the paused controller's graceful drain")
 	}
-	waitForWorkerEvent(t, first.stopEntered, "paused controller drain")
+	testkit.WaitForEvent(t, first.stopEntered, "paused controller drain")
 	requireDrainGatesResume(t, temporalWorker, health, first, &controllers, releaseStopGate, "paused controller drain")
 }
 
@@ -704,7 +696,7 @@ func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 
 	started := make(chan error, 1)
 	go func() { started <- temporalWorker.Start() }()
-	waitForWorkerEvent(t, first.startEntered, "first controller start")
+	testkit.WaitForEvent(t, first.startEntered, "first controller start")
 
 	stopped := runInBackground(temporalWorker.Stop)
 	waitForWorkerCondition(t, func() bool {
@@ -712,13 +704,13 @@ func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 	}, "Stop to own the in-progress start")
 
 	releaseStartGate()
-	waitForWorkerEvent(t, first.stopEntered, "controller stop after start completes")
+	testkit.WaitForEvent(t, first.stopEntered, "controller stop after start completes")
 	requireStillRunning(t, stopped, "Stop returned before the in-progress controller completed its graceful stop")
 
 	releaseStopGate()
-	waitForWorkerEvent(t, first.stopExited, "controller stop completion")
+	testkit.WaitForEvent(t, first.stopExited, "controller stop completion")
 	testassert.ErrorIs(t, <-started, app.ErrWorkerStopping, "Start after Stop")
-	waitForWorkerEvent(t, stopped, "Stop after the in-progress controller completed")
+	testkit.WaitForEvent(t, stopped, "Stop after the in-progress controller completed")
 	if first.stopCalls.Load() != 1 || health.Ready() || temporalWorker.Started() {
 		t.Fatalf("stop-during-start calls=%d ready=%v started=%v", first.stopCalls.Load(), health.Ready(), temporalWorker.Started())
 	}
@@ -842,7 +834,7 @@ func TestWorkerPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(t *testing.
 	mustStartWorker(t, temporalWorker)
 	first := latest()
 	temporalWorker.Pause()
-	waitForWorkerEvent(t, first.stopEntered, "paused controller drain")
+	testkit.WaitForEvent(t, first.stopEntered, "paused controller drain")
 
 	// The Activity needs several graceful stop windows to finish.
 	time.Sleep(5 * graceful)
@@ -877,7 +869,7 @@ func TestWorkerStopDuringPauseDrainCancelsInFlightActivitiesAfterGracefulStopTim
 	mustStartWorker(t, temporalWorker)
 	controller := latest()
 	temporalWorker.Pause()
-	waitForWorkerEvent(t, controller.stopEntered, "paused controller drain")
+	testkit.WaitForEvent(t, controller.stopEntered, "paused controller drain")
 	time.Sleep(5 * graceful)
 	if controller.activityContextCause() != nil {
 		t.Fatalf("pause drain cancelled the in-flight Activity: %v", controller.activityContextCause())

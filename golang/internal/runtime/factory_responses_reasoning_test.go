@@ -56,8 +56,8 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 					Strict:  true,
 				})
 				testassert.NoError(t, err, "Compile() error")
-				encoded := encodeJSON(t, call.SDKParams)
-				wire := decodeJSON[map[string]any](t, encoded)
+				encoded := testassert.MarshalJSON(t, call.SDKParams)
+				wire := testassert.UnmarshalJSON[map[string]any](t, encoded)
 				return wire
 			}
 			replayed := func(wire map[string]any) []map[string]any {

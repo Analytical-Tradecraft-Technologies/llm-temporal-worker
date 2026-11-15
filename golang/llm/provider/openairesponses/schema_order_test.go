@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -22,7 +23,7 @@ func sendSchemaRequest(t *testing.T, toolSchema, toolOutputSchema, outputSchema 
 	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
 	testassert.NoError(t, err)
 	var sent []byte
-	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		sent, _ = io.ReadAll(request.Body)
 		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody)), nil
 	})})

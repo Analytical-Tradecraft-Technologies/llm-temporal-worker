@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -77,9 +78,7 @@ func TestCompileSequentialToolUseLeavesNoneAndToollessRequests(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
 		for _, strict := range []bool{false, true} {
 			request := llm.Request{OperationKey: "none-policy", Model: "amazon.nova-pro-v1:0", Input: input, Tools: tools, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone, Parallel: parallel}}
-			if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict}); err == nil || !strings.Contains(err.Error(), "tool policy none") {
-				t.Fatalf("none with tools parallel=%v strict=%v: got %v", parallel, strict, err)
-			}
+			testassert.ErrorContains(t, testassert.Err(adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})), "tool policy none", fmt.Sprintf("none with tools parallel=%v strict=%v", parallel, strict))
 			request.Tools = nil
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
 			if err != nil || call.Metadata.SequentialToolUseDropped {

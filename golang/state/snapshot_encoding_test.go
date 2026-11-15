@@ -161,7 +161,7 @@ func nestedArray(depth int) json.RawMessage {
 
 func TestCheckpointBlobEnvelopeMatchesLegacyEncode(t *testing.T) {
 	items := encodingTestItems()[:2]
-	snapshot := checkpointSnapshotPayload{Items: mustJSON(t, items), Settings: settingsPatchToWire(settingsPatchFromModel(RootModelState("m"))), Depth: 3, Lineage: []string{"a", "b<c>"}}
+	snapshot := checkpointSnapshotPayload{Items: testassert.MarshalJSON(t, items), Settings: settingsPatchToWire(settingsPatchFromModel(RootModelState("m"))), Depth: 3, Lineage: []string{"a", "b<c>"}}
 	payloads := map[string]any{
 		"items":    items,
 		"no items": []llm.Item{},

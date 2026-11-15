@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -124,10 +125,7 @@ func newCacheLookupFixture(t *testing.T) *cacheLookupFixture {
 
 func assertCacheLookupError(t *testing.T, err error, code provider.Code, retry provider.RetryDisposition) {
 	t.Helper()
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Phase != provider.PhaseStateLoad || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != retry {
-		t.Fatalf("error = %#v, want %s/%s before dispatch", err, code, retry)
-	}
+	mapped := testkit.ProviderError(t, err, testkit.ProviderClass{Code: code, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: retry})
 	if strings.Contains(err.Error(), "sensitive") || mapped.Cause != nil || len(mapped.SafeDetails) != 0 {
 		t.Fatal("exposed planner or cache-store error")
 	}
@@ -397,13 +395,13 @@ func TestResponseCacheLookupRejectsCorruptOrigins(t *testing.T) {
 					entry.Key.RequestIndex++
 				case "response sample":
 					if compact {
-						response := decodeJSON[llm.CompactResponseV1](t, entry.Response)
+						response := testassert.UnmarshalJSON[llm.CompactResponseV1](t, entry.Response)
 						response.Cache.Variant = 1
 						var err error
 						entry.Response, err = json.Marshal(response)
 						testassert.NoError(t, err)
 					} else {
-						response := decodeJSON[llm.GenerateResponseV1](t, entry.Response)
+						response := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, entry.Response)
 						response.Cache.Variant++
 						var err error
 						entry.Response, err = json.Marshal(response)

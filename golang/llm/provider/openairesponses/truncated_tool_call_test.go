@@ -9,12 +9,11 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestIncompleteResponseDropsCutOffFunctionCall(t *testing.T) {
 	body := `{"id":"resp-truncated","object":"response","created_at":1,"model":"gpt-contract","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"service_tier":"default","output":[{"type":"message","id":"msg-1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Looking that up","annotations":[]}]},{"type":"function_call","id":"fc-1","call_id":"call-1","name":"lookup","arguments":"{\"q\": \"abc","status":"incomplete"}],"usage":{"input_tokens":10,"output_tokens":64,"total_tokens":74,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}`
-	response := contract.DecodeJSON[responses.Response](t, []byte(body))
+	response := testassert.UnmarshalJSON[responses.Response](t, []byte(body))
 	call := liftCall("op", llm.ServiceClassStandard)
 	lifted, err := liftResponse(call, &response, "req")
 	testassert.NoError(t, err, "cut-off function call failed the response")
@@ -22,13 +21,13 @@ func TestIncompleteResponseDropsCutOffFunctionCall(t *testing.T) {
 		t.Fatalf("lifted = status %q usage %#v output %#v", lifted.Status, lifted.Usage, lifted.Output)
 	}
 
-	control := contract.DecodeJSON[responses.Response](t, []byte(replaceStatus(body)))
+	control := testassert.UnmarshalJSON[responses.Response](t, []byte(replaceStatus(body)))
 	if _, err := liftResponse(call, &control, "req"); err == nil {
 		t.Fatal("invalid function arguments accepted on a completed response")
 	}
 
 	// An incomplete response must not hide a completed call's invalid arguments.
-	completedCall := contract.DecodeJSON[responses.Response](t, []byte(strings.Replace(body, `"status":"incomplete"}]`, `"status":"completed"}]`, 1)))
+	completedCall := testassert.UnmarshalJSON[responses.Response](t, []byte(strings.Replace(body, `"status":"incomplete"}]`, `"status":"completed"}]`, 1)))
 	if _, err := liftResponse(call, &completedCall, "req"); err == nil {
 		t.Fatal("completed function call with invalid arguments was dropped")
 	}

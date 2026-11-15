@@ -2,26 +2,15 @@ package contract
 
 import (
 	"bytes"
-	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 
 	yaml "go.yaml.in/yaml/v4"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 )
-
-// ReadFixture returns the contents of the fixture file at path.
-func ReadFixture(t testing.TB, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
-}
 
 // ValidateRepository validates every contract profile in the module. It
 // must run from an adapter package directly under llm/provider, three
@@ -35,16 +24,6 @@ func ValidateRepository(t testing.TB) contracttest.Report {
 	return report
 }
 
-// DecodeJSON decodes the JSON in data into a T.
-func DecodeJSON[T any](t testing.TB, data []byte) T {
-	t.Helper()
-	var value T
-	if err := json.Unmarshal(data, &value); err != nil {
-		t.Fatal(err)
-	}
-	return value
-}
-
 // DecodeMetadata decodes a fixture profile's metadata.yaml.
 func DecodeMetadata(t testing.TB, data []byte) contracttest.Metadata {
 	t.Helper()
@@ -55,21 +34,11 @@ func DecodeMetadata(t testing.TB, data []byte) contracttest.Metadata {
 	return metadata
 }
 
-// MarshalJSON returns the JSON encoding of value.
-func MarshalJSON(t testing.TB, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
-}
-
 // JSONObject returns value encoded as JSON and decoded as an object, the
 // shape a request body takes on the wire.
 func JSONObject(t testing.TB, value any) map[string]any {
 	t.Helper()
-	return DecodeJSON[map[string]any](t, MarshalJSON(t, value))
+	return testassert.UnmarshalJSON[map[string]any](t, testassert.MarshalJSON(t, value))
 }
 
 // AssertCanonicalJSON checks that got and want are the same JSON once both
@@ -131,7 +100,7 @@ type ClassFact struct {
 // actual class its semantic fact expects.
 func ClassFacts(t testing.TB, semantic, wire []byte) ([]ClassFact, map[llm.ServiceClass]llm.ServiceClass) {
 	t.Helper()
-	semanticFacts := DecodeJSON[[]struct {
+	semanticFacts := testassert.UnmarshalJSON[[]struct {
 		Class  llm.ServiceClass `json:"class"`
 		Actual llm.ServiceClass `json:"actual"`
 	}](t, semantic)
@@ -139,5 +108,5 @@ func ClassFacts(t testing.TB, semantic, wire []byte) ([]ClassFact, map[llm.Servi
 	for _, fact := range semanticFacts {
 		actualByClass[fact.Class] = fact.Actual
 	}
-	return DecodeJSON[[]ClassFact](t, wire), actualByClass
+	return testassert.UnmarshalJSON[[]ClassFact](t, wire), actualByClass
 }

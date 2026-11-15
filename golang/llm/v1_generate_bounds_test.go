@@ -44,7 +44,7 @@ func TestGenerateRequestV1AcceptsSchemaBoundaries(t *testing.T) {
 
 			encoded, err := json.Marshal(request)
 			testassert.NoError(t, err, "Marshal() rejected a valid boundary")
-			mustUnmarshal[llm.GenerateRequestV1](t, encoded, "Unmarshal() rejected a valid boundary")
+			testassert.UnmarshalJSON[llm.GenerateRequestV1](t, encoded, "Unmarshal() rejected a valid boundary")
 		})
 	}
 }
@@ -108,7 +108,7 @@ func TestGenerateRequestV1RejectsValuesBeyondSchemaBounds(t *testing.T) {
 			if _, err := json.Marshal(request); err == nil {
 				t.Fatal("Marshal() accepted a value beyond the schema bound")
 			}
-			requireUnmarshalRejected[llm.GenerateRequestV1](t, mustMarshal(t, wire), "Unmarshal() accepted a value beyond the schema bound")
+			requireUnmarshalRejected[llm.GenerateRequestV1](t, testassert.MarshalJSON(t, wire), "Unmarshal() accepted a value beyond the schema bound")
 		})
 	}
 }

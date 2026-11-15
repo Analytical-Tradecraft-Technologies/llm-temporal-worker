@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -77,7 +78,7 @@ func TestMaterializingV1RuntimeRejectsInvalidMaterializedStateBeforeDispatch(t *
 			if err == nil {
 				t.Fatal("GenerateV1 unexpectedly accepted invalid materialized state")
 			}
-			assertProviderError(t, err, provider.CodeStateCorrupt, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever)
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeStateCorrupt, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever})
 		})
 	}
 }
@@ -90,9 +91,7 @@ func TestMaterializingV1RuntimeRejectsToolFrontierMismatch(t *testing.T) {
 	if err == nil || !errors.As(err, &providerErr) {
 		t.Fatalf("GenerateV1 error = %v, want provider error", err)
 	}
-	if providerErr.Code != provider.CodeStateCorrupt || providerErr.Retry != provider.RetryNever {
-		t.Fatalf("provider error = %#v, want non-retryable state-corrupt error", providerErr)
-	}
+	testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeStateCorrupt, Retry: provider.RetryNever})
 }
 
 func TestMaterializingV1RuntimeAcceptsEmptyMaterializedTranscript(t *testing.T) {

@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,9 +12,9 @@ import (
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
@@ -24,13 +25,11 @@ func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 		Response:   &http.Response{Header: http.Header{"X-Request-Id": []string{"req-error"}, "Retry-After": []string{"2"}}},
 	}
 	mapped := mapError(apiErr)
-	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryAfter {
-		t.Fatalf("mapped = %#v", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderRateLimited, Dispatch: provider.DispatchRejected, Retry: provider.RetryAfter})
 	if mapped.Provider.RequestID != "req-error" || mapped.SafeDetails["provider_code"] != "rate_limit_exceeded" {
 		t.Fatalf("provider facts = %#v", mapped)
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), "secret provider body") {
 		t.Fatalf("raw provider message leaked: %s", encoded)
 	}
@@ -65,7 +64,7 @@ func TestMapErrorClassifiesProviderNeutralFailures(t *testing.T) {
 func TestMapErrorRedactsTransportCause(t *testing.T) {
 	transportCause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
 	mapped := mapError(transportCause)
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	for _, raw := range []string{"provider-secret", "private-content", "opaque-handle", "provider-raw"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe provider error leaked %q: %s", raw, encoded)
@@ -88,9 +87,7 @@ func TestBillingRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 		{Request: httptest.NewRequest(http.MethodPost, "https://eu.api.openai.com/v1/responses", nil), StatusCode: http.StatusTooManyRequests, Code: "credit_balance_exhausted"},
 	} {
 		mapped := mapAPIError(apiErr)
-		if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNextRoute {
-			t.Fatalf("429 %q/%q = %#v, want a rejected permission denial", apiErr.Code, apiErr.Type, mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected, Retry: provider.RetryNextRoute}, fmt.Sprintf("429 %q/%q", apiErr.Code, apiErr.Type))
 		if got, want := mapped.SafeDetails["status"], "429"; got != want {
 			t.Fatalf("safe status = %q, want %q", got, want)
 		}
@@ -101,8 +98,6 @@ func TestBillingRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 		{StatusCode: http.StatusTooManyRequests, Code: "credit_balance_exhausted"},
 	} {
 		mapped := mapAPIError(apiErr)
-		if mapped.Code != provider.CodeProviderRateLimited || mapped.Retry != provider.RetryAfter {
-			t.Fatalf("rate limit 429 %q = %#v, want provider_rate_limited", apiErr.Code, mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderRateLimited, Retry: provider.RetryAfter}, fmt.Sprintf("rate limit 429 %q", apiErr.Code))
 	}
 }

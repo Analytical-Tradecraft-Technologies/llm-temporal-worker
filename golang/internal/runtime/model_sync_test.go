@@ -239,7 +239,7 @@ func TestEndpointRecoveryIdentityMatchesTheRecoveryReference(t *testing.T) {
 	if legacy, err := legacyEndpointConfigDigest("openrouter", changed); err != nil || legacy == base {
 		t.Fatalf("the legacy digest must still cover the whole configuration: %v", err)
 	}
-	page := mustReadFile(t, "../../../docs/reference/cloud-provider-recovery.md")
+	page := testassert.ReadFile(t, "../../../docs/reference/cloud-provider-recovery.md")
 	for _, field := range []string{"`timeout`", "`langfuse`", "`optional`", "`outbound_hosts`", "legacy digest"} {
 		if !strings.Contains(string(page), field) {
 			t.Fatalf("cloud-provider-recovery.md does not name %s", field)

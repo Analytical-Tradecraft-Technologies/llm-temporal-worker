@@ -76,18 +76,11 @@ func durableAcceptedRecord(t *testing.T, request durable.ReserveRequest, now tim
 	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
 	fingerprint, err := durableRequestFingerprint(request, reservations)
 	testassert.NoError(t, err)
-	return mustJSON(t, durableOperation{
+	return string(testassert.MarshalJSON(t, durableOperation{
 		Schema: "durable-budget/v1", OperationID: string(request.OperationID), GenerationID: string(request.GenerationID),
 		IncarnationID: "incarnation-1", Fingerprint: fingerprint, Status: "accepted", OccurredAt: now,
 		Reservations: reservations, Events: map[string]string{},
-	})
-}
-
-func mustJSON(t *testing.T, value any) string {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return string(data)
+	}))
 }
 
 func TestRedisBudgetMaterializerAcceptsAndReturnsJournalEvents(t *testing.T) {
@@ -118,11 +111,11 @@ func TestRedisBudgetMaterializerDenialIsReplayable(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	request := durableTestRequest(now)
 	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
-	invoker := &durableMaterializerInvoker{result: []any{"existing", mustJSON(t, durableOperation{
+	invoker := &durableMaterializerInvoker{result: []any{"existing", string(testassert.MarshalJSON(t, durableOperation{
 		Schema: "durable-budget/v1", OperationID: string(request.OperationID), GenerationID: string(request.GenerationID),
 		IncarnationID: "incarnation-1", Status: "denied", OccurredAt: now, Reservations: reservations,
 		Denial: &durableDenial{PolicyID: "policy", WindowID: "window", LimitNano: "1000000000", ActiveNano: "1000000000", RequestedNano: "10000000"},
-	})}}
+	}))}}
 	result, err := testRedisMaterializer(t, invoker).Accept(context.Background(), request)
 	testassert.NoError(t, err)
 	if result.Accepted || result.Denial == nil || result.Denial.PolicyID != "policy" || !result.Replayed {

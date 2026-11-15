@@ -45,9 +45,7 @@ var (
 // readModuleFile reads a file below the Go module root.
 func readModuleFile(t *testing.T, path ...string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(append([]string{moduleRoot(t)}, path...)...))
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, filepath.Join(append([]string{moduleRoot(t)}, path...)...))
 }
 
 // readMakefile returns the module Makefile that defines the Compose targets.

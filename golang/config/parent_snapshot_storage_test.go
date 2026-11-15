@@ -47,7 +47,7 @@ func TestConfigSchemaParentSnapshotStorage(t *testing.T) {
 	for value, valid := range map[string]bool{"": true, "inline": true, "blob": true, "sideways": false} {
 		changed := loaded.Clone()
 		changed.State.Requests.ParentSnapshotStorage = value
-		encoded := mustMarshalJSON(t, changed)
+		encoded := testassert.MarshalJSON(t, changed)
 		if err := compiled.Validate(encoded); (err == nil) != valid {
 			t.Errorf("%q: schema validation = %v, want valid=%t", value, err, valid)
 		}

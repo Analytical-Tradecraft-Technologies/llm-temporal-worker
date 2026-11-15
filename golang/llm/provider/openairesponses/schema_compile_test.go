@@ -3,12 +3,12 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -54,7 +54,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 	}}}
 	requestMap, _, err := lowerRequestMap(request, llm.ServiceClassStandard, false, supportedExtensionFields)
 	testassert.NoError(t, err)
-	got := contract.MarshalJSON(t, requestMap["text"])
+	got := testassert.MarshalJSON(t, requestMap["text"])
 	want := `{"format":{"name":"invoice","schema":{"additionalProperties":false,"properties":{"note":{"description":"{minLength: 1}","type":"string"},"total":{"type":"number"}},"required":["total","note"],"type":"object"},"strict":true,"type":"json_schema"}}`
 	if string(got) != want {
 		t.Fatalf("text format\n got: %s\nwant: %s", got, want)
@@ -81,15 +81,10 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 			request.OperationKey = "op-structured"
 			request.Model = "gpt-contract"
 			_, err := adaptertest.Compile(newFixtureAdapter(t, []byte(`{"id":"unused"}`)), "openai-prod", provider.FamilyOpenAIResponses, request, false)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("compile = %#v, want an unsupported compile rejection", err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Phase: provider.PhaseCompile, Dispatch: provider.DispatchNotDispatched}, "compile")
 			// The engine asks before admission, so nothing is reserved.
 			err = newFixtureAdapter(t, []byte(`{"id":"unused"}`)).ValidateRequest(context.Background(), request)
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {
-				t.Fatalf("validate = %#v, want an unsupported rejection", err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "validate")
 		})
 	}
 	// Any case of the word satisfies the provider's rule.

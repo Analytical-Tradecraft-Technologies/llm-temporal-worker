@@ -36,7 +36,7 @@ func TestPayloadCodecIsDisabledByDefault(t *testing.T) {
 	if loaded.Temporal.PayloadCodec != nil {
 		t.Fatalf("example configures a payload codec: %+v", loaded.Temporal.PayloadCodec)
 	}
-	encoded := mustMarshalJSON(t, loaded)
+	encoded := testassert.MarshalJSON(t, loaded)
 	if strings.Contains(string(encoded), "payload_codec") {
 		t.Fatal("an unset payload codec appears in canonical JSON")
 	}
@@ -135,7 +135,7 @@ func TestConfigSchemaAcceptsPayloadCodec(t *testing.T) {
 	} {
 		value := loaded.Clone()
 		test.mutate(value.Temporal.PayloadCodec)
-		encoded := mustMarshalJSON(t, value)
+		encoded := testassert.MarshalJSON(t, value)
 		if err := compiled.Validate(encoded); (err == nil) != test.valid {
 			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}

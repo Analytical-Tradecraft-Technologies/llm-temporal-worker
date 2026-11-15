@@ -14,16 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
-
-// RoundTripFunc is an http.RoundTripper backed by a function.
-type RoundTripFunc func(*http.Request) (*http.Response, error)
-
-// RoundTrip calls function.
-func (function RoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
-}
 
 // JSONResponse answers request with status, a JSON content type, the extra
 // headers given as name/value pairs, and body.
@@ -44,7 +37,7 @@ func (panickingBody) Close() error             { return nil }
 
 // PanickingTransport answers every request with status and a JSON content
 // type whose body panics when read.
-func PanickingTransport(status int) RoundTripFunc {
+func PanickingTransport(status int) testkit.RoundTripFunc {
 	return func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: panickingBody{}, Request: request}, nil
 	}
@@ -91,7 +84,7 @@ func (observer *Observer) OnProgress(context.Context, provider.Progress) {
 // RedirectTransport answers every request with a 307 redirect to a URL
 // carrying a continuation secret and the JSON body, counting requests in
 // calls.
-func RedirectTransport(calls *int, body string) RoundTripFunc {
+func RedirectTransport(calls *int, body string) testkit.RoundTripFunc {
 	return func(request *http.Request) (*http.Response, error) {
 		*calls++
 		return JSONResponse(request, http.StatusTemporaryRedirect, body, "Location", "https://redirect.example/continuation-secret"), nil
@@ -107,9 +100,7 @@ func AmbiguousRedirect(t *testing.T, err error) *provider.Error {
 	if !errors.As(err, &mapped) {
 		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
 	}
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetryNever}, "mapped redirect")
 	return mapped
 }
 
@@ -175,9 +166,7 @@ func CallerDeadlineBeforeDial(t *testing.T, transport *PreDialDeadlineTransport,
 	if !errors.As(invokeErr, &mapped) {
 		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
 	}
-	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped error = %#v, want non-retryable pre-dispatch caller deadline", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeDeadlineExceeded, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever})
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
 		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
 	}

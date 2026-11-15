@@ -16,6 +16,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -24,7 +25,7 @@ import (
 func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 	responseBody := readContractFixture(t, "azure-responses", "response.completed.json")
 	var got *http.Request
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
 		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", "azure-resp-1"), nil
 	})
@@ -87,7 +88,7 @@ func TestAzureResponsesTokenCredentialUsesBearerAndV1Path(t *testing.T) {
 		Endpoint:        "https://127.0.0.1",
 		APIVersion:      "v1",
 		TokenCredential: credential,
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			got = request
 			return adaptertest.JSONResponse(request, http.StatusOK, string(readContractFixture(t, "azure-responses", "response.completed.json"))), nil
 		})},
@@ -231,7 +232,7 @@ func TestAzureResponsesAcceptsDocumentedEndpointForms(t *testing.T) {
 		for _, auth := range []string{"api-key", "token"} {
 			t.Run(auth+" "+endpoint, func(t *testing.T) {
 				var got *http.Request
-				httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				httpClient := &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 					got = request
 					return adaptertest.JSONResponse(request, http.StatusOK, string(readContractFixture(t, "azure-responses", "response.completed.json"))), nil
 				})}
@@ -271,7 +272,7 @@ func (credential failingAzureTokenCredential) GetToken(context.Context, policy.T
 	return azcore.AccessToken{}, credential.err
 }
 
-func invokeAzureTokenAdapter(t *testing.T, credential azcore.TokenCredential, transport roundTripFunc) (error, *adaptertest.Observer) {
+func invokeAzureTokenAdapter(t *testing.T, credential azcore.TokenCredential, transport testkit.RoundTripFunc) (error, *adaptertest.Observer) {
 	t.Helper()
 	client, err := NewAzureTokenClient(AzureTokenClientConfig{Endpoint: "https://resource.openai.azure.com", APIVersion: "v1",
 		TokenCredential: credential, HTTPClient: &http.Client{Transport: transport}})
@@ -296,9 +297,7 @@ func TestAzureResponsesTokenCredentialFailureIsNotDispatched(t *testing.T) {
 	if !errors.As(err, &mapped) {
 		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
 	}
-	if mapped.Code != provider.CodeAuthentication || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("mapped error = %#v, want a not-dispatched credential failure", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeAuthentication, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute})
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, provider.ErrProviderCredentials) {
 		t.Fatalf("mapped error = %v, want certified pre-dispatch credential failure", mapped)
 	}

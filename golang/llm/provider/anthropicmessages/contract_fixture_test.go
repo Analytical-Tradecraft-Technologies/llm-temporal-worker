@@ -9,6 +9,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -54,7 +55,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 	request := anthropicDirectFixture.loadRequest(t, "request.semantic.json")
 	responseBody := anthropicDirectFixture.read(t, "response.completed.json")
 	var got *http.Request
-	client := newAnthropicDirectFixtureClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client := newAnthropicDirectFixtureClient(t, testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
 		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "Request-Id", "req-fixture"), nil
 	}))
@@ -71,7 +72,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 	if got.URL.Path != "/v1/messages" || got.Header.Get("X-Api-Key") != "fixture-anthropic-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("Anthropic direct transport = %s %#v", got.URL, got.Header)
 	}
-	gotSemantic := contract.MarshalJSON(t, result.Response)
+	gotSemantic := testassert.MarshalJSON(t, result.Response)
 	anthropicDirectFixture.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
 
@@ -100,7 +101,7 @@ func anthropicDirectFixtureProfile(t *testing.T) Profile {
 
 func assertAnthropicDirectFixtureClassifiedError(t *testing.T) {
 	t.Helper()
-	fixture := contract.DecodeJSON[contract.ClassifiedErrorFixture](t, anthropicDirectFixture.read(t, "classified-error.wire.json"))
+	fixture := testassert.UnmarshalJSON[contract.ClassifiedErrorFixture](t, anthropicDirectFixture.read(t, "classified-error.wire.json"))
 	mapped := mapAPIError(&anthropic.Error{
 		StatusCode: fixture.Status,
 		RequestID:  fixture.RequestID,
@@ -109,7 +110,7 @@ func assertAnthropicDirectFixtureClassifiedError(t *testing.T) {
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryAfter || mapped.Provider.RequestID != fixture.RequestID || mapped.SafeDetails["retry_after"] != fixture.RetryAfter {
 		t.Fatalf("mapped error = %#v", mapped)
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), fixture.Message) {
 		t.Fatal("classified error leaked fixture body")
 	}

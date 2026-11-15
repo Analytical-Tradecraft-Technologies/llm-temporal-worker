@@ -25,7 +25,7 @@ func configSchema(t *testing.T) *schema.Schema {
 // published configuration schema.
 func validateConfigSchema(t *testing.T, value any) error {
 	t.Helper()
-	return configSchema(t).Validate(mustMarshalJSON(t, value))
+	return configSchema(t).Validate(testassert.MarshalJSON(t, value))
 }
 
 // mustLoadConfig loads data with config.Load, failing the test on an error.
@@ -34,14 +34,6 @@ func mustLoadConfig(t *testing.T, data []byte) config.Config {
 	loaded, err := config.Load(data)
 	testassert.NoError(t, err)
 	return loaded
-}
-
-// mustMarshalJSON encodes value as JSON, failing the test on an error.
-func mustMarshalJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	encoded, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return encoded
 }
 
 // mustCompile compiles data without a reference resolver, failing the test on
@@ -66,7 +58,7 @@ func requireLoadRejected(t *testing.T, data []byte, format string, args ...any) 
 func jsonDocument(t *testing.T, value any) map[string]any {
 	t.Helper()
 	var document map[string]any
-	testassert.NoError(t, json.Unmarshal(mustMarshalJSON(t, value), &document))
+	testassert.NoError(t, json.Unmarshal(testassert.MarshalJSON(t, value), &document))
 	return document
 }
 

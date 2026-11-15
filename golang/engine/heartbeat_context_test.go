@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 
@@ -43,11 +44,11 @@ func TestContextHeartbeatOverridesStaticEngineHeartbeat(t *testing.T) {
 	}
 	got := bound.phases()
 	for _, phase := range []string{"planning", "admission", "pre_write", "response_received", "lift", "finalization"} {
-		if !containsPhase(got, phase) {
+		if !slices.Contains(got, phase) {
 			t.Fatalf("bound heartbeat phases = %v, missing %q", got, phase)
 		}
 	}
-	if containsPhase(got, "streaming") {
+	if slices.Contains(got, "streaming") {
 		t.Fatalf("one-shot Generate heartbeat phases = %v, must not claim streaming", got)
 	}
 }
@@ -63,10 +64,10 @@ func TestGenerateDoesNotExposeProviderStreamingPhase(t *testing.T) {
 
 	testassert.NoError(t, testassert.Err(harness.engine.Generate(WithHeartbeat(context.Background(), bound), baseRequest("one-shot-stream-progress"))))
 	got := bound.phases()
-	if !containsPhase(got, "response_received") {
+	if !slices.Contains(got, "response_received") {
 		t.Fatalf("one-shot Generate heartbeat phases = %v, missing response_received", got)
 	}
-	if containsPhase(got, "streaming") {
+	if slices.Contains(got, "streaming") {
 		t.Fatalf("one-shot Generate heartbeat phases = %v, must not expose provider stream progress", got)
 	}
 }
@@ -79,18 +80,9 @@ func TestStreamRetainsStreamingHeartbeat(t *testing.T) {
 	testassert.NoError(t, err)
 	defer stream.Close()
 	readTerminalStream(t, stream)
-	if got := bound.phases(); !containsPhase(got, "streaming") {
+	if got := bound.phases(); !slices.Contains(got, "streaming") {
 		t.Fatalf("stream heartbeat phases = %v, missing streaming", got)
 	}
-}
-
-func containsPhase(phases []string, want string) bool {
-	for _, phase := range phases {
-		if phase == want {
-			return true
-		}
-	}
-	return false
 }
 
 var _ Heartbeat = (*recordedHeartbeat)(nil)

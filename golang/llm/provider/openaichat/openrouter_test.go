@@ -9,15 +9,15 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 	var got *http.Request
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
 		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"gen-1","model":"router-model","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"cost":0.00000123,"cost_details":{"upstream_inference_cost":0.00000123}}}`, "X-Request-Id", "or-req-1"), nil
 	})
@@ -43,7 +43,7 @@ func TestOpenRouterPinsProviderRoutingAndPricing(t *testing.T) {
 	result := adaptertest.Invoke(t, adapter, call)
 	body, err := io.ReadAll(got.Body)
 	testassert.NoError(t, err)
-	wire := contract.DecodeJSON[map[string]any](t, body)
+	wire := testassert.UnmarshalJSON[map[string]any](t, body)
 	providerBody, ok := wire["provider"].(map[string]any)
 	if !ok || providerBody["allow_fallbacks"] != false || providerBody["require_parameters"] != true {
 		t.Fatalf("provider routing body = %#v", wire["provider"])
@@ -77,8 +77,8 @@ func openRouterProviderBody(t *testing.T, profile Profile, model string, class l
 	testassert.NoError(t, err)
 	params, err := lowerRequest(llm.Request{Model: model}, lowering, "default")
 	testassert.NoError(t, err)
-	encoded := contract.MarshalJSON(t, params)
-	wire := contract.DecodeJSON[map[string]any](t, encoded)
+	encoded := testassert.MarshalJSON(t, params)
+	wire := testassert.UnmarshalJSON[map[string]any](t, encoded)
 	body, ok := wire["provider"].(map[string]any)
 	if !ok {
 		t.Fatalf("provider routing body = %#v", wire["provider"])
@@ -154,7 +154,7 @@ func TestOpenRouterSendsTheReservedPriceCeiling(t *testing.T) {
 	testassert.NoError(t, err)
 	params, err := lowerRequest(llm.Request{Model: "vendor/model"}, lowering, "default")
 	testassert.NoError(t, err)
-	encoded := contract.MarshalJSON(t, params)
+	encoded := testassert.MarshalJSON(t, params)
 	// Exact decimals travel as JSON numbers, never through a float.
 	if !strings.Contains(string(encoded), `"max_price":{"completion":1.5,"prompt":0.26,"request":0}`) {
 		t.Fatalf("wire body %s lacks the price ceiling", encoded)

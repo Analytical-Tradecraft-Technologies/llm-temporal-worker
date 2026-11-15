@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 	original := exampleYAML(t)
 	yamlSnapshot := mustCompile(t, original)
-	encoded := mustMarshalJSON(t, yamlSnapshot.Config().Budgets)
+	encoded := testassert.MarshalJSON(t, yamlSnapshot.Config().Budgets)
 	start := strings.Index(string(original), "\nbudgets:\n")
 	end := strings.Index(string(original), "\ncontinuation:\n")
 	if start < 0 || end < start {

@@ -52,7 +52,7 @@ func mediaURLRequestWires(t *testing.T) map[string]string {
 
 func decodeMediaURLRequest(t *testing.T, wire, raw string) (GenerateRequestV1, error) {
 	t.Helper()
-	quoted := mustMarshalJSON(t, raw)
+	quoted := testassert.MarshalJSON(t, raw)
 	var request GenerateRequestV1
 	err := json.Unmarshal([]byte(strings.Replace(wire, `"`+mediaURLPlaceholder+`"`, string(quoted), 1)), &request)
 	return request, err

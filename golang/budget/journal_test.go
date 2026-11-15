@@ -1,7 +1,7 @@
 package budget
 
 import (
-	"strings"
+	"fmt"
 	"testing"
 	"time"
 
@@ -105,14 +105,10 @@ func TestJournalEventsRejectBadSharedFields(t *testing.T) {
 	} {
 		r := reservation
 		test.reservation(&r)
-		if err := r.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("%s: reservation error = %v", test.name, err)
-		}
+		testassert.ErrorContains(t, r.Validate(), test.want, fmt.Sprintf("%s: reservation", test.name))
 		c := completion
 		test.completion(&c)
-		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("%s: completion error = %v", test.name, err)
-		}
+		testassert.ErrorContains(t, c.Validate(), test.want, fmt.Sprintf("%s: completion", test.name))
 	}
 	r := reservation
 	r.OccurredAt = time.Time{}

@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -177,9 +178,7 @@ func TestBudgetsJSONRejectsNullSwitchAndPolicy(t *testing.T) {
 		`{"require_match":null,"policies":[]}`:      "budgets.require_match must not be null",
 		`{"require_match":false,"policies":[null]}`: "budgets.policies[0] must not be null",
 	} {
-		if _, err := config.ParseBudgetsJSON([]byte(document)); err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("budgets_json %s error = %v, want %q", document, err, want)
-		}
+		testassert.ErrorContains(t, testassert.Err(config.ParseBudgetsJSON([]byte(document))), want, fmt.Sprintf("budgets_json %s", document))
 	}
 }
 
@@ -190,7 +189,7 @@ func TestLoadAcceptsNullListsAndTheRenderedEffectiveConfiguration(t *testing.T) 
 	if tenants := loaded.Models["invoice-summarizer"].AllowedTenants; len(tenants) != 0 {
 		t.Fatalf("allowed_tenants = %v, want no restriction", tenants)
 	}
-	rendered := mustMarshalJSON(t, loaded)
+	rendered := testassert.MarshalJSON(t, loaded)
 	if !strings.Contains(string(rendered), `"allowed_tenants":null`) {
 		t.Fatal("fixture no longer renders an unset list as null")
 	}

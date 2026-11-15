@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,14 +22,9 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (roundTrip roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return roundTrip(request)
-}
 
 func TestProviderEgressPolicyRejectsBlockedAddresses(t *testing.T) {
 	t.Parallel()
@@ -227,9 +223,7 @@ func TestProviderEgressRoundTripperDoesNotLetLatePreflightPolicyOverwriteCallerC
 	}
 	finish(deniedProviderEgress("unsafe_address"))
 	mapped := provider.ClassifyEgressOutcome(outcome, err)
-	if mapped == nil || mapped.Code != provider.CodeCanceled || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("late preflight overwrote caller cancellation: %#v", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeCanceled, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever}, "late preflight overwrote caller cancellation")
 	testassert.ErrorIsNot(t, mapped, provider.ErrProviderEgressDenied, "late preflight policy leaked into caller cancellation")
 }
 
@@ -385,10 +379,7 @@ func TestProviderEgressTransportDoesNotPoisonCanceledRequestAfterIdleConnectionW
 	releaseSecond := make(chan struct{})
 	var firstOnce, secondOnce, releaseFirstOnce, releaseSecondOnce sync.Once
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("test environment does not allow a loopback listener: %v", err)
-	}
+	listener := testkit.LoopbackListener(t)
 	server := &httptest.Server{
 		Listener:    listener,
 		EnableHTTP2: false,
@@ -578,7 +569,7 @@ func TestProviderEgressTransportDisablesRedirectsAndKeepsTLS(t *testing.T) {
 	t.Parallel()
 
 	redirects := 0
-	server := newLoopbackTLSServer(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := testkit.LoopbackTLSServer(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		redirects++
 		if request.URL.Path == "/redirect" {
 			http.Redirect(response, request, "https://provider.example/final", http.StatusFound)
@@ -636,7 +627,7 @@ func TestCloneProviderTransportClearsCallerAlternateProtocol(t *testing.T) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{
 		"caller-protocol": func(string, *tls.Conn) http.RoundTripper {
-			return roundTripperFunc(func(*http.Request) (*http.Response, error) {
+			return testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 				return nil, errors.New("caller alternate protocol should not run")
 			})
 		},
@@ -813,25 +804,13 @@ func newEgressTestConn(remote net.IP) net.Conn {
 	return egressTestConn{Conn: client, remote: &net.TCPAddr{IP: remote, Port: 443}}
 }
 
-func newLoopbackTLSServer(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("test environment does not allow a loopback listener: %v", err)
-	}
-	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler}}
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	return server
-}
-
 func localProviderMockEndpoint(t *testing.T) config.EndpointConfig {
 	t.Helper()
 	_, source, _, ok := goruntime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	data := mustReadFile(t, filepath.Join(filepath.Dir(source), "..", "..", "deploy", "local", "config.yaml"))
+	data := testassert.ReadFile(t, filepath.Join(filepath.Dir(source), "..", "..", "deploy", "local", "config.yaml"))
 	loaded, err := config.Load(data)
 	testassert.NoError(t, err, "load local config")
 	endpoint, ok := loaded.Endpoints["provider-mock"]
@@ -870,7 +849,7 @@ func providerExampleRequest(t *testing.T, ctx context.Context) *http.Request {
 
 // roundTripGuard sends providerExampleRequest under ctx through an egress
 // guard over next, bounding responses at maxResponseBytes (zero for none).
-func roundTripGuard(t *testing.T, ctx context.Context, maxResponseBytes int64, next roundTripperFunc) (*http.Response, error) {
+func roundTripGuard(t *testing.T, ctx context.Context, maxResponseBytes int64, next testkit.RoundTripFunc) (*http.Response, error) {
 	t.Helper()
 	guard := &providerEgressRoundTripper{policy: providerExamplePolicy(), next: next, maxResponseBytes: maxResponseBytes}
 	return guard.RoundTrip(providerExampleRequest(t, ctx))
@@ -880,9 +859,7 @@ func roundTripGuard(t *testing.T, ctx context.Context, maxResponseBytes int64, n
 // provider error with code and retry; what names the classified outcome.
 func requireNotDispatched(t *testing.T, mapped *provider.Error, code provider.Code, retry provider.RetryDisposition, what string) {
 	t.Helper()
-	if mapped == nil || mapped.Code != code || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != retry {
-		t.Fatalf("classified %s = %#v, want not-dispatched %s with retry %s", what, mapped, code, retry)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: code, Dispatch: provider.DispatchNotDispatched, Retry: retry}, fmt.Sprintf("classified %s", what))
 }
 
 // requireEgressCallState returns the egress call state request carries.

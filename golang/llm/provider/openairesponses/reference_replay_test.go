@@ -9,7 +9,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A replayed transcript still carries the citations a provider such as Exa
@@ -37,7 +36,7 @@ func TestCompileSkipsReplayedReferenceAnnotations(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			call, err := adaptertest.Compile(adapter, "openai-fixture", provider.FamilyOpenAIResponses, request, strict)
 			testassert.NoError(t, err, "compile replayed references")
-			encoded := contract.MarshalJSON(t, call.SDKParams)
+			encoded := testassert.MarshalJSON(t, call.SDKParams)
 			var wire struct {
 				Input []struct {
 					Type string `json:"type"`

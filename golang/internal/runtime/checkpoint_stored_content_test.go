@@ -3,12 +3,12 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -78,10 +78,7 @@ func TestCloudExecutionRuntimeFailsStoredBlockedMediaURLAsInvalidArgument(t *tes
 			for name, input := range map[string]llm.PrepareExecutionV1{"generate": {Generate: &f.request}, "compact": {Compact: &compact}} {
 				_, err := f.runtime.PrepareExecutionV1(ctx, input)
 				assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
-				var mapped *provider.Error
-				if !errors.As(err, &mapped) || mapped.Retry != provider.RetryNever {
-					t.Fatalf("%s: error = %#v, want non-retryable", name, err)
-				}
+				testkit.ProviderError(t, err, testkit.ProviderClass{Retry: provider.RetryNever}, name)
 			}
 			if _, err := f.runtime.PlanGenerationV1(ctx, f.request); err == nil {
 				t.Fatal("generation planning accepted a replayed blocked media URL")
@@ -122,7 +119,7 @@ func TestCloudExecutionRuntimeAggregateLineageByteLimitIsNotRetried(t *testing.T
 	ctx := context.Background()
 	delta := []llm.Item{llm.HumanText(strings.Repeat("x", 600))}
 	parent := publishStoredRoot(t, f, delta)
-	encoded := encodeJSON(t, delta)
+	encoded := testassert.MarshalJSON(t, delta)
 	// Larger than the delta or the output alone, smaller than both together.
 	f.options.Limits.MaxBytes = int64(len(encoded)) + 16
 	f.restart(t)
@@ -133,8 +130,5 @@ func TestCloudExecutionRuntimeAggregateLineageByteLimitIsNotRetried(t *testing.T
 	f.continueTurn(parent, "over-lineage-limit")
 	_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Retry != provider.RetryNever {
-		t.Fatalf("error = %#v, want non-retryable", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Retry: provider.RetryNever})
 }

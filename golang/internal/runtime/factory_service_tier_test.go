@@ -25,6 +25,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -318,10 +319,7 @@ func newTierTestProvider(t *testing.T, hosts []string, handler http.Handler) (*h
 	testassert.NoError(t, err)
 	certificate, err := x509.ParseCertificate(der)
 	testassert.NoError(t, err)
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("test environment does not allow a loopback listener: %v", err)
-	}
+	listener := testkit.LoopbackListener(t)
 	server := &httptest.Server{Listener: listener, Config: &http.Server{Handler: handler}}
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
 	server.StartTLS()

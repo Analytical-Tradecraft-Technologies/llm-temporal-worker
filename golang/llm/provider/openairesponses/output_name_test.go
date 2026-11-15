@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -23,7 +24,7 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 		`"output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}],` +
 		`"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`
 	var wire []byte
-	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		wire, _ = io.ReadAll(request.Body)
 		return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Request-Id", "req-name"), nil
 	})})

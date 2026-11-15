@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -50,7 +51,7 @@ func compactionWireMessages(t *testing.T, call provider.Call) []compactionWireMe
 	case *bedrockruntime.ConverseInput:
 		return converse(*params)
 	}
-	encoded := encodeJSON(t, call.SDKParams)
+	encoded := testassert.MarshalJSON(t, call.SDKParams)
 	var body struct {
 		Messages []struct {
 			Role    string `json:"role"`

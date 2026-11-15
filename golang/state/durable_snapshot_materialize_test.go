@@ -96,7 +96,7 @@ func (fixture *snapshotLineageFixture) add(id string, parent string, delta, outp
 		testassert.NoError(t, err)
 		lineage = append(append([]Handle(nil), full.Lineage...), Handle(id))
 	}
-	row.CanonicalLineageDigest = sha256.Sum256(mustJSON(t, lineage))
+	row.CanonicalLineageDigest = sha256.Sum256(testassert.MarshalJSON(t, lineage))
 	fixture.plain.rows[row.ID] = row
 	if snapshot {
 		full, err := fixture.materializer(fixture.plain).Materialize(context.Background(), "scope-a", row.ID, MaterializeLimits{})
@@ -157,7 +157,7 @@ func (fixture *snapshotLineageFixture) requireSameMaterialization(id string) Mat
 	if err != nil {
 		t.Fatalf("snapshot walk of %s: %v", id, err)
 	}
-	if wantBytes, gotBytes := mustJSON(t, want), mustJSON(t, got); !bytes.Equal(gotBytes, wantBytes) {
+	if wantBytes, gotBytes := testassert.MarshalJSON(t, want), testassert.MarshalJSON(t, got); !bytes.Equal(gotBytes, wantBytes) {
 		t.Fatalf("snapshot walk of %s differs from the full walk:\n got %s\nwant %s", id, gotBytes, wantBytes)
 	}
 	return got

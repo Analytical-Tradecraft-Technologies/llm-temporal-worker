@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -398,9 +400,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkRecordsNoCost(t *testing.T)
 			adapter := &fakeAdapter{name: "fake", egressFirst: test.egress, preDispatchFirst: test.preDispatch, response: successfulResponse()}
 			harness := newHarness(t, adapter)
 			mapped := harness.generateFailure(t, baseRequest("egress-no-cost-"+test.name), "egress-denied request unexpectedly succeeded")
-			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-				t.Fatalf("mapped egress error = %#v", mapped)
-			}
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute}, "mapped egress error")
 			if test.egress && !errors.Is(mapped, provider.ErrProviderEgressDenied) {
 				t.Fatal("mapped policy error did not retain its marker")
 			}
@@ -421,9 +421,7 @@ func TestGenerateCertifiedPreDispatchCallerDeadlineAfterMarkDoesNotFallback(t *t
 	request := priorityWithStandardFallback("pre-dispatch-caller-deadline")
 
 	mapped := harness.generateFailure(t, request, "certified caller deadline unexpectedly succeeded")
-	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped caller deadline = %#v, want non-retryable not-dispatched deadline", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeDeadlineExceeded, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever}, "mapped caller deadline")
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
 		t.Fatalf("mapped caller deadline = %v, want certified pre-dispatch deadline cause", mapped)
 	}
@@ -440,9 +438,7 @@ func TestGenerateRawDeadlineAfterMarkRemainsAmbiguous(t *testing.T) {
 	request := priorityWithStandardFallback("raw-post-mark-deadline")
 
 	mapped := harness.generateFailure(t, request, "raw post-mark deadline unexpectedly succeeded")
-	if mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped raw deadline = %#v, want ambiguous non-retryable result", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Dispatch: provider.DispatchAmbiguous, Retry: provider.RetryNever}, "mapped raw deadline")
 	adapter.requireInvokes(t, 1, "provider invoke count = %d, want one without fallback")
 }
 
@@ -451,9 +447,7 @@ func TestGenerateRedirectResponseAfterMarkDoesNotFallback(t *testing.T) {
 	harness := newHarness(t, adapter)
 	request := priorityWithStandardFallback("redirect-no-fallback")
 	mapped := harness.generateFailure(t, request, "redirect response unexpectedly succeeded")
-	if mapped.Code != provider.CodeAmbiguousDispatch || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped redirect error = %#v, want ambiguous non-retriable dispatch error", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeAmbiguousDispatch, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetryNever}, "mapped redirect error")
 	adapter.requireInvokes(t, 1, "provider invoke count = %d, want one without fallback resend")
 	operation := harness.operation(t, mapped.OperationID)
 	if operation.State != admission.StateAmbiguous || operation.Attempt.Dispatch != admission.Ambiguous {
@@ -484,10 +478,7 @@ func TestGenerateDoesNotRetryAmbiguousOperation(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%s ambiguous request unexpectedly succeeded", attempt.request)
 		}
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeAmbiguousDispatch {
-			t.Fatalf("%s error = %#v, want ambiguous dispatch", attempt.err, err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeAmbiguousDispatch}, fmt.Sprintf("%s error", attempt.err))
 	}
 	adapter.requireInvokes(t, 1, "provider invoke count = %d, want one")
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,7 +21,7 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 	client, err := NewClient(context.Background(), ClientConfig{
 		BaseURL:   "http://127.0.0.1",
 		AWSConfig: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", "")},
-		HTTPClient: &http.Client{Transport: adaptertest.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			wire, _ = io.ReadAll(request.Body)
 			return adaptertest.JSONResponse(request, http.StatusOK, `{}`), nil
 		})},

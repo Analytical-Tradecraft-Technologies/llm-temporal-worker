@@ -3,10 +3,12 @@ package adaptertest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -26,9 +28,7 @@ func ProviderNeutralFailures(t *testing.T, mapError func(error) *provider.Error,
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mapped := mapError(test.marker)
-			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-				t.Fatalf("mapped = %#v", mapped)
-			}
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute})
 			if !errors.Is(mapped, test.marker) {
 				t.Fatal(test.lost)
 			}
@@ -36,9 +36,7 @@ func ProviderNeutralFailures(t *testing.T, mapError func(error) *provider.Error,
 	}
 	t.Run("canceled transport", func(t *testing.T) {
 		mapped := mapError(context.Canceled)
-		if mapped.Code != provider.CodeCanceled || mapped.Dispatch != provider.DispatchAmbiguous {
-			t.Fatalf("cancellation classification = %#v", mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeCanceled, Dispatch: provider.DispatchAmbiguous}, "cancellation classification")
 		if before := dispatchContextError(context.Canceled); before.Dispatch != provider.DispatchNotDispatched {
 			t.Fatal("preflight cancellation became ambiguous")
 		}
@@ -52,9 +50,7 @@ func ProviderNeutralFailures(t *testing.T, mapError func(error) *provider.Error,
 func HTTPStatuses(t *testing.T, mapStatus func(status int, response *http.Response) *provider.Error) {
 	t.Run("redirect is ambiguous", func(t *testing.T) {
 		mapped := mapStatus(http.StatusTemporaryRedirect, &http.Response{Header: http.Header{"Location": []string{"https://redirect.example/secret"}}})
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-			t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetryNever}, "mapped redirect")
 	})
 	t.Run("retry after delay", func(t *testing.T) {
 		mapped := mapStatus(http.StatusTooManyRequests, &http.Response{Header: http.Header{"Retry-After": []string{"2"}}})
@@ -68,17 +64,13 @@ func HTTPStatuses(t *testing.T, mapStatus func(status int, response *http.Respon
 	t.Run("gateway timeouts remain ambiguous", func(t *testing.T) {
 		for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
 			mapped := mapStatus(status, nil)
-			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
-				t.Fatalf("status %d became a rejection: %#v", status, mapped)
-			}
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetrySameOperation}, fmt.Sprintf("status %d became a rejection", status))
 		}
 	})
 	t.Run("server errors remain rejected", func(t *testing.T) {
 		for _, status := range []int{500, 502, 503, 529} {
 			mapped := mapStatus(status, nil)
-			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
-				t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
-			}
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchRejected, Retry: provider.RetrySameOperation}, fmt.Sprintf("status %d", status))
 		}
 	})
 	// An account out of credit is an operator-side route failure: it must
@@ -86,9 +78,7 @@ func HTTPStatuses(t *testing.T, mapStatus func(status int, response *http.Respon
 	// ignores.
 	t.Run("payment required is a route-level denial", func(t *testing.T) {
 		mapped := mapStatus(http.StatusPaymentRequired, nil)
-		if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNever {
-			t.Fatalf("402 = %#v, want a rejected permission denial", mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected, Retry: provider.RetryNever}, "402")
 		if got, want := mapped.SafeDetails["status"], "402"; got != want {
 			t.Fatalf("safe status = %q, want %q", got, want)
 		}

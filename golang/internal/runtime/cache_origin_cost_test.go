@@ -13,8 +13,8 @@ import (
 
 func assertOriginCost(t *testing.T, diagnostics []llm.Diagnostic, operation, amount string) {
 	t.Helper()
-	expectedJSON := encodeJSON(t, llm.CostV1{Status: "exact", ActualCostUSD: &amount, Method: "catalog_usage"})
-	expected := decodeJSON[llm.CostV1](t, expectedJSON)
+	expectedJSON := testassert.MarshalJSON(t, llm.CostV1{Status: "exact", ActualCostUSD: &amount, Method: "catalog_usage"})
+	expected := testassert.UnmarshalJSON[llm.CostV1](t, expectedJSON)
 	var found []llm.Diagnostic
 	for _, d := range diagnostics {
 		if d.Code == "cache_origin_cost" {
@@ -44,7 +44,7 @@ func TestCacheOriginCostPreservesReceiptAndUnknowns(t *testing.T) {
 				t.Fatal("unknown cost was invented")
 			}
 		}
-		encoded := encodeJSON(t, diagnostic)
+		encoded := testassert.MarshalJSON(t, diagnostic)
 		var decoded llm.Diagnostic
 		if err := json.Unmarshal(encoded, &decoded); err != nil || !reflect.DeepEqual(decoded, diagnostic) {
 			t.Fatalf("diagnostic wire round trip: %v", err)

@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"fmt"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
@@ -86,12 +87,7 @@ func TestTemporalVersioningRejectsIdentitiesTemporalRejects(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := test.value.Validate()
-			if err == nil {
-				t.Fatal("identity Temporal rejects was accepted")
-			}
-			if !strings.Contains(err.Error(), "temporal.worker.versioning."+test.field) {
-				t.Fatalf("error does not name %s: %v", test.field, err)
-			}
+			testassert.ErrorContains(t, err, "temporal.worker.versioning."+test.field, fmt.Sprintf("error does not name %s", test.field))
 			if strings.Contains(err.Error(), test.echo) {
 				t.Fatalf("error echoes the configured value: %v", err)
 			}
@@ -127,7 +123,7 @@ func TestTemporalVersioningSchemaMatchesTemporalRules(t *testing.T) {
 	} {
 		value := loaded.Clone()
 		value.Temporal.Worker.Versioning = config.WorkerVersioningConfig{Enabled: true, DeploymentName: test.deployment, BuildID: test.build}
-		encoded := mustMarshalJSON(t, value)
+		encoded := testassert.MarshalJSON(t, value)
 		if err := compiled.Validate(encoded); (err == nil) != test.valid {
 			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}

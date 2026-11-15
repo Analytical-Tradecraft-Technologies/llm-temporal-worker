@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestGenerationPlanClosedWire(t *testing.T) {
 	for _, value := range []bool{false, true} {
 		plan := GenerationPlanV1{CompactBeforeGenerate: value}
-		data := mustMarshalJSON(t, plan)
+		data := testassert.MarshalJSON(t, plan)
 		var decoded GenerationPlanV1
 		if err := json.Unmarshal(data, &decoded); err != nil || decoded != plan {
 			t.Fatalf("round trip: %v", err)
@@ -26,7 +28,7 @@ func TestGenerationPlanClosedWire(t *testing.T) {
 func TestGenerationPlanEffectiveParentWire(t *testing.T) {
 	parent := CheckpointHandle("ckp_v1.saved")
 	want := GenerationPlanV1{CompactBeforeGenerate: true, EffectiveParent: &parent}
-	data := mustMarshalJSON(t, want)
+	data := testassert.MarshalJSON(t, want)
 	var got GenerationPlanV1
 	if err := json.Unmarshal(data, &got); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("bound plan round trip: %+v %v", got, err)

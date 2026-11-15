@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -268,7 +267,7 @@ func responsesAdapter(t testing.TB, httpClient *http.Client) *openairesponses.Ad
 // exampleConfig reads the repository example configuration.
 func exampleConfig(t testing.TB) []byte {
 	t.Helper()
-	return mustReadFile(t, "../../config.example.yaml")
+	return testassert.ReadFile(t, "../../config.example.yaml")
 }
 
 // generateStep runs the fixture's Generate step under a background context
@@ -444,30 +443,6 @@ func mustCompileConfig(t testing.TB, data []byte) *config.Snapshot {
 	snapshot, err := config.Compile(context.Background(), data, nil)
 	testassert.NoError(t, err)
 	return snapshot
-}
-
-// mustReadFile reads path or fails the test.
-func mustReadFile(t testing.TB, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	testassert.NoError(t, err)
-	return data
-}
-
-// encodeJSON encodes value or fails the test.
-func encodeJSON(t testing.TB, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
-}
-
-// decodeJSON decodes data into a new T or fails the test.
-func decodeJSON[T any](t testing.TB, data []byte) T {
-	t.Helper()
-	var value T
-	testassert.NoError(t, json.Unmarshal(data, &value))
-	return value
 }
 
 // requireCount fails the test with message and both counts unless counter

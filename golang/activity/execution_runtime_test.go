@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.temporal.io/sdk/temporal"
@@ -94,7 +95,7 @@ func TestExecutionActivitiesDispatchOnceAndValidateBeforeDispatch(t *testing.T) 
 			}
 			// Each step has its own latency series (#1497); requests rejected
 			// below never reach the runtime and are not observed.
-			defer assertActivityMetricHistogramCount(t, metrics, "llmtw_execution_step_duration_seconds", map[string]string{"step": test.step}, 1)
+			defer testkit.MetricHistogramCount(t, metrics, "llmtw_execution_step_duration_seconds", map[string]string{"step": test.step}, 1)
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			if result, err := test.call(a, ctx); result != nil || err == nil || runtime.calls != 1 {

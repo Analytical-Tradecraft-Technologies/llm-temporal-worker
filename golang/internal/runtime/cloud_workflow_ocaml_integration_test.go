@@ -96,7 +96,7 @@ func TestCloudWorkflowLiveOCaml(t *testing.T) {
 
 func writeCloudOCamlInput(t *testing.T, path string, request llm.GenerateRequestV1) {
 	t.Helper()
-	raw := encodeJSON(t, request)
+	raw := testassert.MarshalJSON(t, request)
 	testassert.NoError(t, os.WriteFile(path, raw, 0o600))
 }
 
@@ -110,7 +110,7 @@ func runCloudOCaml(t *testing.T, ctx context.Context, binary string, args ...str
 
 func assertCloudOCamlResult(t *testing.T, path string, request llm.GenerateRequestV1) {
 	t.Helper()
-	raw := mustReadFile(t, path)
+	raw := testassert.ReadFile(t, path)
 	var result struct {
 		Generate llm.GenerateResponseV1 `json:"generate"`
 		Compact  llm.CompactResponseV1  `json:"compact"`

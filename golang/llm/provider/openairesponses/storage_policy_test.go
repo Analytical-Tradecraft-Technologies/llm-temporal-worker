@@ -10,10 +10,10 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
@@ -41,8 +41,8 @@ func TestStoragePolicy(t *testing.T) {
 				t.Fatal("storage not explicitly disabled")
 			}
 
-			encoded := contract.MarshalJSON(t, params)
-			wire := contract.DecodeJSON[map[string]any](t, encoded)
+			encoded := testassert.MarshalJSON(t, params)
+			wire := testassert.UnmarshalJSON[map[string]any](t, encoded)
 			if !permitted && wire["store"] != false {
 				t.Fatalf("serialized store = %v", wire["store"])
 			}
@@ -83,7 +83,7 @@ func TestStoragePolicyReconfigurationPreservesExactSchemas(t *testing.T) {
 	for _, slot := range []string{"tool", "output", "both"} {
 		t.Run(slot, func(t *testing.T) {
 			var wire []byte
-			client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key", HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				wire, _ = io.ReadAll(request.Body)
 				return adaptertest.JSONResponse(request, http.StatusOK, `{}`), nil
 			})}})
@@ -102,7 +102,7 @@ func TestStoragePolicyReconfigurationPreservesExactSchemas(t *testing.T) {
 			call, err := adaptertest.Compile(permitted, "openai-prod", provider.FamilyOpenAIResponses, request, false)
 			testassert.NoError(t, err)
 			_, _ = denied.Invoke(context.Background(), call, nil)
-			body := contract.DecodeJSON[map[string]json.RawMessage](t, wire)
+			body := testassert.UnmarshalJSON[map[string]json.RawMessage](t, wire)
 			if string(body["store"]) != "false" {
 				t.Fatalf("storage denial missing from actual transport: %s", wire)
 			}

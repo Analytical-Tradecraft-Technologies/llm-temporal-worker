@@ -1,7 +1,8 @@
-// Package testassert holds assertions shared by tests across the module.
+// Package testassert holds assertions shared by tests across the module, and
+// the must-style JSON and file helpers those tests build fixtures with.
 //
 // Every assertion fails the test immediately, as t.Fatal does. NoError,
-// ErrorIs and ErrorIsNot take an optional context naming the step under test;
+// ErrorIs, ErrorIsNot and ErrorContains take an optional context naming the step under test;
 // when given, the failure message starts with "<context>: ", so
 //
 //	testassert.NoError(t, err, "Build")
@@ -10,8 +11,10 @@
 package testassert
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -43,15 +46,42 @@ func ErrorIsNot(t testing.TB, err, target error, context ...string) {
 
 // ErrorContains fails the test immediately unless err is non-nil and its
 // message contains want.
-func ErrorContains(t testing.TB, err error, want string) {
+func ErrorContains(t testing.TB, err error, want string, context ...string) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("error = nil, want an error containing %q", want)
+		fatal(t, context, "error = nil, want an error containing %q", want)
 		return
 	}
 	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("error = %v, want an error containing %q", err, want)
+		fatal(t, context, "error = %v, want an error containing %q", err, want)
 	}
+}
+
+// MarshalJSON returns value encoded with json.Marshal, failing the test
+// immediately if it cannot be encoded.
+func MarshalJSON(t testing.TB, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	NoError(t, err)
+	return data
+}
+
+// UnmarshalJSON decodes data into a new T with json.Unmarshal, failing the
+// test immediately if it cannot be decoded.
+func UnmarshalJSON[T any](t testing.TB, data []byte, context ...string) T {
+	t.Helper()
+	var value T
+	NoError(t, json.Unmarshal(data, &value), context...)
+	return value
+}
+
+// ReadFile returns the contents of the file at path, failing the test
+// immediately if it cannot be read.
+func ReadFile(t testing.TB, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	NoError(t, err)
+	return data
 }
 
 // Err returns the error from a call that also returns a value, so the call

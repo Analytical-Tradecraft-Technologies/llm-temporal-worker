@@ -7,6 +7,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
@@ -36,9 +37,7 @@ func TestSpendCapRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 	spendCap := &anthropic.Error{StatusCode: http.StatusTooManyRequests}
 	testassert.NoError(t, spendCap.UnmarshalJSON([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your API usage limits","details":{"error_code":"enforced_spend_limit_reached"}},"request_id":"req_1"}`)))
 	mapped := mapAPIError(spendCap, "anthropic-messages")
-	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("spend-cap 429 = %#v, want a rejected permission denial", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected, Retry: provider.RetryNextRoute}, "spend-cap 429")
 	if mapped.SafeDetails["status"] != "429" || mapped.SafeDetails["provider_code"] != "enforced_spend_limit_reached" {
 		t.Fatalf("safe details = %#v", mapped.SafeDetails)
 	}

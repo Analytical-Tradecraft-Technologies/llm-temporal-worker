@@ -2,16 +2,15 @@ package anthropicmessages
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -70,7 +69,7 @@ func TestLiftAcceptsUnmappableServiceTier(t *testing.T) {
 		{name: "unrecognized", usage: `"service_tier":"scale"`, want: "scale"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			response := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{`+test.usage+`}}`))
+			response := testassert.UnmarshalJSON[anthropic.Message](t, []byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{`+test.usage+`}}`))
 			got, err := profile.liftResponse(call, &response, "req")
 			testassert.NoError(t, err, "lift")
 			if got.Status != llm.ResponseStatusCompleted || got.Service.Actual != nil || got.Service.ProviderValue != test.want {
@@ -82,7 +81,7 @@ func TestLiftAcceptsUnmappableServiceTier(t *testing.T) {
 	missing := testProfile()
 	missing.MissingActualServiceClass = llm.ServiceClassStandard
 	profile = mustProfile(t, missing)
-	response := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":null}}`))
+	response := testassert.UnmarshalJSON[anthropic.Message](t, []byte(`{"id":"msg-tier","type":"message","role":"assistant","model":"claude-contract","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":null}}`))
 	got, err := profile.liftResponse(call, &response, "req")
 	if err != nil || got.Service.Actual == nil || *got.Service.Actual != llm.ServiceClassStandard {
 		t.Fatalf("missing actual class = %#v, %v", got.Service, err)
@@ -94,15 +93,10 @@ func TestLiftRejectsMalformedToolArgumentsAndUnknownStopReason(t *testing.T) {
 	call := liftCall("anthropic-invalid", llm.ServiceClassStandard)
 	response := anthropic.Message{ID: "bad-tool", Model: "claude-contract", StopReason: anthropic.StopReasonToolUse, Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTierStandard}, Content: []anthropic.ContentBlockUnion{{Type: "tool_use", ID: "toolu", Name: "lookup", Input: json.RawMessage(`{`)}}}
 	_, err := profile.liftResponse(call, &response, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse {
-		t.Fatalf("malformed tool args error = %#v", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse}, "malformed tool args error")
 	unknown := anthropic.Message{ID: "bad-stop", Model: "claude-contract", StopReason: anthropic.StopReason("future_reason"), Usage: anthropic.Usage{ServiceTier: anthropic.UsageServiceTierStandard}}
 	_, err = profile.liftResponse(call, &unknown, "req")
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse {
-		t.Fatalf("unknown stop reason error = %#v", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse}, "unknown stop reason error")
 }
 
 func TestMixedToolResponseSupportsCheckpointAndCompaction(t *testing.T) {

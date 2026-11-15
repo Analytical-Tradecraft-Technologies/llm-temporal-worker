@@ -61,9 +61,7 @@ func TestRunRejectsUnknownOrIncompleteCommands(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout bytes.Buffer
 			err := run(test.args, &stdout)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("run(%v) error = %v, want substring %q", test.args, err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want, fmt.Sprintf("run(%v)", test.args))
 			if stdout.Len() != 0 {
 				t.Fatalf("run(%v) wrote unexpected stdout %q", test.args, stdout.String())
 			}
@@ -120,9 +118,7 @@ func TestArtifactArgumentsMapForRequiredRejectsMalformedInput(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := test.args.mapForRequired(); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("mapForRequired(%v) error = %v, want substring %q", test.args, err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(test.args.mapForRequired()), test.want, fmt.Sprintf("mapForRequired(%v)", test.args))
 		})
 	}
 }
@@ -232,7 +228,7 @@ func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) 
 		}
 	}
 	valid := base("redis_log")
-	testassert.NoError(t, validateRedactedLogArtifact("redis_log", mustJSON(t, valid)), "valid Redis log rejected")
+	testassert.NoError(t, validateRedactedLogArtifact("redis_log", testassert.MarshalJSON(t, valid)), "valid Redis log rejected")
 
 	tests := []struct {
 		name   string
@@ -248,7 +244,7 @@ func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			document := base("redis_log")
 			test.mutate(document)
-			testassert.ErrorContains(t, validateRedactedLogArtifact("redis_log", mustJSON(t, document)), test.want)
+			testassert.ErrorContains(t, validateRedactedLogArtifact("redis_log", testassert.MarshalJSON(t, document)), test.want)
 		})
 	}
 }
@@ -541,7 +537,7 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 		"redacted":               true,
 	}
 	workerPath := filepath.Join(artifactDir, canonicalArtifactPaths["worker_error_summary"])
-	writeTestFile(t, workerPath, mustJSON(t, workerSummary))
+	writeTestFile(t, workerPath, testassert.MarshalJSON(t, workerSummary))
 	schemaPath := releaseEvidenceSchemaPath(t)
 	recordArgs := releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects)
 	recordArgs = append(recordArgs, "-artifact", "worker_error_summary="+canonicalArtifactPaths["worker_error_summary"])
@@ -871,7 +867,7 @@ func readEvidenceRecord(t *testing.T, directory string) map[string]any {
 
 func writeEvidenceRecord(t *testing.T, directory string, record map[string]any) {
 	t.Helper()
-	writeTestFile(t, filepath.Join(directory, "evidence.json"), append(mustJSON(t, record), '\n'))
+	writeTestFile(t, filepath.Join(directory, "evidence.json"), append(testassert.MarshalJSON(t, record), '\n'))
 }
 
 // downgradeToSingleManifestV1 rewrites a freshly recorded bundle into the shape
@@ -897,7 +893,7 @@ func downgradeToSingleManifestV1(t *testing.T, directory string, subjects releas
 
 func writeArtifactJSON(t *testing.T, directory, name string, value any) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(directory, canonicalArtifactPaths[name]), mustJSON(t, value), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, canonicalArtifactPaths[name]), testassert.MarshalJSON(t, value), 0o600); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
@@ -1141,7 +1137,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 	image := subjectIn("registry.example/project", "sha256:"+strings.Repeat("a", 64))
 	valid := releaseEvidenceSBOM(image.Reference, image.Digest)
 	path := filepath.Join(t.TempDir(), "sbom.json")
-	writeTestFile(t, path, mustJSON(t, valid))
+	writeTestFile(t, path, testassert.MarshalJSON(t, valid))
 	testassert.NoError(t, validateCycloneDXSBOM(path, image), "valid SBOM rejected")
 
 	tests := []struct {
@@ -1166,7 +1162,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			document := cloneJSONMap(t, valid)
 			test.mutate(document)
-			writeTestFile(t, path, mustJSON(t, document))
+			writeTestFile(t, path, testassert.MarshalJSON(t, document))
 			testassert.ErrorContains(t, validateCycloneDXSBOM(path, image), test.want)
 		})
 	}
@@ -1176,7 +1172,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 	image := subjectIn("registry.example/project", "sha256:"+strings.Repeat("a", 64))
 	valid := releaseEvidenceScan(image.Reference, image.Digest)
 	path := filepath.Join(t.TempDir(), "scan.json")
-	writeTestFile(t, path, mustJSON(t, valid))
+	writeTestFile(t, path, testassert.MarshalJSON(t, valid))
 	testassert.NoError(t, validateTrivyScan(path, image), "valid Trivy report rejected")
 
 	tests := []struct {
@@ -1197,7 +1193,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			document := cloneJSONMap(t, valid)
 			test.mutate(document)
-			writeTestFile(t, path, mustJSON(t, document))
+			writeTestFile(t, path, testassert.MarshalJSON(t, document))
 			testassert.ErrorContains(t, validateTrivyScan(path, image), test.want)
 		})
 	}
@@ -1242,21 +1238,21 @@ func TestValidateFixtureManifestRejectsDuplicateProfilesAndUnsafeProvenance(t *t
 			ManifestSHA256: strings.Repeat("a", 64),
 		}},
 	}
-	writeTestFile(t, path, mustJSON(t, valid))
+	writeTestFile(t, path, testassert.MarshalJSON(t, valid))
 	testassert.NoError(t, validateFixtureManifest(path), "valid fixture manifest rejected")
 	invalid := valid
 	invalid.Fixtures = append(invalid.Fixtures, valid.Fixtures[0])
-	writeTestFile(t, path, mustJSON(t, invalid))
+	writeTestFile(t, path, testassert.MarshalJSON(t, invalid))
 	testassert.ErrorContains(t, validateFixtureManifest(path), "duplicate profile")
 	invalid = valid
 	invalid.Fixtures[0].UpstreamURL = "https://user:secret@example.invalid/contracts"
-	writeTestFile(t, path, mustJSON(t, invalid))
+	writeTestFile(t, path, testassert.MarshalJSON(t, invalid))
 	testassert.ErrorContains(t, validateFixtureManifest(path), "invalid upstream URL")
 }
 
 func cloneJSONMap(t *testing.T, value map[string]any) map[string]any {
 	t.Helper()
-	return mustUnmarshalMap(t, mustJSON(t, value))
+	return mustUnmarshalMap(t, testassert.MarshalJSON(t, value))
 }
 
 func mustUnmarshalMap(t *testing.T, data []byte) map[string]any {
@@ -1264,13 +1260,6 @@ func mustUnmarshalMap(t *testing.T, data []byte) map[string]any {
 	var value map[string]any
 	testassert.NoError(t, json.Unmarshal(data, &value))
 	return value
-}
-
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
 }
 
 // writeTestFile writes data to path, failing the test on an error.
@@ -1286,7 +1275,7 @@ func rewriteBenchmarkSummary(t *testing.T, artifactDir string, mutate func(map[s
 	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
 	benchmark := repotest.ReadJSONObject(t, benchmarkPath)
 	mutate(benchmark)
-	writeTestFile(t, benchmarkPath, append(mustJSON(t, benchmark), '\n'))
+	writeTestFile(t, benchmarkPath, append(testassert.MarshalJSON(t, benchmark), '\n'))
 }
 
 // writeOCILayoutManifest writes an OCI layout marker and a one-layer image

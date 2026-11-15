@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,9 +12,7 @@ import (
 func exampleConfig(t *testing.T) []byte {
 	t.Helper()
 	path := filepath.Join("..", "..", "config.example.yaml")
-	data, err := os.ReadFile(path)
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, path)
 }
 
 func TestSnapshotBuilderCompilesImmutableConfig(t *testing.T) {

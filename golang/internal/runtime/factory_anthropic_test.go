@@ -11,6 +11,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -43,7 +44,7 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 				profile, err := factory.anthropicProfile("anthropic", endpoint, anthropicmessages.DefaultProfile("capabilities").Capabilities, EndpointProfile{})
 				testassert.NoError(t, err)
 				calls := 0
-				httpClient := &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				httpClient := &http.Client{Transport: testkit.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 					calls++
 					var wire map[string]any
 					testassert.NoError(t, json.NewDecoder(req.Body).Decode(&wire))
@@ -90,7 +91,7 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 				if response.Status != llm.ResponseStatusCompleted || response.Usage.InputTokens != 2 || response.Usage.OutputTokens != 1 {
 					t.Fatalf("response = %+v", response)
 				}
-				output := encodeJSON(t, response.Output)
+				output := testassert.MarshalJSON(t, response.Output)
 				if !strings.Contains(string(output), `"text":"done"`) {
 					t.Fatalf("output = %s", output)
 				}

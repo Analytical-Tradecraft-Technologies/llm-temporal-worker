@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
@@ -403,7 +404,5 @@ func assertRenderedChangesRejected(t *testing.T, label string, changes []rendere
 func assertRenderedBaseRejected(t *testing.T, workload, want, label string) {
 	t.Helper()
 	err := verifyRendered("base", []byte(workload))
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("verify rendered %s error = %v, want %q", label, err, want)
-	}
+	testassert.ErrorContains(t, err, want, fmt.Sprintf("verify rendered %s", label))
 }
