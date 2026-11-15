@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
+	"slices"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
@@ -25,7 +26,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	if err := validateHaiku55Request(request); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
-	if strict && anthropicwire.HasMixedInstructionLevels(request.Instructions) {
+	if strict && provider.MixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Anthropic Messages in strict portability mode")
 	}
 	messages := make([]any, 0, len(request.Input))
@@ -150,13 +151,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		return anthropic.MessageNewParams{}, err
 	}
 
-	encoded, err := json.Marshal(requestMap)
+	params, encoded, err := provider.DecodeWireParams[anthropic.MessageNewParams](requestMap, "anthropic messages")
 	if err != nil {
 		return anthropic.MessageNewParams{}, err
-	}
-	var params anthropic.MessageNewParams
-	if err := json.Unmarshal(encoded, &params); err != nil {
-		return anthropic.MessageNewParams{}, fmt.Errorf("anthropic messages parameter union: %w", err)
 	}
 	// Keep the exact validated wire document as the SDK override. This retains
 	// opaque thinking signatures and redacted blocks byte-for-byte while the
@@ -315,15 +312,7 @@ func lowerDocument(value llm.DocumentPart) (map[string]any, error) {
 }
 
 func lowerToolResultContent(parts []llm.Part) ([]any, error) {
-	content := make([]any, 0, len(parts))
-	for index, part := range parts {
-		lowered, err := lowerPart(part)
-		if err != nil {
-			return nil, fmt.Errorf("tool result part %d: %w", index, err)
-		}
-		content = append(content, lowered)
-	}
-	return content, nil
+	return provider.LowerEach(parts, "tool result part", lowerPart)
 }
 
 func lowerTools(tools []llm.Tool) ([]any, error) {
@@ -452,18 +441,11 @@ func rawContentBlock(raw []byte) (json.RawMessage, error) {
 		return nil, fmt.Errorf("provider state: %w", err)
 	}
 	typeValue, _ := block["type"].(string)
-	if !replayableBlockType(typeValue) {
+	// The blocks lifted as provider state are exactly the replayable ones.
+	if !slices.Contains(contentStateBlocks, typeValue) {
 		return nil, fmt.Errorf("provider state content block type %q is not replayable", typeValue)
 	}
 	return append(json.RawMessage(nil), raw...), nil
-}
-
-func replayableBlockType(kind string) bool {
-	switch kind {
-	case "thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
-		return true
-	}
-	return false
 }
 
 func isContainerState(state llm.ProviderState) bool {

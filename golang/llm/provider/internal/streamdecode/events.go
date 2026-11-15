@@ -4,10 +4,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
+
+// ParseAndDecode parses an SSE stream, as Parse does, and decodes its events
+// with decode, one of the Decode functions.
+func ParseAndDecode(reader io.Reader, decode func([]SSE) ([]provider.Event, error)) ([]provider.Event, error) {
+	events, err := Parse(reader)
+	if err != nil {
+		return nil, err
+	}
+	return decode(events)
+}
 
 func DecodeAnthropic(events []SSE) ([]provider.Event, error) {
 	result := make([]provider.Event, 0)

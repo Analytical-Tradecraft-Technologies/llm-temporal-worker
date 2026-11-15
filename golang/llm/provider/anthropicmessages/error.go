@@ -2,7 +2,6 @@ package anthropicmessages
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -12,17 +11,7 @@ import (
 )
 
 func mapError(err error, profileName string) *provider.Error {
-	if err == nil {
-		return nil
-	}
-	if mapped := provider.MapTransportError(err, profileName); mapped != nil {
-		return mapped
-	}
-	var apiErr *anthropic.Error
-	if errors.As(err, &apiErr) {
-		return mapAPIError(apiErr, profileName)
-	}
-	return provider.NewUnclassifiedDispatchError(err, profileName)
+	return provider.MapSDKError(err, profileName, mapAPIError)
 }
 
 func mapAPIError(apiErr *anthropic.Error, profileName string) *provider.Error {

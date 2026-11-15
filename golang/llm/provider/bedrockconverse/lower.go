@@ -18,10 +18,10 @@ import (
 func lowerRequest(request llm.Request, profile Profile, serviceTier string, strict bool) (bedrockruntime.ConverseInput, error) {
 	// An adapter never drops a request parameter it cannot honour; the
 	// planner also keeps such requests off Bedrock routes (#1506).
-	if hosted := hostedToolFlag(request); hosted != "" {
+	if hosted := provider.HostedToolFlag(request); hosted != "" {
 		return bedrockruntime.ConverseInput{}, provider.NewUnsupportedCapabilityError(hosted + " is not supported by the Bedrock Converse adapter")
 	}
-	if strict && hasMixedInstructionLevels(request.Instructions) {
+	if strict && provider.MixedInstructionLevels(request.Instructions) {
 		return bedrockruntime.ConverseInput{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Converse in strict portability mode")
 	}
 	if request.Output != nil && (request.Output.Format.Kind == llm.OutputKindJSON || request.Output.Format.Kind == llm.OutputKindJSONSchema) {
@@ -206,16 +206,11 @@ func lowerItem(item llm.Item) (types.Message, error) {
 func lowerParts(parts []llm.Part) ([]types.ContentBlock, error) {
 	content := make([]types.ContentBlock, 0, len(parts))
 	for index, part := range parts {
-		text, ok := part.(llm.TextPart)
-		if !ok {
-			if value, jsonOK := part.(llm.JSONPart); jsonOK && json.Valid(value.Value) {
-				text, ok = llm.TextPart{Text: string(value.Value)}, true
-			}
-		}
+		text, ok := partText(part)
 		if !ok {
 			return nil, fmt.Errorf("part %d kind %q is not supported by Bedrock Converse", index, part.PartKind())
 		}
-		content = append(content, &types.ContentBlockMemberText{Value: text.Text})
+		content = append(content, &types.ContentBlockMemberText{Value: text})
 	}
 	return content, nil
 }
@@ -223,18 +218,24 @@ func lowerParts(parts []llm.Part) ([]types.ContentBlock, error) {
 func lowerToolResultParts(parts []llm.Part) ([]types.ToolResultContentBlock, error) {
 	content := make([]types.ToolResultContentBlock, 0, len(parts))
 	for index, part := range parts {
-		text, ok := part.(llm.TextPart)
-		if !ok {
-			if value, jsonOK := part.(llm.JSONPart); jsonOK && json.Valid(value.Value) {
-				text, ok = llm.TextPart{Text: string(value.Value)}, true
-			}
-		}
+		text, ok := partText(part)
 		if !ok {
 			return nil, fmt.Errorf("tool result part %d kind %q is not supported by Bedrock Converse", index, part.PartKind())
 		}
-		content = append(content, &types.ToolResultContentBlockMemberText{Value: text.Text})
+		content = append(content, &types.ToolResultContentBlockMemberText{Value: text})
 	}
 	return content, nil
+}
+
+// partText returns the text a text part, or a valid JSON part, carries.
+func partText(part llm.Part) (string, bool) {
+	switch value := part.(type) {
+	case llm.TextPart:
+		return value.Text, true
+	case llm.JSONPart:
+		return string(value.Value), json.Valid(value.Value)
+	}
+	return "", false
 }
 
 func lowerTools(tools []llm.Tool) ([]types.Tool, error) {
@@ -288,18 +289,6 @@ func lowerToolChoice(policy llm.ToolPolicy) (types.ToolChoice, error) {
 	}
 }
 
-func hasMixedInstructionLevels(instructions []llm.Instruction) bool {
-	application, policy := false, false
-	for _, instruction := range instructions {
-		if instruction.Level == llm.InstructionLevelPolicy {
-			policy = true
-		} else {
-			application = true
-		}
-	}
-	return application && policy
-}
-
 func stringPtr(value string) *string { return &value }
 
 // decodeDocument preserves JSON numeric literals through the SDK document
@@ -325,17 +314,4 @@ func reasoningIsProviderDefault(reasoning llm.ReasoningSpec) bool {
 	return (reasoning.Mode == "" || reasoning.Mode == llm.ReasoningModeProviderDefault) &&
 		(reasoning.Effort == "" || reasoning.Effort == llm.ReasoningEffortProviderDefault) && reasoning.TokenBudget == nil &&
 		(reasoning.Summary == "" || reasoning.Summary == llm.ReasoningSummaryProviderDefault)
-}
-
-// hostedToolFlag names the first provider-hosted tool the request asks for.
-func hostedToolFlag(request llm.Request) string {
-	switch {
-	case request.WebSearch:
-		return "web_search"
-	case request.WebFetch:
-		return "web_fetch"
-	case request.CodeExecution:
-		return "code_execution"
-	}
-	return ""
 }

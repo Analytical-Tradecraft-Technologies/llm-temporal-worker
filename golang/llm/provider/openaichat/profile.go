@@ -153,26 +153,8 @@ func (profile Profile) validate() error {
 	if role := profile.ApplicationInstructionRole; role != "" && role != "developer" && role != "system" {
 		return fmt.Errorf("openai chat profile %q application instruction role %q is invalid", profile.ID, role)
 	}
-	if profile.ID == "" {
-		return fmt.Errorf("openai chat profile ID is required")
-	}
-	if profile.ExpectedBaseURL != "" {
-		if _, err := clientconfig.BaseURL(profile.ExpectedBaseURL); err != nil {
-			return fmt.Errorf("openai chat profile %q expected base URL: %w", profile.ID, err)
-		}
-	}
-	if profile.ExpectedModel != "" && len(profile.ExpectedModel) > 256 {
-		return fmt.Errorf("openai chat profile %q expected model is too long", profile.ID)
-	}
-	version := profile.CapabilityVersion
-	if version == "" {
-		version = profile.Capabilities.Version
-	}
-	if version == "" {
-		return fmt.Errorf("openai chat profile %q capability version is required", profile.ID)
-	}
-	if profile.Capabilities.Version != "" && profile.Capabilities.Version != version {
-		return fmt.Errorf("openai chat profile %q capability versions conflict", profile.ID)
+	if err := provider.ValidateProfileIdentity("openai chat", profile.ID, profile.ExpectedBaseURL, profile.ExpectedModel, profile.CapabilityVersion, profile.Capabilities); err != nil {
+		return err
 	}
 	for _, class := range llm.ServiceClasses() {
 		value, ok := profile.ServiceTiers[class]
@@ -189,16 +171,8 @@ func (profile Profile) validate() error {
 	if continuation := profile.Capabilities.Features[provider.FeatureContinuation]; continuation.State == provider.CapabilityNative || continuation.State == provider.CapabilityEmulated {
 		return fmt.Errorf("openai chat profile %q cannot advertise continuation as %q: adapter does not implement continuation", profile.ID, continuation.State)
 	}
-	if profile.MissingActualServiceClass != "" && !profile.MissingActualServiceClass.Valid() {
-		return fmt.Errorf("openai chat profile %q missing actual service class %q is invalid", profile.ID, profile.MissingActualServiceClass)
-	}
-	for providerTier, class := range profile.ActualServiceClasses {
-		if !validProviderTier(providerTier) {
-			return fmt.Errorf("openai chat profile %q actual provider tier %q is invalid", profile.ID, providerTier)
-		}
-		if !class.Valid() {
-			return fmt.Errorf("openai chat profile %q actual provider tier %q maps to invalid class %q", profile.ID, providerTier, class)
-		}
+	if err := provider.ValidateActualServiceClasses("openai chat", profile.ID, profile.ActualServiceClasses, profile.MissingActualServiceClass, validProviderTier); err != nil {
+		return err
 	}
 	// Two allowed fields sharing one effective wire field would let map
 	// iteration pick the provider value, so the same request could lower
@@ -293,23 +267,15 @@ func validateChoiceCount(wire string, raw json.RawMessage) error {
 }
 
 func (profile Profile) capabilityVersion() string {
-	if profile.CapabilityVersion != "" {
-		return profile.CapabilityVersion
-	}
-	return profile.Capabilities.Version
+	return provider.ProfileCapabilityVersion(profile.CapabilityVersion, profile.Capabilities)
 }
 
 func (profile Profile) capabilities(ctx context.Context, query provider.CapabilityQuery, endpointID string) (provider.CapabilitySet, error) {
-	if err := ctx.Err(); err != nil {
+	set, err := provider.OneShotProfileCapabilities(ctx, query, fmt.Sprintf("openai chat profile %q", profile.ID), provider.FamilyOpenAIChat, endpointID, profile.Capabilities, profile.capabilityVersion())
+	if err != nil {
 		return provider.CapabilitySet{}, err
 	}
-	if err := provider.ValidateCapabilityQuery(query, fmt.Sprintf("openai chat profile %q", profile.ID), provider.FamilyOpenAIChat, endpointID); err != nil {
-		return provider.CapabilitySet{}, err
-	}
-	set := profile.Capabilities.Clone()
-	set.Version = profile.capabilityVersion()
 	set.Features[provider.FeatureContinuation] = unsupportedContinuationCapability(set.Features[provider.FeatureContinuation])
-	set.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(set.Features[provider.FeatureStreaming])
 	return set, nil
 }
 
@@ -329,14 +295,7 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 // than a guess or a failure: the response is already paid for, and the raw
 // label is kept in the service facts for audit.
 func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
-	class, ok := profile.ActualServiceClasses[providerTier]
-	if providerTier == "" {
-		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
-	}
-	if !ok {
-		return nil
-	}
-	return &class
+	return provider.ActualServiceClass(profile.ActualServiceClasses, profile.MissingActualServiceClass, providerTier)
 }
 
 func unsupportedContinuationCapability(capability provider.Capability) provider.Capability {

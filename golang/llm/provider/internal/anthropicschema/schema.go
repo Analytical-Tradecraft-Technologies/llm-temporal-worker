@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemawire"
 	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
 
@@ -79,7 +80,7 @@ func Lower(schema json.RawMessage, strict bool) (map[string]any, error) {
 // Validate applies the caller schema to the first model text of a completed
 // response, exactly as the Responses and Chat lifts do.
 func Validate(schema json.RawMessage, output []llm.Item) error {
-	content, ok := firstModelText(output)
+	content, ok := schemawire.FirstModelText(output)
 	if !ok {
 		return fmt.Errorf("provider response did not contain JSON text content")
 	}
@@ -93,21 +94,6 @@ func Validate(schema json.RawMessage, output []llm.Item) error {
 	return nil
 }
 
-func firstModelText(output []llm.Item) (string, bool) {
-	for _, item := range output {
-		message, ok := item.(llm.Message)
-		if !ok || message.Actor != llm.ActorModel {
-			continue
-		}
-		for _, part := range message.Content {
-			if text, ok := part.(llm.TextPart); ok {
-				return text.Text, true
-			}
-		}
-	}
-	return "", false
-}
-
 func lowerSchema(source map[string]any, path string, strict bool) (map[string]any, error) {
 	if ref, ok := source["$ref"]; ok {
 		// The provider does not accept $ref alongside other keywords; only
@@ -116,7 +102,7 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 		if defs, ok := source["$defs"].(map[string]any); ok {
 			lowered := make(map[string]any, len(defs))
 			for name, child := range defs {
-				nested, err := lowerChild(child, pointerJoin(pointerJoin(path, "$defs"), name), strict)
+				nested, err := lowerChild(child, schemawire.PointerJoin(schemawire.PointerJoin(path, "$defs"), name), strict)
 				if err != nil {
 					return nil, err
 				}
@@ -136,13 +122,13 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 			extras[key] = value
 			continue
 		}
-		childPath := pointerJoin(path, key)
+		childPath := schemawire.PointerJoin(path, key)
 		switch key {
 		case "$defs", "properties":
 			children, _ := value.(map[string]any)
 			lowered := make(map[string]any, len(children))
 			for name, child := range children {
-				nested, err := lowerChild(child, pointerJoin(childPath, name), strict)
+				nested, err := lowerChild(child, schemawire.PointerJoin(childPath, name), strict)
 				if err != nil {
 					return nil, err
 				}
@@ -195,15 +181,15 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 		}
 		delete(result, "oneOf")
 	}
-	if isObjectSchema(source) {
+	if schemawire.IsObjectSchema(source) {
 		properties, _ := result["properties"].(map[string]any)
 		if additional, present := source["additionalProperties"]; present && additional != false {
 			if strict {
-				return nil, &UnsupportedError{Path: pointerJoin(path, "additionalProperties"), Reason: "additionalProperties other than false is not supported by Claude structured output"}
+				return nil, &UnsupportedError{Path: schemawire.PointerJoin(path, "additionalProperties"), Reason: "additionalProperties other than false is not supported by Claude structured output"}
 			}
 			if len(properties) == 0 {
 				// Closing it would constrain the answer to {}.
-				return nil, &UnsupportedError{Path: pointerJoin(path, "additionalProperties"), Reason: "an open object without declared properties is not supported by Claude structured output"}
+				return nil, &UnsupportedError{Path: schemawire.PointerJoin(path, "additionalProperties"), Reason: "an open object without declared properties is not supported by Claude structured output"}
 			}
 			extras["additionalProperties"] = additional
 		}
@@ -215,9 +201,9 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 		extras["additionalProperties"] = additional
 	}
 	if len(extras) > 0 {
-		note, err := describeExtras(extras)
+		note, err := schemawire.DescribeExtras(extras)
 		if err != nil {
-			return nil, fmt.Errorf("output schema at %s: %w", displayPath(path), err)
+			return nil, fmt.Errorf("output schema at %s: %w", schemawire.DisplayPath(path), err)
 		}
 		if description, ok := result["description"].(string); ok && description != "" {
 			note = description + "\n\n" + note
@@ -233,48 +219,6 @@ func lowerChild(value any, path string, strict bool) (map[string]any, error) {
 		return nil, &UnsupportedError{Path: path, Reason: "schema must be an object"}
 	}
 	return lowerSchema(object, path, strict)
-}
-
-func isObjectSchema(schema map[string]any) bool {
-	if _, ok := schema["properties"]; ok {
-		return true
-	}
-	switch value := schema["type"].(type) {
-	case string:
-		return value == "object"
-	case []any:
-		for _, item := range value {
-			if item == "object" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// describeExtras renders moved keywords in the SDK's "{key: value, ...}" form
-// with sorted keys, so equal schemas always lower to equal bytes.
-func describeExtras(extras map[string]any) (string, error) {
-	keys := make([]string, 0, len(extras))
-	for key := range extras {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		rendered, ok := extras[key].(string)
-		if !ok {
-			var buffer bytes.Buffer
-			encoder := json.NewEncoder(&buffer)
-			encoder.SetEscapeHTML(false)
-			if err := encoder.Encode(extras[key]); err != nil {
-				return "", err
-			}
-			rendered = strings.TrimSuffix(buffer.String(), "\n")
-		}
-		parts = append(parts, key+": "+rendered)
-	}
-	return "{" + strings.Join(parts, ", ") + "}", nil
 }
 
 // rejectRecursion walks the reference graph. Nodes are the schema root and
@@ -297,7 +241,7 @@ func rejectRecursion(root map[string]any) error {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			childPath := pointerJoin(path, key)
+			childPath := schemawire.PointerJoin(path, key)
 			switch key {
 			case "$defs", "properties":
 				children, _ := schema[key].(map[string]any)
@@ -307,7 +251,7 @@ func rejectRecursion(root map[string]any) error {
 				}
 				sort.Strings(names)
 				for _, name := range names {
-					if err := visit(children[name], pointerJoin(childPath, name)); err != nil {
+					if err := visit(children[name], schemawire.PointerJoin(childPath, name)); err != nil {
 						return err
 					}
 				}
@@ -339,7 +283,7 @@ func rejectRecursion(root map[string]any) error {
 					continue
 				}
 				state[name] = visiting
-				if err := visit(target, pointerJoin("/$defs", name)); err != nil {
+				if err := visit(target, schemawire.PointerJoin("/$defs", name)); err != nil {
 					return err
 				}
 				state[name] = done
@@ -348,15 +292,4 @@ func rejectRecursion(root map[string]any) error {
 		return nil
 	}
 	return visit(root, "")
-}
-
-func pointerJoin(base, token string) string {
-	return base + "/" + strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
-}
-
-func displayPath(path string) string {
-	if path == "" {
-		return "/"
-	}
-	return path
 }

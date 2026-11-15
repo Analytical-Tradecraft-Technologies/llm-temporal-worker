@@ -11,11 +11,7 @@ import (
 // returns provider-neutral events. The reader may return arbitrary transport
 // fragments; SSE framing is reconstructed before JSON decoding.
 func DecodeStream(reader io.Reader) ([]provider.Event, error) {
-	events, err := streamdecode.Parse(reader)
-	if err != nil {
-		return nil, err
-	}
-	return streamdecode.DecodeChat(events)
+	return streamdecode.ParseAndDecode(reader, streamdecode.DecodeChat)
 }
 
 // Decode is an alias for DecodeStream used by generic stream harnesses.

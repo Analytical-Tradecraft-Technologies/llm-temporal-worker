@@ -80,6 +80,14 @@ func NewInvalidResponseError(call Call, requestID, message string) *Error {
 	return mapped
 }
 
+// NewInvalidResponseErrorWithID reports an accepted response, identified by
+// the provider's response ID, that the adapter could not lift.
+func NewInvalidResponseErrorWithID(call Call, requestID, responseID, message string) *Error {
+	mapped := NewInvalidResponseError(call, requestID, message)
+	mapped.Provider.ResponseID = responseID
+	return mapped
+}
+
 // ValidateCapabilityQuery checks that a capability query, when it names a
 // family or endpoint, names this adapter's. label prefixes the error, for
 // example "openai chat".
@@ -89,6 +97,28 @@ func ValidateCapabilityQuery(query CapabilityQuery, label string, family Family,
 	}
 	if query.EndpointID != "" && query.EndpointID != endpointID {
 		return fmt.Errorf("%s: capability endpoint %q does not match %q", label, query.EndpointID, endpointID)
+	}
+	return nil
+}
+
+// RequireAdapterArgs checks the client and endpoint ID every adapter
+// constructor requires. label prefixes the error, as in "openai chat".
+func RequireAdapterArgs(label string, hasClient bool, endpointID string) error {
+	if !hasClient {
+		return fmt.Errorf("%s: client is required", label)
+	}
+	if endpointID == "" {
+		return fmt.Errorf("%s: endpoint ID is required", label)
+	}
+	return nil
+}
+
+// RequireExpectedBaseURL checks that a client's base URL is the one a
+// profile, when it pins one, expects. label names the profile family, as in
+// "openai chat".
+func RequireExpectedBaseURL(label, profileID, expected, actual string) error {
+	if expected != "" && actual != expected {
+		return fmt.Errorf("%s profile %q requires base URL %q, got %q", label, profileID, expected, actual)
 	}
 	return nil
 }

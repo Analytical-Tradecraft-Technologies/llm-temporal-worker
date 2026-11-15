@@ -1,10 +1,12 @@
-// Package anthropicwire holds the request lowering the Anthropic Messages and
-// Bedrock Messages adapters share. Both send the Anthropic Messages body; a
-// Family only changes how the endpoint is named in error messages.
+// Package anthropicwire holds the request lowering and response lifting the
+// Anthropic Messages and Bedrock Messages adapters share. Both speak the
+// Anthropic Messages body; a Family only changes how the endpoint is named in
+// error messages.
 package anthropicwire
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -37,15 +39,7 @@ type PartLowering struct {
 
 // LowerParts lowers content parts in order, prefixing errors with the index.
 func (family Family) LowerParts(parts []llm.Part, lowering PartLowering) ([]any, error) {
-	content := make([]any, 0, len(parts))
-	for index, part := range parts {
-		lowered, err := family.LowerPart(part, lowering)
-		if err != nil {
-			return nil, fmt.Errorf("part %d: %w", index, err)
-		}
-		content = append(content, lowered)
-	}
-	return content, nil
+	return provider.LowerEach(parts, "part", func(part llm.Part) (any, error) { return family.LowerPart(part, lowering) })
 }
 
 // LowerPart lowers one content part to its Anthropic content block.
@@ -279,21 +273,6 @@ func LowerToolPolicy(policy llm.ToolPolicy) (map[string]any, error) {
 	return choice, nil
 }
 
-// HasMixedInstructionLevels reports whether instructions mix application and
-// policy levels, which the single system prompt cannot keep apart.
-func HasMixedInstructionLevels(instructions []llm.Instruction) bool {
-	application := false
-	policy := false
-	for _, instruction := range instructions {
-		if instruction.Level == llm.InstructionLevelPolicy {
-			policy = true
-		} else {
-			application = true
-		}
-	}
-	return application && policy
-}
-
 // EmptyModelMessage reports whether item is a model message with no content.
 func EmptyModelMessage(item llm.Item) bool {
 	message, ok := item.(llm.Message)
@@ -303,37 +282,23 @@ func EmptyModelMessage(item llm.Item) bool {
 // RequiredFeatures lists the capabilities a request needs from an Anthropic
 // Messages endpoint, in first-use order.
 func RequiredFeatures(request llm.Request) []provider.Feature {
-	features := []provider.Feature{provider.FeatureText, provider.FeatureUsage}
-	for _, instruction := range request.Instructions {
-		for _, part := range instruction.Content {
-			features = append(features, partFeature(part))
-		}
+	return provider.RequestFeatures(request, partFeature, []provider.Feature{provider.FeatureContinuation, provider.FeatureReasoning}, provider.StructuredOutputKind)
+}
+
+// LowerError maps a lowering failure to its compile error: an output schema
+// the endpoint cannot carry is an unsupported structured-output feature, a
+// provider error (such as a strict-portability refusal) is kept, and anything
+// else is an invalid request.
+func LowerError(err error) *provider.Error {
+	var unsupported *anthropicschema.UnsupportedError
+	if errors.As(err, &unsupported) {
+		return provider.NewUnsupportedFeatureError(provider.FeatureStructuredOutput, err.Error())
 	}
-	for _, item := range request.Input {
-		switch value := item.(type) {
-		case llm.Message:
-			for _, part := range value.Content {
-				features = append(features, partFeature(part))
-			}
-		case llm.ToolCall, llm.ToolResult:
-			features = append(features, provider.FeatureToolCall)
-		case llm.ProviderState:
-			features = append(features, provider.FeatureContinuation, provider.FeatureReasoning)
-		}
+	var strict *provider.Error
+	if errors.As(err, &strict) {
+		return strict
 	}
-	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
-		features = append(features, provider.FeatureToolCall)
-	}
-	if request.Output != nil && request.Output.Format.Kind != "" && request.Output.Format.Kind != llm.OutputKindText {
-		features = append(features, provider.FeatureStructuredOutput)
-	}
-	if request.Reasoning != nil {
-		features = append(features, provider.FeatureReasoning)
-	}
-	if request.Continuation != nil {
-		features = append(features, provider.FeatureContinuation)
-	}
-	return provider.UniqueFeatures(features)
+	return provider.NewCompileError(err.Error())
 }
 
 func partFeature(part llm.Part) provider.Feature {

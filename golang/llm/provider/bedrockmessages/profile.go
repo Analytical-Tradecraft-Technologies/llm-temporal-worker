@@ -78,26 +78,8 @@ func NewProfile(profile Profile) (Profile, error) {
 }
 
 func (profile Profile) validate() error {
-	if profile.ID == "" {
-		return fmt.Errorf("bedrock messages profile ID is required")
-	}
-	if profile.ExpectedBaseURL != "" {
-		if _, err := clientconfig.BaseURL(profile.ExpectedBaseURL); err != nil {
-			return fmt.Errorf("bedrock messages profile %q expected base URL: %w", profile.ID, err)
-		}
-	}
-	if profile.ExpectedModel != "" && len(profile.ExpectedModel) > 256 {
-		return fmt.Errorf("bedrock messages profile %q expected model is too long", profile.ID)
-	}
-	version := profile.CapabilityVersion
-	if version == "" {
-		version = profile.Capabilities.Version
-	}
-	if version == "" {
-		return fmt.Errorf("bedrock messages profile %q capability version is required", profile.ID)
-	}
-	if profile.Capabilities.Version != "" && profile.Capabilities.Version != version {
-		return fmt.Errorf("bedrock messages profile %q capability versions conflict", profile.ID)
+	if err := provider.ValidateProfileIdentity("bedrock messages", profile.ID, profile.ExpectedBaseURL, profile.ExpectedModel, profile.CapabilityVersion, profile.Capabilities); err != nil {
+		return err
 	}
 	supported := 0
 	for _, class := range llm.ServiceClasses() {
@@ -121,16 +103,8 @@ func (profile Profile) validate() error {
 	if err := provider.ValidateProfileFeatures("bedrock messages", profile.ID, profile.Capabilities.Features); err != nil {
 		return err
 	}
-	if profile.MissingActualServiceClass != "" && !profile.MissingActualServiceClass.Valid() {
-		return fmt.Errorf("bedrock messages profile %q missing actual service class %q is invalid", profile.ID, profile.MissingActualServiceClass)
-	}
-	for tier, class := range profile.ActualServiceClasses {
-		if !validProviderTier(tier) {
-			return fmt.Errorf("bedrock messages profile %q actual provider tier %q is invalid", profile.ID, tier)
-		}
-		if !class.Valid() {
-			return fmt.Errorf("bedrock messages profile %q actual provider tier %q maps to invalid class %q", profile.ID, tier, class)
-		}
+	if err := provider.ValidateActualServiceClasses("bedrock messages", profile.ID, profile.ActualServiceClasses, profile.MissingActualServiceClass, validProviderTier); err != nil {
+		return err
 	}
 	if profile.DefaultMaxTokens < 0 {
 		return fmt.Errorf("bedrock messages profile %q default max_tokens must not be negative", profile.ID)
@@ -139,23 +113,11 @@ func (profile Profile) validate() error {
 }
 
 func (profile Profile) capabilityVersion() string {
-	if profile.CapabilityVersion != "" {
-		return profile.CapabilityVersion
-	}
-	return profile.Capabilities.Version
+	return provider.ProfileCapabilityVersion(profile.CapabilityVersion, profile.Capabilities)
 }
 
 func (profile Profile) capabilities(ctx context.Context, query provider.CapabilityQuery, endpointID string) (provider.CapabilitySet, error) {
-	if err := ctx.Err(); err != nil {
-		return provider.CapabilitySet{}, err
-	}
-	if err := provider.ValidateCapabilityQuery(query, fmt.Sprintf("bedrock messages profile %q", profile.ID), provider.FamilyBedrockMessages, endpointID); err != nil {
-		return provider.CapabilitySet{}, err
-	}
-	set := profile.Capabilities.Clone()
-	set.Version = profile.capabilityVersion()
-	set.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(set.Features[provider.FeatureStreaming])
-	return set, nil
+	return provider.OneShotProfileCapabilities(ctx, query, fmt.Sprintf("bedrock messages profile %q", profile.ID), provider.FamilyBedrockMessages, endpointID, profile.Capabilities, profile.capabilityVersion())
 }
 
 func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
@@ -174,14 +136,7 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 // class, so it yields nil rather than a guess or a failure: the response is
 // already paid for, and the raw label is kept in the service facts for audit.
 func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
-	class, ok := profile.ActualServiceClasses[providerTier]
-	if providerTier == "" {
-		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
-	}
-	if !ok {
-		return nil
-	}
-	return &class
+	return provider.ActualServiceClass(profile.ActualServiceClasses, profile.MissingActualServiceClass, providerTier)
 }
 
 func validProviderTier(value string) bool {

@@ -152,13 +152,9 @@ func lowerRequest(request llm.Request, serviceClass llm.ServiceClass) (responses
 
 // requestParams carries an intended wire body into the SDK parameter type.
 func requestParams(requestMap map[string]any, policy loweredToolPolicy) (responses.ResponseNewParams, error) {
-	encoded, err := json.Marshal(requestMap)
+	params, encoded, err := provider.DecodeWireParams[responses.ResponseNewParams](requestMap, "openai responses")
 	if err != nil {
 		return responses.ResponseNewParams{}, err
-	}
-	var params responses.ResponseNewParams
-	if err := json.Unmarshal(encoded, &params); err != nil {
-		return responses.ResponseNewParams{}, fmt.Errorf("openai responses parameter union: %w", err)
 	}
 	if policy.named {
 		params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
@@ -336,15 +332,7 @@ func includeEncryptedReasoning(existing any) []string {
 }
 
 func lowerParts(parts []llm.Part) ([]any, error) {
-	content := make([]any, 0, len(parts))
-	for index, part := range parts {
-		lowered, err := lowerPart(part)
-		if err != nil {
-			return nil, fmt.Errorf("part %d: %w", index, err)
-		}
-		content = append(content, lowered)
-	}
-	return content, nil
+	return provider.LowerEach(parts, "part", lowerPart)
 }
 
 // lowerModelParts lowers replayed assistant content. Responses accepts only
@@ -382,16 +370,9 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 		}
 		return map[string]any{"type": "input_text", "text": string(value.Value)}, nil
 	case llm.ImagePart:
-		url, err := openaiwire.MediaURL(value.URL, value.Bytes, value.MediaType)
+		url, detail, err := openaiwire.ImageSource(value)
 		if err != nil {
-			return nil, fmt.Errorf("image: %w", err)
-		}
-		detail := value.Detail
-		if detail == "" {
-			detail = "auto"
-		}
-		if _, ok := imageDetails[detail]; !ok {
-			return nil, fmt.Errorf("image detail %q is not one of low, high, auto or original", detail)
+			return nil, err
 		}
 		return map[string]any{"type": "input_image", "image_url": url, "detail": detail}, nil
 	case llm.DocumentPart:
@@ -715,6 +696,3 @@ func lowerExtensions(extensions map[string]json.RawMessage, allowed map[string]s
 	}
 	return nil
 }
-
-// imageDetails are the image detail values the OpenAI APIs accept.
-var imageDetails = map[string]struct{}{"low": {}, "high": {}, "auto": {}, "original": {}}

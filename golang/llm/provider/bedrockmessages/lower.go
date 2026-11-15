@@ -29,7 +29,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	// Anthropic's hosted tools are not offered on Amazon Bedrock, and an
 	// adapter never drops a request parameter it cannot honour; the planner
 	// also keeps such requests off Bedrock routes (#1506).
-	if hosted := hostedToolFlag(request); hosted != "" {
+	if hosted := provider.HostedToolFlag(request); hosted != "" {
 		return anthropic.MessageNewParams{}, provider.NewUnsupportedCapabilityError(hosted + " is not supported by the Bedrock Messages adapter")
 	}
 	// The profile has no extension allowlist, so no namespace can be carried
@@ -38,7 +38,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	if strict && len(request.Extensions) > 0 {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("extensions are not supported by the Bedrock Messages adapter in strict portability mode")
 	}
-	if strict && anthropicwire.HasMixedInstructionLevels(request.Instructions) {
+	if strict && provider.MixedInstructionLevels(request.Instructions) {
 		return anthropic.MessageNewParams{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved by Bedrock Messages in strict portability mode")
 	}
 	messages := make([]any, 0, len(request.Input))
@@ -125,13 +125,9 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	if err := thinkingwire.Validate(target, "Bedrock Messages"); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
-	encoded, err := json.Marshal(target)
+	params, encoded, err := provider.DecodeWireParams[anthropic.MessageNewParams](target, "bedrock messages")
 	if err != nil {
 		return anthropic.MessageNewParams{}, err
-	}
-	var params anthropic.MessageNewParams
-	if err := json.Unmarshal(encoded, &params); err != nil {
-		return anthropic.MessageNewParams{}, fmt.Errorf("bedrock messages parameter union: %w", err)
 	}
 	param.SetJSON(encoded, &params)
 	return params, nil
@@ -318,17 +314,4 @@ func lowerPart(part llm.Part) (any, error) {
 // partLowering supplies this endpoint's media and provider-state lowering.
 func partLowering() anthropicwire.PartLowering {
 	return anthropicwire.PartLowering{Image: lowerImage, Document: lowerDocument, ProviderState: providerStatePartRaw}
-}
-
-// hostedToolFlag names the first provider-hosted tool the request asks for.
-func hostedToolFlag(request llm.Request) string {
-	switch {
-	case request.WebSearch:
-		return "web_search"
-	case request.WebFetch:
-		return "web_fetch"
-	case request.CodeExecution:
-		return "code_execution"
-	}
-	return ""
 }

@@ -20,20 +20,14 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 	actual := serviceClassForTier(response.ServiceTier)
 	output, hasToolCalls, hasRefusal, err := liftOutput(response.Output, response.Status == responses.ResponseStatusIncomplete)
 	if err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
 	status, err := liftStatus(response.Status, response.IncompleteDetails.Reason, hasToolCalls, hasRefusal)
 	if err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
 	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
 	providerRaw := map[string]json.RawMessage{}
 	ids := make([]string, 0, len(response.Output))
@@ -54,9 +48,7 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 	}
 	input, err := usageutil.OrdinaryInput(response.Usage.InputTokens, response.Usage.InputTokensDetails.CachedTokens, response.Usage.InputTokensDetails.CacheWriteTokens)
 	if err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
 	usage := llm.Usage{
 		InputTokens:      input,

@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemawire"
 )
 
 // UnsupportedError reports a request OpenAI structured output cannot accept
@@ -67,7 +69,7 @@ func LowerStrict(schema json.RawMessage) (map[string]any, error) {
 	if err := decoder.Decode(&root); err != nil || root == nil {
 		return nil, fmt.Errorf("output schema must be an object")
 	}
-	if _, ref := root["$ref"]; ref || !isObjectSchema(root) {
+	if _, ref := root["$ref"]; ref || !schemawire.IsObjectSchema(root) {
 		return nil, &UnsupportedError{Path: "/", Reason: "the root of an OpenAI strict output schema must be an object schema"}
 	}
 	return lowerSchema(root, root, "")
@@ -113,14 +115,14 @@ func JSONModeContextError() error {
 
 func lowerSchema(root, source map[string]any, path string) (map[string]any, error) {
 	if ref, ok := source["$ref"]; ok {
-		if err := checkRef(root, ref, pointerJoin(path, "$ref")); err != nil {
+		if err := checkRef(root, ref, schemawire.PointerJoin(path, "$ref")); err != nil {
 			return nil, err
 		}
 		// A reference is not accepted alongside other keywords; only the
 		// definitions it may point at are kept.
 		result := map[string]any{"$ref": ref}
 		if defs, ok := source["$defs"].(map[string]any); ok {
-			lowered, err := lowerChildren(root, defs, pointerJoin(path, "$defs"))
+			lowered, err := lowerChildren(root, defs, schemawire.PointerJoin(path, "$defs"))
 			if err != nil {
 				return nil, err
 			}
@@ -134,7 +136,7 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 		if _, drop := identifierKeywords[key]; drop {
 			continue
 		}
-		childPath := pointerJoin(path, key)
+		childPath := schemawire.PointerJoin(path, key)
 		if key == "allOf" {
 			return nil, &UnsupportedError{Path: childPath, Reason: "allOf is not supported by OpenAI strict structured output"}
 		}
@@ -183,16 +185,16 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 		}
 		delete(result, "oneOf")
 	}
-	if isObjectSchema(source) {
+	if schemawire.IsObjectSchema(source) {
 		if additional, present := source["additionalProperties"]; present && additional != false {
-			return nil, &UnsupportedError{Path: pointerJoin(path, "additionalProperties"), Reason: "additionalProperties other than false is not supported by OpenAI strict structured output"}
+			return nil, &UnsupportedError{Path: schemawire.PointerJoin(path, "additionalProperties"), Reason: "additionalProperties other than false is not supported by OpenAI strict structured output"}
 		}
 		properties, _ := result["properties"].(map[string]any)
 		if properties == nil {
 			properties = map[string]any{}
 			result["properties"] = properties
 		}
-		required, err := requireAll(source["required"], properties, pointerJoin(path, "required"))
+		required, err := requireAll(source["required"], properties, schemawire.PointerJoin(path, "required"))
 		if err != nil {
 			return nil, err
 		}
@@ -206,9 +208,9 @@ func lowerSchema(root, source map[string]any, path string) (map[string]any, erro
 		}
 	}
 	if len(extras) > 0 {
-		note, err := describeExtras(extras)
+		note, err := schemawire.DescribeExtras(extras)
 		if err != nil {
-			return nil, fmt.Errorf("output schema at %s: %w", displayPath(path), err)
+			return nil, fmt.Errorf("output schema at %s: %w", schemawire.DisplayPath(path), err)
 		}
 		if description, ok := result["description"].(string); ok && description != "" {
 			note = description + "\n\n" + note
@@ -266,7 +268,7 @@ func checkRef(root map[string]any, value any, path string) error {
 func lowerChildren(root, children map[string]any, path string) (map[string]any, error) {
 	lowered := make(map[string]any, len(children))
 	for name, child := range children {
-		nested, err := lowerChild(root, child, pointerJoin(path, name))
+		nested, err := lowerChild(root, child, schemawire.PointerJoin(path, name))
 		if err != nil {
 			return nil, err
 		}
@@ -281,57 +283,4 @@ func lowerChild(root map[string]any, value any, path string) (map[string]any, er
 		return nil, &UnsupportedError{Path: path, Reason: "schema must be an object"}
 	}
 	return lowerSchema(root, object, path)
-}
-
-func isObjectSchema(schema map[string]any) bool {
-	if _, ok := schema["properties"]; ok {
-		return true
-	}
-	switch value := schema["type"].(type) {
-	case string:
-		return value == "object"
-	case []any:
-		for _, item := range value {
-			if item == "object" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// describeExtras renders moved keywords in "{key: value, ...}" form with
-// sorted keys, so equal schemas always lower to equal bytes.
-func describeExtras(extras map[string]any) (string, error) {
-	keys := make([]string, 0, len(extras))
-	for key := range extras {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		rendered, ok := extras[key].(string)
-		if !ok {
-			var buffer bytes.Buffer
-			encoder := json.NewEncoder(&buffer)
-			encoder.SetEscapeHTML(false)
-			if err := encoder.Encode(extras[key]); err != nil {
-				return "", err
-			}
-			rendered = strings.TrimSuffix(buffer.String(), "\n")
-		}
-		parts = append(parts, key+": "+rendered)
-	}
-	return "{" + strings.Join(parts, ", ") + "}", nil
-}
-
-func pointerJoin(base, token string) string {
-	return base + "/" + strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
-}
-
-func displayPath(path string) string {
-	if path == "" {
-		return "/"
-	}
-	return path
 }

@@ -127,13 +127,9 @@ func lowerRequest(request llm.Request, profile Profile, serviceTier string) (ope
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, err
 	}
-	encoded, err := json.Marshal(requestMap)
+	params, encoded, err := provider.DecodeWireParams[openai.ChatCompletionNewParams](requestMap, "openai chat")
 	if err != nil {
 		return openai.ChatCompletionNewParams{}, err
-	}
-	var params openai.ChatCompletionNewParams
-	if err := json.Unmarshal(encoded, &params); err != nil {
-		return openai.ChatCompletionNewParams{}, fmt.Errorf("openai chat parameter union: %w", err)
 	}
 	if name := namedToolChoice(requestMap["tool_choice"]); name != "" {
 		// The SDK union decodes a named function choice as its allowed-tools
@@ -349,15 +345,7 @@ func lowerMessage(message llm.Message) (map[string]any, error) {
 }
 
 func lowerParts(parts []llm.Part) ([]any, error) {
-	content := make([]any, 0, len(parts))
-	for index, part := range parts {
-		lowered, err := lowerPart(part)
-		if err != nil {
-			return nil, fmt.Errorf("part %d: %w", index, err)
-		}
-		content = append(content, lowered)
-	}
-	return content, nil
+	return provider.LowerEach(parts, "part", lowerPart)
 }
 
 // lowerAssistantParts lowers replayed model content. Chat Completions accepts
@@ -395,16 +383,9 @@ func lowerPart(part llm.Part) (map[string]any, error) {
 		}
 		return map[string]any{"type": "text", "text": string(value.Value)}, nil
 	case llm.ImagePart:
-		url, err := openaiwire.MediaURL(value.URL, value.Bytes, value.MediaType)
+		url, detail, err := openaiwire.ImageSource(value)
 		if err != nil {
-			return nil, fmt.Errorf("image: %w", err)
-		}
-		detail := value.Detail
-		if detail == "" {
-			detail = "auto"
-		}
-		if _, ok := imageDetails[detail]; !ok {
-			return nil, fmt.Errorf("image detail %q is not one of low, high, auto or original", detail)
+			return nil, err
 		}
 		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url, "detail": detail}}, nil
 	case llm.DocumentPart:
@@ -664,6 +645,3 @@ func lowerExtensions(profile Profile, extensions map[string]json.RawMessage, tar
 
 // maxChatStopSequences is the Chat Completions limit on stop sequences.
 const maxChatStopSequences = 4
-
-// imageDetails are the image detail values the OpenAI APIs accept.
-var imageDetails = map[string]struct{}{"low": {}, "high": {}, "auto": {}, "original": {}}
