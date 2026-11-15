@@ -3,11 +3,12 @@ package provider
 import (
 	"context"
 	"fmt"
-	"reflect"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -86,7 +87,7 @@ func (registry *Registry) Register(registration Registration) error {
 	// The registration owns copies of maps so mutable configuration supplied by
 	// a caller cannot change the contract after validation.
 	registration.Capabilities = cloneCapabilities(registration.Capabilities)
-	registration.ServiceTiers = cloneServiceTiers(registration.ServiceTiers)
+	registration.ServiceTiers = maps.Clone(registration.ServiceTiers)
 	registry.entries[key] = registration
 	return nil
 }
@@ -102,7 +103,7 @@ func (registry *Registry) Lookup(family Family, profileID string) (Registration,
 		return Registration{}, false
 	}
 	registration.Capabilities = cloneCapabilities(registration.Capabilities)
-	registration.ServiceTiers = cloneServiceTiers(registration.ServiceTiers)
+	registration.ServiceTiers = maps.Clone(registration.ServiceTiers)
 	return registration, true
 }
 
@@ -141,7 +142,7 @@ func (registry *Registry) Registrations() []Registration {
 	result := make([]Registration, 0, len(registry.entries))
 	for _, registration := range registry.entries {
 		registration.Capabilities = cloneCapabilities(registration.Capabilities)
-		registration.ServiceTiers = cloneServiceTiers(registration.ServiceTiers)
+		registration.ServiceTiers = maps.Clone(registration.ServiceTiers)
 		result = append(result, registration)
 	}
 	sort.Slice(result, func(left, right int) bool {
@@ -157,7 +158,7 @@ func validateRegistration(registration Registration) error {
 	if err := validateRegistryKey(registration.Family, registration.ProfileID); err != nil {
 		return err
 	}
-	if isNilAdapter(registration.Adapter) {
+	if typednil.Is(registration.Adapter) {
 		return fmt.Errorf("provider registry profile %q has no concrete adapter", registration.ProfileID)
 	}
 	if strings.TrimSpace(registration.SDKParameterTypeName) == "" || registration.SDKParameterCheck == nil {
@@ -195,14 +196,14 @@ func validateRegistration(registration Registration) error {
 	if call.Family != registration.Family {
 		return fmt.Errorf("provider registry profile %q compile probe returned family %q", registration.ProfileID, call.Family)
 	}
-	if isNilAny(call.SDKParams) {
+	if typednil.Is(call.SDKParams) {
 		return fmt.Errorf("provider registry profile %q compile probe returned no SDK parameters", registration.ProfileID)
 	}
 	if !registration.SDKParameterCheck(call.SDKParams) {
 		return fmt.Errorf("provider registry profile %q compile probe returned unsupported SDK parameter type", registration.ProfileID)
 	}
 	client, err := registration.ClientFactory()
-	if err != nil || isNilAny(client) {
+	if err != nil || typednil.Is(client) {
 		// Do not include the factory error: SDK constructors may include endpoint
 		// or authentication details that are not safe for startup diagnostics.
 		return fmt.Errorf("provider registry profile %q client construction failed", registration.ProfileID)
@@ -270,30 +271,9 @@ func validateServiceTiers(tiers map[llm.ServiceClass]string) error {
 	return nil
 }
 
-func isNilAdapter(adapter Adapter) bool { return isNilAny(adapter) }
-
-func isNilAny(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflectValue := reflect.ValueOf(value)
-	switch reflectValue.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflectValue.IsNil()
-	default:
-		return false
-	}
-}
-
 func cloneCapabilities(set CapabilitySet) CapabilitySet {
-	copy := set
-	if set.Features != nil {
-		copy.Features = make(map[Feature]Capability, len(set.Features))
-		for feature, capability := range set.Features {
-			copy.Features[feature] = capability
-		}
-	}
-	return copy
+	set.Features = maps.Clone(set.Features)
+	return set
 }
 
 func capabilitiesEqual(left, right CapabilitySet) bool {
@@ -306,15 +286,4 @@ func capabilitiesEqual(left, right CapabilitySet) bool {
 		}
 	}
 	return true
-}
-
-func cloneServiceTiers(tiers map[llm.ServiceClass]string) map[llm.ServiceClass]string {
-	if tiers == nil {
-		return nil
-	}
-	copy := make(map[llm.ServiceClass]string, len(tiers))
-	for class, tier := range tiers {
-		copy[class] = tier
-	}
-	return copy
 }

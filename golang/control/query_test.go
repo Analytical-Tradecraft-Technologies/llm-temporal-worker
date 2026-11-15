@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -476,9 +477,7 @@ func TestQueryServiceClassifiesRawHandlerFailureAsRetryableStateUnavailable(t *t
 
 	_, err := service.Execute(context.Background(), request)
 	providerErr := requireProviderError(t, err)
-	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetrySameOperation {
-		t.Fatalf("provider error = %#v", providerErr)
-	}
+	testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeStateUnavailable, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetrySameOperation})
 	if !errors.Is(err, backendErr) {
 		t.Fatalf("wrapped error = %v, want original cause for local diagnostics", err)
 	}
@@ -491,9 +490,7 @@ func TestQueryServiceMapsExpiredProviderViewToPermanentCursorError(t *testing.T)
 	service := testQueryService(failingQueryHandler(ErrProviderViewExpired), allowQuery)
 	_, err := service.Execute(context.Background(), queryRequest())
 	providerErr := requireProviderError(t, err)
-	if providerErr.Code != provider.CodeInvalidArgument || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetryNever {
-		t.Fatalf("provider error = %#v", providerErr)
-	}
+	testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeInvalidArgument, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever})
 	if !strings.Contains(providerErr.SafeMessage, "restart pagination") {
 		t.Fatalf("safe message = %q, want restart pagination guidance", providerErr.SafeMessage)
 	}
@@ -533,9 +530,7 @@ func TestQueryServiceMapsChildDeadlineToRetryableStateUnavailable(t *testing.T) 
 	service := testQueryService(failingQueryHandler(context.DeadlineExceeded), allowQuery)
 	_, err := service.Execute(context.Background(), queryRequest())
 	providerErr := requireProviderError(t, err)
-	if providerErr.Code != provider.CodeStateUnavailable || providerErr.Phase != provider.PhaseStateLoad || providerErr.Retry != provider.RetrySameOperation {
-		t.Fatalf("provider error = %#v", providerErr)
-	}
+	testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeStateUnavailable, Phase: provider.PhaseStateLoad, Retry: provider.RetrySameOperation})
 }
 
 func TestQueryServiceTypedHandlerBindsCursorClaimsAndValidatesOutgoingCursor(t *testing.T) {

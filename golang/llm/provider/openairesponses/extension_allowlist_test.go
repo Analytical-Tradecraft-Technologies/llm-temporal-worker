@@ -3,7 +3,7 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
@@ -35,9 +35,7 @@ func TestCompileAlwaysRejectsBackgroundExtension(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		for _, options := range [][]AdapterOption{nil, {WithAllowedExtensionFields("background", "store")}, {WithAllowedExtensionFields("background"), WithProviderStoragePermitted(true)}} {
 			call, err := compileResponsesExtension(t, `{"background":true}`, strict, options...)
-			if err == nil || !strings.Contains(err.Error(), `"background" is not supported`) {
-				t.Fatalf("strict=%v Compile() = %v, want background rejection", strict, err)
-			}
+			testassert.ErrorContains(t, err, `"background" is not supported`, fmt.Sprintf("strict=%v Compile()", strict))
 			if call.SDKParams != nil {
 				t.Fatalf("strict=%v rejected extension produced dispatch parameters", strict)
 			}
@@ -68,9 +66,7 @@ func TestCompileGatesExtensionFieldsByEndpointAllowlist(t *testing.T) {
 				}
 				continue
 			}
-			if err == nil || !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("%s strict=%v Compile() = %v, want %q", test.name, strict, err, test.wantError)
-			}
+			testassert.ErrorContains(t, err, test.wantError, fmt.Sprintf("%s strict=%v Compile()", test.name, strict))
 		}
 	}
 }

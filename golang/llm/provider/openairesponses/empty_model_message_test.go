@@ -9,7 +9,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A lifted empty or content-filtered reply is a model message with no parts.
@@ -34,7 +33,7 @@ func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			call, err := adaptertest.Compile(adapter, "openai-fixture", provider.FamilyOpenAIResponses, request, strict)
 			testassert.NoError(t, err, "compile replayed empty model message")
-			encoded := contract.MarshalJSON(t, call.SDKParams)
+			encoded := testassert.MarshalJSON(t, call.SDKParams)
 			var wire struct {
 				Input []struct {
 					Type    string            `json:"type"`

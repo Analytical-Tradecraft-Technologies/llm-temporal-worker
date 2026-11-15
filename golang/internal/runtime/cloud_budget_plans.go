@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
@@ -26,7 +27,7 @@ type CloudBudgetPlans struct {
 
 func (capabilities V1RuntimeCapabilities) NewCloudBudgetPlans() (*CloudBudgetPlans, error) {
 	store, ok := capabilities.Requests.(CloudBudgetPlanStore)
-	if !ok || isNilCapability(store) || capabilities.ConfigDigest == ([32]byte{}) {
+	if !ok || typednil.Is(store) || capabilities.ConfigDigest == ([32]byte{}) {
 		return nil, errors.New("cloud budget plans require request storage and a configuration identity")
 	}
 	return &CloudBudgetPlans{store: store, configDigest: capabilities.ConfigDigest}, nil
@@ -76,7 +77,7 @@ func (planned PlannedBudgetCall) BudgetPlan(kind string) (cloudstate.BudgetPlan,
 }
 
 func (plans *CloudBudgetPlans) Save(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, kind string, planned PlannedBudgetCall, now time.Time) (cloudstate.BudgetPlan, error) {
-	if ctx == nil || plans == nil || isNilCapability(plans.store) {
+	if ctx == nil || plans == nil || typednil.Is(plans.store) {
 		return cloudstate.BudgetPlan{}, cloudRuntimeError(cloudstate.ErrInvalid, false)
 	}
 	if err := ctx.Err(); err != nil {
@@ -99,7 +100,7 @@ func (plans *CloudBudgetPlans) Save(ctx context.Context, scope cloudstate.Scope,
 // snapshot or consult its price resolver. Recovery must use the saved identity;
 // it must not recompile under changed settings without verifying compatibility.
 func (plans *CloudBudgetPlans) Load(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID) (cloudstate.BudgetPlan, error) {
-	if ctx == nil || plans == nil || isNilCapability(plans.store) {
+	if ctx == nil || plans == nil || typednil.Is(plans.store) {
 		return cloudstate.BudgetPlan{}, cloudRuntimeError(cloudstate.ErrInvalid, false)
 	}
 	if err := ctx.Err(); err != nil {

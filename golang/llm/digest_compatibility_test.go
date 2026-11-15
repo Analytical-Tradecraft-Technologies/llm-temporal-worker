@@ -55,7 +55,7 @@ func readRequestFile(t *testing.T, path string) Request {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	testassert.NoError(t, err)
-	return mustUnmarshalJSON[Request](t, data, "decode "+path)
+	return testassert.UnmarshalJSON[Request](t, data, "decode "+path)
 }
 
 func TestRequestDigestLegacyCompatibility(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -101,11 +103,7 @@ func (loader CatalogSnapshotLoader) load(ctx context.Context, snapshot *config.S
 }
 
 func mergePricingCatalogs(bundle catalog.Bundle, configVersion string, modelSync bool) (pricing.Catalog, error) {
-	ids := make([]string, 0, len(bundle.Pricing))
-	for id := range bundle.Pricing {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := slices.Sorted(maps.Keys(bundle.Pricing))
 	if len(ids) == 0 && !modelSync {
 		return pricing.Catalog{}, fmt.Errorf("verified pricing catalogs are required")
 	}
@@ -130,11 +128,7 @@ func mergePricingCatalogs(bundle catalog.Bundle, configVersion string, modelSync
 
 func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (routing.Catalog, error) {
 	models := make(map[string]routing.Model, len(value.Models))
-	modelNames := make([]string, 0, len(value.Models))
-	for name := range value.Models {
-		modelNames = append(modelNames, name)
-	}
-	sort.Strings(modelNames)
+	modelNames := slices.Sorted(maps.Keys(value.Models))
 	for _, modelName := range modelNames {
 		modelValue := value.Models[modelName]
 		routes := make([]routing.Route, 0, len(modelValue.Routes))
@@ -177,11 +171,7 @@ func compileRoutes(value config.Config, bundle catalog.Bundle, now time.Time) (r
 				}
 				providerTiers[class] = tier
 			}
-			extensions := make([]string, 0, len(endpoint.Extensions))
-			for name := range endpoint.Extensions {
-				extensions = append(extensions, name)
-			}
-			sort.Strings(extensions)
+			extensions := slices.Sorted(maps.Keys(endpoint.Extensions))
 			endpointDigest, err := endpointConfigDigest(routeValue.Endpoint, endpoint)
 			if err != nil {
 				return routing.Catalog{}, fmt.Errorf("model %q route %q: %w", modelName, routeValue.ID, err)

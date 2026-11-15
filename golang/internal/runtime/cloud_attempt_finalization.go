@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -83,7 +84,7 @@ func loadValidatedRequestPreparation(ctx context.Context, store interface {
 func (f *CloudFinalizer) loadAttemptResult(ctx context.Context, scope cloudstate.Scope, rootID cloudstate.RequestID, known *cloudValidatedPreparation) (CloudAttemptResult, string, error) {
 	var zero CloudAttemptResult
 	store, ok := f.requests.(cloudAttemptResultStore)
-	if !ok || isNilCapability(store) {
+	if !ok || typednil.Is(store) {
 		return zero, "", cloudstate.ErrCorrupt
 	}
 	root, err := store.Read(ctx, scope, rootID)

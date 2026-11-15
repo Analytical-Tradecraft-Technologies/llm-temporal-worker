@@ -2,13 +2,13 @@ package openairesponses
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"testing"
 
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -67,10 +67,7 @@ func TestLiftRejectsNilResponseWithoutPanicking(t *testing.T) {
 			panicked = recover() != nil
 		}()
 		_, err := liftResponse(call, nil, "req-empty")
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAccepted {
-			t.Fatalf("nil response error = %#v, want accepted provider invalid response", err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}, "nil response error")
 	}()
 	if panicked {
 		t.Fatal("liftResponse panicked for nil response")
@@ -165,17 +162,14 @@ func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
 	response.ID = "array"
 	response.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"[1,2,3]","annotations":[]}]}]`)
 	_, err = liftResponse(call, &response, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("non-object JSON response error = %#v, want accepted provider invalid response", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}, "non-object JSON response error")
 }
 
 func loadResponseFixture(t *testing.T, name string) responses.Response {
 	t.Helper()
 	data, err := os.ReadFile("testdata/contracts/openai-responses/" + name)
 	testassert.NoError(t, err)
-	response := contract.DecodeJSON[responses.Response](t, data)
+	response := testassert.UnmarshalJSON[responses.Response](t, data)
 	return response
 }
 
@@ -185,7 +179,7 @@ func minimalResponse(tier responses.ResponseServiceTier, status responses.Respon
 
 func decodeOutputItems(t *testing.T, raw string) []responses.ResponseOutputItemUnion {
 	t.Helper()
-	items := contract.DecodeJSON[[]responses.ResponseOutputItemUnion](t, []byte(raw))
+	items := testassert.UnmarshalJSON[[]responses.ResponseOutputItemUnion](t, []byte(raw))
 	return items
 }
 

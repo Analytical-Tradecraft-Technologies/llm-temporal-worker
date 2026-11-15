@@ -8,6 +8,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/provider"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providers"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 )
 
 // Config embeds parsed provider JSON, including application aliases for existing
@@ -65,7 +66,7 @@ func open(ctx context.Context, config Config, secret []byte, initialize func(con
 	if err != nil {
 		return nil, err
 	}
-	if nilInterface(backend) {
+	if typednil.Is(backend) {
 		return nil, ErrInvalid
 	}
 	table, err := backend.OpenKeyValueStore(ctx, config.RequestTable)

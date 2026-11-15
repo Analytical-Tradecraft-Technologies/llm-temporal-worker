@@ -9,6 +9,7 @@ import (
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -72,7 +73,7 @@ func (replay *CheckpointReplay) Compact(ctx context.Context, request llm.Compact
 }
 
 func (replay *CheckpointReplay) authorize(ctx context.Context, caller llm.RequestContext) (string, error) {
-	if ctx == nil || replay == nil || replay.resolve == nil || isNilCapability(replay.materializer) {
+	if ctx == nil || replay == nil || replay.resolve == nil || typednil.Is(replay.materializer) {
 		return "", checkpointReplayError(provider.CodeConfiguration)
 	}
 	if err := ctx.Err(); err != nil {

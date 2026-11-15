@@ -1,8 +1,8 @@
 package routing
 
 import (
+	"fmt"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
@@ -83,9 +83,7 @@ func TestClassPoliciesMustKeepStandard(t *testing.T) {
 		{policies: []ClassPolicy{{Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}, want: "ID is required"},
 		{policies: []ClassPolicy{{ID: "a", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}, {ID: "a", Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}, want: "duplicate"},
 	} {
-		if _, err := (Catalog{Version: "v"}).WithClassPolicies(tc.policies); err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("WithClassPolicies(%+v) = %v, want %q", tc.policies, err, tc.want)
-		}
+		testassert.ErrorContains(t, testassert.Err((Catalog{Version: "v"}).WithClassPolicies(tc.policies)), tc.want, fmt.Sprintf("WithClassPolicies(%+v)", tc.policies))
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -54,13 +55,13 @@ func TestBudgetDefaultOutputLimitSurvivesRecovery(t *testing.T) {
 func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
 	f.generate.Request.Output.MaxTokens = nil
-	adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected network call") })})
+	adapter := responsesAdapter(t, &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected network call") })})
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
 	planning := f.planning(t)
 	planned := f.plan(t, planning, false)
 	check := func(call PlannedProviderCall) {
 		t.Helper()
-		data := encodeJSON(t, call.Call.SDKParams)
+		data := testassert.MarshalJSON(t, call.Call.SDKParams)
 		var wire struct {
 			MaxOutputTokens int64 `json:"max_output_tokens"`
 		}

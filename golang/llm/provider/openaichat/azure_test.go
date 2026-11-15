@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -13,7 +14,7 @@ import (
 
 func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 	var got *http.Request
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
 		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"azure-chat-1","model":"deployment-a","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`, "X-Request-Id", "azure-req-1"), nil
 	})

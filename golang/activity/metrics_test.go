@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.temporal.io/sdk/temporal"
@@ -41,12 +42,12 @@ func TestGenerateActivityRecordsTerminalMetrics(t *testing.T) {
 			metrics := newActivityTestMetrics(t)
 			activities := Activities{Metrics: metrics, Engine: &fakeEngine{err: test.engineErr, response: completedEngineResponse()}}
 			_, _ = activities.Generate(context.Background(), validGeneratePayload())
-			assertActivityMetricCounter(t, metrics, "llmtw_activity_total", map[string]string{"status": test.status, "error_class": test.errorClass}, 1)
-			assertActivityMetricHistogramCount(t, metrics, "llmtw_activity_duration_seconds", map[string]string{"phase": "total"}, 1)
+			testkit.MetricCounter(t, metrics, "llmtw_activity_total", map[string]string{"status": test.status, "error_class": test.errorClass}, 1)
+			testkit.MetricHistogramCount(t, metrics, "llmtw_activity_duration_seconds", map[string]string{"phase": "total"}, 1)
 			if test.origin != "" {
-				assertActivityMetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": test.origin}, 1)
+				testkit.MetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": test.origin}, 1)
 			} else {
-				assertActivityFailureCountZero(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"})
+				testkit.MetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"}, 0)
 			}
 		})
 	}
@@ -83,7 +84,7 @@ func TestGenerateActivityDoesNotRecordFailureForPreDispatchCancellation(t *testi
 	}
 	_, _ = activities.Generate(context.Background(), validGeneratePayload())
 	for _, origin := range []string{"worker", "caller"} {
-		assertActivityFailureCountZero(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": origin})
+		testkit.MetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": origin}, 0)
 	}
 }
 
@@ -101,8 +102,8 @@ func TestGenerateActivityRecordsWorkerFailureForOversizedResponse(t *testing.T) 
 		}},
 	}
 	_, _ = activities.Generate(context.Background(), validGeneratePayload())
-	assertActivityMetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"}, 1)
-	assertActivityFailureCountZero(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "caller"})
+	testkit.MetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "worker"}, 1)
+	testkit.MetricCounter(t, metrics, "llmtw_activity_failure_total", map[string]string{"origin": "caller"}, 0)
 }
 
 func validGeneratePayload() GenerateRequest {
@@ -114,56 +115,4 @@ func newActivityTestMetrics(t *testing.T) *observability.Metrics {
 	metrics, err := observability.NewMetrics(observability.AllowedValues{Statuses: []string{"completed", "failed", "canceled"}, ErrorClasses: []string{"none", "provider_unavailable", "budget_denied", "internal"}, Phases: []string{"total"}})
 	testassert.NoError(t, err)
 	return metrics
-}
-
-func assertActivityMetricCounter(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string, want float64) {
-	t.Helper()
-	got, found := activityMetricValue(t, metrics, name, labels, false)
-	if !found || got != want {
-		t.Fatalf("%s%v = %v, found=%v; want %v", name, labels, got, found, want)
-	}
-}
-
-// assertActivityFailureCountZero accepts the zero series that the metrics
-// exporter creates up front for every bounded failure origin.
-func assertActivityFailureCountZero(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string) {
-	t.Helper()
-	if got, found := activityMetricValue(t, metrics, name, labels, false); found && got != 0 {
-		t.Fatalf("%s%v = %v; want no failures", name, labels, got)
-	}
-}
-
-func assertActivityMetricHistogramCount(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string, want uint64) {
-	t.Helper()
-	got, found := activityMetricValue(t, metrics, name, labels, true)
-	if !found || uint64(got) != want {
-		t.Fatalf("%s%v count = %v, found=%v; want %v", name, labels, got, found, want)
-	}
-}
-
-func activityMetricValue(t *testing.T, metrics *observability.Metrics, name string, labels map[string]string, histogram bool) (float64, bool) {
-	t.Helper()
-	families, err := metrics.Gather()
-	testassert.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.Metric {
-			matches := len(metric.Label) == len(labels)
-			for _, label := range metric.Label {
-				if labels[label.GetName()] != label.GetValue() {
-					matches = false
-					break
-				}
-			}
-			if matches {
-				if histogram {
-					return float64(metric.GetHistogram().GetSampleCount()), true
-				}
-				return metric.GetCounter().GetValue(), true
-			}
-		}
-	}
-	return 0, false
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -19,7 +20,7 @@ func sendSchemaRequest(t *testing.T, toolSchema, outputSchema string) []byte {
 	t.Helper()
 	var sent []byte
 	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/v1", APIKey: "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			sent, _ = io.ReadAll(request.Body)
 			return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"chatcmpl-1","object":"chat.completion","created":1700000000,"model":"chat-model","choices":[]}`), nil
 		})}})

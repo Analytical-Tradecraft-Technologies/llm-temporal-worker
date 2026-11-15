@@ -8,6 +8,7 @@ package control
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"time"
@@ -764,11 +765,7 @@ func cloneTags(tags map[string]string) map[string]string {
 	if len(tags) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(tags))
-	for k, v := range tags {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(tags)
 }
 func stringValue[T ~string](value *T) string {
 	if value == nil {

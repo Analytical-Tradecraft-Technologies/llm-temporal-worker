@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -49,7 +50,7 @@ type CheckpointPublication struct {
 }
 
 func (capabilities V1RuntimeCapabilities) NewCheckpointPublication(keyring *state.Keyring, limits state.MaterializeLimits) (*CheckpointPublication, error) {
-	if keyring == nil || capabilities.Checkpoints.RequireMaterializer() != nil || isNilCapability(capabilities.Checkpoints.BlobWriter) || limits.MaxDepth < 0 || limits.MaxRows < 0 || limits.MaxItems < 0 || limits.MaxBytes < 0 || limits.SnapshotInterval < 0 {
+	if keyring == nil || capabilities.Checkpoints.RequireMaterializer() != nil || typednil.Is(capabilities.Checkpoints.BlobWriter) || limits.MaxDepth < 0 || limits.MaxRows < 0 || limits.MaxItems < 0 || limits.MaxBytes < 0 || limits.SnapshotInterval < 0 {
 		return nil, checkpointPublicationError(provider.CodeConfiguration)
 	}
 	if limits.SnapshotInterval == 0 {

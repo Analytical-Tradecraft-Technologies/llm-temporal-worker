@@ -12,6 +12,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -51,10 +52,7 @@ func checkpointReplayFixture(t *testing.T) (*CheckpointReplay, *checkpointReplay
 }
 func assertCheckpointReplayError(t *testing.T, err error, code provider.Code) {
 	t.Helper()
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Phase != provider.PhaseStateLoad || mapped.Dispatch != provider.DispatchNotDispatched {
-		t.Fatalf("error = %#v, want %s before dispatch", err, code)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: code, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched})
 	if strings.Contains(err.Error(), "sensitive") {
 		t.Fatal("leaked cause")
 	}

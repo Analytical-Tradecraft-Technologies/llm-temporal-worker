@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -102,11 +104,7 @@ func modelDigest(models []provider.Model) string {
 	hash := sha256.New()
 	for _, model := range models {
 		fmt.Fprintf(hash, "%s\x00%s\x00%s\x00%d\x00%s\x00", model.ProviderModelID, model.DisplayName, model.OwnedBy, model.CreatedAt.UnixNano(), model.Lifecycle)
-		keys := make([]string, 0, len(model.SafeMetadata))
-		for key := range model.SafeMetadata {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(model.SafeMetadata))
 		for _, key := range keys {
 			fmt.Fprintf(hash, "%s\x00%s\x00", key, model.SafeMetadata[key])
 		}

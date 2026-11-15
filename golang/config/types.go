@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -327,8 +326,27 @@ type LimitsConfig struct {
 }
 
 const (
-	DefaultProviderResponseBytes int64 = 16 << 20
+	// DefaultProviderResponseBytes is the largest default that satisfies the
+	// durable record bound below with the largest server.inline_payload_bytes
+	// (2 MiB): 6 x 960 KiB + 2 MiB + 256 KiB = 7.875 MiB.
+	DefaultProviderResponseBytes int64 = 960 << 10
 	MaxProviderResponseBytes     int64 = 64 << 20
+
+	// DurableRecordBytes is the largest encoded durable request record, the
+	// record limit in storage/cloudstate (MaxRecordBytes). A provider attempt
+	// saves its response in one such record (#1319).
+	DurableRecordBytes int64 = 8 << 20
+	// SavedResponseExpansion is how many saved bytes one provider response
+	// body byte can take. Saving re-encodes the response as JSON, and
+	// encoding/json writes <, > and & as six-byte \u escapes, so a response
+	// text made of them saves at six times its size in the body.
+	SavedResponseExpansion int64 = 6
+	// DurableRecordBookkeepingBytes is the part of a provider attempt's
+	// record reserved for everything except the response and the request:
+	// the record envelope, request preparation, attempt link, budget plan,
+	// reservation, claim and settlement, and the response's route, usage,
+	// cost and diagnostic facts.
+	DurableRecordBookkeepingBytes int64 = 256 << 10
 )
 
 type EndpointConfig struct {
@@ -608,15 +626,6 @@ func (config Config) canonicalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return llm.CanonicalJSON(encoded)
-}
-
-func sortedKeys[T any](values map[string]T) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // NormalizeOutboundHost canonicalizes one explicit provider hostname. Provider

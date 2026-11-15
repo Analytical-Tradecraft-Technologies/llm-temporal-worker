@@ -2,7 +2,6 @@ package state
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
@@ -48,14 +47,6 @@ func mustMaterialize(t testing.TB, graph *CheckpointGraph, tenant string, handle
 	return state
 }
 
-// mustJSON marshals value, failing the test on an error.
-func mustJSON(t testing.TB, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
-}
-
 // lookupCall is a call of the "lookup" tool with raw JSON arguments.
 func lookupCall(id, arguments string) llm.ToolCall {
 	return llm.ToolCall{ID: id, Name: "lookup", Arguments: []byte(arguments)}
@@ -70,7 +61,7 @@ func assertMaterializeErr(t testing.TB, graph *CheckpointGraph, tenant string, h
 
 func canonicalItemsForTest(t *testing.T, items []llm.Item) []byte {
 	t.Helper()
-	canonical, err := llm.CanonicalJSON(mustJSON(t, items))
+	canonical, err := llm.CanonicalJSON(testassert.MarshalJSON(t, items))
 	testassert.NoError(t, err)
 	return canonical
 }

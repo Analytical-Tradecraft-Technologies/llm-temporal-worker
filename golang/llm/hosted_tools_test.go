@@ -3,6 +3,8 @@ package llm
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestHostedSearchChargesAndUnknownExecution(t *testing.T) {
@@ -27,7 +29,7 @@ func TestHostedSearchChargesAndUnknownExecution(t *testing.T) {
 func TestHostedPatchBoolValidation(t *testing.T) {
 	for _, flag := range []string{"web_search", "web_fetch", "code_execution"} {
 		for _, value := range []string{`{"set":true}`, `{"set":false}`, `{"clear":true}`} {
-			mustUnmarshalJSON[SettingsPatchV1](t, []byte(`{"`+flag+`":`+value+`}`), "decode "+flag)
+			testassert.UnmarshalJSON[SettingsPatchV1](t, []byte(`{"`+flag+`":`+value+`}`), "decode "+flag)
 		}
 		for _, value := range []string{`{"set":null}`, `{"set":"true"}`, `{"set":1}`} {
 			var patch SettingsPatchV1

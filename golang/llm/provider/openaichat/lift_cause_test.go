@@ -3,12 +3,12 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -39,10 +39,7 @@ func TestOpenRouterLiftFailuresNameTheirCause(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := invokeOpenRouterRequest(t, llm.Request{OperationKey: "or-op", Model: "router-model", Output: output}, test.body)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift {
-				t.Fatalf("Invoke() error = %#v", err)
-			}
+			mapped := testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Phase: provider.PhaseLift}, "Invoke() error")
 			if mapped.SafeDetails["lift_cause"] != test.cause || mapped.SafeDetails["finish_reason"] != test.finish {
 				t.Fatalf("safe details = %v, want cause %s finish %s", mapped.SafeDetails, test.cause, test.finish)
 			}
@@ -58,7 +55,7 @@ func TestOpenRouterLiftFailuresNameTheirCause(t *testing.T) {
 
 func invokeOpenRouterRequest(t *testing.T, request llm.Request, body string) error {
 	t.Helper()
-	transport := roundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+	transport := testkit.RoundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
 		return adaptertest.JSONResponse(httpRequest, http.StatusOK, body), nil
 	})
 	client, err := NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "or-key", HTTPClient: &http.Client{Transport: transport}})

@@ -167,11 +167,11 @@ func TestCheckpointBlobDecodersCheckNestedPayloadLimits(t *testing.T) {
 }
 
 func TestCheckpointSnapshotDecodeStillValidatesToolFrontier(t *testing.T) {
-	items := mustJSON(t, []llm.Item{llm.ToolResult{CallID: "missing-call", Content: []llm.Part{llm.TextPart{Text: "result"}}}})
-	payload := mustJSON(t, checkpointSnapshotPayload{
+	items := testassert.MarshalJSON(t, []llm.Item{llm.ToolResult{CallID: "missing-call", Content: []llm.Part{llm.TextPart{Text: "result"}}}})
+	payload := testassert.MarshalJSON(t, checkpointSnapshotPayload{
 		Items: items, Settings: settingsPatchToWire(SettingsPatch{Model: SetPatch("gpt-test")}), Depth: 1,
 	})
-	data := mustJSON(t, checkpointBlobEnvelope{Version: CheckpointBlobCodecVersion, Kind: CheckpointSnapshotBlob, Payload: payload})
+	data := testassert.MarshalJSON(t, checkpointBlobEnvelope{Version: CheckpointBlobCodecVersion, Kind: CheckpointSnapshotBlob, Payload: payload})
 	testassert.ErrorContains(t, testassert.Err((CheckpointBlobCodec{}).DecodeSnapshot(data)), "unmatched tool result")
 }
 

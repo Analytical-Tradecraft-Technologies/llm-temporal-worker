@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -257,10 +259,7 @@ func TestProviderRefreshUnsupportedProviderFailsBeforeFetch(t *testing.T) {
 	}
 	for _, test := range cases {
 		_, err := service.Execute(context.Background(), inventoryRefreshRequest(t, test.kind, test.endpoint, time.Minute))
-		var providerErr *provider.Error
-		if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability {
-			t.Fatalf("%s/%q: err = %v, want unsupported capability", test.kind, test.endpoint, err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, fmt.Sprintf("%s/%q", test.kind, test.endpoint))
 	}
 	if lister.calls.Load() != 0 || store.persists != 0 {
 		t.Fatalf("unsupported refresh fetched or wrote state: calls=%d persists=%d", lister.calls.Load(), store.persists)
@@ -305,10 +304,7 @@ func TestProviderRefreshAbsentLeavesQueriesUnchanged(t *testing.T) {
 	service.TypedHandler.(*persistedQueryHandler).refresh = nil
 	for _, kind := range []llm.QueryKind{llm.QueryModelInventory, llm.QueryProviderStatus, llm.QueryCreditStatus} {
 		_, err := service.Execute(context.Background(), inventoryRefreshRequest(t, kind, "primary", time.Minute))
-		var providerErr *provider.Error
-		if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability {
-			t.Fatalf("%s: err = %v, want unsupported capability", kind, err)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, string(kind))
 	}
 	if lister.calls.Load() != 0 {
 		t.Fatalf("disabled refresh fetched")

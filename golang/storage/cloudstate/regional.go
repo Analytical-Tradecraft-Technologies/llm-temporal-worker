@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/regional"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -167,14 +168,14 @@ func (s *regionalBlobs) store(ctx context.Context, i int) (blob.BlobStore, error
 	s.mu.Lock()
 	store := s.stores[i]
 	s.mu.Unlock()
-	if !nilInterface(store) {
+	if !typednil.Is(store) {
 		return store, nil
 	}
 	store, err := s.open(ctx, i)
 	if err != nil {
 		return nil, err
 	}
-	if nilInterface(store) {
+	if typednil.Is(store) {
 		return nil, ErrInvalid
 	}
 	s.mu.Lock()
@@ -311,7 +312,7 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 	if err != nil {
 		return nil, err
 	}
-	if nilInterface(baseline) {
+	if typednil.Is(baseline) {
 		return nil, ErrInvalid
 	}
 	regions := append([]string{primary}, f.DynamoDBRegions...)
@@ -353,7 +354,7 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 		if err != nil {
 			return nil, err
 		}
-		if nilInterface(backend) {
+		if typednil.Is(backend) {
 			return nil, ErrInvalid
 		}
 		return backend.OpenKeyValueStore(ctx, c.RequestTable)
@@ -365,7 +366,7 @@ func openRegional(ctx context.Context, c Config, secret []byte, initialize func(
 		if err != nil {
 			return nil, err
 		}
-		if nilInterface(backend) {
+		if typednil.Is(backend) {
 			return nil, ErrInvalid
 		}
 		return backend.OpenBlobStore(ctx, c.PayloadStore)

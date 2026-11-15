@@ -14,6 +14,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
@@ -64,13 +65,13 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			testassert.NoError(t, err)
 			params, err := lowerRequest(normalized, lowering, tier)
 			testassert.NoError(t, err)
-			gotWire := contract.MarshalJSON(t, params)
+			gotWire := testassert.MarshalJSON(t, params)
 			assertCanonicalChatFixture(t, gotWire, profile, "request.wire.json")
 
 			response := loadChatFixtureResponse(t, profile, "response.completed.json")
 			lifted, err := profile.profile.liftResponse(chatFixtureCall(profile, normalized, serviceClass), &response, profile.requestID)
 			testassert.NoError(t, err)
-			gotSemantic := contract.MarshalJSON(t, lifted)
+			gotSemantic := testassert.MarshalJSON(t, lifted)
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
 		})
 	}
@@ -147,7 +148,7 @@ func TestChatContractFixturesCoverUsageClassesLossDiagnosticsAndContinuation(t *
 				ServiceClass: llm.ServiceClassStandard,
 			}, &response, profile.requestID)
 			testassert.NoError(t, err)
-			gotUsage := contract.MarshalJSON(t, lifted)
+			gotUsage := testassert.MarshalJSON(t, lifted)
 			assertCanonicalChatFixture(t, gotUsage, profile, "usage-cost.semantic.json")
 
 			assertChatFixtureCompileError(t, profile, "strict-loss.semantic.json", "strict-loss.wire.json")
@@ -182,7 +183,7 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 			request := loadChatFixtureRequest(t, profile, "request.semantic.json")
 			responseBody := readChatFixture(t, profile, "response.completed.json")
 			var got *http.Request
-			client := newChatFixtureClient(t, profile, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			client := newChatFixtureClient(t, profile, testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				got = request
 				return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 			}))
@@ -196,7 +197,7 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 			body, err := io.ReadAll(got.Body)
 			testassert.NoError(t, err)
 			assertCanonicalChatFixture(t, body, profile, "request.wire.json")
-			gotSemantic := contract.MarshalJSON(t, result.Response)
+			gotSemantic := testassert.MarshalJSON(t, result.Response)
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
 			assertChatFixtureAuth(t, profile, got)
 		})
@@ -301,12 +302,12 @@ func chatFixtureCall(profile chatFixtureProfile, request llm.Request, serviceCla
 
 func loadChatFixtureRequest(t *testing.T, profile chatFixtureProfile, name string) llm.Request {
 	t.Helper()
-	return contract.DecodeJSON[llm.Request](t, readChatFixture(t, profile, name))
+	return testassert.UnmarshalJSON[llm.Request](t, readChatFixture(t, profile, name))
 }
 
 func loadChatFixtureResponse(t *testing.T, profile chatFixtureProfile, name string) openai.ChatCompletion {
 	t.Helper()
-	return contract.DecodeJSON[openai.ChatCompletion](t, readChatFixture(t, profile, name))
+	return testassert.UnmarshalJSON[openai.ChatCompletion](t, readChatFixture(t, profile, name))
 }
 
 func loadChatFixtureMetadata(t *testing.T, profile chatFixtureProfile) contracttest.Metadata {
@@ -316,7 +317,7 @@ func loadChatFixtureMetadata(t *testing.T, profile chatFixtureProfile) contractt
 
 func readChatFixture(t *testing.T, profile chatFixtureProfile, name string) []byte {
 	t.Helper()
-	return contract.ReadFixture(t, filepath.Join("testdata", "contracts", profile.path, name))
+	return testassert.ReadFile(t, filepath.Join("testdata", "contracts", profile.path, name))
 }
 
 func assertCanonicalChatFixture(t *testing.T, got []byte, profile chatFixtureProfile, name string) {
@@ -409,7 +410,7 @@ func assertChatBestEffortDiagnostic(t *testing.T, profile chatFixtureProfile) {
 
 func assertChatFixtureClassifiedError(t *testing.T, profile chatFixtureProfile) {
 	t.Helper()
-	fixture := contract.DecodeJSON[contract.ClassifiedErrorFixture](t, readChatFixture(t, profile, "classified-error.wire.json"))
+	fixture := testassert.UnmarshalJSON[contract.ClassifiedErrorFixture](t, readChatFixture(t, profile, "classified-error.wire.json"))
 	mapped := mapError(&openai.Error{
 		Code:       fixture.Code,
 		Message:    fixture.Message,
@@ -419,7 +420,7 @@ func assertChatFixtureClassifiedError(t *testing.T, profile chatFixtureProfile) 
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Provider.RequestID != fixture.RequestID {
 		t.Fatalf("%s mapped error = %#v", profile.id, mapped)
 	}
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), fixture.Message) {
 		t.Fatalf("%s classified error leaked fixture body", profile.id)
 	}

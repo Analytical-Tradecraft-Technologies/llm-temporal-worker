@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -52,10 +52,7 @@ func preparationFixture() (llm.GenerateRequestV1, durable.GenerateReplay, llm.Co
 
 func assertPreparationError(t *testing.T, err error, code provider.Code) {
 	t.Helper()
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Phase != provider.PhaseStateLoad || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("error = %#v; want %s before dispatch", err, code)
-	}
+	mapped := testkit.ProviderError(t, err, testkit.ProviderClass{Code: code, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever})
 	if mapped.Cause != nil || len(mapped.SafeDetails) != 0 || strings.Contains(err.Error(), "sensitive") {
 		t.Fatal("preparation exposed request or stored content")
 	}
@@ -282,8 +279,8 @@ func TestPrepareCompactInputRejectsInvalidStoredAndOverridePolicies(t *testing.T
 // The published schema's compaction fixture sets every policy field, so the
 // worker must accept exactly the policy that fixture publishes.
 func TestDecodeCompactionPolicyAcceptsPublishedFixture(t *testing.T) {
-	data := mustReadFile(t, filepath.Join("..", "..", "llm", "testdata", "v1", "generate-fork-patch-compaction.json"))
-	request := decodeJSON[llm.GenerateRequestV1](t, data)
+	data := testassert.ReadFile(t, filepath.Join("..", "..", "llm", "testdata", "v1", "generate-fork-patch-compaction.json"))
+	request := testassert.UnmarshalJSON[llm.GenerateRequestV1](t, data)
 	if request.SettingsPatch.CompactionPolicy.Set == nil {
 		t.Fatal("fixture omitted the compaction policy")
 	}

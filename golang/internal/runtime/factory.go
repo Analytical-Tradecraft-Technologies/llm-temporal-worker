@@ -8,10 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -573,7 +575,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			return fail(initErr)
 		}
 		store, ok := repository.(budget.InitializationStore)
-		if !ok || isNilCapability(store) {
+		if !ok || typednil.Is(store) {
 			return fail(ErrBudgetInitializationRequired)
 		}
 		readContext, cancel := context.WithTimeout(ctx, time.Duration(value.Server.ReadinessProbeTimeout))
@@ -779,7 +781,7 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	// An interface can hold a typed nil pointer. Treat that value as an
 	// incomplete composition and drain the snapshot-owned clients before the
 	// worker can register Activities and panic on the first invocation.
-	if isNilCapability(v1Runtime) {
+	if typednil.Is(v1Runtime) {
 		return abort(fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid))
 	}
 	_, executes := v1Runtime.(activity.ExecutionRuntime)
@@ -1085,6 +1087,14 @@ func (factory *ProductionEngineFactory) loadSnapshot(ctx context.Context, snapsh
 	return loaded.snapshot, syncRuntime, nil
 }
 
+// modelSyncHTTPClient applies the endpoint's egress policy to the catalog
+// fetch. A catalog has its own size bound, not limits.provider_response_bytes:
+// that limit sizes a paid response to fit the durable record that saves it
+// (#1319), and a catalog is never saved there.
+func (factory *ProductionEngineFactory) modelSyncHTTPClient(endpoint config.EndpointConfig) (*http.Client, error) {
+	return newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, modelsync.MaxResponseBytes)
+}
+
 // startModelSync starts the refresher. The OpenRouter fetch uses the
 // OpenRouter endpoint's egress policy, and its credential when the endpoint
 // is enabled; OpenRouter's model lists are public, so prices still sync when
@@ -1092,7 +1102,7 @@ func (factory *ProductionEngineFactory) loadSnapshot(ctx context.Context, snapsh
 func (factory *ProductionEngineFactory) startModelSync(ctx context.Context, value config.Config, syncRuntime *modelSyncRuntime, store modelsync.Store, adapters map[string]provider.Adapter) error {
 	endpointID := value.ModelSync.OpenRouter.Endpoint
 	endpoint := value.Endpoints[endpointID]
-	client, err := factory.providerEgressClient(value, endpoint)
+	client, err := factory.modelSyncHTTPClient(endpoint)
 	if err != nil {
 		return fmt.Errorf("model_sync endpoint %q: provider egress policy: %w", endpointID, err)
 	}
@@ -1119,11 +1129,7 @@ func (factory *ProductionEngineFactory) providerEgressClient(value config.Config
 }
 
 func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value config.Config, snapshot engine.Snapshot, syncRuntime *modelSyncRuntime) (map[string]provider.Adapter, error) {
-	ids := make([]string, 0, len(value.Endpoints))
-	for id := range value.Endpoints {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := slices.Sorted(maps.Keys(value.Endpoints))
 	adapters := make(map[string]provider.Adapter, len(ids))
 	for _, endpointID := range ids {
 		endpoint := value.Endpoints[endpointID]
@@ -1397,12 +1403,7 @@ func capabilityFeatureConflict(left, right provider.CapabilitySet) (provider.Fea
 	for feature := range right.Features {
 		features[feature] = struct{}{}
 	}
-	ordered := make([]provider.Feature, 0, len(features))
-	for feature := range features {
-		ordered = append(ordered, feature)
-	}
-	sort.Slice(ordered, func(index, next int) bool { return ordered[index] < ordered[next] })
-	for _, feature := range ordered {
+	for _, feature := range slices.Sorted(maps.Keys(features)) {
 		leftCapability, leftOK := left.Features[feature]
 		rightCapability, rightOK := right.Features[feature]
 		if leftOK != rightOK || (leftOK && leftCapability != rightCapability) {
@@ -1445,9 +1446,7 @@ func completeCapabilities(value provider.CapabilitySet) provider.CapabilitySet {
 	// provider usage from the response. A catalog may still declare it
 	// explicitly to override this default.
 	copy.Features[provider.FeatureUsage] = provider.Capability{State: provider.CapabilityNative, Reason: "adapter lifts provider usage"}
-	for feature, capability := range value.Features {
-		copy.Features[feature] = capability
-	}
+	maps.Copy(copy.Features, value.Features)
 	return copy
 }
 
@@ -1713,15 +1712,18 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 
 // blobMaxBytes bounds one blob in the shared request/result store. Results
 // are complete serialized responses, so the input request limit alone would
-// reject a valid response larger than the request that produced it. Allow the
-// larger of the request limit and twice the provider response limit, which
-// covers JSON re-encoding (escaping) of a maximal provider body.
+// reject a valid response larger than the request that produced it. A result
+// is the response re-encoded as JSON, which writes <, > and & as six-byte
+// escapes, so allow the larger of the request limit and the same worst case
+// the durable record bound uses (#1319): config.SavedResponseExpansion times
+// the provider response limit, plus the bookkeeping reserve that covers the
+// response's route, usage, cost and diagnostic facts.
 func blobMaxBytes(limits config.LimitsConfig) int64 {
 	response := limits.ProviderResponseBytes
 	if response <= 0 {
 		response = config.DefaultProviderResponseBytes
 	}
-	return max(int64(limits.RequestBytes), 2*response)
+	return max(int64(limits.RequestBytes), config.SavedResponseExpansion*response+config.DurableRecordBookkeepingBytes)
 }
 
 func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, io.Closer, error) {

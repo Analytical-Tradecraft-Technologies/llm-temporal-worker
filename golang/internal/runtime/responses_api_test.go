@@ -68,7 +68,7 @@ func (index *testResponseResultIndex) GetResponseResult(_ context.Context, tenan
 
 func testCompletedRecord(t *testing.T, key string, created time.Time) cloudstate.Record {
 	t.Helper()
-	encoded := encodeJSON(t, testGenerateResponse(key))
+	encoded := testassert.MarshalJSON(t, testGenerateResponse(key))
 	completed, _ := json.Marshal(cloudRuntimeResult{Version: 1, Response: encoded})
 	return cloudstate.Record{Request: cloudstate.CreateRequest{CreatedAt: created}, Status: cloudstate.StatusCompleted, Progress: completed}
 }
@@ -147,7 +147,7 @@ func TestLookupGenerateResultDecodesTheOperationRecord(t *testing.T) {
 		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
 		Cost:       llm.CostV1{Status: "unknown", UnknownReason: "provider_did_not_report_cost"},
 	}
-	encoded := encodeJSON(t, response)
+	encoded := testassert.MarshalJSON(t, response)
 	completed, _ := json.Marshal(cloudRuntimeResult{Version: 1, Response: encoded})
 	failed := json.RawMessage(`{"execution_failure":{"request_id":"llmtw_req_5f0c6b2e-8a1d-4c3b-9e7f-2a4d6c8b0e1f","kind":"generate","state":"failed","failure_code":"provider_error","error_code":"budget_denied"}}`)
 	request := cloudstate.CreateRequest{CreatedAt: created}

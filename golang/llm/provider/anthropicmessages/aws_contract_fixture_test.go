@@ -13,11 +13,11 @@ import (
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -44,7 +44,7 @@ func TestAnthropicAWSContractFixtureLowersToolInputAndOutput(t *testing.T) {
 	testassert.NoError(t, err)
 	params, err := lowerRequest(normalized, profile, tier)
 	testassert.NoError(t, err)
-	gotWire := contract.MarshalJSON(t, params)
+	gotWire := testassert.MarshalJSON(t, params)
 	anthropicAWSFixture.assertCanonical(t, gotWire, "request.tool-input-output.wire.json")
 }
 
@@ -82,7 +82,7 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 	request := anthropicAWSFixture.loadRequest(t, "request.semantic.json")
 	responseBody := anthropicAWSFixture.read(t, "response.completed.json")
 	var got *http.Request
-	client := newAnthropicAWSFixtureClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client := newAnthropicAWSFixtureClient(t, testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
 		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "Request-Id", "req-anthropic-aws-fixture"), nil
 	}))
@@ -99,7 +99,7 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 	if got.URL.Path != "/aws-contract/v1/messages" {
 		t.Fatalf("Anthropic AWS transport path = %q", got.URL.Path)
 	}
-	gotSemantic := contract.MarshalJSON(t, result.Response)
+	gotSemantic := testassert.MarshalJSON(t, result.Response)
 	anthropicAWSFixture.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
 
@@ -137,7 +137,7 @@ func anthropicAWSFixtureProfile(t *testing.T) Profile {
 func assertAnthropicAWSFixtureClassifiedError(t *testing.T) {
 	t.Helper()
 	calls := 0
-	client := newAnthropicAWSFixtureClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client := newAnthropicAWSFixtureClient(t, testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
 		return adaptertest.JSONResponse(request, http.StatusUnauthorized, string(anthropicAWSFixture.read(t, "error.authentication.json")), "Request-Id", "aws-auth-fixture"), nil
 	}))

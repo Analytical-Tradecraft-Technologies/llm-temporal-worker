@@ -12,7 +12,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func compileExtensionRequest(t *testing.T, adapter *Adapter, strict bool, extensions map[string]json.RawMessage) (provider.Call, error) {
@@ -53,7 +52,7 @@ func TestCompileDropsExtensionsWithDiagnosticInBestEffortMode(t *testing.T) {
 	if !call.Metadata.ExtensionsDropped {
 		t.Fatal("best-effort compile did not record the dropped extensions")
 	}
-	encoded := contract.MarshalJSON(t, call.SDKParams)
+	encoded := testassert.MarshalJSON(t, call.SDKParams)
 	if strings.Contains(string(encoded), "temperature") || strings.Contains(string(encoded), "anthropic") {
 		t.Fatalf("dropped extension reached the wire: %s", encoded)
 	}

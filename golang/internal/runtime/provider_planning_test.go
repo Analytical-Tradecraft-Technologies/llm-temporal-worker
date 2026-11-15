@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
@@ -76,12 +77,6 @@ func (function planningRegistryFunc) Adapter(ctx context.Context, candidate rout
 	return function(ctx, candidate)
 }
 
-type planningTransportFunc func(*http.Request) (*http.Response, error)
-
-func (function planningTransportFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
-}
-
 func planningFixture() (V1RuntimeCapabilities, *planningSource, *planningAdapter, llm.GenerateRequestV1, durable.CompactReplay, llm.CompactRequestV1) {
 	adapter := &planningAdapter{version: "profile/v1"}
 	route := routing.Route{ID: "route", EndpointID: "endpoint", Provider: "openai", Family: string(provider.FamilyOpenAIResponses),
@@ -138,8 +133,8 @@ func TestProviderPlanningRealCompilerResolvesAliasesAndFallbackForBothPhases(t *
 			if planned.Candidate.RequestedClass != llm.ServiceClassPriority || planned.Candidate.AttemptedClass != llm.ServiceClassStandard || planned.Call.Model != "provider-model" || planned.Call.ServiceClass != llm.ServiceClassStandard {
 				t.Fatalf("unresolved provider selection: %+v", planned)
 			}
-			data := encodeJSON(t, planned.Call.SDKParams)
-			wire := decodeJSON[map[string]any](t, data)
+			data := testassert.MarshalJSON(t, planned.Call.SDKParams)
+			wire := testassert.UnmarshalJSON[map[string]any](t, data)
 			if wire["model"] != "provider-model" || wire["service_tier"] != "default" {
 				t.Fatalf("wrong SDK projection: %s", data)
 			}
@@ -593,7 +588,7 @@ func TestProviderPlanningFlattensSummarizerInstructionsOnlyForSingleSystemFamili
 // it, for tests that must compile but never dispatch.
 func offlineResponsesAdapter(t *testing.T, httpCalls *atomic.Int32) *openairesponses.Adapter {
 	t.Helper()
-	return responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+	return responsesAdapter(t, &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		httpCalls.Add(1)
 		return nil, errors.New("unexpected HTTP request")
 	})})

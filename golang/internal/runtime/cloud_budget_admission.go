@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -57,7 +58,7 @@ func (call *CloudBudgetCall) Plan() cloudstate.BudgetPlan {
 func (capabilities V1RuntimeCapabilities) NewCloudBudgetAdmission(ctx context.Context) (*CloudBudgetAdmission, error) {
 	store, ok := capabilities.Requests.(cloudAdmissionStore)
 	boundary, err := capabilities.cloudBudgetBoundary()
-	if !ok || isNilCapability(store) || err != nil {
+	if !ok || typednil.Is(store) || err != nil {
 		return nil, budgetPlanningError(provider.CodeConfiguration)
 	}
 	planning, err := capabilities.NewBudgetPlanning(ctx)
@@ -169,7 +170,7 @@ func (admission *CloudBudgetAdmission) probe(ctx context.Context, p PreparedClou
 }
 
 func (admission *CloudBudgetAdmission) original(ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, kind string) (cloudstate.Record, error) {
-	if ctx == nil || admission == nil || isNilCapability(admission.store) || admission.planning == nil || admission.recovery == nil {
+	if ctx == nil || admission == nil || typednil.Is(admission.store) || admission.planning == nil || admission.recovery == nil {
 		return cloudstate.Record{}, budgetPlanningError(provider.CodeConfiguration)
 	}
 	if err := ctx.Err(); err != nil {
@@ -273,7 +274,7 @@ func (admission *CloudBudgetAdmission) Claim(ctx context.Context, call *CloudBud
 }
 
 func (admission *CloudBudgetAdmission) verify(ctx context.Context, call *CloudBudgetCall) error {
-	if ctx == nil || admission == nil || call == nil || call.owner != admission || isNilCapability(admission.store) {
+	if ctx == nil || admission == nil || call == nil || call.owner != admission || typednil.Is(admission.store) {
 		return budgetPlanningError(provider.CodeConfiguration)
 	}
 	if err := ctx.Err(); err != nil {

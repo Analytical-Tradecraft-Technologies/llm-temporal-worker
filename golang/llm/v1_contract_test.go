@@ -15,18 +15,18 @@ import (
 
 func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {
 	for _, name := range []string{"generate-root.json", "generate-delta.json", "generate-cache-any-age.json"} {
-		request := mustUnmarshal[llm.GenerateRequestV1](t, readV1Fixture(t, name), name)
+		request := testassert.UnmarshalJSON[llm.GenerateRequestV1](t, readV1Fixture(t, name), name)
 		encoded, err := json.Marshal(request)
 		if err != nil {
 			t.Fatalf("%s marshal: %v", name, err)
 		}
-		mustUnmarshal[llm.GenerateRequestV1](t, encoded, name+" second decode")
+		testassert.UnmarshalJSON[llm.GenerateRequestV1](t, encoded, name+" second decode")
 		if string(encoded) != string(mustCanonicalJSON(t, encoded)) {
 			t.Fatalf("%s was not deterministic", name)
 		}
 	}
-	mustMarshal(t, mustUnmarshal[llm.GenerateResponseV1](t, readV1Fixture(t, "generate-response.json"), "generate-response.json"))
-	mustMarshal(t, mustUnmarshal[llm.CompactResponseV1](t, readV1Fixture(t, "compact-response.json"), "compact-response.json"))
+	testassert.MarshalJSON(t, testassert.UnmarshalJSON[llm.GenerateResponseV1](t, readV1Fixture(t, "generate-response.json"), "generate-response.json"))
+	testassert.MarshalJSON(t, testassert.UnmarshalJSON[llm.CompactResponseV1](t, readV1Fixture(t, "compact-response.json"), "compact-response.json"))
 }
 
 func TestV1RequestContextRejectsTags(t *testing.T) {
@@ -154,7 +154,7 @@ func TestCompactV1RequestContextRejectsMissingOrEmptyMembers(t *testing.T) {
 // its settings_patch (#1348).
 func TestCompactV1SummarizerOverrides(t *testing.T) {
 	const prefix = `{"api_version":"llm.temporal/compact/v1","operation_key":"compact","context":{"tenant":"tenant","project":"project","actor":"actor"},"parent":"ckp_v1.parent"`
-	request := mustUnmarshal[llm.CompactRequestV1](t, []byte(prefix+`,"model":"alias2","service_class":"priority"}`), "decode overrides")
+	request := testassert.UnmarshalJSON[llm.CompactRequestV1](t, []byte(prefix+`,"model":"alias2","service_class":"priority"}`), "decode overrides")
 	if request.Model != "alias2" || request.ServiceClass != llm.ServiceClassPriority {
 		t.Fatalf("decoded overrides = %q/%q", request.Model, request.ServiceClass)
 	}
@@ -163,7 +163,7 @@ func TestCompactV1SummarizerOverrides(t *testing.T) {
 		t.Fatalf("encoded = %s, %v", encoded, err)
 	}
 	long := strings.Repeat("é", llm.MaxCompactModelLengthV1)
-	mustUnmarshal[llm.CompactRequestV1](t, []byte(prefix+`,"model":"`+long+`"}`), fmt.Sprintf("a %d code point model was rejected", llm.MaxCompactModelLengthV1))
+	testassert.UnmarshalJSON[llm.CompactRequestV1](t, []byte(prefix+`,"model":"`+long+`"}`), fmt.Sprintf("a %d code point model was rejected", llm.MaxCompactModelLengthV1))
 	for _, field := range []string{`"model":""`, `"model":1`, `"model":"` + long + `x"`, `"service_class":"turbo"`} {
 		requireUnmarshalRejected[llm.CompactRequestV1](t, []byte(prefix+","+field+"}"), "%s was accepted", field)
 	}
@@ -207,10 +207,10 @@ func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 }
 
 func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
-	value := mustMarshal(t, llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("10.500000000000"), Method: "provider_reported"})
+	value := testassert.MarshalJSON(t, llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("10.500000000000"), Method: "provider_reported"})
 	requireEncodedContains(t, value, `"actual_cost_usd":"10.5"`, "cost was not canonicalized")
-	cost := mustUnmarshal[llm.CostV1](t, []byte(`{"status":"exact","actual_cost_usd":"0.1000","method":"provider_reported"}`), "decode cost")
-	requireEncodedContains(t, mustMarshal(t, cost), `"actual_cost_usd":"0.1"`, "round-trip cost was not canonicalized")
+	cost := testassert.UnmarshalJSON[llm.CostV1](t, []byte(`{"status":"exact","actual_cost_usd":"0.1000","method":"provider_reported"}`), "decode cost")
+	requireEncodedContains(t, testassert.MarshalJSON(t, cost), `"actual_cost_usd":"0.1"`, "round-trip cost was not canonicalized")
 	if _, err := json.Marshal(llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "estimate"}); err == nil {
 		t.Fatal("unknown exact cost method accepted")
 	}
@@ -218,9 +218,9 @@ func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
 		t.Fatal("unknown cost with catalog version accepted")
 	}
 	request := llm.GenerateRequestV1{OperationKey: "nil-arrays", Context: llm.RequestContext{Tenant: "t", Project: "p", Actor: "a"}}
-	requireEncodedContains(t, mustMarshal(t, request), `"append":[]`, "nil append was not normalized")
+	requireEncodedContains(t, testassert.MarshalJSON(t, request), `"append":[]`, "nil append was not normalized")
 	response := llm.GenerateResponseV1{OperationKey: "nil-output", OperationID: "id", Status: llm.ResponseStatusCompleted, Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.nil", Kind: "generation", Depth: 0}, Cache: llm.CacheDispositionV1{Disposition: "disabled"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"}}
-	requireEncodedContains(t, mustMarshal(t, response), `"output":[]`, "nil output was not normalized")
+	requireEncodedContains(t, testassert.MarshalJSON(t, response), `"output":[]`, "nil output was not normalized")
 }
 
 func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
@@ -371,19 +371,19 @@ func TestQueryResponseV1RequiresExplicitActualCost(t *testing.T) {
 	})
 
 	t.Run("explicit null unknown actual cost", func(t *testing.T) {
-		mustUnmarshal[llm.QueryResponseV1](t, unknownPayload(`,"actual_cost_usd":null`), "explicit null actual_cost_usd was rejected")
+		testassert.UnmarshalJSON[llm.QueryResponseV1](t, unknownPayload(`,"actual_cost_usd":null`), "explicit null actual_cost_usd was rejected")
 	})
 
 	t.Run("unknown marshal emits null actual cost", func(t *testing.T) {
 		response := validQueryResponse(llm.QueryProviderStatus)
 		response.Cost = llm.CostV1{Status: "unknown", UnknownReason: "state_unavailable"}
-		requireEncodedContains(t, mustMarshal(t, response), `"actual_cost_usd":null`, "unknown query response omitted explicit null actual cost")
+		requireEncodedContains(t, testassert.MarshalJSON(t, response), `"actual_cost_usd":null`, "unknown query response omitted explicit null actual cost")
 	})
 
 	t.Run("exact actual cost remains canonical", func(t *testing.T) {
 		payload := []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":{"routes":[]},"cost_status":"exact","actual_cost_usd":"0.1000","cost_method":"provider_reported"}`)
-		response := mustUnmarshal[llm.QueryResponseV1](t, payload, "exact actual cost was rejected")
-		requireEncodedContains(t, mustMarshal(t, response), `"actual_cost_usd":"0.1"`, "exact actual cost was not canonicalized")
+		response := testassert.UnmarshalJSON[llm.QueryResponseV1](t, payload, "exact actual cost was rejected")
+		requireEncodedContains(t, testassert.MarshalJSON(t, response), `"actual_cost_usd":"0.1"`, "exact actual cost was not canonicalized")
 	})
 }
 
@@ -437,7 +437,7 @@ func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
 
 func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	requestData := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"instructions":{"set":[{"kind":"parts","content":[{"kind":"text","text":"hello"}]}]},"tools":{"set":[{"name":"lookup","description":"lookup data","input_schema":{"type":"object"}}]},"output":{"set":{"max_tokens":32,"format":{"kind":"text"}}}}}`)
-	request := mustUnmarshal[llm.GenerateRequestV1](t, requestData, "decode settings patch")
+	request := testassert.UnmarshalJSON[llm.GenerateRequestV1](t, requestData, "decode settings patch")
 	if request.SettingsPatch.Instructions.Set == nil || len(*request.SettingsPatch.Instructions.Set) != 1 || len((*request.SettingsPatch.Instructions.Set)[0].Content) != 1 {
 		t.Fatalf("parts instruction was not decoded: %#v", request.SettingsPatch.Instructions)
 	}
@@ -448,17 +448,17 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 		t.Fatalf("output max_tokens was not decoded: %#v", request.SettingsPatch.Output)
 	}
 	canonicalTemperature := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":"0.7000"}}}`)
-	decimalRequest := mustUnmarshal[llm.GenerateRequestV1](t, canonicalTemperature, "decimal temperature was not decoded")
-	requireEncodedContains(t, mustMarshal(t, decimalRequest), `"temperature":{"set":"0.7"}`, "temperature was not canonically re-encoded as a string")
+	decimalRequest := testassert.UnmarshalJSON[llm.GenerateRequestV1](t, canonicalTemperature, "decimal temperature was not decoded")
+	requireEncodedContains(t, testassert.MarshalJSON(t, decimalRequest), `"temperature":{"set":"0.7"}`, "temperature was not canonically re-encoded as a string")
 	legacyNumeric := bytes.Replace(canonicalTemperature, []byte(`"0.7000"`), []byte(`0.7`), 1)
-	mustUnmarshal[llm.GenerateRequestV1](t, legacyNumeric, "legacy numeric temperature was not accepted during compatibility window")
+	testassert.UnmarshalJSON[llm.GenerateRequestV1](t, legacyNumeric, "legacy numeric temperature was not accepted during compatibility window")
 	invalidDecimal := bytes.Replace(canonicalTemperature, []byte(`"0.7000"`), []byte(`"1.0000000000000000001"`), 1)
 	requireUnmarshalRejected[llm.GenerateRequestV1](t, invalidDecimal, "temperature with excessive precision was accepted")
 
-	envelope := mustUnmarshal[map[string]json.RawMessage](t, readV1Fixture(t, "generate-response.json"), "decode generate-response.json")
+	envelope := testassert.UnmarshalJSON[map[string]json.RawMessage](t, readV1Fixture(t, "generate-response.json"), "decode generate-response.json")
 	envelope["route"] = json.RawMessage(`{"route_id":"route-1","endpoint_id":"endpoint-1","api_family":"responses","requested_model":"gpt-test","resolved_model":"gpt-test-2026"}`)
 	envelope["usage"] = json.RawMessage(`{"input_tokens":10,"output_tokens":20,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5}`)
-	response := mustUnmarshal[llm.GenerateResponseV1](t, mustMarshal(t, envelope), "decode response metadata")
+	response := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, testassert.MarshalJSON(t, envelope), "decode response metadata")
 	if response.Route == nil || response.Route.RouteID != "route-1" || response.Route.ResolvedModel != "gpt-test-2026" {
 		t.Fatalf("route metadata was not decoded: %#v", response.Route)
 	}
@@ -469,15 +469,15 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 
 func TestV1TemperaturePreservesAllEighteenFractionalDigits(t *testing.T) {
 	const input = `{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":"0.123456789012345678"}}}`
-	request := mustUnmarshal[llm.GenerateRequestV1](t, []byte(input), "decode exact decimal")
+	request := testassert.UnmarshalJSON[llm.GenerateRequestV1](t, []byte(input), "decode exact decimal")
 	if request.SettingsPatch.Temperature.Set == nil || request.SettingsPatch.Temperature.Set.String() != "0.123456789012345678" {
 		t.Fatalf("exact decimal was not retained: %#v", request.SettingsPatch.Temperature.Set)
 	}
-	requireEncodedContains(t, mustMarshal(t, request), `"temperature":{"set":"0.123456789012345678"}`, "exact decimal was rounded during re-encoding")
+	requireEncodedContains(t, testassert.MarshalJSON(t, request), `"temperature":{"set":"0.123456789012345678"}`, "exact decimal was rounded during re-encoding")
 
 	trailingZeros := bytes.Replace([]byte(input), []byte("0.123456789012345678"), []byte("12.340000000000000000"), 1)
-	request = mustUnmarshal[llm.GenerateRequestV1](t, trailingZeros, "decode trailing zeros")
-	requireEncodedContains(t, mustMarshal(t, request), `"temperature":{"set":"12.34"}`, "decimal was not normalized on output")
+	request = testassert.UnmarshalJSON[llm.GenerateRequestV1](t, trailingZeros, "decode trailing zeros")
+	requireEncodedContains(t, testassert.MarshalJSON(t, request), `"temperature":{"set":"12.34"}`, "decimal was not normalized on output")
 }
 
 func TestV1TemperatureRejectsBeyondContractPrecision(t *testing.T) {
@@ -618,12 +618,7 @@ func TestV1RejectsNegativeContractFixtures(t *testing.T) {
 				t.Fatalf("unknown contract %q", entry.contract)
 			}
 			err := json.Unmarshal(readV1Fixture(t, name), decoder())
-			if err == nil {
-				t.Fatal("negative fixture was accepted")
-			}
-			if !strings.Contains(err.Error(), entry.field) {
-				t.Fatalf("rejection %q does not name %q", err, entry.field)
-			}
+			testassert.ErrorContains(t, err, entry.field, "rejection")
 		})
 	}
 }
@@ -658,21 +653,19 @@ func readNegativeFixtureManifest(t *testing.T) map[string]negativeFixture {
 
 func readV1Fixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "v1", name))
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, filepath.Join("testdata", "v1", name))
 }
 
 // readV1GenerateFixture decodes the named testdata/v1 Generate request.
 func readV1GenerateFixture(t *testing.T, name string) llm.GenerateRequestV1 {
 	t.Helper()
-	return mustUnmarshal[llm.GenerateRequestV1](t, readV1Fixture(t, name), name)
+	return testassert.UnmarshalJSON[llm.GenerateRequestV1](t, readV1Fixture(t, name), name)
 }
 
 func stringPointer(value string) *string { return &value }
 func mustCanonicalJSON(t *testing.T, data []byte) []byte {
 	t.Helper()
-	return mustMarshal(t, mustUnmarshal[any](t, data, "decode canonical JSON"))
+	return testassert.MarshalJSON(t, testassert.UnmarshalJSON[any](t, data, "decode canonical JSON"))
 }
 
 func TestCacheAgeOmissionIsUnrestrictedButZeroAndNullAreInvalid(t *testing.T) {
@@ -690,14 +683,14 @@ func TestCacheAgeOmissionIsUnrestrictedButZeroAndNullAreInvalid(t *testing.T) {
 }
 
 func TestV1CompactResponseUsagePreservedAndValidated(t *testing.T) {
-	fields := mustUnmarshal[map[string]json.RawMessage](t, readV1Fixture(t, "compact-response.json"), "decode compact-response.json")
+	fields := testassert.UnmarshalJSON[map[string]json.RawMessage](t, readV1Fixture(t, "compact-response.json"), "decode compact-response.json")
 	valid := `{"input_tokens":9007199254740993,"output_tokens":12,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5,"provider_raw":{"tokens":9007199254740993}}`
 	fields["usage"] = json.RawMessage(valid)
-	response := mustUnmarshal[llm.CompactResponseV1](t, mustMarshal(t, fields), "decode valid usage")
+	response := testassert.UnmarshalJSON[llm.CompactResponseV1](t, testassert.MarshalJSON(t, fields), "decode valid usage")
 	if response.Usage == nil || response.Usage.InputTokens != 9007199254740993 || response.Usage.OutputTokens != 12 || response.Usage.ReasoningTokens != 3 || response.Usage.CacheReadTokens != 4 || response.Usage.CacheWriteTokens != 5 || string(response.Usage.ProviderRaw["tokens"]) != "9007199254740993" {
 		t.Fatalf("usage lost on decode: %+v", response.Usage)
 	}
-	again := mustUnmarshal[llm.CompactResponseV1](t, mustMarshal(t, response), "decode round-tripped usage")
+	again := testassert.UnmarshalJSON[llm.CompactResponseV1](t, testassert.MarshalJSON(t, response), "decode round-tripped usage")
 	first, _ := json.Marshal(response.Usage)
 	second, _ := json.Marshal(again.Usage)
 	if !bytes.Equal(first, second) {

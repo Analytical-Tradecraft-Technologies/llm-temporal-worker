@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -108,7 +109,7 @@ func TestRunWithAdapterAllowsTextOnlyAnthropicResponseWithoutContinuation(t *tes
 	client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{
 		BaseURL: baseURL,
 		APIKey:  "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			invocations++
 			if request.URL.Path != "/anthropic-live-contract/v1/messages" {
 				t.Errorf("request path = %q, want Anthropic messages endpoint", request.URL.Path)
@@ -397,12 +398,6 @@ type recordingAdapter struct {
 	callOverride       *provider.Call
 	result             provider.Result
 	events             []string
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return fn(request)
 }
 
 func (adapter *recordingAdapter) Name() string { return "recording" }

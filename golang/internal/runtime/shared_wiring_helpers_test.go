@@ -3,11 +3,13 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -66,10 +68,7 @@ func TestMarshalHandoff(t *testing.T) {
 		{name: "response", request: "ok", response: func() {}, dispatch: provider.DispatchAccepted},
 	} {
 		_, _, err := marshalHandoff(tc.request, tc.response)
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Dispatch != tc.dispatch {
-			t.Fatalf("%s encoding error = %#v, want invalid argument with dispatch %q", tc.name, err, tc.dispatch)
-		}
+		testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeInvalidArgument, Dispatch: tc.dispatch}, fmt.Sprintf("%s encoding error", tc.name))
 	}
 }
 

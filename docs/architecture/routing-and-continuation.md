@@ -365,8 +365,13 @@ V1 health is operator-configured plus passive:
 - ambiguous calls do not count as safe transient failures.
 
 Authentication and configuration state is scoped to the immutable configuration
-snapshot that recorded the failure. Publishing a replacement snapshot clears
-that open state for planning even before the route receives a new outcome;
+snapshot that recorded the failure: shared records are keyed by the
+configuration digest, which covers the non-secret configuration (including
+secret references, not their values). Publishing a replacement snapshot with
+a different digest clears that open state for planning even before the route
+receives a new outcome. A restart or reload with unchanged configuration,
+including one that only picks up a rotated secret value, keeps the digest and
+the hold;
 health observations without a snapshot identity remain process-local diagnostic
 views only.
 

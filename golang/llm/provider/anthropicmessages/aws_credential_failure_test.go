@@ -12,6 +12,7 @@ import (
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -44,7 +45,7 @@ echo '{"Version":1,"AccessKeyId":"AKIDFIXTURE","SecretAccessKey":"fixture-secret
 	calls := 0
 	client, err := NewAWSClient(context.Background(), AWSClientConfig{
 		BaseURL: "http://127.0.0.1/aws-contract",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 			calls++
 			return nil, errors.New("transport must not be reached")
 		})},

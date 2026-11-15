@@ -36,12 +36,12 @@ func TestNormalizeServiceClassRejectsProviderDefault(t *testing.T) {
 
 func TestRequestJSONFixtures(t *testing.T) {
 	for _, name := range []string{"minimal.json", "full.json"} {
-		request := mustUnmarshal[llm.Request](t, readFixture(t, filepath.Join("request", name)), "unmarshal "+name)
+		request := testassert.UnmarshalJSON[llm.Request](t, readFixture(t, filepath.Join("request", name)), "unmarshal "+name)
 		encoded, err := json.Marshal(request)
 		if err != nil {
 			t.Fatalf("marshal %s: %v", name, err)
 		}
-		roundTripped := mustUnmarshal[llm.Request](t, encoded, fmt.Sprintf("round-trip %s (%s)", name, encoded))
+		roundTripped := testassert.UnmarshalJSON[llm.Request](t, encoded, fmt.Sprintf("round-trip %s (%s)", name, encoded))
 		if request.APIVersion != llm.APIVersion || roundTripped.ServiceClass == "" {
 			t.Fatalf("%s lost normalized contract: %#v", name, roundTripped)
 		}
@@ -51,7 +51,7 @@ func TestRequestJSONFixtures(t *testing.T) {
 	if minimal.ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("omitted service class = %q, want standard", minimal.ServiceClass)
 	}
-	requireEncodedContains(t, mustMarshal(t, minimal), `"service_class":"standard"`, "normalized request omitted explicit standard")
+	requireEncodedContains(t, testassert.MarshalJSON(t, minimal), `"service_class":"standard"`, "normalized request omitted explicit standard")
 }
 
 func TestRequestFullFixturePreservesTypedItems(t *testing.T) {
@@ -123,9 +123,9 @@ func TestPublicJSONRejectsNestedDuplicateKeys(t *testing.T) {
 
 func TestResponseJSONFixtures(t *testing.T) {
 	for _, name := range []string{"tool-calls.json", "completed.json"} {
-		response := mustUnmarshal[llm.Response](t, readFixture(t, filepath.Join("response", name)), "unmarshal "+name)
-		encoded := mustMarshal(t, response)
-		roundTripped := mustUnmarshal[llm.Response](t, encoded, fmt.Sprintf("round-trip %s (%s)", name, encoded))
+		response := testassert.UnmarshalJSON[llm.Response](t, readFixture(t, filepath.Join("response", name)), "unmarshal "+name)
+		encoded := testassert.MarshalJSON(t, response)
+		roundTripped := testassert.UnmarshalJSON[llm.Response](t, encoded, fmt.Sprintf("round-trip %s (%s)", name, encoded))
 		if response.Status != roundTripped.Status || response.OperationKey != roundTripped.OperationKey {
 			t.Fatalf("round-trip changed response identity: %#v %#v", response, roundTripped)
 		}
@@ -138,12 +138,12 @@ func TestResponseCostStatus(t *testing.T) {
 		Status:       llm.ResponseStatusCompleted,
 		Cost:         llm.Cost{Status: llm.CostStatusUnknown},
 	}
-	encoded := mustMarshal(t, response)
+	encoded := testassert.MarshalJSON(t, response)
 	requireEncodedContains(t, encoded, `"cost_status":"unknown"`, "unknown-cost response omitted cost_status")
 	for _, field := range []string{`"reserved_cost_usd":null`, `"actual_cost_usd":null`} {
 		requireEncodedContains(t, encoded, field, "unknown-cost response omitted exact nullable field "+field)
 	}
-	decoded := mustUnmarshal[llm.Response](t, encoded, "unmarshal unknown-cost response")
+	decoded := testassert.UnmarshalJSON[llm.Response](t, encoded, "unmarshal unknown-cost response")
 	if decoded.Cost.Status != llm.CostStatusUnknown {
 		t.Fatalf("cost status = %q, want unknown", decoded.Cost.Status)
 	}
@@ -159,7 +159,7 @@ func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 			t.Fatalf("schema %s is not valid JSON", name)
 		}
 		if name == "generate-request.schema.json" {
-			schema := mustUnmarshal[struct {
+			schema := testassert.UnmarshalJSON[struct {
 				AdditionalProperties bool `json:"additionalProperties"`
 			}](t, data, "decode "+name)
 			if schema.AdditionalProperties {
@@ -178,26 +178,7 @@ func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", name))
-	testassert.NoError(t, err)
-	return data
-}
-
-func mustMarshal(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
-}
-
-// mustUnmarshal decodes data into a new T, failing with what as context.
-func mustUnmarshal[T any](t testing.TB, data []byte, what string) T {
-	t.Helper()
-	var value T
-	if err := json.Unmarshal(data, &value); err != nil {
-		t.Fatalf("%s: %v", what, err)
-	}
-	return value
+	return testassert.ReadFile(t, filepath.Join("testdata", name))
 }
 
 // requireUnmarshalRejected fails with the formatted message when data decodes

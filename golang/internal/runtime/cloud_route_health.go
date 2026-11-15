@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -31,7 +32,7 @@ func (p *ProviderPlanning) routeBlocked(ctx context.Context, candidate routing.C
 // routeHold returns why the candidate's shared health record holds it, or ""
 // when nothing does.
 func (p *ProviderPlanning) routeHold(ctx context.Context, candidate routing.Candidate) (string, error) {
-	if isNilCapability(p.routeStatus) {
+	if typednil.Is(p.routeStatus) {
 		return "", nil
 	}
 	status, err := p.routeStatus.GetRouteStatus(ctx, p.configDigest, candidate.RouteID, candidate.EndpointID, candidate.Model, candidate.ProviderTier)
@@ -75,7 +76,7 @@ const creditFailureHold = 15 * time.Minute
 // Stable completion timestamps make activity replay idempotent at the Redis
 // projection. Health is best effort and cannot prevent budget settlement.
 func (e *CloudProviderExecution) recordRouteStatus(ctx context.Context, saved cloudstate.SavedProviderExecution) {
-	if isNilCapability(e.statusRecorder) {
+	if typednil.Is(e.statusRecorder) {
 		return
 	}
 	x, plan := saved.Execution, saved.Plan

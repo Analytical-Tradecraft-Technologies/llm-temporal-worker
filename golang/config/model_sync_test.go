@@ -101,12 +101,7 @@ model_sync:
     endpoint: openrouter-pinned
 `
 	value, err := config.Load([]byte(data))
-	if err == nil {
-		t.Fatal("a pinned OpenRouter endpoint was accepted for model_sync")
-	}
-	if !strings.Contains(err.Error(), "provider_order") {
-		t.Fatalf("error = %v, want the provider_order rejection", err)
-	}
+	testassert.ErrorContains(t, err, "provider_order")
 	_ = value
 	unpinned := strings.Replace(data, "        provider_order: [ProviderA]\n", "", 1)
 	value = mustLoadConfig(t, []byte(unpinned))
@@ -117,7 +112,7 @@ model_sync:
 
 func TestConfigWithoutModelSyncKeepsItsCanonicalDigest(t *testing.T) {
 	value := mustLoadConfig(t, exampleYAML(t))
-	encoded := mustMarshalJSON(t, value)
+	encoded := testassert.MarshalJSON(t, value)
 	if strings.Contains(string(encoded), "model_sync") || strings.Contains(string(encoded), `"optional"`) {
 		t.Fatal("unused model-sync fields entered canonical configuration JSON")
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 )
 
 var ErrBudgetBoundaryInvalid = errors.New("durable budget boundary is invalid")
@@ -24,7 +25,7 @@ func (boundary BudgetBoundary) Validate() error {
 	if err := boundary.Identity.ValidateBudget(); err != nil {
 		return fmt.Errorf("%w: %v", ErrBudgetBoundaryInvalid, err)
 	}
-	if isNilPort(boundary.Materializer) {
+	if typednil.Is(boundary.Materializer) {
 		return fmt.Errorf("%w: Redis budget leaser is required", ErrBudgetBoundaryInvalid)
 	}
 	return nil

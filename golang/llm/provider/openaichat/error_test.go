@@ -1,12 +1,14 @@
 package openaichat
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -33,9 +35,7 @@ func TestBillingRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 		{Request: openAI, StatusCode: http.StatusTooManyRequests, Type: "insufficient_quota"},
 	} {
 		mapped := mapAPIError(apiErr, "openai-chat")
-		if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNextRoute {
-			t.Fatalf("429 %q/%q = %#v, want a rejected permission denial", apiErr.Code, apiErr.Type, mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected, Retry: provider.RetryNextRoute}, fmt.Sprintf("429 %q/%q", apiErr.Code, apiErr.Type))
 		if got, want := mapped.SafeDetails["status"], "429"; got != want {
 			t.Fatalf("safe status = %q, want %q", got, want)
 		}
@@ -45,8 +45,6 @@ func TestBillingRateLimitIsARouteLevelCreditDenial(t *testing.T) {
 		{Request: httptest.NewRequest(http.MethodPost, "https://example.openai.azure.com/openai/deployments/d/chat/completions", nil), StatusCode: http.StatusTooManyRequests, Code: "insufficient_quota", Type: "insufficient_quota"},
 	} {
 		mapped := mapAPIError(apiErr, "openai-chat")
-		if mapped.Code != provider.CodeProviderRateLimited || mapped.Retry != provider.RetryAfter {
-			t.Fatalf("rate limit 429 %q = %#v, want provider_rate_limited", apiErr.Code, mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderRateLimited, Retry: provider.RetryAfter}, fmt.Sprintf("rate limit 429 %q", apiErr.Code))
 	}
 }

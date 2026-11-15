@@ -532,9 +532,7 @@ entries:
       %s: {level: native, max_bytes: %d}
 `, feature, limit))
 				result, err := LoadCapabilities(ref)
-				if err == nil || !strings.Contains(err.Error(), "max_bytes") {
-					t.Fatalf("unsupported limit accepted: %#v, %v", result, err)
-				}
+				testassert.ErrorContains(t, err, "max_bytes", fmt.Sprintf("unsupported limit accepted: %#v", result))
 				if len(result.Profiles) != 0 {
 					t.Fatal("failed load exposed a partial catalog")
 				}

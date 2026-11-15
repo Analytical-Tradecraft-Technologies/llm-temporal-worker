@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -84,7 +85,7 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 	calls := 0
 	var requestBody []byte
 	var requestHeaders http.Header
-	client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: adaptertest.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
 		requestBody, _ = io.ReadAll(request.Body)
 		requestHeaders = request.Header.Clone()
@@ -124,7 +125,7 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 func TestBedrockCallSerializationDoesNotContainResolvedCredentials(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
 	call := adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockMessages, llm.Request{OperationKey: "bedrock-credentials", Model: "claude-contract"})
-	encoded := contract.MarshalJSON(t, call)
+	encoded := testassert.MarshalJSON(t, call)
 	if strings.Contains(string(encoded), "contract-secret") || strings.Contains(string(encoded), "contract-access") {
 		t.Fatalf("credential value appeared in call serialization: %s", encoded)
 	}
@@ -195,5 +196,5 @@ func mustBedrockProfile(t *testing.T, baseURL string) Profile {
 
 func mustReadBedrockFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	return contract.ReadFixture(t, "testdata/contracts/bedrock-anthropic/"+name)
+	return testassert.ReadFile(t, "testdata/contracts/bedrock-anthropic/"+name)
 }

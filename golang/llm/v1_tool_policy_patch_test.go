@@ -1,8 +1,11 @@
 package llm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 // The published schema requires mode and parallel on tool_policy. The v1
@@ -20,9 +23,7 @@ func TestV1ToolPolicyPatchRequiresModeAndParallel(t *testing.T) {
 			mutated := strings.Replace(base, complete, `"tool_policy": {"set": `+set+`}`, 1)
 			var request GenerateRequestV1
 			err := request.UnmarshalJSON([]byte(mutated))
-			if err == nil || !strings.Contains(err.Error(), "tool_policy.set") {
-				t.Fatalf("decode of tool_policy.set %s error = %v", set, err)
-			}
+			testassert.ErrorContains(t, err, "tool_policy.set", fmt.Sprintf("decode of tool_policy.set %s", set))
 		})
 	}
 	for name, set := range map[string]string{
@@ -40,14 +41,14 @@ func TestV1ToolPolicyPatchRequiresModeAndParallel(t *testing.T) {
 
 	// The encoder always writes both fields, so every patch this module
 	// stored, including one with a zero-value policy, still decodes.
-	encoded := mustMarshalJSON(t, SettingsPatchV1{ToolPolicy: Patch[ToolPolicy]{Set: &ToolPolicy{}}})
-	stored := mustUnmarshalJSON[SettingsPatchV1](t, encoded, "stored patch "+string(encoded))
+	encoded := testassert.MarshalJSON(t, SettingsPatchV1{ToolPolicy: Patch[ToolPolicy]{Set: &ToolPolicy{}}})
+	stored := testassert.UnmarshalJSON[SettingsPatchV1](t, encoded, "stored patch "+string(encoded))
 	if stored.ToolPolicy.Set == nil || *stored.ToolPolicy.Set != (ToolPolicy{Mode: ToolChoiceAuto}) {
 		t.Fatalf("stored patch = %#v", stored.ToolPolicy)
 	}
 
 	// The provider-neutral request keeps its defaults for omitted fields.
 	for _, policy := range []string{`{}`, `{"mode": "required"}`, `{"parallel": true}`} {
-		mustUnmarshalJSON[Request](t, []byte(`{"api_version": "`+APIVersion+`", "operation_key": "op", "model": "m", "tool_policy": `+policy+`}`), "request tool_policy "+policy)
+		testassert.UnmarshalJSON[Request](t, []byte(`{"api_version": "`+APIVersion+`", "operation_key": "op", "model": "m", "tool_policy": `+policy+`}`), "request tool_policy "+policy)
 	}
 }

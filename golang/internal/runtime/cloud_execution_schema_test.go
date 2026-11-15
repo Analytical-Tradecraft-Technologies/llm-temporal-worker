@@ -21,7 +21,7 @@ func publishedExecutionResultSchema(t *testing.T) *jsonschema.Schema {
 	compiler := jsonschema.NewCompiler()
 	var target string
 	for _, name := range []string{"generate-response", "compact-response", "execution-result"} {
-		data := mustReadFile(t, filepath.Join("..", "..", "api", "schema", "v1", name+".schema.json"))
+		data := testassert.ReadFile(t, filepath.Join("..", "..", "api", "schema", "v1", name+".schema.json"))
 		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 		testassert.NoError(t, err)
 		target = document.(map[string]any)["$id"].(string)
@@ -34,7 +34,7 @@ func publishedExecutionResultSchema(t *testing.T) *jsonschema.Schema {
 
 func assertPublishedExecutionResult(t *testing.T, compiled *jsonschema.Schema, result llm.ExecutionResultV1) {
 	t.Helper()
-	encoded := encodeJSON(t, result)
+	encoded := testassert.MarshalJSON(t, result)
 	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
 	testassert.NoError(t, err)
 	if err := compiled.Validate(instance); err != nil {

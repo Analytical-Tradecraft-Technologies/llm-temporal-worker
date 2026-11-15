@@ -3,7 +3,6 @@ package pricing
 import (
 	"math"
 	"math/big"
-	"strings"
 	"testing"
 	"time"
 
@@ -196,12 +195,7 @@ func TestCostFromUsageRejectsNegativeUsage(t *testing.T) {
 func TestCostFromUsageRejectsMicroUSDComponentOverflow(t *testing.T) {
 	entry := Entry{Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
 	_, err := CostFromUsage(entry, Usage{InputTokens: math.MaxInt64})
-	if err == nil {
-		t.Fatal("CostFromUsage silently discarded an input component above the Redis-safe range")
-	}
-	if !strings.Contains(err.Error(), "usage input microUSD compatibility conversion") {
-		t.Fatalf("overflow error = %v, want component context", err)
-	}
+	testassert.ErrorContains(t, err, "usage input microUSD compatibility conversion", "overflow")
 }
 
 func TestCostFromUsageRejectsMicroUSDAggregateOverflow(t *testing.T) {
@@ -210,12 +204,7 @@ func TestCostFromUsageRejectsMicroUSDAggregateOverflow(t *testing.T) {
 		OutputPerMillion: MustDecimalUSD("9007199254.740991"),
 	}}
 	_, err := CostFromUsage(entry, Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
-	if err == nil {
-		t.Fatal("CostFromUsage silently discarded a checked microUSD aggregate overflow")
-	}
-	if !strings.Contains(err.Error(), "usage output microUSD compatibility total") {
-		t.Fatalf("aggregate overflow error = %v, want total context", err)
-	}
+	testassert.ErrorContains(t, err, "usage output microUSD compatibility total", "aggregate overflow")
 }
 
 func TestCostFromUsagePreservesSubMicroUSDInExactCost(t *testing.T) {

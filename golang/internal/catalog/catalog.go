@@ -14,9 +14,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -182,7 +183,7 @@ func LoadWithOptions(cfg config.Config, options Options) (Bundle, error) {
 }
 
 func verifyEndpointReferences(cfg config.Config, bundle Bundle) error {
-	for _, endpointID := range sortedEndpointIDs(cfg.Endpoints) {
+	for _, endpointID := range slices.Sorted(maps.Keys(cfg.Endpoints)) {
 		endpoint := cfg.Endpoints[endpointID]
 		profile, ok := bundle.Capabilities[endpoint.CapabilityProfile]
 		if !ok {
@@ -218,15 +219,6 @@ func verifyPriceCatalogReference(endpointID string, endpoint config.EndpointConf
 		}
 	}
 	return fmt.Errorf("endpoint %q has no price entry in catalog %q for family %q", endpointID, endpoint.PriceCatalog, endpointFamily(endpoint.Family))
-}
-
-func sortedEndpointIDs(endpoints map[string]config.EndpointConfig) []string {
-	ids := make([]string, 0, len(endpoints))
-	for id := range endpoints {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
 }
 
 // ReadVerified reads one configured catalog-style file with the same bounds

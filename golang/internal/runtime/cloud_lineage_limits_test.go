@@ -2,10 +2,10 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -19,10 +19,7 @@ func (f *boundedCloudFixture) requireLineageLimitRejected(t *testing.T, input ll
 	t.Helper()
 	submits := f.submits.Load()
 	_, err := f.runtime.PrepareExecutionV1(context.Background(), input)
-	var failure *provider.Error
-	if !errors.As(err, &failure) || failure.Code != provider.CodeInvalidArgument || failure.Retry != provider.RetryNever || failure.Dispatch != provider.DispatchNotDispatched {
-		t.Fatalf("prepare error = %v", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeInvalidArgument, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever}, "prepare error")
 	requireCount(t, &f.submits, submits, "rejected request reached the provider")
 	for shard := range cloudstate.PendingShards {
 		page, err := f.repository.ListPending(context.Background(), shard, 100, "")

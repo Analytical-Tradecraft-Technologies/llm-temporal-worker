@@ -18,8 +18,8 @@ func TestRequestPayloadRoundTrip(t *testing.T) {
 	if decoded.Request.OperationKey != payload.Request.OperationKey || decoded.Request.ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("decoded payload = %#v", decoded)
 	}
-	if !bytes.Equal(encoded, mustJSON(t, decoded)) {
-		t.Fatalf("payload encoding is not deterministic: %s != %s", encoded, mustJSON(t, decoded))
+	if !bytes.Equal(encoded, testassert.MarshalJSON(t, decoded)) {
+		t.Fatalf("payload encoding is not deterministic: %s != %s", encoded, testassert.MarshalJSON(t, decoded))
 	}
 }
 
@@ -185,7 +185,7 @@ func mustPayloadRoundTrip[T any](t *testing.T, value T, marshal func(T, PayloadL
 // value once the inline limit is one byte below its JSON encoding.
 func assertCodecRejectsOneByteOverLimit[T any](t *testing.T, value T, marshal func(T, PayloadLimits) ([]byte, error), unmarshal func([]byte, PayloadLimits) (T, error)) {
 	t.Helper()
-	encoded := mustJSON(t, value)
+	encoded := testassert.MarshalJSON(t, value)
 	limits := PayloadLimits{MaxInlineBytes: len(encoded) - 1}
 	if _, err := marshal(value, limits); err == nil {
 		t.Fatalf("encode accepted a %T larger than its limit", value)
@@ -193,11 +193,4 @@ func assertCodecRejectsOneByteOverLimit[T any](t *testing.T, value T, marshal fu
 	if _, err := unmarshal(encoded, limits); err == nil {
 		t.Fatalf("decode accepted a %T larger than its limit", value)
 	}
-}
-
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
 }

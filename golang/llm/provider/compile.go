@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
@@ -122,9 +123,7 @@ func NewCall(endpointID string, family Family, normalized llm.Request, serviceCl
 // touching the original.
 func (set CapabilitySet) Clone() CapabilitySet {
 	features := make(map[Feature]Capability, len(set.Features))
-	for feature, capability := range set.Features {
-		features[feature] = capability
-	}
+	maps.Copy(features, set.Features)
 	set.Features = features
 	return set
 }

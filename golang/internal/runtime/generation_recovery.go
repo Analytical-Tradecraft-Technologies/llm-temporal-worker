@@ -13,6 +13,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
@@ -135,7 +136,7 @@ func RunGenerationRecover(ctx context.Context, data []byte, workflowID, runID st
 		return errors.New("generation recovery storage could not be opened")
 	}
 	store, ok := repository.(generationRecoveryStore)
-	if !ok || isNilCapability(store) {
+	if !ok || typednil.Is(store) {
 		return errors.New("generation recovery storage is unsupported")
 	}
 	var dc converter.DataConverter

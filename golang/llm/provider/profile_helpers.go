@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
@@ -125,9 +126,7 @@ func ValidateProfileFeatures(family, id string, features map[Feature]Capability)
 // The copy is never nil.
 func CloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]string {
 	copy := make(map[llm.ServiceClass]string, len(values))
-	for class, value := range values {
-		copy[class] = value
-	}
+	maps.Copy(copy, values)
 	return copy
 }
 
@@ -135,8 +134,6 @@ func CloneServiceTiers(values map[llm.ServiceClass]string) map[llm.ServiceClass]
 // service-class map. The copy is never nil.
 func CloneActualServiceClasses(values map[string]llm.ServiceClass) map[string]llm.ServiceClass {
 	copy := make(map[string]llm.ServiceClass, len(values))
-	for tier, class := range values {
-		copy[tier] = class
-	}
+	maps.Copy(copy, values)
 	return copy
 }

@@ -267,11 +267,12 @@ Because every output token is at least one byte, `limits.max_output_tokens`
 must also be less than `server.inline_payload_bytes` and
 `limits.provider_response_bytes`, which also hold provider and result framing;
 otherwise a full-length response could be paid
-for but never read or returned. The 2 MiB inline cap keeps this bound below the
-8 MiB durable record limit. This is a lower bound only: a response averaging
+for but never read or returned. This is a lower bound only: a response averaging
 more than one byte per token, or a larger explicit caller limit, can still
 exceed the inline limit and closes as the paid `incomplete_response` failure
-described in the Activity runtime reference.
+described in the Activity runtime reference. Every response that
+`limits.provider_response_bytes` admits can still be saved; see
+[Provider egress policy](#provider-egress-policy) for that bound.
 
 ## Complete shape
 
@@ -386,7 +387,8 @@ blob_store:
 
 limits:
   # Input request size. Stored results are bounded separately: a blob may be
-  # up to the larger of request_bytes and twice provider_response_bytes.
+  # up to the larger of request_bytes and 6 x provider_response_bytes + 256 KiB,
+  # the escaped worst case of a response that limit admits.
   request_bytes: 1048576
   items: 512
   parts_per_item: 64
@@ -396,7 +398,7 @@ limits:
   continuation_depth: 256
   route_attempts: 6
   provider_timeout: 120s
-  provider_response_bytes: 16777216
+  provider_response_bytes: 983040
   max_output_tokens: 32768
   max_budget_buckets_per_window: 2048
   token_estimate_safety_ratio: "1.35"
@@ -1091,14 +1093,43 @@ provider response.
 
 `limits.provider_response_bytes` bounds every HTTP response body shared by all
 provider SDKs, including successful JSON, provider error bodies, and streaming
-protocols such as SSE. It defaults to 16 MiB and cannot exceed the 64 MiB hard
-safety cap. A declared `Content-Length` above the configured limit is rejected
-before parsing and the body is closed. Unknown-length, chunked, or incorrectly
-declared bodies are read through a counting wrapper: bytes through the limit
-remain available incrementally, and the next byte returns a content-free
-oversize classification. Configure enough space for the largest legitimate
-single provider response; the limit is cumulative per HTTP response, not per
-stream event.
+protocols such as SSE. It defaults to 960 KiB (983040) and cannot exceed the
+64 MiB hard safety cap. A declared `Content-Length` above the configured limit
+is rejected before parsing and the body is closed. Unknown-length, chunked, or
+incorrectly declared bodies are read through a counting wrapper: bytes through
+the limit remain available incrementally, and the next byte returns a
+content-free oversize classification. Configure enough space for the largest
+legitimate single provider response; the limit is cumulative per HTTP response,
+not per stream event. The `model_sync` OpenRouter catalog fetch is not a paid
+response and has its own 16 MiB bound instead.
+
+Every response this limit admits must also fit in the durable record that saves
+it, or the worker could pay for a response it can never save. That record is
+at most 8 MiB (the request record limit in `storage/cloudstate`) and holds:
+
+- the saved response. Saving re-encodes it as JSON, and Go's encoder writes
+  `<`, `>` and `&` as six-byte `\u` escapes, so a body can save at up to six
+  times its size;
+- the request it answers, which is at most `server.inline_payload_bytes`;
+- 256 KiB reserved for the attempt's bookkeeping: the record envelope, request
+  preparation, attempt link, budget plan, reservation, claim and settlement,
+  and the response's route, usage, cost and diagnostic facts.
+
+Configuration validation therefore requires
+
+```text
+6 × limits.provider_response_bytes + server.inline_payload_bytes + 256 KiB ≤ 8 MiB
+```
+
+and rejects a larger limit at load, before any request is paid for. That is at
+most 1267029 bytes with the default 512 KiB inline limit and 1004885 bytes with
+the 2 MiB maximum; the default fits every inline limit. The bound does not
+cover two things configuration cannot size: a request whose saved form is
+larger than its payload (for example, raw `<` it sent is saved escaped), and a
+parent snapshot that `state.requests.parent_snapshot_storage: inline` (the
+default) copies into the record; `blob` stores a fixed-size reference instead.
+A response that does not fit beside them is closed as a settled paid failure,
+never left `submitting`.
 
 ## Readiness and Redis budget policy
 

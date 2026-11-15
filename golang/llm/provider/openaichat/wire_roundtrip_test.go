@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -127,7 +128,7 @@ func wireAuditProfiles(t *testing.T) []wireAuditProfile {
 func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request) map[string]any {
 	t.Helper()
 	var captured []byte
-	client, err := profile.newClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	client, err := profile.newClient(&http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		body, readErr := io.ReadAll(request.Body)
 		if readErr != nil {
 			return nil, readErr

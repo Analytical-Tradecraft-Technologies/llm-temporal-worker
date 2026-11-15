@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -135,11 +136,7 @@ func modelSyncSource(value config.Config, bundle catalog.Bundle, endpointID, rul
 	for class, tier := range endpoint.ServiceClasses {
 		tiers[class] = tier.ProviderValue
 	}
-	extensions := make([]string, 0, len(endpoint.Extensions))
-	for name := range endpoint.Extensions {
-		extensions = append(extensions, name)
-	}
-	sort.Strings(extensions)
+	extensions := slices.Sorted(maps.Keys(endpoint.Extensions))
 	endpointDigest, err := endpointConfigDigest(endpointID, endpoint)
 	if err != nil {
 		return modelsync.Source{}, fmt.Errorf("model_sync: %w", err)
@@ -211,12 +208,8 @@ func (syncer *modelSyncRuntime) install(document *modelsync.Document) error {
 		return err
 	}
 	models := make(map[string]routing.Model, len(syncer.base.Routes.Models)+len(compiled.Models))
-	for name, model := range syncer.base.Routes.Models {
-		models[name] = model
-	}
-	for name, model := range compiled.Models {
-		models[name] = model
-	}
+	maps.Copy(models, syncer.base.Routes.Models)
+	maps.Copy(models, compiled.Models)
 	routes, err := routing.CompileCatalog(syncer.base.Routes.Version, models)
 	if err == nil {
 		routes, err = routes.WithClassPolicies(syncer.base.Routes.ClassPolicies)

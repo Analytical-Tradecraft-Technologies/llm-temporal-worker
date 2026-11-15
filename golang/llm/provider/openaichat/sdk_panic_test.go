@@ -2,11 +2,11 @@ package openaichat
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -32,8 +32,5 @@ func TestInvokeRecoversAnSDKPanicWhileReadingAnErrorResponse(t *testing.T) {
 	testassert.NoError(t, err)
 	adapter, call := compileChatProdCall(t, client, "op-panic")
 	_, err = adapter.Invoke(context.Background(), call, nil)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation || mapped.Code != provider.CodeProviderUnavailable {
-		t.Fatalf("Invoke() error = %#v, want the rejected, retryable 503 classification", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchRejected, Retry: provider.RetrySameOperation}, "Invoke() error")
 }

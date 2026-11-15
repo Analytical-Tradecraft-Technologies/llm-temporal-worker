@@ -492,7 +492,8 @@ func openLiveRedisAt(t *testing.T, address string) *redisclient.Client {
 
 func reopenLiveRedisAfterRestart(t *testing.T, container string) *redisclient.Client {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	// Replaying the append-only file after a hard kill can be slow on a loaded runner.
+	deadline := time.Now().Add(time.Minute)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		address, err := liveRedisAddressForContainer(container)
@@ -662,9 +663,11 @@ func deleteLivePrefix(ctx context.Context, client redisclient.UniversalClient, p
 
 func runLiveRedisDocker(t *testing.T, arguments ...string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// A loaded CI runner has taken longer than 30 s to kill or start the
+	// container, so allow two minutes and report what Docker said.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "docker", arguments...).Run(); err != nil {
-		t.Fatal("could not restart the isolated Redis dependency")
+	if output, err := exec.CommandContext(ctx, "docker", arguments...).CombinedOutput(); err != nil {
+		t.Fatalf("could not restart the isolated Redis dependency: docker %s: %v: %s", arguments[0], err, strings.TrimSpace(string(output)))
 	}
 }

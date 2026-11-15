@@ -90,12 +90,31 @@ worker database; the service has no deployed SQL data. See the
 - [Durable-storage key management (proposed design)](architecture/durable-storage-key-management.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
+- [v1 consumer contract kit](testing/contract-kit.md)
 - [Architecture decisions](decisions/)
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
 - [Terminated workflow pending-recovery runbook](runbooks/terminated-workflow-pending-recovery.md)
 - [Fleet upgrade and rollback runbook](runbooks/fleet-upgrade-and-rollback.md)
 - [Key compromise and credential rotation design (#1559)](architecture/key-compromise-and-credential-rotation.md)
 - [Rotating runtime credentials runbook](runbooks/rotating-runtime-credentials.md)
+
+## Incident response
+
+Start every page at [on-call escalation and severity](runbooks/on-call.md):
+severity definitions, escalation roles, the rules that hold in every incident,
+and readiness reason codes. Each row of the
+[alerts catalog](architecture/deployment-and-operations.md#alerts) links to its
+runbook:
+
+- [Stuck ambiguous attempt](runbooks/stuck-ambiguous-attempt.md)
+- [Budget and cost](runbooks/budget-and-cost.md)
+- [Providers and routing](runbooks/provider-and-routing.md)
+- [State stores: Redis readiness, DynamoDB, S3 and corrupt state](runbooks/state-stores.md)
+- [Temporal: stuck Activities, backlog and namespace outage](runbooks/temporal.md)
+- [Configuration reload, rollback and credential rotation](runbooks/configuration-and-credentials.md)
+- [Access: scope denials and unusual access](runbooks/access.md)
+- [Redis budget authority and recovery](runbooks/redis-budget-generation-recovery.md)
+- [Terminated workflows and pending-request recovery](runbooks/terminated-workflow-pending-recovery.md)
 
 ## v1 completion gate
 

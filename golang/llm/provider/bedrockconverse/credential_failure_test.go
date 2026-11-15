@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -38,10 +39,7 @@ func TestConverseCredentialFailureIsPreDispatch(t *testing.T) {
 			_, err := invokeRealConverse(t, transport, func(context.Context) (aws.Credentials, error) {
 				return aws.Credentials{}, credentialErr
 			})
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeAuthentication || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-				t.Fatalf("Invoke() error = %#v, want a not-dispatched next-route authentication failure", err)
-			}
+			mapped := testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeAuthentication, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute}, "Invoke() error")
 			if !errors.Is(err, provider.ErrProviderPreDispatch) || !errors.Is(err, provider.ErrProviderCredentials) {
 				t.Fatalf("Invoke() error = %v, want the pre-dispatch and credential markers", err)
 			}

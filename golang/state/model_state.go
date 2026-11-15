@@ -207,27 +207,12 @@ func (state ModelState) Clone() ModelState {
 	result.Instructions = cloneInstructions(state.Instructions)
 	result.Tools = cloneTools(state.Tools)
 	result.Output = cloneOutput(state.Output)
-	if state.Temperature != nil {
-		value := *state.Temperature
-		result.Temperature = &value
-	}
-	if state.TemperatureDecimal != nil {
-		value := *state.TemperatureDecimal
-		result.TemperatureDecimal = &value
-	}
-	if state.TopP != nil {
-		value := *state.TopP
-		result.TopP = &value
-	}
+	result.Temperature = clonePointer(state.Temperature)
+	result.TemperatureDecimal = clonePointer(state.TemperatureDecimal)
+	result.TopP = clonePointer(state.TopP)
 	result.StopSequences = append([]string(nil), state.StopSequences...)
-	if state.Seed != nil {
-		value := *state.Seed
-		result.Seed = &value
-	}
-	if state.ReasoningTokenBudget != nil {
-		value := *state.ReasoningTokenBudget
-		result.ReasoningTokenBudget = &value
-	}
+	result.Seed = clonePointer(state.Seed)
+	result.ReasoningTokenBudget = clonePointer(state.ReasoningTokenBudget)
 	result.CompactionPolicy = append(json.RawMessage(nil), state.CompactionPolicy...)
 	result.Extensions = cloneRawMap(state.Extensions)
 	return result
@@ -264,10 +249,7 @@ func cloneOutput(value *llm.OutputSpec) *llm.OutputSpec {
 	}
 	result := *value
 	result.Format.Schema = append(json.RawMessage(nil), value.Format.Schema...)
-	if value.MaxTokens != nil {
-		maxTokens := *value.MaxTokens
-		result.MaxTokens = &maxTokens
-	}
+	result.MaxTokens = clonePointer(value.MaxTokens)
 	return &result
 }
 

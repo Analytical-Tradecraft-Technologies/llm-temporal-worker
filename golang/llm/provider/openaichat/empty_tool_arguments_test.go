@@ -7,7 +7,6 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // Some providers send an empty string as the arguments of a zero-argument
@@ -16,7 +15,7 @@ func TestEmptyToolArgumentsLiftAsEmptyObject(t *testing.T) {
 	for name, arguments := range map[string]string{"empty": ``, "whitespace": ` \n\t`} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"id":"empty-args","object":"chat.completion","created":1,"model":"chat-model","service_tier":"default","usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18},"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"ping","arguments":"` + arguments + `"}}]}}]}`
-			response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
+			response := testassert.UnmarshalJSON[openai.ChatCompletion](t, []byte(body))
 			lifted, err := liftStandard(&response)
 			testassert.NoError(t, err, "empty tool arguments failed the response")
 			if lifted.Status != llm.ResponseStatusToolCalls || len(lifted.Output) != 1 {

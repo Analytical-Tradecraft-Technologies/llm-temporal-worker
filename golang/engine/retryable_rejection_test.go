@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -47,10 +48,7 @@ func TestGenerateAttemptCapKeepsTheLastProviderFailure(t *testing.T) {
 	harness.engine.dependencies.MaxAttempts = 1
 	request := priorityWithStandardFallback("attempt-cap")
 	_, err := harness.engine.Generate(context.Background(), request)
-	var failure *provider.Error
-	if !errors.As(err, &failure) || failure.Code != provider.CodeProviderUnavailable || failure.Dispatch != provider.DispatchRejected {
-		t.Fatalf("error = %#v, want the provider's definite rejection", err)
-	}
+	failure := testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchRejected})
 	if adapter.invokes != 1 {
 		t.Fatalf("provider invokes = %d, want the cap to stop after one", adapter.invokes)
 	}

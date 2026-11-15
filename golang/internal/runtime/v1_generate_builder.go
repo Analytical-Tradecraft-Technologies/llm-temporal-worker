@@ -8,6 +8,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -57,11 +58,11 @@ func snapshotV1RuntimeCapabilities(ctx context.Context, snapshot *config.Snapsho
 	if snapshot == nil {
 		return V1RuntimeCapabilities{}, fmt.Errorf("%w: configuration snapshot is nil", composition)
 	}
-	if isNilCapability(clients) {
+	if typednil.Is(clients) {
 		return V1RuntimeCapabilities{}, fmt.Errorf("%w: snapshot client set is nil", composition)
 	}
 	source, ok := clients.(V1RuntimeCapabilitiesSource)
-	if !ok || isNilCapability(source) {
+	if !ok || typednil.Is(source) {
 		return V1RuntimeCapabilities{}, fmt.Errorf("%w: snapshot client set does not expose V1RuntimeCapabilitiesSource", composition)
 	}
 	return source.V1RuntimeCapabilities(), nil

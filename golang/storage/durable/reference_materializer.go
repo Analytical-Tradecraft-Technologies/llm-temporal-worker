@@ -387,9 +387,7 @@ func (materializer *ReferenceBudgetMaterializer) Reconcile(ctx context.Context, 
 		operation.reservations[reservationKey] = reservation
 		operation.events[event.EventID] = fingerprint
 	}
-	for key, bucket := range stagedBuckets {
-		materializer.buckets[key] = bucket
-	}
+	maps.Copy(materializer.buckets, stagedBuckets)
 	materializer.operations[request.OperationID] = operation
 	return nil
 }

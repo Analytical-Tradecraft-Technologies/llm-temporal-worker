@@ -14,7 +14,7 @@ import (
 )
 
 func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
-	response := contract.DecodeJSON[responses.Response](t, readContractFixture(t, "openai-responses", "response.completed.json"))
+	response := testassert.UnmarshalJSON[responses.Response](t, readContractFixture(t, "openai-responses", "response.completed.json"))
 	lifted := mustLift(t, liftCall("fixture-op", llm.ServiceClassStandard), &response, "req")
 	var state *llm.ProviderState
 	var produced []llm.Item
@@ -43,7 +43,7 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("reasoning item missing from replayed input: %s", contract.MarshalJSON(t, params))
+		t.Fatalf("reasoning item missing from replayed input: %s", testassert.MarshalJSON(t, params))
 	}
 
 	for _, foreign := range []llm.ProviderState{

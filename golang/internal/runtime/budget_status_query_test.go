@@ -81,7 +81,7 @@ func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 	for _, member := range members {
 		read.Members = append(read.Members, redisstore.BudgetStatusWindowRecord{Schema: redisstore.BudgetStatusWindowSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1", ManifestDigest: digest, MemberKey: member.Key(), LimitNanoUSD: member.LimitNanoUSD, ReservedNanoUSD: "200000000", AccountedNanoUSD: "100000000", CoverageStart: start, CoverageEnd: end})
 	}
-	payload := encodeJSON(t, read)
+	payload := testassert.MarshalJSON(t, read)
 	keys, err := redisstore.NewBudgetKeySpace(redisstore.KeyOptions{Prefix: "worker", HashTag: "budget", KeySecret: bytes.Repeat([]byte{8}, 32)})
 	testassert.NoError(t, err)
 	f := &cliBudgetFixture{
@@ -123,7 +123,7 @@ func budgetResult(t *testing.T, response llm.QueryResponseV1) llm.BudgetStatus {
 
 func budgetWindow(t *testing.T, raw json.RawMessage) map[string]any {
 	t.Helper()
-	return decodeJSON[map[string]any](t, raw)
+	return testassert.UnmarshalJSON[map[string]any](t, raw)
 }
 
 func requireUnsupportedBudget(t *testing.T, err error) {
@@ -227,7 +227,7 @@ func TestPersistedQueryLogsAuthorizationDecisionsWithoutContent(t *testing.T) {
 	}
 	var decisions []string
 	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
-		entry := decodeJSON[map[string]any](t, []byte(line))
+		entry := testassert.UnmarshalJSON[map[string]any](t, []byte(line))
 		if entry["msg"] != "control query access decision" {
 			continue
 		}

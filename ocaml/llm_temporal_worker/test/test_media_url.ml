@@ -1,8 +1,8 @@
 open Llm_temporal
 
-(* fixtures/v1/media-url-policy.tsv is a copy of the Go case list, so the
-   OCaml codec refuses exactly the image and document URLs the Go worker
-   refuses at request ingress (#1676). *)
+(* fixtures/v1/media-url-policy.tsv is a copy of the contract kit's case
+   list, so the OCaml codec refuses exactly the image and document URLs the
+   Go worker refuses at request ingress (#1676). *)
 let failf format = Printf.ksprintf failwith format
 
 let cases () =

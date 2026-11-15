@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -24,7 +25,7 @@ func TestGenerateActivityKeepsHeartbeatAliveDuringBlockedGenerate(t *testing.T) 
 
 	close(value.release)
 	assertKeepaliveGenerateSucceeded(t, done, "blocked Generate")
-	waitForKeepaliveEvent(t, ticker.stopped, "keepalive ticker to stop before Generate returns")
+	testkit.WaitForEvent(t, ticker.stopped, "keepalive ticker to stop before Generate returns")
 
 	for _, progress := range heartbeater.Snapshot() {
 		if progress.Phase == "streaming" {
@@ -48,14 +49,14 @@ func TestGenerateActivityMapsKeepaliveFailureToAmbiguousAndJoins(t *testing.T) {
 	if !errors.Is(value.ContextError(), context.Canceled) {
 		t.Fatalf("Generate context error = %v, want context cancellation after keepalive failure", value.ContextError())
 	}
-	waitForKeepaliveEvent(t, ticker.stopped, "failed keepalive ticker to stop before Generate returns")
+	testkit.WaitForEvent(t, ticker.stopped, "failed keepalive ticker to stop before Generate returns")
 }
 
 func TestGenerateActivityDoesNotReturnSuccessWhenInFlightKeepaliveFails(t *testing.T) {
 	heartbeater := newGatedFailureHeartbeater(errors.New("heartbeat transport failed after Generate completed"))
 	ticker, value, done := startBlockedKeepaliveGenerate(t, context.Background(), heartbeater)
 	ticker.Tick()
-	waitForKeepaliveEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
+	testkit.WaitForEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
 
 	// The provider can return successfully while a heartbeat transport call is
 	// already in flight. Releasing the provider first makes the stop/join path
@@ -64,21 +65,21 @@ func TestGenerateActivityDoesNotReturnSuccessWhenInFlightKeepaliveFails(t *testi
 	close(heartbeater.release)
 
 	assertKeepaliveGenerateAmbiguous(t, done, "in-flight keepalive failure")
-	waitForKeepaliveEvent(t, ticker.stopped, "in-flight keepalive ticker to stop before Generate returns")
+	testkit.WaitForEvent(t, ticker.stopped, "in-flight keepalive ticker to stop before Generate returns")
 }
 
 func TestGenerateActivityIgnoresSelfStopCancellationFromInFlightKeepalive(t *testing.T) {
 	heartbeater := newGatedCancellationHeartbeater()
 	ticker, value, done := startBlockedKeepaliveGenerate(t, context.Background(), heartbeater)
 	ticker.Tick()
-	waitForKeepaliveEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
+	testkit.WaitForEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
 
 	close(value.release)
-	waitForKeepaliveEvent(t, heartbeater.canceled, "self-stop cancellation to reach in-flight heartbeat")
+	testkit.WaitForEvent(t, heartbeater.canceled, "self-stop cancellation to reach in-flight heartbeat")
 	close(heartbeater.release)
 
 	assertKeepaliveGenerateSucceeded(t, done, "Generate after self-stop heartbeat cancellation")
-	waitForKeepaliveEvent(t, ticker.stopped, "self-stopped keepalive ticker to stop before Generate returns")
+	testkit.WaitForEvent(t, ticker.stopped, "self-stopped keepalive ticker to stop before Generate returns")
 }
 
 func TestGenerateActivityCancellationStopsKeepalive(t *testing.T) {
@@ -90,7 +91,7 @@ func TestGenerateActivityCancellationStopsKeepalive(t *testing.T) {
 	if !errors.Is(result.err, context.Canceled) {
 		t.Fatalf("Generate error after cancellation = %v, want context cancellation", result.err)
 	}
-	waitForKeepaliveEvent(t, ticker.stopped, "canceled keepalive ticker to stop before Generate returns")
+	testkit.WaitForEvent(t, ticker.stopped, "canceled keepalive ticker to stop before Generate returns")
 }
 
 func TestGenerateActivityStopsKeepaliveWhenGeneratePanics(t *testing.T) {
@@ -105,7 +106,7 @@ func TestGenerateActivityStopsKeepaliveWhenGeneratePanics(t *testing.T) {
 		defer func() { panicked <- recover() }()
 		_, _ = activities.Generate(context.Background(), testKeepalivePayload())
 	}()
-	waitForKeepaliveEvent(t, value.started, "panicking Generate to start")
+	testkit.WaitForEvent(t, value.started, "panicking Generate to start")
 	close(value.release)
 
 	select {
@@ -118,7 +119,7 @@ func TestGenerateActivityStopsKeepaliveWhenGeneratePanics(t *testing.T) {
 	}
 	// stop waits for the keepalive goroutine, whose deferred ticker stop runs
 	// before Generate can re-panic to its caller.
-	waitForKeepaliveEvent(t, ticker.stopped, "panic-path keepalive ticker to stop")
+	testkit.WaitForEvent(t, ticker.stopped, "panic-path keepalive ticker to stop")
 }
 
 type generateActivityResult struct {
@@ -147,7 +148,7 @@ func startBlockedKeepaliveGenerate(t *testing.T, ctx context.Context, heartbeate
 	ticker := newManualHeartbeatTicker()
 	value := newBlockingGenerateEngine(completedEngineResponse())
 	done := startKeepaliveGenerate(ctx, keepaliveActivities(value, heartbeater, ticker))
-	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	testkit.WaitForEvent(t, value.started, "blocked Generate to start")
 	return ticker, value, done
 }
 
@@ -364,15 +365,6 @@ var _ Heartbeater = (*gatedCancellationHeartbeater)(nil)
 
 func testKeepalivePayload() GenerateRequest {
 	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
-}
-
-func waitForKeepaliveEvent(t *testing.T, event <-chan struct{}, description string) {
-	t.Helper()
-	select {
-	case <-event:
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", description)
-	}
 }
 
 func waitForGenerateActivityResult(t *testing.T, done <-chan generateActivityResult) generateActivityResult {

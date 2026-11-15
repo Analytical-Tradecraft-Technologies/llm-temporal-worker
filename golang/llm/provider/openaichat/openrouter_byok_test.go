@@ -8,13 +8,12 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func liftOpenRouterUsage(t *testing.T, usage string) *llm.Response {
 	t.Helper()
 	body := `{"id":"gen-1","model":"router-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":` + usage + `}`
-	response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
+	response := testassert.UnmarshalJSON[openai.ChatCompletion](t, []byte(body))
 	lifted := &llm.Response{}
 	testassert.NoError(t, augmentOpenRouter(provider.Call{}, &response, lifted))
 	return lifted

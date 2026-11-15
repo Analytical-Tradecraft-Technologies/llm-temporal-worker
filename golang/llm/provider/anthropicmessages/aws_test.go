@@ -12,10 +12,10 @@ import (
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
@@ -24,7 +24,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 	var requestBody []byte
 	client, err := NewAWSClient(context.Background(), AWSClientConfig{
 		BaseURL: "http://127.0.0.1/aws-contract",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			if request.URL.Path != "/aws-contract/v1/messages" {
 				t.Errorf("request path = %q", request.URL.Path)
@@ -68,7 +68,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 func TestAWSConfigAndCallsDoNotSerializeCredentialValues(t *testing.T) {
 	const secret = "aws-secret-must-not-cross-boundary"
 	config := AWSClientConfig{AWSConfig: anthropicaws.ClientConfig{AWSAccessKey: "access", AWSSecretAccessKey: secret, AWSRegion: "us-east-1", SkipAuth: true}}
-	encodedConfig := contract.MarshalJSON(t, config)
+	encodedConfig := testassert.MarshalJSON(t, config)
 	if strings.Contains(string(encodedConfig), secret) {
 		t.Fatal("resolved credential value appeared in AWS client configuration serialization")
 	}
@@ -78,7 +78,7 @@ func TestAWSConfigAndCallsDoNotSerializeCredentialValues(t *testing.T) {
 		return profile
 	}())}
 	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-credentials", Model: "claude-contract"})
-	encodedCall := contract.MarshalJSON(t, call)
+	encodedCall := testassert.MarshalJSON(t, call)
 	if strings.Contains(string(encodedCall), secret) {
 		t.Fatal("credential value appeared in provider call serialization")
 	}
@@ -114,7 +114,7 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 	body := string(anthropicAWSFixture.read(t, "error.authentication.json"))
 	client, err := NewAWSClient(context.Background(), AWSClientConfig{
 		BaseURL: "http://127.0.0.1/aws-contract",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			return adaptertest.JSONResponse(request, http.StatusUnauthorized, body, "Request-Id", "aws-auth-1"), nil
 		})},
@@ -137,7 +137,7 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 }
 
 func TestAWSGatewayFixtureTextOnlyResponseDoesNotLiftContinuation(t *testing.T) {
-	response := contract.DecodeJSON[anthropic.Message](t, anthropicAWSFixture.read(t, "response.completed.json"))
+	response := testassert.UnmarshalJSON[anthropic.Message](t, anthropicAWSFixture.read(t, "response.completed.json"))
 	call := provider.Call{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "aws-fixture", ServiceClass: llm.ServiceClassStandard}
 	lifted := mustLift(t, mustProfile(t, testProfile()), call, &response, "aws-fixture-request")
 	if lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard || lifted.Continuation != nil {

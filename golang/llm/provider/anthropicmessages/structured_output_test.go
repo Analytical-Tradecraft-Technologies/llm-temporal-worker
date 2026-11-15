@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -26,7 +27,7 @@ func structuredOutputAdapter(t *testing.T, text string, wire *[]byte) *Adapter {
 	client, err := NewClient(ClientConfig{
 		BaseURL: "http://127.0.0.1/contract",
 		APIKey:  "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			*wire, _ = io.ReadAll(request.Body)
 			return adaptertest.JSONResponse(request, http.StatusOK, string(body), "Request-Id", "req-structured"), nil
 		})},

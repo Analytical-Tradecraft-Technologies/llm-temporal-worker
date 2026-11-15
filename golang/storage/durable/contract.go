@@ -8,13 +8,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
@@ -292,16 +292,16 @@ func (composition Composition) Validate() error {
 	if err := composition.Identity.Validate(); err != nil {
 		return err
 	}
-	if isNilPort(composition.Operations) {
+	if typednil.Is(composition.Operations) {
 		return errors.New("durable operation store is required")
 	}
-	if isNilPort(composition.Continuations) {
+	if typednil.Is(composition.Continuations) {
 		return errors.New("durable continuation store is required")
 	}
-	if isNilPort(composition.Results) {
+	if typednil.Is(composition.Results) {
 		return errors.New("durable result store is required")
 	}
-	if isNilPort(composition.Materializer) {
+	if typednil.Is(composition.Materializer) {
 		return errors.New("durable Redis budget materializer is required")
 	}
 	// Validate the budget boundary as part of the composition so callers
@@ -311,22 +311,6 @@ func (composition Composition) Validate() error {
 		return err
 	}
 	return nil
-}
-
-// isNilPort treats an interface containing a typed nil pointer as nil. Ports
-// are validated before any side effects, so an invalid composition fails
-// closed instead of panicking when a method is invoked later.
-func isNilPort(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 // Phase is the legal new-operation order. A failed claim stops dispatch.

@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 )
 
@@ -189,11 +190,11 @@ func RunBudgetInitialize(ctx context.Context, data []byte, apply, recover bool, 
 		return err
 	}
 	store, ok := repository.(budget.InitializationStore)
-	if !ok || isNilCapability(store) {
+	if !ok || typednil.Is(store) {
 		return ErrBudgetInitializationRequired
 	}
 	recovery := budgetRecovery{Recoverer: initializer, Force: recover, Horizon: budgetRecoveryHorizon(value), Logger: slog.New(slog.NewJSONHandler(os.Stderr, nil))}
-	if source, ok := repository.(budgetRecoverySource); ok && !isNilCapability(source) {
+	if source, ok := repository.(budgetRecoverySource); ok && !typednil.Is(source) {
 		recovery.Source = source
 	} else if recover {
 		return errors.New("budget-initialize --recover requires durable cloud request storage")

@@ -8,6 +8,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
@@ -27,9 +28,7 @@ func TestModelProcessingFailuresRemainAmbiguous(t *testing.T) {
 	for _, status := range []int{http.StatusRequestTimeout, http.StatusFailedDependency} {
 		cause := &anthropic.Error{StatusCode: status, RequestID: "request-id"}
 		mapped := mapError(fmt.Errorf("wrapped: %w", cause), "bedrock-messages")
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
-			t.Fatalf("status %d became a rejection: %#v", status, mapped)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetrySameOperation}, fmt.Sprintf("status %d became a rejection", status))
 		if !errors.Is(mapped, cause) || mapped.Provider.RequestID != "request-id" {
 			t.Fatal("provider error identity was lost")
 		}
@@ -39,9 +38,7 @@ func TestModelProcessingFailuresRemainAmbiguous(t *testing.T) {
 func TestDefiniteMessagesRejectionsRemainRejected(t *testing.T) {
 	for _, status := range []int{400, 401, 403, 404, 422, 429} {
 		mapped := mapAPIError(&anthropic.Error{StatusCode: status}, "bedrock-messages")
-		if mapped.Dispatch != provider.DispatchRejected {
-			t.Fatalf("status %d became ambiguous", status)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Dispatch: provider.DispatchRejected}, fmt.Sprintf("status %d became ambiguous", status))
 	}
 }
 

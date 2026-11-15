@@ -6,7 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -35,11 +36,7 @@ func IsObjectSchema(schema map[string]any) bool {
 // deterministic, sorted note for the schema description, as in
 // "{maxLength: 5, pattern: ^a}".
 func DescribeExtras(extras map[string]any) (string, error) {
-	keys := make([]string, 0, len(extras))
-	for key := range extras {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(extras))
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		rendered, ok := extras[key].(string)
