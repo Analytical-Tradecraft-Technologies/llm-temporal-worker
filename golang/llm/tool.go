@@ -13,6 +13,8 @@ const (
 	ToolKindRemoteMCP ToolKind = "remote_mcp"
 )
 
+var toolKinds = []ToolKind{ToolKindFunction, ToolKindProvider, ToolKindRemoteMCP}
+
 type Tool struct {
 	Kind         ToolKind
 	Name         string
@@ -22,8 +24,8 @@ type Tool struct {
 }
 
 func (tool Tool) MarshalJSON() ([]byte, error) {
-	if tool.Kind != "" && tool.Kind != ToolKindFunction && tool.Kind != ToolKindProvider && tool.Kind != ToolKindRemoteMCP {
-		return nil, fmt.Errorf("tool kind %q is invalid", tool.Kind)
+	if _, err := defaultEnum(tool.Kind, ToolKindFunction, "tool kind", toolKinds...); err != nil {
+		return nil, err
 	}
 	if err := validateToolName(tool.Name); err != nil {
 		return nil, err
@@ -49,40 +51,25 @@ func (tool Tool) MarshalJSON() ([]byte, error) {
 }
 
 func decodeTool(data []byte) (Tool, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "kind", "name", "description", "input_schema", "output_schema")
 	if err != nil {
 		return Tool{}, err
 	}
-	if err := checkUnknownFields(fields, "kind", "name", "description", "input_schema", "output_schema"); err != nil {
-		return Tool{}, err
-	}
-	kindValue, _, err := optionalString(fields, "kind")
-	if err != nil {
-		return Tool{}, err
-	}
-	kind := ToolKind(kindValue)
-	if kind == "" {
-		kind = ToolKindFunction
-	}
-	if kind != ToolKindFunction && kind != ToolKindProvider && kind != ToolKindRemoteMCP {
-		return Tool{}, fmt.Errorf("tool kind %q is invalid", kind)
-	}
-	name, err := requiredString(fields, "name")
-	if err != nil {
-		return Tool{}, err
+	reader := fieldReader{fields: fields}
+	kind := readEnum(&reader, "kind", ToolKindFunction, "tool kind", toolKinds...)
+	name := reader.requiredString("name")
+	if reader.err != nil {
+		return Tool{}, reader.err
 	}
 	if err := validateToolName(name); err != nil {
 		return Tool{}, err
 	}
 	// The schema requires description and the encoder always writes it, so
 	// the decoder requires it too (#1662).
-	description, err := requiredString(fields, "description")
-	if err != nil {
-		return Tool{}, err
-	}
-	inputSchema, err := requireField(fields, "input_schema")
-	if err != nil {
-		return Tool{}, err
+	description := reader.requiredString("description")
+	inputSchema := reader.requireField("input_schema")
+	if reader.err != nil {
+		return Tool{}, reader.err
 	}
 	if !validObjectJSON(inputSchema) {
 		return Tool{}, fmt.Errorf("tool %q input_schema must be a JSON object", name)
@@ -119,28 +106,34 @@ type ToolPolicy struct {
 }
 
 func (policy ToolPolicy) MarshalJSON() ([]byte, error) {
-	mode := policy.Mode
-	if mode == "" {
-		mode = ToolChoiceAuto
+	mode, err := defaultEnum(policy.Mode, ToolChoiceAuto, "tool policy mode", toolChoiceModes...)
+	if err != nil {
+		return nil, err
 	}
-	if mode != ToolChoiceNone && mode != ToolChoiceAuto && mode != ToolChoiceRequired && mode != ToolChoiceNamed {
-		return nil, fmt.Errorf("tool policy mode %q is invalid", mode)
-	}
-	if mode == ToolChoiceNamed {
-		if err := validateToolName(policy.Name); err != nil {
-			return nil, fmt.Errorf("named tool policy: %w", err)
-		}
-	} else if policy.Name != "" {
-		return nil, fmt.Errorf("tool policy name is only valid with named mode")
+	if err := validateToolPolicyName(mode, policy.Name); err != nil {
+		return nil, err
 	}
 	fields := map[string]any{
 		"mode":     mode,
 		"parallel": policy.Parallel,
 	}
-	if policy.Name != "" {
-		fields["name"] = policy.Name
-	}
+	setIfNotEmpty(fields, "name", policy.Name)
 	return marshalObject(fields)
+}
+
+var toolChoiceModes = []ToolChoiceMode{ToolChoiceNone, ToolChoiceAuto, ToolChoiceRequired, ToolChoiceNamed}
+
+// validateToolPolicyName requires a valid tool name in named mode and no
+// name in any other mode.
+func validateToolPolicyName(mode ToolChoiceMode, name string) error {
+	if mode == ToolChoiceNamed {
+		if err := validateToolName(name); err != nil {
+			return fmt.Errorf("named tool policy: %w", err)
+		}
+	} else if name != "" {
+		return fmt.Errorf("tool policy name is only valid with named mode")
+	}
+	return nil
 }
 
 // decodeToolPolicyPatch decodes a settings patch value. The published schema
@@ -161,39 +154,21 @@ func decodeToolPolicyPatch(data []byte) (ToolPolicy, error) {
 }
 
 func decodeToolPolicy(data []byte) (ToolPolicy, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "mode", "name", "parallel")
 	if err != nil {
 		return ToolPolicy{}, err
 	}
-	if err := checkUnknownFields(fields, "mode", "name", "parallel"); err != nil {
+	reader := fieldReader{fields: fields}
+	policy := ToolPolicy{
+		Mode:     readEnum(&reader, "mode", ToolChoiceAuto, "tool policy mode", toolChoiceModes...),
+		Name:     reader.optionalString("name"),
+		Parallel: reader.optionalBool("parallel"),
+	}
+	if reader.err != nil {
+		return ToolPolicy{}, reader.err
+	}
+	if err := validateToolPolicyName(policy.Mode, policy.Name); err != nil {
 		return ToolPolicy{}, err
-	}
-	modeValue, present, err := optionalString(fields, "mode")
-	if err != nil {
-		return ToolPolicy{}, err
-	}
-	mode := ToolChoiceMode(modeValue)
-	if !present || mode == "" {
-		mode = ToolChoiceAuto
-	}
-	if mode != ToolChoiceNone && mode != ToolChoiceAuto && mode != ToolChoiceRequired && mode != ToolChoiceNamed {
-		return ToolPolicy{}, fmt.Errorf("tool policy mode %q is invalid", mode)
-	}
-	name, _, err := optionalString(fields, "name")
-	if err != nil {
-		return ToolPolicy{}, err
-	}
-	parallel, _, err := optionalBool(fields, "parallel")
-	if err != nil {
-		return ToolPolicy{}, err
-	}
-	policy := ToolPolicy{Mode: mode, Name: name, Parallel: parallel}
-	if mode == ToolChoiceNamed {
-		if err := validateToolName(name); err != nil {
-			return ToolPolicy{}, fmt.Errorf("named tool policy: %w", err)
-		}
-	} else if name != "" {
-		return ToolPolicy{}, fmt.Errorf("tool policy name is only valid with named mode")
 	}
 	return policy, nil
 }

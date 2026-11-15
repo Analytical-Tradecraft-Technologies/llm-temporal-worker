@@ -45,15 +45,9 @@ func (context RequestContext) empty() bool {
 
 func (context RequestContext) MarshalJSON() ([]byte, error) {
 	fields := make(map[string]any)
-	if context.Tenant != "" {
-		fields["tenant"] = context.Tenant
-	}
-	if context.Project != "" {
-		fields["project"] = context.Project
-	}
-	if context.Actor != "" {
-		fields["actor"] = context.Actor
-	}
+	setIfNotEmpty(fields, "tenant", context.Tenant)
+	setIfNotEmpty(fields, "project", context.Project)
+	setIfNotEmpty(fields, "actor", context.Actor)
 	if len(context.Tags) > 0 {
 		fields["tags"] = context.Tags
 	}
@@ -61,32 +55,33 @@ func (context RequestContext) MarshalJSON() ([]byte, error) {
 }
 
 func decodeRequestContext(data []byte) (RequestContext, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "tenant", "project", "actor", "tags")
 	if err != nil {
 		return RequestContext{}, err
 	}
-	if err := checkUnknownFields(fields, "tenant", "project", "actor", "tags"); err != nil {
-		return RequestContext{}, err
-	}
-	tenant, _, err := optionalString(fields, "tenant")
+	context, err := decodeContextIdentity(fields)
 	if err != nil {
 		return RequestContext{}, err
 	}
-	project, _, err := optionalString(fields, "project")
-	if err != nil {
-		return RequestContext{}, err
+	if err := decodeOptionalField(fields, "tags", &context.Tags, decodeJSONValue[map[string]string]); err != nil {
+		return RequestContext{}, fmt.Errorf("context %w", err)
 	}
-	actor, _, err := optionalString(fields, "actor")
-	if err != nil {
-		return RequestContext{}, err
+	return context, nil
+}
+
+// decodeContextIdentity reads the optional tenant, project and actor strings
+// the engine and v1 context objects share.
+func decodeContextIdentity(fields map[string]json.RawMessage) (RequestContext, error) {
+	reader := fieldReader{fields: fields}
+	context := RequestContext{
+		Tenant:  reader.optionalString("tenant"),
+		Project: reader.optionalString("project"),
+		Actor:   reader.optionalString("actor"),
 	}
-	var tags map[string]string
-	if raw, ok := fields["tags"]; ok {
-		if err := decodeJSON(raw, &tags); err != nil {
-			return RequestContext{}, fmt.Errorf("context tags: %w", err)
-		}
+	if reader.err != nil {
+		return RequestContext{}, reader.err
 	}
-	return RequestContext{Tenant: tenant, Project: project, Actor: actor, Tags: tags}, nil
+	return context, nil
 }
 
 type InstructionKind string
@@ -102,6 +97,8 @@ const (
 	InstructionLevelApplication InstructionLevel = "application"
 	InstructionLevelPolicy      InstructionLevel = "policy"
 )
+
+var instructionLevels = []InstructionLevel{InstructionLevelApplication, InstructionLevelPolicy}
 
 type Instruction struct {
 	Kind    InstructionKind
@@ -122,12 +119,9 @@ func (instruction Instruction) MarshalJSON() ([]byte, error) {
 	if kind != InstructionKindText && kind != InstructionKindParts {
 		return nil, fmt.Errorf("instruction kind %q is invalid", kind)
 	}
-	level := instruction.Level
-	if level == "" {
-		level = InstructionLevelApplication
-	}
-	if level != InstructionLevelApplication && level != InstructionLevelPolicy {
-		return nil, fmt.Errorf("instruction level %q is invalid", level)
+	level, err := defaultEnum(instruction.Level, InstructionLevelApplication, "instruction level", instructionLevels...)
+	if err != nil {
+		return nil, err
 	}
 	fields := map[string]any{"kind": kind}
 	if level != InstructionLevelApplication {
@@ -150,21 +144,14 @@ func (instruction Instruction) MarshalJSON() ([]byte, error) {
 		}
 		fields["text"] = instruction.Text
 	case InstructionKindParts:
-		content := instruction.Content
-		if content == nil {
-			content = []Part{}
-		}
-		fields["content"] = content
+		fields["content"] = emptyIfNil(instruction.Content)
 	}
 	return marshalObject(fields)
 }
 
 func decodeInstruction(data []byte) (Instruction, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "kind", "level", "text", "content")
 	if err != nil {
-		return Instruction{}, err
-	}
-	if err := checkUnknownFields(fields, "kind", "level", "text", "content"); err != nil {
 		return Instruction{}, err
 	}
 	kindValue, err := requiredString(fields, "kind")
@@ -175,16 +162,10 @@ func decodeInstruction(data []byte) (Instruction, error) {
 	if kind != InstructionKindText && kind != InstructionKindParts {
 		return Instruction{}, fmt.Errorf("instruction kind %q is invalid", kind)
 	}
-	levelValue, _, err := optionalString(fields, "level")
-	if err != nil {
-		return Instruction{}, err
-	}
-	level := InstructionLevel(levelValue)
-	if level == "" {
-		level = InstructionLevelApplication
-	}
-	if level != InstructionLevelApplication && level != InstructionLevelPolicy {
-		return Instruction{}, fmt.Errorf("instruction level %q is invalid", level)
+	reader := fieldReader{fields: fields}
+	level := readEnum(&reader, "level", InstructionLevelApplication, "instruction level", instructionLevels...)
+	if reader.err != nil {
+		return Instruction{}, reader.err
 	}
 	instruction := Instruction{Kind: kind, Level: level}
 	switch kind {
@@ -233,6 +214,8 @@ const (
 	OutputKindJSONSchema OutputKind = "json_schema"
 )
 
+var outputKinds = []OutputKind{OutputKindText, OutputKindJSON, OutputKindJSONSchema}
+
 // DefaultOutputFormatName is the json_schema name sent to providers that
 // require one when the caller omitted it. It is a constant so the wire body
 // stays deterministic.
@@ -264,23 +247,16 @@ type OutputFormat struct {
 }
 
 func (format OutputFormat) MarshalJSON() ([]byte, error) {
-	kind := format.Kind
-	if kind == "" {
-		kind = OutputKindText
-	}
-	if kind != OutputKindText && kind != OutputKindJSON && kind != OutputKindJSONSchema {
-		return nil, fmt.Errorf("output format kind %q is invalid", kind)
+	kind, err := defaultEnum(format.Kind, OutputKindText, "output format kind", outputKinds...)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateOutputFormatName(format.Name); err != nil {
 		return nil, err
 	}
 	fields := map[string]any{"kind": kind}
-	if format.Name != "" {
-		fields["name"] = format.Name
-	}
-	if format.Description != "" {
-		fields["description"] = format.Description
-	}
+	setIfNotEmpty(fields, "name", format.Name)
+	setIfNotEmpty(fields, "description", format.Description)
 	if kind == OutputKindJSONSchema {
 		if !validObjectJSON(format.Schema) {
 			return nil, errorsForField("json_schema output format", "schema")
@@ -296,27 +272,15 @@ func (format OutputFormat) MarshalJSON() ([]byte, error) {
 }
 
 func decodeOutputFormat(data []byte) (OutputFormat, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "kind", "name", "description", "strict", "schema")
 	if err != nil {
 		return OutputFormat{}, err
 	}
-	if err := checkUnknownFields(fields, "kind", "name", "description", "strict", "schema"); err != nil {
-		return OutputFormat{}, err
-	}
-	kindValue, present, err := optionalString(fields, "kind")
-	if err != nil {
-		return OutputFormat{}, err
-	}
-	kind := OutputKind(kindValue)
-	if !present || kind == "" {
-		kind = OutputKindText
-	}
-	if kind != OutputKindText && kind != OutputKindJSON && kind != OutputKindJSONSchema {
-		return OutputFormat{}, fmt.Errorf("output format kind %q is invalid", kind)
-	}
-	name, namePresent, err := optionalString(fields, "name")
-	if err != nil {
-		return OutputFormat{}, err
+	reader := fieldReader{fields: fields}
+	kind := readEnum(&reader, "kind", OutputKindText, "output format kind", outputKinds...)
+	name, namePresent := reader.optionalStringPresent("name")
+	if reader.err != nil {
+		return OutputFormat{}, reader.err
 	}
 	if namePresent && name == "" {
 		return OutputFormat{}, fmt.Errorf("output format name must not be empty when present")
@@ -324,13 +288,10 @@ func decodeOutputFormat(data []byte) (OutputFormat, error) {
 	if err := validateOutputFormatName(name); err != nil {
 		return OutputFormat{}, err
 	}
-	description, _, err := optionalString(fields, "description")
-	if err != nil {
-		return OutputFormat{}, err
-	}
-	strict, _, err := optionalBool(fields, "strict")
-	if err != nil {
-		return OutputFormat{}, err
+	description := reader.optionalString("description")
+	strict := reader.optionalBool("strict")
+	if reader.err != nil {
+		return OutputFormat{}, reader.err
 	}
 	var schema json.RawMessage
 	if value, ok := fields["schema"]; ok {
@@ -366,30 +327,20 @@ func (output OutputSpec) MarshalJSON() ([]byte, error) {
 }
 
 func decodeOutput(data []byte) (*OutputSpec, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "max_tokens", "format")
 	if err != nil {
 		return nil, err
 	}
-	if err := checkUnknownFields(fields, "max_tokens", "format"); err != nil {
-		return nil, err
-	}
 	var maxTokens *int
-	if value, ok := fields["max_tokens"]; ok {
-		parsed, err := decodeInt(value)
-		if err != nil {
-			return nil, fmt.Errorf("output max_tokens: %w", err)
-		}
-		if parsed < 0 {
-			return nil, fmt.Errorf("output max_tokens must not be negative")
-		}
-		maxTokens = &parsed
+	if err := decodeOptionalField(fields, "max_tokens", &maxTokens, pointerTo(decodeInt)); err != nil {
+		return nil, fmt.Errorf("output %w", err)
+	}
+	if maxTokens != nil && *maxTokens < 0 {
+		return nil, fmt.Errorf("output max_tokens must not be negative")
 	}
 	format := OutputFormat{Kind: OutputKindText}
-	if value, ok := fields["format"]; ok {
-		format, err = decodeOutputFormat(value)
-		if err != nil {
-			return nil, fmt.Errorf("output format: %w", err)
-		}
+	if err := decodeOptionalField(fields, "format", &format, decodeOutputFormat); err != nil {
+		return nil, fmt.Errorf("output %w", err)
 	}
 	return &OutputSpec{MaxTokens: maxTokens, Format: format}, nil
 }
@@ -431,60 +382,21 @@ func (sampling SamplingSpec) MarshalJSON() ([]byte, error) {
 }
 
 func decodeSampling(data []byte) (*SamplingSpec, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "temperature", "top_p", "top_k", "seed", "presence_penalty", "frequency_penalty", "stop_sequences")
 	if err != nil {
 		return nil, err
 	}
-	if err := checkUnknownFields(fields, "temperature", "top_p", "top_k", "seed", "presence_penalty", "frequency_penalty", "stop_sequences"); err != nil {
-		return nil, err
-	}
 	result := &SamplingSpec{}
-	if raw, ok := fields["temperature"]; ok {
-		value, err := decodeFloat64(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sampling temperature: %w", err)
-		}
-		result.Temperature = &value
-	}
-	if raw, ok := fields["top_p"]; ok {
-		value, err := decodeFloat64(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sampling top_p: %w", err)
-		}
-		result.TopP = &value
-	}
-	if raw, ok := fields["top_k"]; ok {
-		value, err := decodeInt(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sampling top_k: %w", err)
-		}
-		result.TopK = &value
-	}
-	if raw, ok := fields["seed"]; ok {
-		value, err := decodeInt64(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sampling seed: %w", err)
-		}
-		result.Seed = &value
-	}
-	if raw, ok := fields["presence_penalty"]; ok {
-		value, err := decodeFloat64(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sampling presence_penalty: %w", err)
-		}
-		result.PresencePenalty = &value
-	}
-	if raw, ok := fields["frequency_penalty"]; ok {
-		value, err := decodeFloat64(raw)
-		if err != nil {
-			return nil, fmt.Errorf("sampling frequency_penalty: %w", err)
-		}
-		result.FrequencyPenalty = &value
-	}
-	if raw, ok := fields["stop_sequences"]; ok {
-		if err := decodeJSON(raw, &result.StopSequences); err != nil {
-			return nil, fmt.Errorf("sampling stop_sequences: %w", err)
-		}
+	reader := fieldReader{fields: fields}
+	readOptionalField(&reader, "temperature", &result.Temperature, pointerTo(decodeFloat64))
+	readOptionalField(&reader, "top_p", &result.TopP, pointerTo(decodeFloat64))
+	readOptionalField(&reader, "top_k", &result.TopK, pointerTo(decodeInt))
+	readOptionalField(&reader, "seed", &result.Seed, pointerTo(decodeInt64))
+	readOptionalField(&reader, "presence_penalty", &result.PresencePenalty, pointerTo(decodeFloat64))
+	readOptionalField(&reader, "frequency_penalty", &result.FrequencyPenalty, pointerTo(decodeFloat64))
+	readOptionalField(&reader, "stop_sequences", &result.StopSequences, decodeJSONValue[[]string])
+	if reader.err != nil {
+		return nil, fmt.Errorf("sampling %w", reader.err)
 	}
 	return result, nil
 }
@@ -529,58 +441,37 @@ type ReasoningSpec struct {
 
 func (reasoning ReasoningSpec) MarshalJSON() ([]byte, error) {
 	fields := make(map[string]any)
-	if reasoning.Mode != "" {
-		fields["mode"] = reasoning.Mode
-	}
-	if reasoning.Effort != "" {
-		fields["effort"] = reasoning.Effort
-	}
+	setIfNotEmpty(fields, "mode", reasoning.Mode)
+	setIfNotEmpty(fields, "effort", reasoning.Effort)
 	if reasoning.TokenBudget != nil {
 		if *reasoning.TokenBudget < 0 {
 			return nil, fmt.Errorf("reasoning token_budget must not be negative")
 		}
 		fields["token_budget"] = *reasoning.TokenBudget
 	}
-	if reasoning.Summary != "" {
-		fields["summary"] = reasoning.Summary
-	}
+	setIfNotEmpty(fields, "summary", reasoning.Summary)
 	return marshalObject(fields)
 }
 
 func decodeReasoning(data []byte) (*ReasoningSpec, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "mode", "effort", "token_budget", "summary")
 	if err != nil {
 		return nil, err
 	}
-	if err := checkUnknownFields(fields, "mode", "effort", "token_budget", "summary"); err != nil {
-		return nil, err
-	}
-	modeValue, _, err := optionalString(fields, "mode")
-	if err != nil {
-		return nil, err
-	}
-	effortValue, _, err := optionalString(fields, "effort")
-	if err != nil {
-		return nil, err
-	}
-	summaryValue, _, err := optionalString(fields, "summary")
-	if err != nil {
-		return nil, err
-	}
+	reader := fieldReader{fields: fields}
 	result := &ReasoningSpec{
-		Mode:    ReasoningMode(modeValue),
-		Effort:  ReasoningEffort(effortValue),
-		Summary: ReasoningSummary(summaryValue),
+		Mode:    ReasoningMode(reader.optionalString("mode")),
+		Effort:  ReasoningEffort(reader.optionalString("effort")),
+		Summary: ReasoningSummary(reader.optionalString("summary")),
 	}
-	if raw, ok := fields["token_budget"]; ok {
-		value, err := decodeInt(raw)
-		if err != nil {
-			return nil, fmt.Errorf("reasoning token_budget: %w", err)
-		}
-		if value < 0 {
-			return nil, fmt.Errorf("reasoning token_budget must not be negative")
-		}
-		result.TokenBudget = &value
+	if reader.err != nil {
+		return nil, reader.err
+	}
+	if err := decodeOptionalField(fields, "token_budget", &result.TokenBudget, pointerTo(decodeInt)); err != nil {
+		return nil, fmt.Errorf("reasoning %w", err)
+	}
+	if result.TokenBudget != nil && *result.TokenBudget < 0 {
+		return nil, fmt.Errorf("reasoning token_budget must not be negative")
 	}
 	if err := validateReasoning(*result); err != nil {
 		return nil, err
@@ -605,12 +496,8 @@ func (continuation Continuation) MarshalJSON() ([]byte, error) {
 		"handle": continuation.Handle,
 		"pinned": continuation.Pinned,
 	}
-	if continuation.EndpointID != "" {
-		fields["endpoint_id"] = continuation.EndpointID
-	}
-	if continuation.Model != "" {
-		fields["model"] = continuation.Model
-	}
+	setIfNotEmpty(fields, "endpoint_id", continuation.EndpointID)
+	setIfNotEmpty(fields, "model", continuation.Model)
 	if continuation.ExpiresAt != nil {
 		fields["expires_at"] = continuation.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -621,32 +508,21 @@ func (continuation Continuation) MarshalJSON() ([]byte, error) {
 }
 
 func decodeContinuation(data []byte) (*Continuation, error) {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "handle", "endpoint_id", "model", "expires_at", "pinned", "provider_state")
 	if err != nil {
 		return nil, err
 	}
-	if err := checkUnknownFields(fields, "handle", "endpoint_id", "model", "expires_at", "pinned", "provider_state"); err != nil {
-		return nil, err
-	}
-	handle, err := requiredString(fields, "handle")
-	if err != nil {
-		return nil, err
-	}
-	endpointID, _, err := optionalString(fields, "endpoint_id")
-	if err != nil {
-		return nil, err
-	}
-	model, _, err := optionalString(fields, "model")
-	if err != nil {
-		return nil, err
-	}
-	pinned, _, err := optionalBool(fields, "pinned")
-	if err != nil {
-		return nil, err
+	reader := fieldReader{fields: fields}
+	handle := reader.requiredString("handle")
+	endpointID := reader.optionalString("endpoint_id")
+	model := reader.optionalString("model")
+	pinned := reader.optionalBool("pinned")
+	if reader.err != nil {
+		return nil, reader.err
 	}
 	var expiresAt *time.Time
 	if raw, ok := fields["expires_at"]; ok {
-		value, err := requiredString(map[string]json.RawMessage{"expires_at": raw}, "expires_at")
+		value, err := decodeStringField("expires_at", raw)
 		if err != nil {
 			return nil, err
 		}
@@ -662,13 +538,8 @@ func decodeContinuation(data []byte) (*Continuation, error) {
 		if err := decodeJSON(raw, &values); err != nil {
 			return nil, fmt.Errorf("continuation provider_state: %w", err)
 		}
-		states = make([]ProviderState, 0, len(values))
-		for index, value := range values {
-			state, err := decodeProviderState(value)
-			if err != nil {
-				return nil, fmt.Errorf("continuation provider_state %d: %w", index, err)
-			}
-			states = append(states, state)
+		if states, err = decodeEach(values, "continuation provider_state", decodeProviderState); err != nil {
+			return nil, err
 		}
 	}
 	return &Continuation{Handle: handle, EndpointID: endpointID, Model: model, ExpiresAt: expiresAt, Pinned: pinned, ProviderStates: states}, nil
@@ -699,10 +570,7 @@ func (request Request) jsonFields() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	fallbacks := request.ServiceClassFallbacks
-	if fallbacks == nil {
-		fallbacks = []ServiceClass{}
-	}
+	fallbacks := emptyIfNil(request.ServiceClassFallbacks)
 	if err := ValidateServiceClassFallbacks(serviceClass, fallbacks); err != nil {
 		return nil, err
 	}
@@ -712,18 +580,6 @@ func (request Request) jsonFields() (map[string]any, error) {
 	}
 	if !portability.Valid() {
 		return nil, fmt.Errorf("portability %q is invalid", portability)
-	}
-	instructions := request.Instructions
-	if instructions == nil {
-		instructions = []Instruction{}
-	}
-	input := request.Input
-	if input == nil {
-		input = []Item{}
-	}
-	tools := request.Tools
-	if tools == nil {
-		tools = []Tool{}
 	}
 	extensions := copyRawMap(request.Extensions)
 	if extensions == nil {
@@ -736,9 +592,9 @@ func (request Request) jsonFields() (map[string]any, error) {
 		"service_class":           serviceClass,
 		"service_class_fallbacks": fallbacks,
 		"portability":             portability,
-		"instructions":            instructions,
-		"input":                   input,
-		"tools":                   tools,
+		"instructions":            emptyIfNil(request.Instructions),
+		"input":                   emptyIfNil(request.Input),
+		"tools":                   emptyIfNil(request.Tools),
 		"tool_policy":             request.ToolPolicy,
 		"continuation":            request.Continuation,
 		"extensions":              extensions,
@@ -755,70 +611,41 @@ func (request Request) jsonFields() (map[string]any, error) {
 	if !request.Context.empty() {
 		fields["context"] = request.Context
 	}
-	if request.Output != nil {
-		fields["output"] = request.Output
-	}
-	if request.Sampling != nil {
-		fields["sampling"] = request.Sampling
-	}
-	if request.Reasoning != nil {
-		fields["reasoning"] = request.Reasoning
-	}
+	setIfNotNil(fields, "output", request.Output)
+	setIfNotNil(fields, "sampling", request.Sampling)
+	setIfNotNil(fields, "reasoning", request.Reasoning)
 	return fields, nil
 }
 
 func (request *Request) UnmarshalJSON(data []byte) error {
-	fields, err := decodeObject(data)
+	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "model", "service_class", "service_class_fallbacks", "portability", "instructions", "input", "tools", "tool_policy", "output", "sampling", "reasoning", "continuation", "extensions", "web_search", "web_fetch", "code_execution")
 	if err != nil {
 		return err
 	}
-	if err := checkUnknownFields(fields, "api_version", "operation_key", "context", "model", "service_class", "service_class_fallbacks", "portability", "instructions", "input", "tools", "tool_policy", "output", "sampling", "reasoning", "continuation", "extensions", "web_search", "web_fetch", "code_execution"); err != nil {
-		return err
-	}
-	apiVersion, err := requiredString(fields, "api_version")
+	apiVersion, operationKey, err := decodeEngineHeader(fields)
 	if err != nil {
 		return err
 	}
-	if apiVersion != APIVersion {
-		return fmt.Errorf("api_version %q is unsupported", apiVersion)
-	}
-	operationKey, err := requiredString(fields, "operation_key")
-	if err != nil {
-		return err
-	}
-	model, err := requiredString(fields, "model")
-	if err != nil {
-		return err
-	}
-	result := Request{APIVersion: apiVersion, OperationKey: operationKey, Model: model, Portability: PortabilityStrict}
-	if err := decodeOptionalField(fields, "context", &result.Context, decodeRequestContext); err != nil {
-		return err
-	}
-	serviceClass := ServiceClass("")
-	if raw, ok := fields["service_class"]; ok {
-		value, err := requiredString(map[string]json.RawMessage{"service_class": raw}, "service_class")
-		if err != nil {
-			return err
-		}
-		serviceClass = ServiceClass(value)
+	reader := fieldReader{fields: fields}
+	result := Request{APIVersion: apiVersion, OperationKey: operationKey, Model: reader.requiredString("model"), Portability: PortabilityStrict}
+	readOptionalField(&reader, "context", &result.Context, decodeRequestContext)
+	serviceClass := ServiceClass(reader.optionalString("service_class"))
+	if reader.err != nil {
+		return reader.err
 	}
 	result.ServiceClass, err = NormalizeServiceClass(serviceClass)
 	if err != nil {
 		return err
 	}
-	if raw, ok := fields["service_class_fallbacks"]; ok {
-		if err := decodeJSON(raw, &result.ServiceClassFallbacks); err != nil {
-			return fmt.Errorf("service_class_fallbacks: %w", err)
-		}
+	if err := decodeOptionalField(fields, "service_class_fallbacks", &result.ServiceClassFallbacks, decodeJSONValue[[]ServiceClass]); err != nil {
+		return err
 	}
-	if result.ServiceClassFallbacks == nil {
-		result.ServiceClassFallbacks = []ServiceClass{}
-	}
+	result.ServiceClassFallbacks = emptyIfNil(result.ServiceClassFallbacks)
 	if err := ValidateServiceClassFallbacks(result.ServiceClass, result.ServiceClassFallbacks); err != nil {
 		return err
 	}
 	if raw, ok := fields["portability"]; ok {
-		value, err := requiredString(map[string]json.RawMessage{"portability": raw}, "portability")
+		value, err := decodeStringField("portability", raw)
 		if err != nil {
 			return err
 		}
@@ -827,70 +654,36 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("portability %q is invalid", result.Portability)
 		}
 	}
-	if err := decodeOptionalField(fields, "instructions", &result.Instructions, decodeInstructions); err != nil {
-		return err
-	}
-	if err := decodeOptionalField(fields, "input", &result.Input, decodeItems); err != nil {
-		return err
-	}
-	if err := decodeOptionalField(fields, "tools", &result.Tools, decodeTools); err != nil {
-		return err
-	}
+	readOptionalField(&reader, "instructions", &result.Instructions, decodeInstructions)
+	readOptionalField(&reader, "input", &result.Input, decodeItems)
+	readOptionalField(&reader, "tools", &result.Tools, decodeTools)
 	result.ToolPolicy = ToolPolicy{Mode: ToolChoiceAuto}
-	if err := decodeOptionalField(fields, "tool_policy", &result.ToolPolicy, decodeToolPolicy); err != nil {
+	readOptionalField(&reader, "tool_policy", &result.ToolPolicy, decodeToolPolicy)
+	readNullableField(&reader, "output", &result.Output, decodeOutput)
+	readNullableField(&reader, "sampling", &result.Sampling, decodeSampling)
+	readNullableField(&reader, "reasoning", &result.Reasoning, decodeReasoning)
+	readNullableField(&reader, "continuation", &result.Continuation, decodeContinuation)
+	if reader.err != nil {
+		return reader.err
+	}
+	if err := decodeNonNullBool(fields, "web_fetch", &result.WebFetch); err != nil {
 		return err
 	}
-	if err := decodeNullableField(fields, "output", &result.Output, decodeOutput); err != nil {
+	if err := decodeNonNullBool(fields, "code_execution", &result.CodeExecution); err != nil {
 		return err
 	}
-	if err := decodeNullableField(fields, "sampling", &result.Sampling, decodeSampling); err != nil {
-		return err
+	if string(fields["web_search"]) == "null" {
+		return fmt.Errorf("web_search must be boolean")
 	}
-	if err := decodeNullableField(fields, "reasoning", &result.Reasoning, decodeReasoning); err != nil {
-		return err
+	readOptionalField(&reader, "web_search", &result.WebSearch, decodeJSONValue[bool])
+	readOptionalField(&reader, "extensions", &result.Extensions, decodeJSONValue[map[string]json.RawMessage])
+	if reader.err != nil {
+		return reader.err
 	}
-	if err := decodeNullableField(fields, "continuation", &result.Continuation, decodeContinuation); err != nil {
-		return err
-	}
-	if raw, ok := fields["web_fetch"]; ok {
-		if string(raw) == "null" {
-			return fmt.Errorf("web_fetch must be boolean")
-		}
-		if err := decodeJSON(raw, &result.WebFetch); err != nil {
-			return err
-		}
-	}
-	if raw, ok := fields["code_execution"]; ok {
-		if string(raw) == "null" {
-			return fmt.Errorf("code_execution must be boolean")
-		}
-		if err := decodeJSON(raw, &result.CodeExecution); err != nil {
-			return err
-		}
-	}
-	if raw, ok := fields["web_search"]; ok {
-		if string(raw) == "null" {
-			return fmt.Errorf("web_search must be boolean")
-		}
-		if err := decodeJSON(raw, &result.WebSearch); err != nil {
-			return fmt.Errorf("web_search: %w", err)
-		}
-	}
-	if raw, ok := fields["extensions"]; ok {
-		if err := decodeJSON(raw, &result.Extensions); err != nil {
-			return fmt.Errorf("extensions: %w", err)
-		}
-		result.Extensions = copyRawMap(result.Extensions)
-	}
-	if result.Instructions == nil {
-		result.Instructions = []Instruction{}
-	}
-	if result.Input == nil {
-		result.Input = []Item{}
-	}
-	if result.Tools == nil {
-		result.Tools = []Tool{}
-	}
+	result.Extensions = copyRawMap(result.Extensions)
+	result.Instructions = emptyIfNil(result.Instructions)
+	result.Input = emptyIfNil(result.Input)
+	result.Tools = emptyIfNil(result.Tools)
 	if result.Extensions == nil {
 		result.Extensions = map[string]json.RawMessage{}
 	}
@@ -898,20 +691,43 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func decodeInstructions(data []byte) ([]Instruction, error) {
-	var values []json.RawMessage
-	if err := decodeJSON(data, &values); err != nil {
-		return nil, err
+// decodeEngineHeader reads the api_version and operation_key the engine
+// Request and Response start with. Unlike decodeContractHeader it reports a
+// missing api_version as a missing field.
+func decodeEngineHeader(fields map[string]json.RawMessage) (string, string, error) {
+	apiVersion, err := requiredString(fields, "api_version")
+	if err != nil {
+		return "", "", err
 	}
-	return decodeEach(values, "instruction", decodeInstruction)
+	if apiVersion != APIVersion {
+		return "", "", fmt.Errorf("api_version %q is unsupported", apiVersion)
+	}
+	operationKey, err := requiredString(fields, "operation_key")
+	if err != nil {
+		return "", "", err
+	}
+	return apiVersion, operationKey, nil
+}
+
+// decodeNonNullBool decodes the optional boolean field name into target. A
+// null value is reported as "<name> must be boolean".
+func decodeNonNullBool(fields map[string]json.RawMessage, name string, target *bool) error {
+	raw, ok := fields[name]
+	if !ok {
+		return nil
+	}
+	if string(raw) == "null" {
+		return fmt.Errorf("%s must be boolean", name)
+	}
+	return decodeJSON(raw, target)
+}
+
+func decodeInstructions(data []byte) ([]Instruction, error) {
+	return decodeArray(data, "instruction", decodeInstruction)
 }
 
 func decodeTools(data []byte) ([]Tool, error) {
-	var values []json.RawMessage
-	if err := decodeJSON(data, &values); err != nil {
-		return nil, err
-	}
-	return decodeEach(values, "tool", decodeTool)
+	return decodeArray(data, "tool", decodeTool)
 }
 
 func copyRawMap(source map[string]json.RawMessage) map[string]json.RawMessage {

@@ -37,19 +37,10 @@ func checkRequestParts(instructions []Instruction, items []Item, check func([]Pa
 	}
 	for index, item := range items {
 		var content []Part
-		switch item := item.(type) {
-		case Message:
-			content = item.Content
-		case *Message:
-			if item != nil {
-				content = item.Content
-			}
-		case ToolResult:
-			content = item.Content
-		case *ToolResult:
-			if item != nil {
-				content = item.Content
-			}
+		if message, ok := derefAs[Message](item); ok {
+			content = message.Content
+		} else if result, ok := derefAs[ToolResult](item); ok {
+			content = result.Content
 		}
 		if err := check(content); err != nil {
 			return fmt.Errorf("item %d: %w", index, err)
@@ -61,23 +52,10 @@ func checkRequestParts(instructions []Instruction, items []Item, check func([]Pa
 func rejectBlobMediaParts(parts []Part) error {
 	for index, part := range parts {
 		var kind string
-		switch part := part.(type) {
-		case ImagePart:
-			if part.Blob != nil {
-				kind = "image"
-			}
-		case *ImagePart:
-			if part != nil && part.Blob != nil {
-				kind = "image"
-			}
-		case DocumentPart:
-			if part.Blob != nil {
-				kind = "document"
-			}
-		case *DocumentPart:
-			if part != nil && part.Blob != nil {
-				kind = "document"
-			}
+		if image, ok := derefAs[ImagePart](part); ok && image.Blob != nil {
+			kind = "image"
+		} else if document, ok := derefAs[DocumentPart](part); ok && document.Blob != nil {
+			kind = "document"
 		}
 		if kind != "" {
 			return fmt.Errorf("part %d: %s blob references are not supported; send inline bytes or a URL", index, kind)
@@ -89,19 +67,10 @@ func rejectBlobMediaParts(parts []Part) error {
 func validateMediaURLParts(parts []Part) error {
 	for index, part := range parts {
 		var raw, kind string
-		switch part := part.(type) {
-		case ImagePart:
-			raw, kind = part.URL, "image"
-		case *ImagePart:
-			if part != nil {
-				raw, kind = part.URL, "image"
-			}
-		case DocumentPart:
-			raw, kind = part.URL, "document"
-		case *DocumentPart:
-			if part != nil {
-				raw, kind = part.URL, "document"
-			}
+		if image, ok := derefAs[ImagePart](part); ok {
+			raw, kind = image.URL, "image"
+		} else if document, ok := derefAs[DocumentPart](part); ok {
+			raw, kind = document.URL, "document"
 		}
 		if raw == "" {
 			continue

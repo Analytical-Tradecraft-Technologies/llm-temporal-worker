@@ -13,10 +13,7 @@ type GenerationPlanV1 struct {
 }
 
 func (plan *GenerationPlanV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "compact_before_generate", "effective_parent"); err != nil {
-		return err
-	}
-	fields, err := decodeObject(data)
+	fields, err := executionFields(data, "compact_before_generate", "effective_parent")
 	if err != nil {
 		return err
 	}
@@ -66,10 +63,7 @@ func (resolution GenerationResolutionV1) validate() error {
 }
 
 func (resolution *GenerationResolutionV1) UnmarshalJSON(data []byte) error {
-	if err := executionFields(data, "plan", "result"); err != nil {
-		return err
-	}
-	fields, err := decodeObject(data)
+	fields, err := executionFields(data, "plan", "result")
 	if err != nil {
 		return err
 	}
