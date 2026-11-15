@@ -83,32 +83,29 @@ func TestBaseProjectedSecretVolumeIsReadableByWorkerGroup(t *testing.T) {
 	deployment := readDeploymentManifest(t, "deploy", "kubernetes", "base", "deployment.yaml")
 	assertWorkerGroupAccess(t, deployment)
 
-	runtimeSecrets := findVolume(t, deployment, "runtime-secrets")
-	if runtimeSecrets.Secret != nil {
-		t.Error("base runtime-secrets volume must not combine a Secret and projected source")
-	}
-	if runtimeSecrets.Projected == nil {
-		t.Fatal("base runtime-secrets volume must use a projected source")
-	}
-	if got, want := runtimeSecrets.Projected.DefaultMode, 0o440; got != want {
-		t.Errorf("base runtime-secrets defaultMode = %#o, want %#o", got, want)
-	}
-	assertProjectedSecretNames(t, runtimeSecrets.Projected, []string{"llmtw-worker-secrets"})
+	assertProjectedRuntimeSecrets(t, deployment, "base runtime-secrets volume", []string{"llmtw-worker-secrets"})
 }
 
 func TestRedisTLSOverlayExtendsProjectedRuntimeSecrets(t *testing.T) {
 	patch := readDeploymentManifest(t, "deploy", "kubernetes", "examples", "redis-tls", "deployment-patch.yaml")
-	runtimeSecrets := findVolume(t, patch, "runtime-secrets")
+	assertProjectedRuntimeSecrets(t, patch, "redis TLS runtime-secrets patch", []string{"llmtw-worker-secrets", "llmtw-redis-ca"})
+}
+
+// assertProjectedRuntimeSecrets checks that the runtime-secrets volume uses
+// only a projected source, group-readable at 0440, over exactly secretNames.
+func assertProjectedRuntimeSecrets(t *testing.T, deployment deploymentManifest, label string, secretNames []string) {
+	t.Helper()
+	runtimeSecrets := findVolume(t, deployment, "runtime-secrets")
 	if runtimeSecrets.Secret != nil {
-		t.Error("redis TLS runtime-secrets patch must not add a second volume source type")
+		t.Errorf("%s must not combine Secret and projected sources", label)
 	}
 	if runtimeSecrets.Projected == nil {
-		t.Fatal("redis TLS runtime-secrets patch must use a projected source")
+		t.Fatalf("%s must use a projected source", label)
 	}
 	if got, want := runtimeSecrets.Projected.DefaultMode, 0o440; got != want {
-		t.Errorf("redis TLS projected runtime-secrets defaultMode = %#o, want %#o", got, want)
+		t.Errorf("%s defaultMode = %#o, want %#o", label, got, want)
 	}
-	assertProjectedSecretNames(t, runtimeSecrets.Projected, []string{"llmtw-worker-secrets", "llmtw-redis-ca"})
+	assertProjectedSecretNames(t, runtimeSecrets.Projected, secretNames)
 }
 
 func TestRenderedSecretVolumesAreReadableByWorkerGroup(t *testing.T) {
@@ -131,18 +128,7 @@ func TestRenderedSecretVolumesAreReadableByWorkerGroup(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			deployment := renderDeployment(t, kubectl, test.path...)
 			assertWorkerGroupAccess(t, deployment)
-
-			runtimeSecrets := findVolume(t, deployment, "runtime-secrets")
-			if runtimeSecrets.Secret != nil {
-				t.Error("rendered runtime-secrets volume must not combine Secret and projected sources")
-			}
-			if runtimeSecrets.Projected == nil {
-				t.Fatal("rendered runtime-secrets volume must use a projected source")
-			}
-			if got, want := runtimeSecrets.Projected.DefaultMode, 0o440; got != want {
-				t.Errorf("rendered projected runtime-secrets defaultMode = %#o, want %#o", got, want)
-			}
-			assertProjectedSecretNames(t, runtimeSecrets.Projected, test.secretNames)
+			assertProjectedRuntimeSecrets(t, deployment, "rendered runtime-secrets volume", test.secretNames)
 		})
 	}
 }

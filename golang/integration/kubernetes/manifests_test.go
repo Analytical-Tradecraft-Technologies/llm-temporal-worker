@@ -5,37 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 	yaml "go.yaml.in/yaml/v4"
 )
 
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	directory := filepath.Dir(source)
-	for {
-		if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("repository checkout root not found")
-		}
-		directory = parent
-	}
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(repositoryRoot(t), "golang")
-}
+var moduleRoot = repotest.ModuleRoot
 
 func readRepositoryFile(t *testing.T, path ...string) string {
 	t.Helper()

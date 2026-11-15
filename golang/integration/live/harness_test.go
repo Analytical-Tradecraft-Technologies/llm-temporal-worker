@@ -76,14 +76,7 @@ func TestAuthorizationFailsClosedBeforeCredentialResolution(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			lookedUpCredential := false
-			lookup := func(name string) (string, bool) {
-				if name == profile.Credential.Environment {
-					lookedUpCredential = true
-				}
-				value, ok := test.env[name]
-				return value, ok
-			}
-			allowed, reason := authorize(profile, lookup)
+			allowed, reason := authorize(profile, gateLookup(profile, test.env, &lookedUpCredential))
 			if lookedUpCredential {
 				t.Fatalf("authorization looked up credential %q", profile.Credential.Environment)
 			}
@@ -149,27 +142,11 @@ func TestMessagesProfilesDeclareConditionalReplayStateContinuation(t *testing.T)
 
 func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 	profile := Profiles()[0]
-	actual := llm.ServiceClassStandard
-	response := llm.Response{
-		Status: llm.ResponseStatusCompleted,
-		Service: llm.ServiceFacts{
-			Requested: llm.ServiceClassStandard,
-			Attempted: llm.ServiceClassStandard,
-			Actual:    &actual,
-		},
-		Usage: llm.Usage{InputTokens: 3, OutputTokens: 2},
-		Cost: llm.Cost{
-			Status:        llm.CostStatusKnown,
-			ActualCostUSD: func() *pricing.USD { value := pricing.MustUSD("0.000123"); return &value }(),
-			Method:        "provider_reported",
-		},
-		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		Continuation: &llm.Continuation{
-			Handle:     "continuation-123",
-			EndpointID: profile.ID,
-			Model:      profile.Model,
-			Pinned:     true,
-		},
+	response := completedPinnedResponse(profile)
+	response.Cost = llm.Cost{
+		Status:        llm.CostStatusKnown,
+		ActualCostUSD: func() *pricing.USD { value := pricing.MustUSD("0.000123"); return &value }(),
+		Method:        "provider_reported",
 	}
 
 	evidence, err := validateResponse(profile, response)
@@ -179,7 +156,7 @@ func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 	if evidence.Profile != profile.ID || evidence.Tenant != profile.Tenant {
 		t.Fatalf("evidence profile = %#v, want %q/%q", evidence, profile.ID, profile.Tenant)
 	}
-	if evidence.RequestID != response.Provider.RequestID || evidence.ActualServiceClass != actual {
+	if evidence.RequestID != response.Provider.RequestID || evidence.ActualServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("evidence provider facts = %#v", evidence)
 	}
 	if !evidence.ActualSpendKnown || evidence.ActualMicroUSD != 123 || evidence.CostMethod != response.Cost.Method {
@@ -193,17 +170,7 @@ func TestValidateResponseCapturesReportedLiveFacts(t *testing.T) {
 func TestValidateResponseRecordsUnreportedAndImplicitProviderCost(t *testing.T) {
 	for _, profileID := range []string{"openrouter-chat", "exa-chat"} {
 		profile := profileForTest(t, profileID)
-		actual := llm.ServiceClassStandard
-		response := llm.Response{
-			Status: llm.ResponseStatusCompleted,
-			Service: llm.ServiceFacts{
-				Requested: llm.ServiceClassStandard,
-				Attempted: llm.ServiceClassStandard,
-				Actual:    &actual,
-			},
-			Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-			Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		}
+		response := completedResponse()
 
 		t.Run(profileID+"/unreported", func(t *testing.T) {
 			evidence, err := validateResponse(profile, response)
@@ -232,13 +199,8 @@ func TestValidateResponseRecordsUnreportedAndImplicitProviderCost(t *testing.T) 
 
 func TestValidateResponseAllowsBedrockConverseWithoutResponseID(t *testing.T) {
 	profile := profileForTest(t, "bedrock-converse")
-	actual := llm.ServiceClassStandard
-	response := llm.Response{
-		Status:   llm.ResponseStatusCompleted,
-		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
-		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-		Provider: llm.ProviderFacts{RequestID: "bedrock-request-123"},
-	}
+	response := completedResponse()
+	response.Provider = llm.ProviderFacts{RequestID: "bedrock-request-123"}
 	evidence, err := validateResponse(profile, response)
 	if err != nil {
 		t.Fatalf("validate Bedrock Converse response: %v", err)
@@ -250,15 +212,8 @@ func TestValidateResponseAllowsBedrockConverseWithoutResponseID(t *testing.T) {
 
 func TestValidateResponseAllowsTextOnlyResponseForConditionalContinuationProfile(t *testing.T) {
 	profile := profileForTest(t, "anthropic-direct")
-	actual := llm.ServiceClassStandard
-	response := llm.Response{
-		Status:   llm.ResponseStatusCompleted,
-		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
-		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-	}
 
-	evidence, err := validateResponse(profile, response)
+	evidence, err := validateResponse(profile, completedResponse())
 	if err != nil {
 		t.Fatalf("validate text-only response: %v", err)
 	}
@@ -269,18 +224,8 @@ func TestValidateResponseAllowsTextOnlyResponseForConditionalContinuationProfile
 
 func TestValidateResponseRejectsUnpinnedConditionalContinuation(t *testing.T) {
 	profile := profileForTest(t, "anthropic-direct")
-	actual := llm.ServiceClassStandard
-	response := llm.Response{
-		Status:   llm.ResponseStatusCompleted,
-		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
-		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		Continuation: &llm.Continuation{
-			Handle:     "continuation-123",
-			EndpointID: profile.ID,
-			Model:      profile.Model,
-		},
-	}
+	response := completedPinnedResponse(profile)
+	response.Continuation.Pinned = false
 
 	if _, err := validateResponse(profile, response); err == nil || !strings.Contains(err.Error(), "pinned continuation") {
 		t.Fatalf("validate unpinned continuation error = %v, want pinned-continuation rejection", err)
@@ -289,21 +234,8 @@ func TestValidateResponseRejectsUnpinnedConditionalContinuation(t *testing.T) {
 
 func TestValidateResponseRejectsEmptyStateConditionalContinuation(t *testing.T) {
 	profile := profileForTest(t, "anthropic-direct")
-	actual := llm.ServiceClassStandard
-	response := llm.Response{
-		Status:   llm.ResponseStatusCompleted,
-		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
-		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		Continuation: &llm.Continuation{
-			Handle:     "continuation-123",
-			EndpointID: profile.ID,
-			Model:      profile.Model,
-			Pinned:     true,
-		},
-	}
 
-	if _, err := validateResponse(profile, response); err == nil || !strings.Contains(err.Error(), "replayable provider state") {
+	if _, err := validateResponse(profile, completedPinnedResponse(profile)); err == nil || !strings.Contains(err.Error(), "replayable provider state") {
 		t.Fatalf("validate empty-state continuation error = %v, want replayable-provider-state rejection", err)
 	}
 }
@@ -311,19 +243,7 @@ func TestValidateResponseRejectsEmptyStateConditionalContinuation(t *testing.T) 
 func TestValidateResponseFailsClosedOnMissingOrOverCeilingFacts(t *testing.T) {
 	pinned := Profiles()[0]
 	unsupported := Profiles()[2]
-	actual := llm.ServiceClassStandard
-	valid := llm.Response{
-		Status:   llm.ResponseStatusCompleted,
-		Service:  llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard, Actual: &actual},
-		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		Continuation: &llm.Continuation{
-			Handle:     "continuation-123",
-			EndpointID: pinned.ID,
-			Model:      pinned.Model,
-			Pinned:     true,
-		},
-	}
+	valid := completedPinnedResponse(pinned)
 	tests := []struct {
 		name    string
 		profile Profile
@@ -362,6 +282,18 @@ func cloneContinuation(value *llm.Continuation) *llm.Continuation {
 	}
 	result := *value
 	return &result
+}
+
+// gateLookup serves env and records in credentialRead whether profile's
+// credential variable was ever looked up.
+func gateLookup(profile Profile, env map[string]string, credentialRead *bool) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		if name == profile.Credential.Environment {
+			*credentialRead = true
+		}
+		value, ok := env[name]
+		return value, ok
+	}
 }
 
 func profileForTest(t *testing.T, id string) Profile {

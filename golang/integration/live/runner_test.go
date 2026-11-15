@@ -85,19 +85,9 @@ func TestUnsupportedContinuationProbeFailsBeforeProviderInvocation(t *testing.T)
 
 func TestRunWithAdapterPreflightsUnsupportedContinuationBeforeInvocation(t *testing.T) {
 	profile := Profiles()[2]
-	actual := llm.ServiceClassStandard
 	adapter := &recordingAdapter{
 		rejectContinuation: true,
-		result: provider.Result{Response: llm.Response{
-			Status: llm.ResponseStatusCompleted,
-			Service: llm.ServiceFacts{
-				Requested: llm.ServiceClassStandard,
-				Attempted: llm.ServiceClassStandard,
-				Actual:    &actual,
-			},
-			Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-			Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		}},
+		result:             provider.Result{Response: completedResponse()},
 	}
 
 	evidence, err := runWithAdapter(context.Background(), adapter, profile)
@@ -161,61 +151,40 @@ func TestRunWithAdapterAllowsTextOnlyAnthropicResponseWithoutContinuation(t *tes
 
 func TestRunWithAdapterRejectsMismatchedCompiledWireBeforeInvocation(t *testing.T) {
 	profile := Profiles()[0]
-	actual := llm.ServiceClassStandard
-	wrongCall := provider.Call{
-		EndpointID:   "unexpected-endpoint",
-		Family:       familyFor(profile),
-		Model:        profile.Model,
-		OperationKey: "live-contract-" + profile.ID,
-		ServiceClass: llm.ServiceClassStandard,
-	}
-	adapter := &recordingAdapter{
-		callOverride: &wrongCall,
-		result: provider.Result{Response: llm.Response{
-			Status: llm.ResponseStatusCompleted,
-			Service: llm.ServiceFacts{
-				Requested: llm.ServiceClassStandard,
-				Attempted: llm.ServiceClassStandard,
-				Actual:    &actual,
-			},
-			Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
-			Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-			Continuation: &llm.Continuation{
-				Handle:     "continuation-123",
-				EndpointID: profile.ID,
-				Model:      profile.Model,
-				Pinned:     true,
-			},
-		}},
-	}
-
-	if _, err := runWithAdapter(context.Background(), adapter, profile); err == nil {
-		t.Fatal("run profile unexpectedly accepted a mismatched compiled wire contract")
-	}
-	if adapter.invokeCalls != 0 {
-		t.Fatalf("provider invocations = %d, want no invocation after a wire mismatch", adapter.invokeCalls)
-	}
+	wrongCall := tierlessCompiledCall(profile)
+	wrongCall.EndpointID = "unexpected-endpoint"
+	assertCompiledCallRejectedBeforeInvocation(t, profile, wrongCall, "a mismatched compiled wire contract", "after a wire mismatch")
 }
 
 func TestRunWithAdapterRejectsMissingProviderTierBeforeInvocation(t *testing.T) {
 	profile := Profiles()[0]
-	missingTier := provider.Call{
+	assertCompiledCallRejectedBeforeInvocation(t, profile, tierlessCompiledCall(profile), "a compiled call with no explicit provider tier", "when the provider tier is omitted")
+}
+
+// tierlessCompiledCall is the call profile pins, minus the provider tier
+// metadata that validateCompiledCall requires.
+func tierlessCompiledCall(profile Profile) provider.Call {
+	return provider.Call{
 		EndpointID:   profile.ID,
 		Family:       familyFor(profile),
 		Model:        profile.Model,
 		OperationKey: "live-contract-" + profile.ID,
 		ServiceClass: llm.ServiceClassStandard,
 	}
+}
+
+func assertCompiledCallRejectedBeforeInvocation(t *testing.T, profile Profile, call provider.Call, accepted, noInvocation string) {
+	t.Helper()
 	adapter := &recordingAdapter{
-		callOverride: &missingTier,
+		callOverride: &call,
 		result:       completedPinnedResult(profile),
 	}
 
 	if _, err := runWithAdapter(context.Background(), adapter, profile); err == nil {
-		t.Fatal("run profile unexpectedly accepted a compiled call with no explicit provider tier")
+		t.Fatalf("run profile unexpectedly accepted %s", accepted)
 	}
 	if adapter.invokeCalls != 0 {
-		t.Fatalf("provider invocations = %d, want no invocation when the provider tier is omitted", adapter.invokeCalls)
+		t.Fatalf("provider invocations = %d, want no invocation %s", adapter.invokeCalls, noInvocation)
 	}
 }
 
@@ -295,13 +264,7 @@ func TestRunProfileWithFactoryFailsClosedBeforeAdapterConstruction(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			credentialRead := false
-			lookup := func(name string) (string, bool) {
-				if name == profile.Credential.Environment {
-					credentialRead = true
-				}
-				value, ok := test.env[name]
-				return value, ok
-			}
+			lookup := gateLookup(profile, test.env, &credentialRead)
 			factoryCalls := 0
 			factory := func(context.Context, Profile, func(string) (string, bool)) (provider.Adapter, error) {
 				factoryCalls++
@@ -419,6 +382,34 @@ func TestAdapterForRejectsUntrustedAzureEndpointBeforeCredentialOrClientConstruc
 	}
 }
 
+func TestLiveAdapterCollapsesConstructionFailures(t *testing.T) {
+	built := &recordingAdapter{}
+	newAdapter := func(client string) (provider.Adapter, error) {
+		if client != "client" {
+			return nil, errors.New("adapter failure with SDK detail")
+		}
+		return built, nil
+	}
+	for _, test := range []struct {
+		name      string
+		client    string
+		clientErr error
+	}{
+		{name: "client failure", client: "client", clientErr: errors.New("client failure with SDK detail")},
+		{name: "adapter failure", client: "rejected"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter, err := liveAdapter(test.client, test.clientErr, newAdapter)
+			if adapter != nil || err == nil || err.Error() != "live adapter construction failed" {
+				t.Fatalf("liveAdapter = (%v, %v), want only the content-free construction error", adapter, err)
+			}
+		})
+	}
+	if adapter, err := liveAdapter("client", nil, newAdapter); err != nil || adapter != built {
+		t.Fatalf("liveAdapter = (%v, %v), want the constructed adapter", adapter, err)
+	}
+}
+
 type recordingAdapter struct {
 	capabilityCalls    int
 	compileCalls       int
@@ -472,9 +463,12 @@ func (adapter *recordingAdapter) Invoke(context.Context, provider.Call, provider
 	return adapter.result, nil
 }
 
-func completedPinnedResult(profile Profile) provider.Result {
+// completedResponse is a completed standard-class response that reports
+// usage and both provider IDs but no continuation. Each call returns fresh
+// pointers, so callers may mutate the result.
+func completedResponse() llm.Response {
 	actual := llm.ServiceClassStandard
-	return provider.Result{Response: llm.Response{
+	return llm.Response{
 		Status: llm.ResponseStatusCompleted,
 		Service: llm.ServiceFacts{
 			Requested: llm.ServiceClassStandard,
@@ -483,13 +477,23 @@ func completedPinnedResult(profile Profile) provider.Result {
 		},
 		Usage:    llm.Usage{InputTokens: 3, OutputTokens: 2},
 		Provider: llm.ProviderFacts{RequestID: "request-123", ResponseID: "response-123"},
-		Continuation: &llm.Continuation{
-			Handle:     "continuation-123",
-			EndpointID: profile.ID,
-			Model:      profile.Model,
-			Pinned:     true,
-		},
-	}}
+	}
+}
+
+// completedPinnedResponse adds a continuation pinned to profile.
+func completedPinnedResponse(profile Profile) llm.Response {
+	response := completedResponse()
+	response.Continuation = &llm.Continuation{
+		Handle:     "continuation-123",
+		EndpointID: profile.ID,
+		Model:      profile.Model,
+		Pinned:     true,
+	}
+	return response
+}
+
+func completedPinnedResult(profile Profile) provider.Result {
+	return provider.Result{Response: completedPinnedResponse(profile)}
 }
 
 type fakeAzureTokenCredential struct{}

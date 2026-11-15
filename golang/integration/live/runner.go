@@ -69,11 +69,7 @@ func chatProfileFor(liveProfile Profile) (openaichat.Profile, error) {
 			ID:                liveProfile.ID,
 			CapabilityVersion: capabilities.Version,
 			Capabilities:      capabilities,
-			ServiceTiers: map[llm.ServiceClass]string{
-				llm.ServiceClassEconomy:  "",
-				llm.ServiceClassStandard: "default",
-				llm.ServiceClassPriority: "",
-			},
+			ServiceTiers:      liveStandardServiceTiers("default"),
 			ActualServiceClasses: map[string]llm.ServiceClass{
 				"default": llm.ServiceClassStandard,
 			},
@@ -81,44 +77,21 @@ func chatProfileFor(liveProfile Profile) (openaichat.Profile, error) {
 			ExpectedModel:   liveProfile.Model,
 		})
 	case "openrouter-chat":
-		return openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{
-			ID:                liveProfile.ID,
-			CapabilityVersion: capabilities.Version,
-			BaseURL:           liveOpenRouterBaseURL,
-			Model:             liveProfile.Model,
-			Capabilities:      capabilities,
-			ServiceTiers: map[llm.ServiceClass]string{
-				llm.ServiceClassEconomy:  "",
-				llm.ServiceClassStandard: "standard",
-				llm.ServiceClassPriority: "",
-			},
-			ActualServiceClasses: map[string]llm.ServiceClass{
-				"default":  llm.ServiceClassStandard,
-				"standard": llm.ServiceClassStandard,
-			},
-			ProviderOrder:     []string{"openai"},
-			AllowFallbacks:    false,
-			RequireParameters: true,
-			Upstreams:         liveOpenRouterUpstreams{},
-		})
+		return openaichat.NewOpenRouterProfile(openRouterProfileConfig(liveProfile))
 	case "exa-chat":
-		return openaichat.NewExaProfile(openaichat.ExaProfileConfig{
-			ID:                liveProfile.ID,
-			CapabilityVersion: capabilities.Version,
-			BaseURL:           liveExaBaseURL,
-			Model:             liveProfile.Model,
-			Capabilities:      capabilities,
-			ServiceTiers: map[llm.ServiceClass]string{
-				llm.ServiceClassEconomy:  "",
-				llm.ServiceClassStandard: "standard",
-				llm.ServiceClassPriority: "",
-			},
-			ActualServiceClasses: map[string]llm.ServiceClass{
-				"standard": llm.ServiceClassStandard,
-			},
-		})
+		return openaichat.NewExaProfile(exaProfileConfig(liveProfile))
 	default:
 		return openaichat.Profile{}, fmt.Errorf("live profile has no chat contract")
+	}
+}
+
+// liveStandardServiceTiers maps only the standard public class, to the given
+// provider tier; economy and priority stay explicitly unmapped.
+func liveStandardServiceTiers(standardTier string) map[llm.ServiceClass]string {
+	return map[llm.ServiceClass]string{
+		llm.ServiceClassEconomy:  "",
+		llm.ServiceClassStandard: standardTier,
+		llm.ServiceClassPriority: "",
 	}
 }
 
@@ -282,14 +255,9 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 			return nil, err
 		}
 		client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: liveOpenAIBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := openairesponses.NewOpenAIAdapter(client, profile.ID, "live-openai-responses/v1")
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *openairesponses.Client) (provider.Adapter, error) {
+			return openairesponses.NewOpenAIAdapter(client, profile.ID, "live-openai-responses/v1")
+		})
 	case "azure-responses":
 		endpoint, err := requiredEnvironment(lookup, liveAzureEndpointEnv)
 		if err != nil {
@@ -311,14 +279,9 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
 		client, err := azureDependencies.newAzureTokenClient(openairesponses.AzureTokenClientConfig{Endpoint: endpointConfig.BaseURL, APIVersion: liveAzureAPIVersion, TokenCredential: credential, HTTPClient: httpClient})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := openairesponses.NewAzureAdapter(client, profile.ID, "live-azure-responses/v1")
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *openairesponses.Client) (provider.Adapter, error) {
+			return openairesponses.NewAzureAdapter(client, profile.ID, "live-azure-responses/v1")
+		})
 	case "openai-chat":
 		key, err := credentialFor(profile, lookup)
 		if err != nil {
@@ -329,56 +292,36 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
 		client, err := openaichat.NewClient(openaichat.ClientConfig{BaseURL: liveOpenAIBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := openaichat.NewOpenAIAdapter(client, profile.ID, chatProfile)
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
+			return openaichat.NewOpenAIAdapter(client, profile.ID, chatProfile)
+		})
 	case "openrouter-chat":
 		key, err := credentialFor(profile, lookup)
 		if err != nil {
 			return nil, err
 		}
 		client, err := openaichat.NewOpenRouterClient(openaichat.OpenRouterClientConfig{BaseURL: liveOpenRouterBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := openaichat.NewOpenRouterAdapter(client, profile.ID, openRouterProfileConfig(profile))
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
+			return openaichat.NewOpenRouterAdapter(client, profile.ID, openRouterProfileConfig(profile))
+		})
 	case "exa-chat":
 		key, err := credentialFor(profile, lookup)
 		if err != nil {
 			return nil, err
 		}
 		client, err := openaichat.NewExaClient(openaichat.ExaClientConfig{BaseURL: liveExaBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := openaichat.NewExaAdapter(client, profile.ID, exaProfileConfig(profile))
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *openaichat.Client) (provider.Adapter, error) {
+			return openaichat.NewExaAdapter(client, profile.ID, exaProfileConfig(profile))
+		})
 	case "anthropic-direct":
 		key, err := credentialFor(profile, lookup)
 		if err != nil {
 			return nil, err
 		}
 		client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: liveAnthropicBaseURL, APIKey: key, HTTPClient: newLiveHTTPClient()})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicBaseURL))
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *anthropicmessages.Client) (provider.Adapter, error) {
+			return anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicBaseURL))
+		})
 	case "anthropic-aws":
 		workspace, err := requiredEnvironment(lookup, liveAnthropicAWSWorkspaceEnvironment)
 		if err != nil {
@@ -389,49 +332,48 @@ func adapterForWithAzureDependencies(ctx context.Context, candidate Profile, loo
 			HTTPClient: newLiveHTTPClient(),
 			AWSConfig:  anthropicaws.ClientConfig{AWSRegion: liveAWSRegion, WorkspaceID: workspace},
 		})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		adapter, err := anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicAWSBaseURL))
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *anthropicmessages.Client) (provider.Adapter, error) {
+			return anthropicmessages.NewAdapter(client, profile.ID, anthropicProfile(profile, liveAnthropicAWSBaseURL))
+		})
 	case "bedrock-anthropic":
 		config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(liveAWSRegion))
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
 		client, err := bedrockmessages.NewClient(ctx, bedrockmessages.ClientConfig{HTTPClient: newLiveHTTPClient(), AWSConfig: config})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		profileConfig := bedrockmessages.DefaultProfile(profile.ID)
-		profileConfig.ExpectedModel = profile.Model
-		adapter, err := bedrockmessages.NewAdapter(client, profile.ID, profileConfig)
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *bedrockmessages.Client) (provider.Adapter, error) {
+			profileConfig := bedrockmessages.DefaultProfile(profile.ID)
+			profileConfig.ExpectedModel = profile.Model
+			return bedrockmessages.NewAdapter(client, profile.ID, profileConfig)
+		})
 	case "bedrock-converse":
 		config, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(liveAWSRegion))
 		if err != nil {
 			return nil, fmt.Errorf("live adapter construction failed")
 		}
 		client, err := bedrockconverse.NewClient(ctx, bedrockconverse.ClientConfig{HTTPClient: newLiveHTTPClient(), AWSConfig: config})
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		profileConfig := bedrockconverse.DefaultProfile(profile.ID)
-		profileConfig.ExpectedModel = profile.Model
-		adapter, err := bedrockconverse.NewAdapter(client, profile.ID, profileConfig)
-		if err != nil {
-			return nil, fmt.Errorf("live adapter construction failed")
-		}
-		return adapter, nil
+		return liveAdapter(client, err, func(client *bedrockconverse.Client) (provider.Adapter, error) {
+			profileConfig := bedrockconverse.DefaultProfile(profile.ID)
+			profileConfig.ExpectedModel = profile.Model
+			return bedrockconverse.NewAdapter(client, profile.ID, profileConfig)
+		})
 	default:
 		return nil, fmt.Errorf("live profile is not supported")
 	}
+}
+
+// liveAdapter finishes the client-then-adapter construction every live
+// profile shares. Either failure collapses to the same content-free error, so
+// SDK construction details never reach a credentialed test log.
+func liveAdapter[C any](client C, clientErr error, newAdapter func(C) (provider.Adapter, error)) (provider.Adapter, error) {
+	if clientErr != nil {
+		return nil, fmt.Errorf("live adapter construction failed")
+	}
+	adapter, err := newAdapter(client)
+	if err != nil {
+		return nil, fmt.Errorf("live adapter construction failed")
+	}
+	return adapter, nil
 }
 
 // liveAzureOpenAIEndpointConfig accepts only HTTPS Azure OpenAI resource
@@ -474,11 +416,7 @@ func openRouterProfileConfig(profile Profile) openaichat.OpenRouterProfileConfig
 		BaseURL:           liveOpenRouterBaseURL,
 		Model:             profile.Model,
 		Capabilities:      capabilities,
-		ServiceTiers: map[llm.ServiceClass]string{
-			llm.ServiceClassEconomy:  "",
-			llm.ServiceClassStandard: "standard",
-			llm.ServiceClassPriority: "",
-		},
+		ServiceTiers:      liveStandardServiceTiers("standard"),
 		ActualServiceClasses: map[string]llm.ServiceClass{
 			"default":  llm.ServiceClassStandard,
 			"standard": llm.ServiceClassStandard,
@@ -506,11 +444,7 @@ func exaProfileConfig(profile Profile) openaichat.ExaProfileConfig {
 		BaseURL:           liveExaBaseURL,
 		Model:             profile.Model,
 		Capabilities:      capabilities,
-		ServiceTiers: map[llm.ServiceClass]string{
-			llm.ServiceClassEconomy:  "",
-			llm.ServiceClassStandard: "standard",
-			llm.ServiceClassPriority: "",
-		},
+		ServiceTiers:      liveStandardServiceTiers("standard"),
 		ActualServiceClasses: map[string]llm.ServiceClass{
 			"standard": llm.ServiceClassStandard,
 		},
