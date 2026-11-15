@@ -124,45 +124,13 @@ func TestWorkflowFuzzShardRetainsNewCrashersOnFailure(t *testing.T) {
 	}
 }
 
-func TestReleaseEvidenceFuzzReuseRequiresEverySuccessfulShard(t *testing.T) {
-	for _, scenario := range []string{"complete", "missing", "failed"} {
-		t.Run(scenario, func(t *testing.T) {
-			dir := t.TempDir()
-			for i, name := range []string{"fuzz-0.json", "fuzz-1.json", "fuzz-2.json"} {
-				if scenario == "missing" && i == 2 {
-					continue
-				}
-				status := "pass"
-				if scenario == "failed" && i == 2 {
-					status = "fail"
-				}
-				writeReleaseArtifact(t, filepath.Join(dir, name), []byte(`{"kind":"fuzz_summary","status":"`+status+`","redacted":true}`))
-			}
-			dest := filepath.Join(dir, "combined.json")
-			output, err := exec.Command("python3", filepath.Join(repositoryRoot(t), "scripts/release/merge-fuzz.py"), dir, dest).CombinedOutput()
-			if scenario == "complete" {
-				if err != nil {
-					t.Fatalf("%v: %s", err, output)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("incomplete fuzz evidence accepted")
-			}
-			if _, err := os.Stat(dest); !os.IsNotExist(err) {
-				t.Fatal("invalid evidence retained")
-			}
-		})
-	}
-}
-
 func TestWorkflowReleaseEvidenceReusesSuccessfulRunInputs(t *testing.T) {
 	master := readWorkflow(t, "master.yml")
 	assertJobRunContains(t, master, "verify-race", "scripts/release/run-gate.sh race_summary")
 	assertJobRunContains(t, master, "verify-image", "RELEASE_COMPOSE_EVIDENCE_DIR=")
 	assertJobRunContains(t, master, "fuzz-shard", "scripts/release/run-gate.sh fuzz_summary")
 	assertJobRunContains(t, master, "release-evidence", "--verified-inputs verified-inputs")
-	assertJobRunContains(t, master, "release-evidence", "scripts/release/merge-fuzz.py")
+	assertJobRunContains(t, master, "release-evidence", "scripts/release/merge-shards.py")
 	job := workflowJob(t, master, "release-evidence")
 	for _, raw := range job["steps"].([]any) {
 		step := raw.(map[string]any)

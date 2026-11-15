@@ -368,11 +368,18 @@ corpus input directly, run:
 go test <package> -run '^<FuzzTarget>/<corpus-entry>$' -count=1
 ```
 
-The trusted master workflow separately runs three bounded `-fuzz` shards
+The trusted master workflow separately runs five bounded `-fuzz` shards
 (`FUZZ_TIME=250000x`, 250,000 executions and one worker per target).
 `250000x` retains at least the slowest observed 45-second workload (248,282
 executions) while avoiding deadline-based cancellation on busy runners.
-`scripts/run-fuzz.sh shard <0|1|2>` uses the same explicit target list locally.
+Targets are balanced across the shards by their measured durations in
+`golang/scripts/fuzz-weights.tsv`: `scripts/ci/balance-shards.py` places the
+heaviest remaining target on the lightest shard. A new or renamed target fails
+the shard until its weight is recorded. Each master shard records every
+target's duration in its fuzz evidence and job summary in the same
+`<target><TAB><seconds>` format, so the weights can be refreshed from recent
+runs. `scripts/run-fuzz.sh shard <index> <count>` runs the same assignment
+locally, and `scripts/run-fuzz.sh list <index> <count>` prints it.
 `make mutation-verify` compiles a reviewed overlay for each boundary mutation—
 decimal round-up, budget comparison, dispatch certainty, omitted service class,
 and legal state transition—and requires its named invariant to fail. A mutation
@@ -631,15 +638,24 @@ The release job retains:
 
 Master verification runs as concurrent jobs (`verify-static`, `verify-race`,
 `verify-race-repeat`, `verify-cloud-workflow`, `verify-redis`, `verify-image`)
-gated by an aggregating `verify` job. The `verify-race` job records one full
-race-enabled test run as both the test and race summaries. Fuzz jobs retain
-summaries for all three bounded shards. The `verify-image` job captures Compose
+gated by an aggregating `verify` job. The `verify-race` job runs the
+race-enabled suite as six shards (`scripts/run-race-shard.sh`), which together
+run every package `go list ./...` reports exactly once. Packages are balanced
+by their measured durations in `golang/scripts/race-weights.tsv`; an
+unmeasured package gets a small default weight, so a new package still runs.
+A top-level test slow enough to bound a shard on its own is carved out of its
+package there as a separate work item: it runs alone with `-run`, and its
+package runs every other test with `-skip`. Each shard records its race run as
+both a test and a race summary, plus per-item durations. Fuzz jobs retain summaries for every bounded shard. The
+`verify-image` job captures Compose
 health and redacted service-log summaries after the existing lifecycle tests
 pass and before their services are removed. Raw command output
 is never uploaded. Gate wrappers report their stage and elapsed time.
 
 Release evidence downloads these successful inputs from the same workflow run;
-it requires all three fuzz shards and waits for successful image publication.
+`scripts/release/merge-shards.py` combines the race, test and fuzz summaries
+only when every shard the matrix lists passed, and release evidence waits for
+successful image publication.
 It still collects the memory benchmark, fixture metadata, rendered manifests,
 and dependency metadata, but does not repeat the test suite, start another
 Compose stack, or build another image. Standalone collection without
