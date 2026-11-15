@@ -46,7 +46,8 @@ func TestCloudExecutionReportsUnsupportedCapabilityForRejectedRoutes(t *testing.
 			f.request.SettingsPatch.Instructions.Set = &[]llm.Instruction{
 				{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "sensitive policy"}, hierarchyApplicationInstruction}
 			var logs bytes.Buffer
-			logger := testLogger(t, observability.LogOptions{Output: &logs})
+			// Warn level keeps the rejection and drops the info access events.
+			logger := testLogger(t, observability.LogOptions{Output: &logs, Level: "warn"})
 			ctx := observability.WithLogger(context.Background(), logger)
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			if err == nil {

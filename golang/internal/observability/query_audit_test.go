@@ -100,6 +100,87 @@ func TestScopeAccessDeniedLogsActivityTypeAndHashesOnly(t *testing.T) {
 	}
 }
 
+// A request access event logs only hashes and bounded values. A prepared
+// event shares the scope denial's message with outcome allowed; a completed
+// event adds the published checkpoint, route and terminal status (#1541).
+func TestRequestAccessLogsHashesAndBoundedFieldsOnly(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := observability.RequestAccessRecord{
+		Phase: observability.RequestAccessPrepared, Kind: "compact", ActivityType: "llm.PrepareExecution.v1",
+		Tenant: "raw-tenant", Project: "raw-project", Actor: "raw-actor", OperationKey: "raw-operation-key",
+		OperationID: "llmtw_req_raw", ParentCheckpoint: "ctn_v1.raw-parent",
+	}
+	if err := logger.RequestAccess(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	record.Phase, record.Checkpoint, record.RouteID, record.Status, record.ErrorCode = observability.RequestAccessCompleted, "ctn_v1.raw-child", "route-a", "failed", "invalid_argument"
+	if err := logger.RequestAccess(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"raw-tenant", "raw-project", "raw-actor", "raw-operation-key", "llmtw_req_raw", "raw-parent", "raw-child"} {
+		if strings.Contains(output.String(), private) {
+			t.Fatalf("log %q leaks %q", output.String(), private)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q", lines)
+	}
+	common := map[string]any{
+		"level": "INFO", "outcome": "allowed", "request_kind": "compact", "activity_type": "llm.PrepareExecution.v1",
+		"tenant_hash": scopeHash("raw-tenant"), "project_hash": scopeHash("raw-project"), "actor_hash": scopeHash("raw-actor"),
+		"operation_key_hash": scopeHash("raw-operation-key"), "operation_id_hash": scopeHash("llmtw_req_raw"),
+		"parent_checkpoint_hash": scopeHash("ctn_v1.raw-parent"),
+	}
+	for i, want := range []map[string]any{
+		{"msg": "request scope access decision"},
+		{"msg": "request access completed", "checkpoint_hash": scopeHash("ctn_v1.raw-child"), "route_id": "route-a", "status": "failed", "error_code": "invalid_argument"},
+	} {
+		for key, value := range common {
+			want[key] = value
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(lines[i]), &entry); err != nil {
+			t.Fatal(err)
+		}
+		delete(entry, "time")
+		if len(entry) != len(want) {
+			t.Errorf("line %d fields = %v, want %v", i, entry, want)
+		}
+		for key, value := range want {
+			if entry[key] != value {
+				t.Errorf("line %d %s=%v, want %v", i, key, entry[key], value)
+			}
+		}
+	}
+
+	// Empty optional identifiers are omitted, and the level filter applies.
+	output.Reset()
+	if err := logger.RequestAccess(context.Background(), observability.RequestAccessRecord{Phase: observability.RequestAccessPrepared, Kind: "generate"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, absent := range []string{"actor_hash", "operation_id_hash", "parent_checkpoint_hash", "checkpoint_hash", "route_id", "status", "error_code", "activity_type"} {
+		if strings.Contains(output.String(), absent) {
+			t.Errorf("empty record logged %s: %s", absent, output.String())
+		}
+	}
+	writer := &failingAuditWriter{}
+	quiet, err := observability.NewLogger(observability.LogOptions{Output: writer, Level: "warn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := quiet.RequestAccess(context.Background(), record); err != nil || writer.calls != 0 {
+		t.Fatalf("warn-level access audit err=%v, writes=%d", err, writer.calls)
+	}
+	if err := (*observability.Logger)(nil).RequestAccess(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func scopeHash(value string) string {
 	digest := sha256.Sum256([]byte(value))
 	return fmt.Sprintf("%x", digest[:8])

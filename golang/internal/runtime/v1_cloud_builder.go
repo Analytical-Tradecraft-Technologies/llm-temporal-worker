@@ -8,6 +8,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -24,6 +25,9 @@ type CloudV1RuntimeOptions struct {
 	ResolveScope  CheckpointScopeResolver
 	Limits        state.MaterializeLimits
 	CheckpointTTL time.Duration
+	// AccessAudit is CloudExecutionOptions.AccessAudit: nil logs each
+	// request access event through the Activity's logger.
+	AccessAudit observability.RequestAccessFunc
 }
 
 // NewCloudV1RuntimeBuilder composes bounded workflow activities from the exact
@@ -57,7 +61,7 @@ func NewCloudV1RuntimeBuilder(options CloudV1RuntimeOptions) (V1RuntimeBuilder, 
 			return nil, fmt.Errorf("%w: Redis capabilities do not match the snapshot", ErrDurableV1Composition)
 		}
 		execution, err := capabilities.NewCloudExecutionRuntime(ctx, CloudExecutionOptions{
-			ResolveScope: options.ResolveScope, Limits: limits, CheckpointTTL: options.CheckpointTTL,
+			ResolveScope: options.ResolveScope, Limits: limits, CheckpointTTL: options.CheckpointTTL, AccessAudit: options.AccessAudit,
 			Keyring: capabilities.CheckpointKeyring, BudgetGeneration: redisBudgetGeneration, MaxAttempts: value.Limits.RouteAttempts,
 			RequestLimits: cloudRequestLimitsFromConfig(value.Limits), FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout),
 		})
