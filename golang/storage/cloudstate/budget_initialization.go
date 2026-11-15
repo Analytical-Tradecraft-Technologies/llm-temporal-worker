@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"time"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -25,8 +24,7 @@ func (r *Repository) budgetInitializationKey(namespace string) kv.KeyValueKey {
 
 func (r *Repository) budgetInitializationItem(value budget.Initialization) kv.KeyValueItem {
 	key := r.budgetInitializationKey(value.Identity.Namespace)
-	data, _ := json.Marshal(value)
-	return kv.KeyValueItem{PartitionKey: key.PartitionKey, SortKey: key.SortKey, Fields: kv.KeyValueDocument{"initialization": kv.Bytes(data)}}
+	return jsonItem(key, "initialization", value)
 }
 
 func (r *Repository) decodeBudgetInitialization(row kv.KeyValueRecord, namespace string) (budget.Initialization, error) {
@@ -65,7 +63,7 @@ func (r *Repository) PrepareBudgetInitialization(ctx context.Context, identity b
 	if err == nil {
 		return budget.InitializationPreparation{Receipt: value, Created: true}, nil
 	}
-	if errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, contracts.ErrAlreadyExists) {
+	if !definitely(err, contracts.ErrAlreadyExists) {
 		return budget.InitializationPreparation{}, err
 	}
 	previous, err := r.ReadBudgetInitialization(ctx, identity.Namespace)
@@ -102,7 +100,7 @@ func (r *Repository) CompleteBudgetInitialization(ctx context.Context, expected 
 		}
 		previous.Ready = true
 		_, err = r.table.Replace(ctx, r.budgetInitializationItem(previous), row.Version)
-		if err == nil || errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, contracts.ErrConflict) {
+		if !definitely(err, contracts.ErrConflict) {
 			return err
 		}
 	}

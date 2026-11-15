@@ -76,9 +76,7 @@ type DefaultTemporalClientFactory struct {
 }
 
 func (factory DefaultTemporalClientFactory) New(ctx context.Context, value config.Config) (client.Client, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -199,9 +197,7 @@ func (err *payloadCodecError) Unwrap() error { return err.cause }
 // The retry budget is intentionally short and bounded: the worker must not
 // hide a persistent Temporal outage behind an unbounded startup loop.
 func dialTemporalWithRetry(ctx context.Context, dial TemporalDialContext, options client.Options, policy temporalDialRetryPolicy) (client.Client, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if dial == nil {
 		return nil, errors.New("Temporal client dialer is unavailable")
 	}

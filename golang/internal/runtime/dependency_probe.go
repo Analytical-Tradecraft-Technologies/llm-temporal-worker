@@ -143,9 +143,7 @@ func validateRequiredDependencyProbeSet(stateConfig config.StateConfig, probes [
 // available to internal callers, but raw SDK errors never cross the runtime
 // readiness boundary.
 func CheckDependencyProbes(ctx context.Context, probes []DependencyProbe, timeout time.Duration) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if timeout <= 0 {
 		return errRequiredDependencyUnavailable
 	}
@@ -397,9 +395,7 @@ func newRedisDependencyProbe(client redisProbeClient, value config.RedisConfig, 
 }
 
 func (probe *redisDependencyProbe) Probe(ctx context.Context) ProbeResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if probe == nil || probe.client == nil {
 		return redisUnavailable(ctx.Err())
 	}
@@ -798,9 +794,7 @@ func NewBlobDependencyProbe(bucket bucketProbe) (DependencyProbe, error) {
 }
 
 func (probe *blobDependencyProbe) Probe(ctx context.Context) ProbeResult {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if probe == nil || probe.bucket == nil {
 		return blobUnavailable(ctx.Err())
 	}

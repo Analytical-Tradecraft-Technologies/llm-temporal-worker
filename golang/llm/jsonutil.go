@@ -159,6 +159,17 @@ func decodeJSON(data []byte, dst any) error {
 	return ensureJSONEOF(decoder)
 }
 
+// storeValid ends a decoder: it stores value in target when err, the result
+// of validating value, is nil, and returns err. A failed validation leaves
+// target unchanged. The validation must not change value.
+func storeValid[T any](target *T, value T, err error) error {
+	if err != nil {
+		return err
+	}
+	*target = value
+	return nil
+}
+
 func checkUnknownFields(fields map[string]json.RawMessage, allowed ...string) error {
 	for key := range fields {
 		if !slices.Contains(allowed, key) {

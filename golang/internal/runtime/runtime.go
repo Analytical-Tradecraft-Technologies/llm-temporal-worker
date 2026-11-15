@@ -188,9 +188,7 @@ const (
 // EngineFactory is unavailable; the returned error is safe to show in CLI
 // output and contains neither config contents nor resolved secret values.
 func New(ctx context.Context, data []byte, options Options) (*Runtime, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if len(data) == 0 {
 		return nil, errors.New("runtime configuration is required")
 	}
@@ -588,9 +586,7 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 	if runtime == nil || runtime.shutdown == nil {
 		return nil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	for {
 		runtime.mu.Lock()
 		if runtime.state != runtimeStarting {
@@ -640,9 +636,7 @@ func (runtime *Runtime) RunWithReload(ctx context.Context, path string, reloads 
 }
 
 func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-chan struct{}) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if err := runtime.Start(); err != nil {
 		// Start may fail before listeners are bound (for example when the
 		// durable v1 runtime is absent), but New has already allocated the
@@ -674,27 +668,15 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 			}
 			runtime.reloadFromTrigger(ctx, reloadPath)
 		case err, ok := <-healthErrors:
-			if !ok {
-				healthErrors = nil
-				continue
-			}
-			if err != nil {
+			if err := receivedServerError(&healthErrors, err, ok); err != nil {
 				return errors.Join(err, runtime.gracefulShutdown())
 			}
 		case err, ok := <-metricsErrors:
-			if !ok {
-				metricsErrors = nil
-				continue
-			}
-			if err != nil {
+			if err := receivedServerError(&metricsErrors, err, ok); err != nil {
 				return errors.Join(err, runtime.gracefulShutdown())
 			}
 		case err, ok := <-responsesErrors:
-			if !ok {
-				responsesErrors = nil
-				continue
-			}
-			if err != nil {
+			if err := receivedServerError(&responsesErrors, err, ok); err != nil {
 				return errors.Join(err, runtime.gracefulShutdown())
 			}
 		}
@@ -702,13 +684,21 @@ func (runtime *Runtime) run(ctx context.Context, reloadPath string, reloads <-ch
 	return runtime.gracefulShutdown()
 }
 
+// receivedServerError returns the error a server reported on errs. When errs
+// is closed it is set to nil, so the run loop stops selecting it.
+func receivedServerError(errs *<-chan error, err error, ok bool) error {
+	if !ok {
+		*errs = nil
+		return nil
+	}
+	return err
+}
+
 func (runtime *Runtime) reloadFromTrigger(parent context.Context, path string) {
 	if runtime == nil || path == "" {
 		return
 	}
-	if parent == nil {
-		parent = context.Background()
-	}
+	parent = contextOrBackground(parent)
 	timeout := runtime.timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -720,6 +710,14 @@ func (runtime *Runtime) reloadFromTrigger(parent context.Context, path string) {
 		accept = runtime.reloadGate()
 	}
 	_ = runtime.reloadFile(ctx, path, accept)
+}
+
+// contextOrBackground returns ctx, or context.Background when ctx is nil.
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func (runtime *Runtime) gracefulShutdown() error {
@@ -772,9 +770,7 @@ func RunWorkerFile(ctx context.Context, path string, data []byte, _ io.Writer) e
 }
 
 func runWorkerFile(ctx context.Context, path string, data []byte, build func(context.Context, []byte) (*Runtime, error)) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	// Take SIGHUP before the slow startup dials: its default disposition
 	// terminates the process. The buffer holds one early signal, which
 	// becomes the first reload once the worker runs (#1532).
@@ -981,9 +977,7 @@ func (runtime *Runtime) syncDependencyReadiness(ctx context.Context) error {
 	if runtime == nil || runtime.Worker == nil {
 		return errors.New("runtime is not initialized")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if !runtime.currentV1RuntimeConfigured() {
 		runtime.readinessMu.Lock()
 		defer runtime.readinessMu.Unlock()
@@ -1091,9 +1085,7 @@ func (runtime *Runtime) stopDependencyMonitor(ctx context.Context) {
 	if cancel == nil {
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	// Signal cancellation before waiting on readinessMu. A dependency client
 	// that ignores its context must not prevent the monitor from observing the
 	// shutdown request. The lock handoff then serializes any already in-flight

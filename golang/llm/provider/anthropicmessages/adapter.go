@@ -103,20 +103,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if err != nil {
 		return provider.Call{}, anthropicwire.LowerError(err)
 	}
-	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, providerTier)
-	if err != nil {
-		return provider.Call{}, err
-	}
-	return provider.Call{
-		EndpointID:   adapter.endpointID,
-		Family:       provider.FamilyAnthropicMessages,
-		Model:        normalized.Model,
-		OperationKey: normalized.OperationKey,
-		ServiceClass: serviceClass,
-		SDKParams:    params,
-		OutputSchema: provider.OutputSchema(normalized),
-		Metadata:     metadata,
-	}, nil
+	return provider.NewCall(adapter.endpointID, provider.FamilyAnthropicMessages, normalized, serviceClass, params, input.Metadata, set.Version, providerTier)
 }
 
 func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {

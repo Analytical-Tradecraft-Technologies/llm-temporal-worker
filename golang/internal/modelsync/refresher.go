@@ -68,37 +68,36 @@ type Refresher struct {
 // Sync installs the published Document when it differs from the installed
 // one. It reports whether any Document is installed afterwards.
 func (refresher *Refresher) Sync(ctx context.Context) (bool, error) {
+	fail := func(cause string, err error) (bool, error) {
+		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: cause})
+		return refresher.installed != "", err
+	}
 	digest, err := refresher.Store.LatestDigest(ctx)
 	if err != nil {
-		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "store"})
-		return refresher.installed != "", err
+		return fail("store", err)
 	}
 	if digest == "" || digest == refresher.installed {
 		return refresher.installed != "", nil
 	}
 	latest, fetchedAt, body, found, err := refresher.Store.Latest(ctx)
 	if err != nil {
-		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "store"})
-		return refresher.installed != "", err
+		return fail("store", err)
 	}
 	if !found || latest == refresher.installed {
 		return refresher.installed != "", nil
 	}
 	if Digest(body) != latest {
-		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "digest"})
-		return refresher.installed != "", fmt.Errorf("published model catalog does not match its digest")
+		return fail("digest", fmt.Errorf("published model catalog does not match its digest"))
 	}
 	document, err := DecodeDocument(body)
 	if err != nil {
-		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "decode"})
-		return refresher.installed != "", err
+		return fail("decode", err)
 	}
 	// The fetch time is Store metadata, not part of the digested body. It is
 	// the time of the latest fetch that published this content.
 	document.FetchedAt = fetchedAt.UTC()
 	if err := refresher.Install(document); err != nil {
-		refresher.observe(Event{Step: "sync", Outcome: OutcomeFailed, Cause: "install"})
-		return refresher.installed != "", err
+		return fail("install", err)
 	}
 	refresher.installed = latest
 	refresher.observe(Event{Step: "sync", Outcome: OutcomeInstalled, Digest: latest})
@@ -115,8 +114,7 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 	}
 	acquired, err := refresher.Store.AcquireRefresh(ctx, token, refresher.leaseTTL())
 	if err != nil {
-		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "store"})
-		return err
+		return refresher.refreshFailed("store", err)
 	}
 	if !acquired {
 		refresher.observe(Event{Step: "refresh", Outcome: OutcomeSkipped, Cause: "lease_held"})
@@ -132,8 +130,7 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 	}()
 	latest, fetchedAt, body, found, err := refresher.Store.Latest(ctx)
 	if err != nil {
-		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "store"})
-		return err
+		return refresher.refreshFailed("store", err)
 	}
 	// Another worker's timer fired first this period: install its Document
 	// instead of fetching again. The 90% margin keeps a worker whose timer
@@ -156,13 +153,11 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 	document, err := refresher.Fetch(fetchContext, previous)
 	cancel()
 	if err != nil {
-		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "fetch"})
-		return err
+		return refresher.refreshFailed("fetch", err)
 	}
 	encoded, err := document.Encode()
 	if err != nil {
-		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "encode"})
-		return err
+		return refresher.refreshFailed("encode", err)
 	}
 	fetched := document.FetchedAt
 	if fetched.IsZero() {
@@ -174,8 +169,7 @@ func (refresher *Refresher) Refresh(ctx context.Context) error {
 	digest := Digest(encoded)
 	published, err := refresher.Store.Publish(ctx, digest, fetched.UTC(), encoded)
 	if err != nil {
-		refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: "store"})
-		return err
+		return refresher.refreshFailed("store", err)
 	}
 	if published {
 		event := Event{Step: "refresh", Outcome: OutcomePublished, Digest: digest}
@@ -271,24 +265,29 @@ func (refresher *Refresher) now() time.Time {
 }
 
 func (refresher *Refresher) pollInterval() time.Duration {
-	if refresher.PollInterval > 0 {
-		return refresher.PollInterval
-	}
-	return defaultPollInterval
+	return positiveOr(refresher.PollInterval, defaultPollInterval)
 }
 
 func (refresher *Refresher) leaseTTL() time.Duration {
-	if refresher.LeaseTTL > 0 {
-		return refresher.LeaseTTL
-	}
-	return defaultLeaseTTL
+	return positiveOr(refresher.LeaseTTL, defaultLeaseTTL)
 }
 
 func (refresher *Refresher) fetchTimeout() time.Duration {
-	if refresher.FetchTimeout > 0 {
-		return refresher.FetchTimeout
+	return positiveOr(refresher.FetchTimeout, defaultFetchTimeout)
+}
+
+// refreshFailed reports a failed refresh step and returns its error.
+func (refresher *Refresher) refreshFailed(cause string, err error) error {
+	refresher.observe(Event{Step: "refresh", Outcome: OutcomeFailed, Cause: cause})
+	return err
+}
+
+// positiveOr returns value when it is positive and fallback otherwise.
+func positiveOr(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
 	}
-	return defaultFetchTimeout
+	return fallback
 }
 
 func (refresher *Refresher) observe(event Event) {

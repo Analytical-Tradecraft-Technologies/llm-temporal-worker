@@ -41,9 +41,7 @@ func (runtime *snapshotV1Runtime) with(ctx context.Context, function func(activi
 	if runtime == nil || runtime.application == nil {
 		return snapshotV1RuntimeUnavailable()
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	if function == nil {
 		return snapshotV1RuntimeUnavailable()
 	}

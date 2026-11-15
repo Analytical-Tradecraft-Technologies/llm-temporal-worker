@@ -113,11 +113,7 @@ func (store *AdmissionStore) Begin(ctx context.Context, request admission.BeginR
 	for index, reservation := range request.Reservations {
 		keys[index+3] = store.space.budgetKey(reservation.PolicyID, reservation.WindowID)
 	}
-	result, err := store.invoke.Run(ctx, store.function, keys, "begin", string(payload), strconv.FormatInt(int64(ttl), 10))
-	if err != nil {
-		return admission.BeginResult{}, resolveMutationError(ctx, err)
-	}
-	status, recordData, denialData, err := parseFunctionResult(result)
+	status, recordData, denialData, err := store.run(ctx, keys, "begin", string(payload), strconv.FormatInt(int64(ttl), 10))
 	if err != nil {
 		return admission.BeginResult{}, err
 	}
@@ -160,11 +156,7 @@ func (store *AdmissionStore) MarkDispatching(ctx context.Context, request admiss
 		return err
 	}
 	keys := []string{store.space.operationIndexKey(request.OperationID), operationKey}
-	result, err := store.invoke.Run(ctx, store.function, keys, "mark_dispatching", request.DispatchToken, string(attempt), request.LeaseUntil.Format(time.RFC3339Nano), "0")
-	if err != nil {
-		return resolveMutationError(ctx, err)
-	}
-	status, _, _, err := parseFunctionResult(result)
+	status, _, _, err := store.run(ctx, keys, "mark_dispatching", request.DispatchToken, string(attempt), request.LeaseUntil.Format(time.RFC3339Nano), "0")
 	if err != nil {
 		return err
 	}
@@ -210,11 +202,7 @@ func (store *AdmissionStore) Continue(ctx context.Context, request admission.Con
 	}
 	keys := store.operationKeys(request.OperationID, operationKey, operation.Reservations, request.Reservations)
 	ttl := ttlSeconds(store.clock(), request.ExpiresAt)
-	result, err := store.invoke.Run(ctx, store.function, keys, "continue", request.DispatchToken, string(outcome), strconv.FormatInt(int64(request.Remaining), 10), string(reservations), request.LeaseUntil.Format(time.RFC3339Nano), request.ExpiresAt.Format(time.RFC3339Nano), strconv.FormatInt(int64(ttl), 10))
-	if err != nil {
-		return admission.ContinueResult{}, resolveMutationError(ctx, err)
-	}
-	status, recordData, denialData, err := parseFunctionResult(result)
+	status, recordData, denialData, err := store.run(ctx, keys, "continue", request.DispatchToken, string(outcome), strconv.FormatInt(int64(request.Remaining), 10), string(reservations), request.LeaseUntil.Format(time.RFC3339Nano), request.ExpiresAt.Format(time.RFC3339Nano), strconv.FormatInt(int64(ttl), 10))
 	if err != nil {
 		return admission.ContinueResult{}, err
 	}
@@ -295,15 +283,21 @@ func (store *AdmissionStore) settle(ctx context.Context, operationID, action str
 		return err
 	}
 	keys := store.operationKeys(operationID, operationKey, operation.Reservations)
-	result, err := store.invoke.Run(ctx, store.function, keys, append([]string{action}, args...)...)
-	if err != nil {
-		return resolveMutationError(ctx, err)
-	}
-	status, _, _, err := parseFunctionResult(result)
+	status, _, _, err := store.run(ctx, keys, append([]string{action}, args...)...)
 	if err != nil {
 		return err
 	}
 	return mapStatus(status)
+}
+
+// run invokes one admission Function action and parses its result. A failed
+// invocation is resolved as a mutation whose outcome may be unknown.
+func (store *AdmissionStore) run(ctx context.Context, keys []string, args ...string) (status string, record, denial []byte, err error) {
+	result, err := store.invoke.Run(ctx, store.function, keys, args...)
+	if err != nil {
+		return "", nil, nil, resolveMutationError(ctx, err)
+	}
+	return parseFunctionResult(result)
 }
 
 // operationKeys lays out the Function keys for a mutation of an existing

@@ -47,8 +47,7 @@ func (s *responseCache) entryKey(scope string, id state.CacheEntryID) kv.KeyValu
 }
 
 func cacheItem(key kv.KeyValueKey, pointer cachePointer) kv.KeyValueItem {
-	data, _ := json.Marshal(pointer)
-	return kv.KeyValueItem{PartitionKey: key.PartitionKey, SortKey: key.SortKey, Fields: kv.KeyValueDocument{"cache": kv.Bytes(data)}}
+	return jsonItem(key, "cache", pointer)
 }
 
 func (s *responseCache) readPointer(ctx context.Context, key kv.KeyValueKey) (cachePointer, kv.KeyValueVersion, error) {
@@ -89,7 +88,7 @@ func (s *responseCache) immutable(ctx context.Context, key kv.KeyValueKey, strea
 		return cachePointer{}, err
 	}
 	_, err = s.repository.table.Create(ctx, cacheItem(key, want))
-	if errors.Is(err, contracts.ErrAlreadyExists) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if definitely(err, contracts.ErrAlreadyExists) {
 		existing, _, err = s.readPointer(ctx, key)
 		if err == nil && existing != want {
 			err = contracts.ErrConflict
@@ -166,7 +165,7 @@ func (s *responseCache) Publish(ctx context.Context, entry cache.ResponseEntry) 
 			}
 			_, err = s.repository.table.Replace(ctx, cacheItem(head, pointer), version)
 		}
-		if errors.Is(err, contracts.ErrOutcomeUnknown) || (!errors.Is(err, contracts.ErrConflict) && !errors.Is(err, contracts.ErrAlreadyExists)) {
+		if !definitely(err, contracts.ErrConflict) && !definitely(err, contracts.ErrAlreadyExists) {
 			return err
 		}
 	}
