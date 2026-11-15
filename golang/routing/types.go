@@ -1,11 +1,13 @@
 package routing
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -284,14 +286,8 @@ func containsClass(values []llm.ServiceClass, target llm.ServiceClass) bool {
 }
 
 func sortedRejections(values []Rejection) {
-	sort.SliceStable(values, func(i, j int) bool {
-		if values[i].RouteID != values[j].RouteID {
-			return values[i].RouteID < values[j].RouteID
-		}
-		if values[i].Code != values[j].Code {
-			return values[i].Code < values[j].Code
-		}
-		return values[i].Path < values[j].Path
+	slices.SortStableFunc(values, func(a, b Rejection) int {
+		return cmp.Or(cmp.Compare(a.RouteID, b.RouteID), cmp.Compare(a.Code, b.Code), cmp.Compare(a.Path, b.Path))
 	})
 }
 

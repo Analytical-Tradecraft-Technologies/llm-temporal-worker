@@ -21,10 +21,7 @@ func (r *CloudExecutionRuntime) publicGenerationOperation(request llm.GenerateRe
 
 func publicGenerationOperation(request llm.GenerateRequestV1, now time.Time) cloudstate.Operation {
 	manifest, _ := request.MarshalJSON()
-	var index int64
-	if request.Cache != nil {
-		index = int64(request.Cache.Variant)
-	}
+	index := generateSampleIndex(request)
 	return cloudstate.Operation{Scope: cloudstate.Scope{Tenant: request.Context.Tenant, Project: request.Context.Project}, Kind: "generate", Key: request.OperationKey, RequestIndex: index, Manifest: manifest, Now: now}
 }
 

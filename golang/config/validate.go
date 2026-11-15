@@ -52,13 +52,11 @@ func (config Config) Validate() error {
 			return fmt.Errorf("openrouter_upstream.provider_locations: %w", err)
 		}
 	}
-	if err := validateIdentifier(config.Environment, "environment"); err != nil {
-		return err
-	}
-	if err := config.Server.validate(config.Environment); err != nil {
-		return err
-	}
-	if err := config.Temporal.validate(config.Environment); err != nil {
+	if err := firstError(
+		func() error { return validateIdentifier(config.Environment, "environment") },
+		func() error { return config.Server.validate(config.Environment) },
+		func() error { return config.Temporal.validate(config.Environment) },
+	); err != nil {
 		return err
 	}
 	if config.Authorization != nil {
@@ -66,22 +64,14 @@ func (config Config) Validate() error {
 			return err
 		}
 	}
-	if err := validateShutdownBudget(config.Server, config.Temporal.Worker); err != nil {
-		return err
-	}
-	if err := config.State.validate(config.Environment); err != nil {
-		return err
-	}
-	if err := config.BlobStore.validate(config.Environment); err != nil {
-		return err
-	}
-	if err := validateStateBlobComposition(config.State.Kind, config.BlobStore.Kind); err != nil {
-		return err
-	}
-	if err := config.Limits.validate(); err != nil {
-		return err
-	}
-	if err := validateOutputSizeBounds(config.Server, config.Limits); err != nil {
+	if err := firstError(
+		func() error { return validateShutdownBudget(config.Server, config.Temporal.Worker) },
+		func() error { return config.State.validate(config.Environment) },
+		func() error { return config.BlobStore.validate(config.Environment) },
+		func() error { return validateStateBlobComposition(config.State.Kind, config.BlobStore.Kind) },
+		config.Limits.validate,
+		func() error { return validateOutputSizeBounds(config.Server, config.Limits) },
+	); err != nil {
 		return err
 	}
 	if len(config.Endpoints) == 0 {
@@ -114,10 +104,10 @@ func (config Config) Validate() error {
 			return err
 		}
 	}
-	if err := config.Capabilities.validate(); err != nil {
-		return err
-	}
-	if err := config.Pricing.validate(config.ModelSync != nil); err != nil {
+	if err := firstError(
+		config.Capabilities.validate,
+		func() error { return config.Pricing.validate(config.ModelSync != nil) },
+	); err != nil {
 		return err
 	}
 	if config.ModelSync != nil {
@@ -125,20 +115,22 @@ func (config Config) Validate() error {
 			return err
 		}
 	}
-	if err := config.Budgets.validate(); err != nil {
-		return err
-	}
-	if err := validateServiceClassPolicies(config.ServiceClassPolicies); err != nil {
-		return err
-	}
-	if err := config.validateBudgetReferences(); err != nil {
-		return err
-	}
-	if err := config.Continuation.validate(); err != nil {
-		return err
-	}
-	if err := config.Telemetry.validate(config.Environment); err != nil {
-		return err
+	return firstError(
+		config.Budgets.validate,
+		func() error { return validateServiceClassPolicies(config.ServiceClassPolicies) },
+		config.validateBudgetReferences,
+		config.Continuation.validate,
+		func() error { return config.Telemetry.validate(config.Environment) },
+	)
+}
+
+// firstError runs checks in order and returns the first error. Later checks
+// do not run once one fails.
+func firstError(checks ...func() error) error {
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -343,10 +335,9 @@ func validateKeyRing[K PayloadCodecKey | HandleKey](keys []K, path string, idPat
 		if !idPattern.MatchString(key.ID) {
 			return fmt.Errorf("%s.id must be %s", keyPath, idRule)
 		}
-		if _, exists := seen[key.ID]; exists {
-			return fmt.Errorf("%s duplicate key ID %q", keyPath, key.ID)
+		if err := claimUniqueID(seen, key.ID, keyPath, "key"); err != nil {
+			return err
 		}
-		seen[key.ID] = struct{}{}
 		if key.Primary {
 			primary++
 		}
@@ -738,10 +729,9 @@ func (model ModelConfig) validate(path string, endpoints map[string]EndpointConf
 		if len(route.ID) > maxAdmissionFieldBytes {
 			return fmt.Errorf("%s.id exceeds the %d-byte admission field limit", routePath, maxAdmissionFieldBytes)
 		}
-		if _, exists := seen[route.ID]; exists {
-			return fmt.Errorf("%s duplicate route ID %q", path, route.ID)
+		if err := claimUniqueID(seen, route.ID, path, "route"); err != nil {
+			return err
 		}
-		seen[route.ID] = struct{}{}
 		endpoint, exists := endpoints[route.Endpoint]
 		if !exists {
 			return fmt.Errorf("%s.endpoint %q is not configured", routePath, route.Endpoint)
@@ -869,10 +859,9 @@ func validateServiceClassPolicies(policies []ServiceClassPolicy) error {
 		if err := validateIdentifier(policy.ID, path+".id"); err != nil {
 			return err
 		}
-		if _, exists := seen[policy.ID]; exists {
-			return fmt.Errorf("%s duplicate policy ID %q", path, policy.ID)
+		if err := claimUniqueID(seen, policy.ID, path, "policy"); err != nil {
+			return err
 		}
-		seen[policy.ID] = struct{}{}
 		classes := make(map[llm.ServiceClass]struct{}, len(policy.Classes))
 		for classIndex, class := range policy.Classes {
 			if !class.Valid() {
@@ -909,10 +898,9 @@ func (budgets BudgetsConfig) validate() error {
 		if err := validateIdentifier(policy.ID, path+".id"); err != nil {
 			return err
 		}
-		if _, exists := seen[policy.ID]; exists {
-			return fmt.Errorf("%s duplicate policy ID %q", path, policy.ID)
+		if err := claimUniqueID(seen, policy.ID, path, "policy"); err != nil {
+			return err
 		}
-		seen[policy.ID] = struct{}{}
 		match := policy.Match
 		if !hasBudgetMatchRestriction(match) {
 			return fmt.Errorf("%s.match must contain at least one restriction", path)
@@ -1121,5 +1109,15 @@ func validateOperationKeyReuseHorizon(state StateConfig) error {
 	if state.Redis.EffectiveMaxMemoryPolicy() != "noeviction" {
 		return fmt.Errorf("state.redis.operation_key_reuse_horizon requires state.redis.maxmemory_policy noeviction")
 	}
+	return nil
+}
+
+// claimUniqueID records id in seen. It reports a duplicate, named by kind at
+// path, when id was already recorded.
+func claimUniqueID(seen map[string]struct{}, id, path, kind string) error {
+	if _, exists := seen[id]; exists {
+		return fmt.Errorf("%s duplicate %s ID %q", path, kind, id)
+	}
+	seen[id] = struct{}{}
 	return nil
 }

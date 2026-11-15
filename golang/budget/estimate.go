@@ -349,7 +349,7 @@ const (
 // location the adapters forward to a provider. Text-only requests return zero.
 func mediaInputAllowance(request llm.Request) int64 {
 	total := int64(0)
-	add := func(parts []llm.Part) {
+	add := func(parts []llm.Part) []llm.Part {
 		for _, part := range parts {
 			switch typed := part.(type) {
 			case llm.ImagePart, *llm.ImagePart:
@@ -362,25 +362,13 @@ func mediaInputAllowance(request llm.Request) int64 {
 				}
 			}
 		}
+		return parts
 	}
 	for _, instruction := range request.Instructions {
 		add(instruction.Content)
 	}
 	for _, item := range request.Input {
-		switch typed := item.(type) {
-		case llm.Message:
-			add(typed.Content)
-		case *llm.Message:
-			if typed != nil {
-				add(typed.Content)
-			}
-		case llm.ToolResult:
-			add(typed.Content)
-		case *llm.ToolResult:
-			if typed != nil {
-				add(typed.Content)
-			}
-		}
+		mapContent(item, add)
 	}
 	return total
 }
@@ -482,29 +470,37 @@ func withoutInlineMediaBytes(request llm.Request) (llm.Request, int64) {
 	}
 	input := append([]llm.Item(nil), request.Input...)
 	for index, item := range input {
-		switch typed := item.(type) {
-		case llm.Message:
-			typed.Content = strip(typed.Content)
-			input[index] = typed
-		case *llm.Message:
-			if typed != nil {
-				value := *typed
-				value.Content = strip(value.Content)
-				input[index] = &value
-			}
-		case llm.ToolResult:
-			typed.Content = strip(typed.Content)
-			input[index] = typed
-		case *llm.ToolResult:
-			if typed != nil {
-				value := *typed
-				value.Content = strip(value.Content)
-				input[index] = &value
-			}
-		}
+		input[index] = mapContent(item, strip)
 	}
 	request.Instructions, request.Input = instructions, input
 	return request, textBytes
+}
+
+// mapContent returns item with f applied to its content when it is a message
+// or tool result. A pointer item is copied rather than written through; any
+// other item, and a nil pointer, is returned unchanged without calling f.
+func mapContent(item llm.Item, f func([]llm.Part) []llm.Part) llm.Item {
+	switch typed := item.(type) {
+	case llm.Message:
+		typed.Content = f(typed.Content)
+		return typed
+	case *llm.Message:
+		if typed != nil {
+			value := *typed
+			value.Content = f(value.Content)
+			return &value
+		}
+	case llm.ToolResult:
+		typed.Content = f(typed.Content)
+		return typed
+	case *llm.ToolResult:
+		if typed != nil {
+			value := *typed
+			value.Content = f(value.Content)
+			return &value
+		}
+	}
+	return item
 }
 
 // addMediaAllowance adds the media allowance to the serialized-size estimate.

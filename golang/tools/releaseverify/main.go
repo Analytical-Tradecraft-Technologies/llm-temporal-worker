@@ -673,12 +673,8 @@ func validateImageIndex(schemaPath, path string, subject image) error {
 	if err != nil {
 		return err
 	}
-	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
-	if err != nil {
-		return errors.New("image index is not valid JSON")
-	}
-	if err := schema.Validate(instance); err != nil {
-		return fmt.Errorf("image index does not satisfy the allowlisted schema: %w", err)
+	if _, err := validateInstance(schema, data, "image index", "the allowlisted schema"); err != nil {
+		return err
 	}
 	var index struct {
 		Manifests []ociIndexPlatformDescriptor `json:"manifests"`
@@ -750,14 +746,22 @@ func validateSchema(schemaData, evidenceData []byte) error {
 	if err != nil {
 		return fmt.Errorf("cannot compile evidence schema: %w", err)
 	}
-	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(evidenceData))
+	_, err = validateInstance(compiled, evidenceData, "evidence record", "schema")
+	return err
+}
+
+// validateInstance decodes data and checks it against schema, returning the
+// decoded instance. subject names the document and schemaName the schema in
+// the errors.
+func validateInstance(schema *jsonschema.Schema, data []byte, subject, schemaName string) (any, error) {
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 	if err != nil {
-		return errors.New("evidence record is not valid JSON")
+		return nil, fmt.Errorf("%s is not valid JSON", subject)
 	}
-	if err := compiled.Validate(instance); err != nil {
-		return fmt.Errorf("evidence record does not satisfy schema: %w", err)
+	if err := schema.Validate(instance); err != nil {
+		return nil, fmt.Errorf("%s does not satisfy %s: %w", subject, schemaName, err)
 	}
-	return nil
+	return instance, nil
 }
 
 func compileArtifactSchema(evidenceSchemaPath string) (*jsonschema.Schema, error) {
@@ -789,12 +793,9 @@ func compileArtifactSchemaDefinition(evidenceSchemaPath, fragment string) (*json
 }
 
 func validateSummaryArtifact(schema *jsonschema.Schema, name string, data []byte) error {
-	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+	instance, err := validateInstance(schema, data, fmt.Sprintf("artifact %q summary", name), "the allowlisted schema")
 	if err != nil {
-		return fmt.Errorf("artifact %q summary is not valid JSON", name)
-	}
-	if err := schema.Validate(instance); err != nil {
-		return fmt.Errorf("artifact %q summary does not satisfy the allowlisted schema: %w", name, err)
+		return err
 	}
 	document, ok := instance.(map[string]any)
 	if !ok {

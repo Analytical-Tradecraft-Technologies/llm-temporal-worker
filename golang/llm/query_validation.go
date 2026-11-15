@@ -56,11 +56,7 @@ func (value *BudgetStatus) UnmarshalJSON(data []byte) error {
 	if decoded.Windows, err = requiredRawArray(fields, "windows"); err != nil {
 		return err
 	}
-	if err := validateBudgetStatus(decoded); err != nil {
-		return err
-	}
-	*value = decoded
-	return nil
+	return storeValid(value, decoded, validateBudgetStatus(decoded))
 }
 
 func (value *SpendSummary) UnmarshalJSON(data []byte) error {
@@ -76,11 +72,7 @@ func (value *SpendSummary) UnmarshalJSON(data []byte) error {
 	if decoded.Buckets, err = requiredRawArray(fields, "buckets"); err != nil {
 		return err
 	}
-	if err := validateSpendSummary(decoded); err != nil {
-		return err
-	}
-	*value = decoded
-	return nil
+	return storeValid(value, decoded, validateSpendSummary(decoded))
 }
 
 // validateQueryResult applies the same closed-world checks as the query JSON

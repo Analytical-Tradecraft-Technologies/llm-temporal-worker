@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 )
@@ -145,13 +146,12 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 		bucketSeconds int64
 		bucketNanos   int
 	}
+	keyOf := func(windowID string, bucketStart time.Time) reservationKey {
+		return reservationKey{windowID: windowID, bucketSeconds: bucketStart.Unix(), bucketNanos: bucketStart.Nanosecond()}
+	}
 	reservedByKey := make(map[reservationKey]budget.ReservationEvent, len(reservation.Result.Events))
 	for index, reserved := range reservation.Result.Events {
-		key := reservationKey{
-			windowID:      reserved.WindowID,
-			bucketSeconds: reserved.BucketStart.Unix(),
-			bucketNanos:   reserved.BucketStart.Nanosecond(),
-		}
+		key := keyOf(reserved.WindowID, reserved.BucketStart)
 		if _, exists := reservedByKey[key]; exists {
 			return fmt.Errorf("%w: duplicate reservation window and bucket %d", ErrBudgetBoundaryInvalid, index)
 		}
@@ -165,11 +165,7 @@ func (boundary BudgetBoundary) Finalize(ctx context.Context, lifecycle *Lifecycl
 		if event.OperationID != string(reservation.Result.OperationID) || event.GenerationID != string(reservation.Result.GenerationID) {
 			return fmt.Errorf("%w: completion event %d identity does not match reservation", ErrBudgetBoundaryInvalid, index)
 		}
-		key := reservationKey{
-			windowID:      event.WindowID,
-			bucketSeconds: event.BucketStart.Unix(),
-			bucketNanos:   event.BucketStart.Nanosecond(),
-		}
+		key := keyOf(event.WindowID, event.BucketStart)
 		reserved, matched := reservedByKey[key]
 		if !matched || !event.BucketStart.Equal(reserved.BucketStart) {
 			return fmt.Errorf("%w: completion event %d window and bucket do not match reservation", ErrBudgetBoundaryInvalid, index)

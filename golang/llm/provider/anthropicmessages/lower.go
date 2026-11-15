@@ -8,13 +8,11 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
 
@@ -147,19 +145,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 	if err := validateHaiku55Wire(request.Model, requestMap); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
-	if err := thinkingwire.Validate(requestMap, "Anthropic Messages"); err != nil {
-		return anthropic.MessageNewParams{}, err
-	}
-
-	params, encoded, err := provider.DecodeWireParams[anthropic.MessageNewParams](requestMap, "anthropic messages")
-	if err != nil {
-		return anthropic.MessageNewParams{}, err
-	}
-	// Keep the exact validated wire document as the SDK override. This retains
-	// opaque thinking signatures and redacted blocks byte-for-byte while the
-	// concrete typed fields above remain available to callers and tests.
-	param.SetJSON(encoded, &params)
-	return params, nil
+	return wire.Params(requestMap)
 }
 
 func lowerInstruction(instruction llm.Instruction) ([]any, error) {

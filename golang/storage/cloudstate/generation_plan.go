@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
@@ -101,7 +100,7 @@ func (r *Repository) SaveGenerationBinding(ctx context.Context, op Operation, ef
 		}
 		return nil
 	}
-	if !errors.Is(err, contracts.ErrNotFound) || errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if !definitely(err, contracts.ErrNotFound) {
 		return err
 	}
 	data, err := json.Marshal(generationBindingEnvelope{Version: 1, Manifest: op.Manifest, RequestIndex: op.RequestIndex, Effective: effective})
@@ -114,9 +113,8 @@ func (r *Repository) SaveGenerationBinding(ctx context.Context, op Operation, ef
 	if err != nil {
 		return err
 	}
-	pointer, _ := json.Marshal(generationPlanPointer{Version: 1, Blob: blob})
-	_, err = r.table.Create(ctx, kv.KeyValueItem{PartitionKey: key.PartitionKey, SortKey: key.SortKey, Fields: kv.KeyValueDocument{"generation_binding": kv.Bytes(pointer)}})
-	if errors.Is(err, contracts.ErrAlreadyExists) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	_, err = r.table.Create(ctx, jsonItem(key, "generation_binding", generationPlanPointer{Version: 1, Blob: blob}))
+	if definitely(err, contracts.ErrAlreadyExists) {
 		stored, err = r.LoadGenerationBinding(ctx, op)
 		if err == nil && !bytes.Equal(stored, effective) {
 			return contracts.ErrConflict
@@ -191,7 +189,7 @@ func (r *Repository) SaveGenerationPlan(ctx context.Context, op Operation, plan 
 	if err == nil {
 		return existing, nil
 	}
-	if !errors.Is(err, contracts.ErrNotFound) || errors.Is(err, contracts.ErrOutcomeUnknown) {
+	if !definitely(err, contracts.ErrNotFound) {
 		return GenerationPlan{}, err
 	}
 	op, err = r.normalizeGenerationPlanOperation(op)
@@ -207,9 +205,8 @@ func (r *Repository) SaveGenerationPlan(ctx context.Context, op Operation, plan 
 	if err != nil {
 		return GenerationPlan{}, err
 	}
-	pointer, _ := json.Marshal(generationPlanPointer{Version: 1, Blob: blob})
-	_, err = r.table.Create(ctx, kv.KeyValueItem{PartitionKey: key.PartitionKey, SortKey: key.SortKey, Fields: kv.KeyValueDocument{"generation_plan": kv.Bytes(pointer)}})
-	if errors.Is(err, contracts.ErrAlreadyExists) && !errors.Is(err, contracts.ErrOutcomeUnknown) {
+	_, err = r.table.Create(ctx, jsonItem(key, "generation_plan", generationPlanPointer{Version: 1, Blob: blob}))
+	if definitely(err, contracts.ErrAlreadyExists) {
 		return r.LoadGenerationPlan(ctx, op)
 	}
 	if err != nil {

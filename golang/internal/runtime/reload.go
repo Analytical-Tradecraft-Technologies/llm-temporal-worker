@@ -40,9 +40,7 @@ func (runtime *Runtime) reloadFile(ctx context.Context, path string, accept func
 	if runtime == nil || runtime.App == nil {
 		return errors.New("runtime is not initialized")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	err := runtime.App.ReloadFileIf(ctx, path, accept)
 	if errors.Is(err, app.ErrReloadDeferred) {
 		runtime.Logger.Info(ctx, "configuration reload deferred until the file is stable", slog.String("outcome", "deferred"))
@@ -326,9 +324,7 @@ func combineReloadTriggers(ctx context.Context, changes <-chan struct{}, signals
 // signal is forwarded, so the reload it causes can be told apart from a
 // watcher notification.
 func combineReloadTriggersNotify(ctx context.Context, changes <-chan struct{}, signals <-chan os.Signal, onSignal func()) <-chan struct{} {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = contextOrBackground(ctx)
 	triggers := make(chan struct{}, 1)
 	go func() {
 		defer close(triggers)
