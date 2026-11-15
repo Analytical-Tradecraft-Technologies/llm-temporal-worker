@@ -12,6 +12,19 @@ import (
 // injectUncertainWrite can fail with an unknown outcome.
 var uncertainWriteStages = []string{"blob", "event", "index-before", "index-after"}
 
+// failTableWrites is a table hook that returns before and after for every
+// write whose partition key contains fragment, limited to action unless it is
+// empty. A before error rejects the write; an after error applies it and
+// loses the acknowledgement.
+func failTableWrites(action, fragment string, before, after error) func(string, kv.KeyValueItem) (error, error) {
+	return func(gotAction string, item kv.KeyValueItem) (error, error) {
+		if (action == "" || gotAction == action) && strings.Contains(item.PartitionKey, fragment) {
+			return before, after
+		}
+		return nil, nil
+	}
+}
+
 // injectUncertainWrite makes the first write at stage report an unknown
 // outcome: the payload blob, the request event row, or the pending index
 // row, failed before ("index-before") or after ("index-after") it is

@@ -108,13 +108,17 @@ func (fake *budgetWorkerHashFake) Eval(_ context.Context, _ string, _ []string, 
 	return redisclient.NewCmdResult(int64(1), nil)
 }
 
-func testBudgetWorkerKeys(t *testing.T) BudgetKeySpace {
+var budgetWorkerTestEpoch = time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+// newFakeBudgetWorkerLeaseStore builds a lease store over fake whose clock
+// reads *now, so tests can advance time by reassigning the variable.
+func newFakeBudgetWorkerLeaseStore(t *testing.T, fake *budgetWorkerHashFake, sessionID string, now *time.Time) *BudgetWorkerLeaseStore {
 	t.Helper()
-	keys, err := NewBudgetKeySpace(KeyOptions{Prefix: "worker", HashTag: "budget", KeySecret: []byte(strings.Repeat("k", 32))})
+	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: sessionID, Clock: func() time.Time { return *now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return keys
+	return store
 }
 
 // Capture the read result before another caller changes Redis, then deliver
@@ -219,17 +223,14 @@ func runBudgetWorkerRegistrationInterleavings(t *testing.T, makeClient func(*tes
 
 func TestBudgetWorkerRegistrationRejectsInterveningWrites(t *testing.T) {
 	runBudgetWorkerRegistrationInterleavings(t, func(t *testing.T) (BudgetWorkerLeaseRedisClient, BudgetKeySpace) {
-		return &budgetWorkerHashFake{values: make(map[string]string)}, testBudgetWorkerKeys(t)
+		return &budgetWorkerHashFake{values: make(map[string]string)}, testBudgetKeySpaceForAdapter(t)
 	})
 }
 
 func TestBudgetWorkerLeaseKeepsSessionAcrossRenewAndPersistsRoster(t *testing.T) {
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	now := budgetWorkerTestEpoch
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-a", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newFakeBudgetWorkerLeaseStore(t, fake, "session-a", &now)
 	first, err := store.Register(context.Background(), "generation-a", "", time.Minute)
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -262,12 +263,9 @@ func TestBudgetWorkerLeaseKeepsSessionAcrossRenewAndPersistsRoster(t *testing.T)
 }
 
 func TestBudgetWorkerLeaseRejectsExpiredAndRegressingRenewals(t *testing.T) {
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	now := budgetWorkerTestEpoch
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-b", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newFakeBudgetWorkerLeaseStore(t, fake, "session-b", &now)
 	if _, err := store.Register(context.Background(), "generation-a", "20-0", time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -287,12 +285,9 @@ func TestBudgetWorkerLeaseRejectsExpiredAndRegressingRenewals(t *testing.T) {
 }
 
 func TestBudgetWorkerLeaseRenewRejectsStaleCompareAndSwap(t *testing.T) {
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	now := budgetWorkerTestEpoch
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-cas", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newFakeBudgetWorkerLeaseStore(t, fake, "session-cas", &now)
 	if _, err := store.Register(context.Background(), "generation-a", "1-0", time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -316,19 +311,13 @@ func TestBudgetWorkerLeaseRenewRejectsStaleCompareAndSwap(t *testing.T) {
 }
 
 func TestBudgetWorkerLeasePrunesOnlyExpiredGenerationLeases(t *testing.T) {
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	now := budgetWorkerTestEpoch
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	first, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-c", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newFakeBudgetWorkerLeaseStore(t, fake, "session-c", &now)
 	if _, err := first.Register(context.Background(), "generation-a", "1-0", time.Second); err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-d", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := newFakeBudgetWorkerLeaseStore(t, fake, "session-d", &now)
 	if _, err := second.Register(context.Background(), "generation-b", "1-0", time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -343,12 +332,9 @@ func TestBudgetWorkerLeasePrunesOnlyExpiredGenerationLeases(t *testing.T) {
 }
 
 func TestBudgetWorkerLeasePruneDoesNotDeleteRenewedLease(t *testing.T) {
-	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	now := budgetWorkerTestEpoch
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-prune-cas", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newFakeBudgetWorkerLeaseStore(t, fake, "session-prune-cas", &now)
 	if _, err := store.Register(context.Background(), "generation-a", "1-0", time.Second); err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +358,7 @@ func TestBudgetWorkerLeasePruneDoesNotDeleteRenewedLease(t *testing.T) {
 
 func TestBudgetWorkerLeaseGeneratesDistinctOpaqueSessions(t *testing.T) {
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	keys := testBudgetWorkerKeys(t)
+	keys := testBudgetKeySpaceForAdapter(t)
 	left, err := NewBudgetWorkerLeaseStore(fake, keys, BudgetWorkerLeaseOptions{})
 	if err != nil {
 		t.Fatal(err)

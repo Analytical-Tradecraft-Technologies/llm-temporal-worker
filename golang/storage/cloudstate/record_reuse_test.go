@@ -67,7 +67,10 @@ func TestRecordReuseTracksAuthoritativeRevisionAndOwnsCopies(t *testing.T) {
 	}
 }
 
-func TestRecordReuseDoesNotCrossInvocationOrRepository(t *testing.T) {
+// reusedRecordFixture creates the fixture record and reads it once in a
+// record-reuse invocation, returning that invocation's context.
+func reusedRecordFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, CreateRequest, context.Context) {
+	t.Helper()
 	r, table, blobs, request := fixture(t)
 	if _, err := r.Create(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -76,6 +79,11 @@ func TestRecordReuseDoesNotCrossInvocationOrRepository(t *testing.T) {
 	if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
 		t.Fatal(err)
 	}
+	return r, table, blobs, request, ctx
+}
+
+func TestRecordReuseDoesNotCrossInvocationOrRepository(t *testing.T) {
+	r, table, blobs, request, ctx := reusedRecordFixture(t)
 	// A blob lost after its successful read may be reused only within that
 	// invocation. Another repository or Activity must detect the loss.
 	blobs.mu.Lock()
@@ -98,14 +106,7 @@ func TestRecordReuseDoesNotCrossInvocationOrRepository(t *testing.T) {
 }
 
 func TestRecordReuseConcurrentCopies(t *testing.T) {
-	r, _, _, request := fixture(t)
-	if _, err := r.Create(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	ctx := WithRecordReuse(context.Background())
-	if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
-		t.Fatal(err)
-	}
+	r, _, _, request, ctx := reusedRecordFixture(t)
 	var wg sync.WaitGroup
 	for range 24 {
 		wg.Go(func() {
@@ -158,14 +159,7 @@ func TestRecordReuseDoesNotTreatPublicationAsReadableStorage(t *testing.T) {
 }
 
 func TestRecordReuseRequiresEntireValidatedPointer(t *testing.T) {
-	r, _, _, request := fixture(t)
-	if _, err := r.Create(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	ctx := WithRecordReuse(context.Background())
-	if _, err := r.Read(ctx, request.Scope, request.ID); err != nil {
-		t.Fatal(err)
-	}
+	r, _, _, request, ctx := reusedRecordFixture(t)
 	state, err := r.events.ReadState(ctx, r.stream(request.ID))
 	if err != nil {
 		t.Fatal(err)

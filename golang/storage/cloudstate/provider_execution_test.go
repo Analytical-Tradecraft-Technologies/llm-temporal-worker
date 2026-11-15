@@ -51,6 +51,43 @@ func startExecution(t *testing.T, r *Repository, record Record, plan BudgetPlan,
 	return saved
 }
 
+// closeInvalidResponseAttempt closes a paid attempt whose response was
+// refused, proving the refusal left its revision usable.
+func closeInvalidResponseAttempt(t *testing.T, r *Repository, record Record, saved SavedProviderExecution) {
+	t.Helper()
+	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
+		e.Stage = ExecutionFailed
+		e.CompletedAt = e.UpdatedAt.Add(time.Second)
+		e.Failure = &ExecutionFailure{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}
+	})
+	if saved.Execution.Stage != ExecutionFailed {
+		t.Fatal("attempt not closed")
+	}
+}
+
+// concurrentFreshStarts has callers independent repositories race to begin
+// record's provider execution and returns how many were told to submit.
+func concurrentFreshStarts(t *testing.T, table *memoryTable, blobs *memoryBlobs, record Record, plan BudgetPlan, reservation durable.ReserveResult, callers int) int32 {
+	t.Helper()
+	var group sync.WaitGroup
+	var winners atomic.Int32
+	for range callers {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
+			if err != nil {
+				t.Error(err)
+			}
+			if fresh {
+				winners.Add(1)
+			}
+		}()
+	}
+	group.Wait()
+	return winners.Load()
+}
+
 func advanceExecution(t *testing.T, r *Repository, record Record, saved SavedProviderExecution, update func(*ProviderExecution)) SavedProviderExecution {
 	t.Helper()
 	next := saved.Execution
@@ -167,14 +204,7 @@ func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
 				t.Fatal("oversized response not refused by size", err)
 			}
 			// Nothing was written, so the same revision can still close the attempt.
-			saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
-				e.Stage = ExecutionFailed
-				e.CompletedAt = e.UpdatedAt.Add(time.Second)
-				e.Failure = &ExecutionFailure{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}
-			})
-			if saved.Execution.Stage != ExecutionFailed {
-				t.Fatal("attempt not closed")
-			}
+			closeInvalidResponseAttempt(t, r, record, saved)
 		})
 	}
 }
@@ -210,36 +240,14 @@ func TestProviderExecutionToolCallDepth(t *testing.T) {
 	if !errors.Is(err, ErrRecordTooLarge) || !errors.Is(err, ErrInvalid) {
 		t.Fatal("too-deep response not refused as a record limit", err)
 	}
-	saved = advanceExecution(t, r, record, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionFailed
-		e.CompletedAt = e.UpdatedAt.Add(time.Second)
-		e.Failure = &ExecutionFailure{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}
-	})
-	if saved.Execution.Stage != ExecutionFailed {
-		t.Fatal("attempt not closed")
-	}
+	closeInvalidResponseAttempt(t, r, record, saved)
 }
 
 func TestProviderExecutionConcurrentStartsAuthorizeOnlyOneWriter(t *testing.T) {
 	r, table, blobs, record, plan, reservation := executionFixture(t)
-	var group sync.WaitGroup
-	var winners atomic.Int32
-	for range 20 {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
-			if err != nil {
-				t.Error(err)
-			}
-			if fresh {
-				winners.Add(1)
-			}
-		}()
-	}
-	group.Wait()
-	if winners.Load() != 1 {
-		t.Fatal("multiple fresh start permissions", winners.Load())
+	winners := concurrentFreshStarts(t, table, blobs, record, plan, reservation, 20)
+	if winners != 1 {
+		t.Fatal("multiple fresh start permissions", winners)
 	}
 	if _, err := r.LoadProviderExecution(context.Background(), record.Request.Scope, record.Request.ID); err != nil {
 		t.Fatal(err)
@@ -336,40 +344,20 @@ func TestUnreservedProviderExecutionConcurrentAndLostStarts(t *testing.T) {
 		t.Run(map[bool]string{false: "concurrent", true: "lost-ack"}[lost], func(t *testing.T) {
 			r, table, blobs, record, plan, reservation := executionFixture(t, BudgetUnmatched)
 			if lost {
-				table.hook = func(action string, item kv.KeyValueItem) (error, error) {
-					if action == "create" && strings.Contains(item.PartitionKey, "/request/") {
-						return nil, contracts.ErrOutcomeUnknown
-					}
-					return nil, nil
-				}
+				table.hook = failTableWrites("create", "/request/", nil, contracts.ErrOutcomeUnknown)
 				_, fresh, err := r.BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
 				if err == nil || fresh {
 					t.Fatal("uncertain write authorized submission")
 				}
 				table.hook = nil
 			}
-			var group sync.WaitGroup
-			var winners atomic.Int32
-			for range 12 {
-				group.Add(1)
-				go func() {
-					defer group.Done()
-					_, fresh, err := reopen(t, table, blobs).BeginProviderExecution(context.Background(), record.Request.Scope, record.Request.ID, reservation, false, plan.QuotedAt)
-					if err != nil {
-						t.Error(err)
-					}
-					if fresh {
-						winners.Add(1)
-					}
-				}()
-			}
-			group.Wait()
+			winners := concurrentFreshStarts(t, table, blobs, record, plan, reservation, 12)
 			expected := int32(1)
 			if lost {
 				expected = 0
 			}
-			if winners.Load() != expected {
-				t.Fatal("duplicate start permission", winners.Load())
+			if winners != expected {
+				t.Fatal("duplicate start permission", winners)
 			}
 		})
 	}

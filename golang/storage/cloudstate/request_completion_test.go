@@ -73,19 +73,7 @@ func TestRequestCompletionRepairsChildAndRootLostWrites(t *testing.T) {
 					}
 					commitCompletionHandoff(t, r, root, checkpoint, handoff, now)
 					calls := 0
-					table.hook = func(action string, item kv.KeyValueItem) (error, error) {
-						match := !event && action == "replace" && strings.Contains(item.PartitionKey, "/pending/") || event && action == "create" && strings.Contains(item.PartitionKey, "/request/")
-						if match {
-							calls++
-							if calls == target {
-								if event {
-									return nil, contracts.ErrOutcomeUnknown
-								}
-								return contracts.ErrUnavailable, nil
-							}
-						}
-						return nil, nil
-					}
+					table.hook = faultNthIndexOrEventWrite(event, target, &calls)
 					result := json.RawMessage(`{"version":1,"response":{}}`)
 					if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, now); err == nil || calls < target {
 						t.Fatal("fault was not exercised")

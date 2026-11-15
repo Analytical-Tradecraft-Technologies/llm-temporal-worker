@@ -19,12 +19,7 @@ import (
 // once nothing can still settle them; claimed and ambiguous records stay
 // persistent, and the budget:operations index mirrors each key's expiry (#1543).
 func TestLiveRedisOperationRecordRetention(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := client.ScriptLoad(ctx, AdmissionLuaSource()).Err(); err != nil {
-		t.Fatal(err)
-	}
+	client, ctx := openLiveRedisWithAdmissionLua(t, 30*time.Second)
 	t.Cleanup(func() {
 		if liveRedisLuaScriptCleanupAllowed() {
 			_ = client.ScriptFlush(context.Background()).Err()

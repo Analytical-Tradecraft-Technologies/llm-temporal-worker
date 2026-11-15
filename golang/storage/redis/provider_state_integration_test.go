@@ -31,16 +31,24 @@ func liveProviderStore(t *testing.T) (*ProviderStateStore, *redisclient.Client, 
 	return store, client, now
 }
 
-func TestLiveRedisProviderStatusConcurrency(t *testing.T) {
-	store, client, now := liveProviderStore(t)
-	ctx := context.Background()
-	// Distinct clients represent independently running workers sharing one keyspace.
+// secondLiveProviderStore opens store's keyspace through a distinct client,
+// standing in for an independently running worker.
+func secondLiveProviderStore(t *testing.T, client *redisclient.Client, store *ProviderStateStore) *ProviderStateStore {
+	t.Helper()
 	secondClient := redisclient.NewClient(client.Options())
-	defer secondClient.Close()
+	t.Cleanup(func() { _ = secondClient.Close() })
 	second, err := NewProviderStateStore(ProviderStateOptions{Client: secondClient, Keys: KeyOptions{Prefix: store.space.prefix, HashTag: store.space.tag, KeySecret: store.space.secret}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return second
+}
+
+func TestLiveRedisProviderStatusConcurrency(t *testing.T) {
+	store, client, now := liveProviderStore(t)
+	ctx := context.Background()
+	// Distinct clients represent independently running workers sharing one keyspace.
+	second := secondLiveProviderStore(t, client, store)
 	at := now.Add(-time.Minute)
 	first := providerTestEvent(t, at, "route", nil)
 	var applied atomic.Int32
@@ -103,12 +111,7 @@ func TestLiveRedisProviderStatusConcurrency(t *testing.T) {
 func TestLiveRedisProviderStatusTransitionSeenOnce(t *testing.T) {
 	store, client, now := liveProviderStore(t)
 	ctx := context.Background()
-	secondClient := redisclient.NewClient(client.Options())
-	defer secondClient.Close()
-	second, err := NewProviderStateStore(ProviderStateOptions{Client: secondClient, Keys: KeyOptions{Prefix: store.space.prefix, HashTag: store.space.tag, KeySecret: store.space.secret}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := secondLiveProviderStore(t, client, store)
 	at := now.Add(-time.Minute)
 	failure := func(i int) control.StatusObservation {
 		return providerTestEvent(t, at.Add(time.Duration(i)*time.Millisecond), "route", func(o *control.StatusObservation) {

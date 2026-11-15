@@ -74,9 +74,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 		})
 	}
 
-	child := testContinuation(t, now)
-	child.ParentID = parent.String()
-	child.Depth = 1
+	child := testChildContinuation(t, now, parent)
 	child.ExpiresAt = now.Add(time.Minute)
 	first, err := store.PutChild(ctx, state.PutChildRequest{Parent: parent, Child: child, OperationKey: "live-operation"})
 	if err != nil {
@@ -104,9 +102,7 @@ func TestLiveRedisContinuationConformance(t *testing.T) {
 		t.Fatalf("fully expired child read = %v, want not found", err)
 	}
 
-	replacement := testContinuation(t, now)
-	replacement.ParentID = parent.String()
-	replacement.Depth = 1
+	replacement := testChildContinuation(t, now, parent)
 	replacement.ExpiresAt = now.Add(time.Minute)
 	second, err := store.PutChild(ctx, state.PutChildRequest{Parent: parent, Child: replacement, OperationKey: "live-operation"})
 	if err != nil {

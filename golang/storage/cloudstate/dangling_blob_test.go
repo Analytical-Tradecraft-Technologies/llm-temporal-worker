@@ -119,15 +119,11 @@ func TestOperationDanglingRecordBlobIsNotANewOperation(t *testing.T) {
 func TestResponseCacheDanglingBlobIsCorruptNotAbsent(t *testing.T) {
 	r, table, memory, entry, origin := responseCacheFixture(t)
 	ctx := context.Background()
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
-	child := childCheckpoint(origin, "consumer")
-	child.Kind, child.OriginCacheEntryID = state.CheckpointCacheReplay, &entry.ID
+	child := publishEntryWithReplayChild(t, r, entry, origin)
 	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
 		t.Fatal(err)
 	}
-	use := cache.ResponseUse{ScopeID: origin.ScopeID, OperationID: child.OriginOperationID, EntryID: entry.ID, CheckpointID: child.ID, CompletedAt: entry.CompletedAt.Add(time.Hour)}
+	use := replayUse(origin, child, entry, entry.CompletedAt.Add(time.Hour))
 	if err := r.Responses().RecordUse(ctx, use); err != nil {
 		t.Fatal(err)
 	}

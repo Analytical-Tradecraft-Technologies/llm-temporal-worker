@@ -57,17 +57,6 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				}
 				return rows
 			}
-			acquire := func(t *testing.T, m *RedisBudgetMaterializer, req durable.ReserveRequest) durable.ReserveResult {
-				t.Helper()
-				result, err := m.Accept(ctx, req)
-				if err != nil || !result.Accepted {
-					t.Fatalf("acquire = %#v, %v", result, err)
-				}
-				return result
-			}
-			claim := func(r durable.ReserveResult) durable.ClaimRequest {
-				return durable.ClaimRequest{OperationID: r.OperationID, GenerationID: r.GenerationID, IncarnationID: r.IncarnationID}
-			}
 			settle := func(r durable.ReserveResult, amount string) durable.ReconcileRequest {
 				cost := pricing.MustUSD(amount)
 				e := r.Events[0]
@@ -92,7 +81,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 					t.Fatal(err)
 				}
 				oldID := client.XInfoStream(ctx, space.EventsKey()).Val().FirstEntry.ID
-				r := acquire(t, m, req)
+				r := acquireLive(t, m, req)
 				if n := client.XLen(ctx, space.EventsKey()).Val(); n > 10100 {
 					t.Fatalf("unbounded hints: %d", n)
 				}
@@ -120,10 +109,10 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if err != nil || cursor != "0-0" {
 					t.Fatalf("expired stream cursor: %q, %v", cursor, err)
 				}
-				if _, err := m.Claim(ctx, claim(r)); err != nil {
+				if _, err := m.Claim(ctx, claimOf(r)); err != nil {
 					t.Fatalf("claim after hint expiry: %v", err)
 				}
-				if _, err := m.Claim(ctx, claim(r)); !errors.Is(err, durable.ErrAlreadyClaimed) {
+				if _, err := m.Claim(ctx, claimOf(r)); !errors.Is(err, durable.ErrAlreadyClaimed) {
 					t.Fatalf("hint expiry reopened dispatch: %v", err)
 				}
 				rows, err := port.Read(ctx, cursor, 10)
@@ -140,12 +129,12 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if _, err := m.Accept(ctx, req); err == nil {
 					t.Fatal("expected lost acquisition reply")
 				}
-				r := acquire(t, m, req)
+				r := acquireLive(t, m, req)
 				m.invoke = &lostBudgetReply{delegate: m.invoke, action: "durable_claim"}
-				if _, err := m.Claim(ctx, claim(r)); err == nil {
+				if _, err := m.Claim(ctx, claimOf(r)); err == nil {
 					t.Fatal("expected lost claim reply")
 				}
-				if _, err := m.Claim(ctx, claim(r)); !errors.Is(err, durable.ErrAlreadyClaimed) {
+				if _, err := m.Claim(ctx, claimOf(r)); !errors.Is(err, durable.ErrAlreadyClaimed) {
 					t.Fatalf("claim replay = %v", err)
 				}
 				m.invoke = &lostBudgetReply{delegate: m.invoke, action: "durable_reconcile"}
@@ -203,7 +192,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 			})
 			t.Run("denials and release", func(t *testing.T) {
 				m, space, req := fixture(t)
-				r := acquire(t, m, req)
+				r := acquireLive(t, m, req)
 				blocked := req
 				blocked.OperationID = "blocked"
 				blocked.Reservations = append(blocked.Reservations[:0:0], req.Reservations...)
@@ -211,7 +200,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if result, err := m.Accept(ctx, blocked); err != nil || result.Accepted {
 					t.Fatalf("denial = %#v, %v", result, err)
 				}
-				if _, err := m.Claim(ctx, claim(r)); err != nil {
+				if _, err := m.Claim(ctx, claimOf(r)); err != nil {
 					t.Fatal(err)
 				}
 				if err := m.Reconcile(ctx, settle(r, "0")); err != nil {
@@ -230,7 +219,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 			})
 			t.Run("expired reservation publishes cleanup", func(t *testing.T) {
 				m, space, req := fixture(t)
-				acquire(t, m, req)
+				acquireLive(t, m, req)
 				expiry := m.space.durableBudgetExpiryKey(req.Reservations[0].PolicyID, req.Reservations[0].WindowID)
 				members, err := client.ZRange(ctx, expiry, 0, -1).Result()
 				if err != nil || len(members) != 1 {
@@ -240,7 +229,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 					t.Fatal(err)
 				}
 				req.OperationID = "after-expiry"
-				acquire(t, m, req)
+				acquireLive(t, m, req)
 				rows := read(t, space, "")
 				if len(rows) != 3 || rows[1].Event.Kind != BudgetEventExpire ||
 					rows[1].Event.NanoDelta != 10_000_000 || rows[1].Event.OperationHash != "" ||
@@ -257,8 +246,8 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				}
 				// XADD * can advance the millisecond component. It differs from
 				// XADD <milliseconds>-*, which must fail when its sequence fills.
-				r := acquire(t, m, req)
-				if _, err := m.Claim(ctx, claim(r)); err != nil {
+				r := acquireLive(t, m, req)
+				if _, err := m.Claim(ctx, claimOf(r)); err != nil {
 					t.Fatal(err)
 				}
 				if err := m.Reconcile(ctx, settle(r, "0.004")); err != nil {
@@ -325,7 +314,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 			})
 			t.Run("rejected reconciliation emits no success", func(t *testing.T) {
 				m, space, req := fixture(t)
-				r := acquire(t, m, req)
+				r := acquireLive(t, m, req)
 				completed := settle(r, "0.004")
 				if err := m.Reconcile(ctx, completed); !errors.Is(err, durable.ErrClaimRequired) {
 					t.Fatalf("unclaimed settlement = %v", err)
@@ -333,7 +322,7 @@ func TestLiveRedisBudgetEvents(t *testing.T) {
 				if rows := read(t, space, ""); len(rows) != 1 {
 					t.Fatalf("rejected settlement published: %#v", rows)
 				}
-				if _, err := m.Claim(ctx, claim(r)); err != nil {
+				if _, err := m.Claim(ctx, claimOf(r)); err != nil {
 					t.Fatal(err)
 				}
 				key := m.space.durableBudgetOperationKey(string(req.GenerationID), string(req.OperationID))

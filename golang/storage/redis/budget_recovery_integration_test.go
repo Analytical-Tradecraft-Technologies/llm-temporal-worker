@@ -18,12 +18,7 @@ import (
 )
 
 func TestLiveRedisBudgetRecovery(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	if err := client.ScriptLoad(ctx, AdmissionLuaSource()).Err(); err != nil {
-		t.Fatal(err)
-	}
+	client, ctx := openLiveRedisWithAdmissionLua(t, 2*time.Minute)
 	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
 		t.Run(string(mode), func(t *testing.T) {
 			type fixture struct {

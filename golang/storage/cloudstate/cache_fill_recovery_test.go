@@ -28,12 +28,7 @@ func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
 				}
 				return store.Complete(ctx, lease, completion)
 			}
-			table.hook = func(op string, item kv.KeyValueItem) (error, error) {
-				if op == "replace" && strings.Contains(item.PartitionKey, "/cache/fill/") {
-					return nil, contracts.ErrOutcomeUnknown
-				}
-				return nil, nil
-			}
+			table.hook = failTableWrites("replace", "/cache/fill/", nil, contracts.ErrOutcomeUnknown)
 			if err := finish(r.ResponseFills()); !errors.Is(err, contracts.ErrOutcomeUnknown) {
 				t.Fatal(err)
 			}
@@ -41,12 +36,7 @@ func TestCloudFillLostCompletionSurvivesTakeover(t *testing.T) {
 			next := lease
 			next.Attempt, next.AcquiredAt, next.ExpiresAt = "replacement", entry.CompletedAt.Add(time.Second), entry.CompletedAt.Add(time.Minute)
 			// Takeover must preserve the terminal witness before changing head.
-			table.hook = func(_ string, item kv.KeyValueItem) (error, error) {
-				if strings.Contains(item.PartitionKey, "/cache/fill-receipt/") {
-					return contracts.ErrUnavailable, nil
-				}
-				return nil, nil
-			}
+			table.hook = failTableWrites("", "/cache/fill-receipt/", contracts.ErrUnavailable, nil)
 			if _, err := r.ResponseFills().Acquire(ctx, next, next.AcquiredAt); !errors.Is(err, contracts.ErrUnavailable) {
 				t.Fatal("takeover discarded receipt", err)
 			}
@@ -72,12 +62,7 @@ func TestCloudFillWaitsForCachePublicationAndPreservesOldSuccess(t *testing.T) {
 	ctx, lease := context.Background(), fillLease(entry)
 	mustAcquireFill(t, r.ResponseFills(), lease, cache.FillOwned)
 	mustStartFill(t, r.ResponseFills(), lease, lease.AcquiredAt)
-	table.hook = func(_ string, item kv.KeyValueItem) (error, error) {
-		if strings.Contains(item.PartitionKey, "/cache/success/") {
-			return contracts.ErrUnavailable, nil
-		}
-		return nil, nil
-	}
+	table.hook = failTableWrites("", "/cache/success/", contracts.ErrUnavailable, nil)
 	if err := r.Responses().Publish(ctx, entry); !errors.Is(err, contracts.ErrUnavailable) {
 		t.Fatal(err)
 	}

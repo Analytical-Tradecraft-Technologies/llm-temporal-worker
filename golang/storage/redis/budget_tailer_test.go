@@ -11,28 +11,19 @@ import (
 
 func TestBudgetStreamTailerAppliesBoundedBatchesAndPersistsCursorState(t *testing.T) {
 	port := new(MemoryBudgetEventPort)
-	for index := int64(1); index <= 2; index++ {
-		if _, err := port.Append(context.Background(), testTailerEvent("generation-a", index)); err != nil {
-			t.Fatal(err)
-		}
-	}
+	appendTailerEvents(t, port, "generation-a", 2)
 	var applied []string
-	tailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	tailer := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      port,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a"},
 		BatchSize: 1,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "2-0"}, nil
-		},
+		Reload:    reloadTailerTo("generation-a", "2-0"),
 		Apply: func(_ context.Context, record BudgetStreamRecord) error {
 			applied = append(applied, record.ID)
 			return nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	first, err := tailer.Poll(context.Background())
 	if err != nil || first.Records != 1 || first.State.Cursor != "1-0" {
 		t.Fatalf("first poll = %#v, %v", first, err)
@@ -48,24 +39,19 @@ func TestBudgetStreamTailerAppliesBoundedBatchesAndPersistsCursorState(t *testin
 
 func TestBudgetStreamTailerReloadsOnDisabledConsumptionGapAndGenerationSwitch(t *testing.T) {
 	port := new(MemoryBudgetEventPort)
-	if _, err := port.Append(context.Background(), testTailerEvent("generation-a", 1)); err != nil {
-		t.Fatal(err)
-	}
+	appendTailerEvents(t, port, "generation-a", 1)
 	reloads := 0
 	reload := func(context.Context) (BudgetStreamCursorState, error) {
 		reloads++
 		return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"}, nil
 	}
-	tailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	tailer := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      port,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"},
 		BatchSize: 10,
 		Enabled:   false,
 		Reload:    reload,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err := tailer.Poll(context.Background())
 	if err != nil || !result.Reloaded || result.Records != 0 || reloads != 1 {
 		t.Fatalf("disabled poll = %#v, %v, reloads=%d", result, err, reloads)
@@ -74,60 +60,43 @@ func TestBudgetStreamTailerReloadsOnDisabledConsumptionGapAndGenerationSwitch(t 
 	// A retained-stream gap is recovered by the same Redis-only reload path.
 	tailer.SetEnabled(true)
 	gapPort := &scriptedBudgetEventPort{err: ErrBudgetStreamGap, currentCursor: "8-0"}
-	gapTailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	gapTailer := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      gapPort,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"},
 		BatchSize: 1,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "9-0"}, nil
-		},
+		Reload:    reloadTailerTo("generation-a", "9-0"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err = gapTailer.Poll(context.Background())
 	if err != nil || !result.Reloaded || result.State.Cursor != "8-0" || gapPort.reads != 1 {
 		t.Fatalf("gap poll = %#v, %v, reads=%d", result, err, gapPort.reads)
 	}
-	withoutCursor, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	withoutCursor := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      &scriptedBudgetEventPort{err: ErrBudgetStreamGap},
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"},
 		BatchSize: 1,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "9-0"}, nil
-		},
+		Reload:    reloadTailerTo("generation-a", "9-0"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := withoutCursor.Poll(context.Background()); !errors.Is(err, ErrBudgetStreamCursorUnavailable) {
 		t.Fatalf("gap without current cursor = %v, want ErrBudgetStreamCursorUnavailable", err)
 	}
 
 	// A generation-switch event is never applied to the old local plan.
 	switchPort := new(MemoryBudgetEventPort)
-	if _, err := switchPort.Append(context.Background(), testTailerEvent("generation-b", 1)); err != nil {
-		t.Fatal(err)
-	}
+	appendTailerEvents(t, switchPort, "generation-b", 1)
 	applyCalled := false
-	switchTailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	switchTailer := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      switchPort,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a"},
 		BatchSize: 1,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-b", Cursor: "1-0"}, nil
-		},
+		Reload:    reloadTailerTo("generation-b", "1-0"),
 		Apply: func(context.Context, BudgetStreamRecord) error {
 			applyCalled = true
 			return nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err = switchTailer.Poll(context.Background())
 	if err != nil || !result.Reloaded || result.Records != 0 || applyCalled {
 		t.Fatalf("generation switch poll = %#v, %v, applied=%v", result, err, applyCalled)
@@ -139,21 +108,15 @@ func TestBudgetStreamTailerReloadsOnDisabledConsumptionGapAndGenerationSwitch(t 
 
 func TestBudgetStreamTailerDoesNotAdvancePastApplyFailure(t *testing.T) {
 	port := new(MemoryBudgetEventPort)
-	for index := int64(1); index <= 2; index++ {
-		if _, err := port.Append(context.Background(), testTailerEvent("generation-a", index)); err != nil {
-			t.Fatal(err)
-		}
-	}
+	appendTailerEvents(t, port, "generation-a", 2)
 	fail := true
 	var applied []string
-	tailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	tailer := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      port,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a"},
 		BatchSize: 2,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "2-0"}, nil
-		},
+		Reload:    reloadTailerTo("generation-a", "2-0"),
 		Apply: func(_ context.Context, record BudgetStreamRecord) error {
 			applied = append(applied, record.ID)
 			if fail && record.ID == "2-0" {
@@ -162,9 +125,6 @@ func TestBudgetStreamTailerDoesNotAdvancePastApplyFailure(t *testing.T) {
 			return nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err := tailer.Poll(context.Background())
 	if err == nil || result.Records != 1 || tailer.State().Cursor != "1-0" {
 		t.Fatalf("failed poll = %#v, %v, state=%#v", result, err, tailer.State())
@@ -185,18 +145,13 @@ func TestBudgetStreamTailerRejectsNonAdvancingAdapterRecords(t *testing.T) {
 		{ID: "1-0", Event: event},
 		{ID: "1-0", Event: event},
 	}}
-	tailer, err := NewBudgetStreamTailer(BudgetStreamTailerOptions{
+	tailer := newTestBudgetStreamTailer(t, BudgetStreamTailerOptions{
 		Port:      port,
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a"},
 		BatchSize: 2,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-a", Cursor: "1-0"}, nil
-		},
+		Reload:    reloadTailerTo("generation-a", "1-0"),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err := tailer.Poll(context.Background())
 	if !errors.Is(err, ErrBudgetStreamInvalid) || result.Records != 1 || tailer.State().Cursor != "1-0" {
 		t.Fatalf("non-advancing poll = %#v, %v, state=%#v", result, err, tailer.State())
@@ -210,9 +165,7 @@ func TestBudgetStreamTailerRejectsUntrustedConfiguration(t *testing.T) {
 		Initial:   BudgetStreamCursorState{GenerationID: "generation-a"},
 		BatchSize: 1,
 		Enabled:   true,
-		Reload: func(context.Context) (BudgetStreamCursorState, error) {
-			return BudgetStreamCursorState{GenerationID: "generation-a"}, nil
-		},
+		Reload:    reloadTailerTo("generation-a", ""),
 	}
 	tests := []struct {
 		name string
@@ -232,6 +185,32 @@ func TestBudgetStreamTailerRejectsUntrustedConfiguration(t *testing.T) {
 				t.Fatal("constructor accepted untrusted configuration")
 			}
 		})
+	}
+}
+
+func newTestBudgetStreamTailer(t *testing.T, options BudgetStreamTailerOptions) *BudgetStreamTailer {
+	t.Helper()
+	tailer, err := NewBudgetStreamTailer(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tailer
+}
+
+// reloadTailerTo is a Reload callback that always returns the given state.
+func reloadTailerTo(generation, cursor string) func(context.Context) (BudgetStreamCursorState, error) {
+	return func(context.Context) (BudgetStreamCursorState, error) {
+		return BudgetStreamCursorState{GenerationID: BudgetGenerationID(generation), Cursor: cursor}, nil
+	}
+}
+
+// appendTailerEvents appends revisions 1 through count of generation to port.
+func appendTailerEvents(t *testing.T, port *MemoryBudgetEventPort, generation string, count int64) {
+	t.Helper()
+	for index := int64(1); index <= count; index++ {
+		if _, err := port.Append(context.Background(), testTailerEvent(generation, index)); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

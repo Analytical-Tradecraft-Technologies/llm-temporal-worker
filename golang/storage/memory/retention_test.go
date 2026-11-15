@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -12,9 +13,11 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
-func retentionContinuationStore(t *testing.T, now *time.Time) *ContinuationStore {
+// newTestContinuationStore builds a store with a fixed test key whose clock
+// reads *now. random seeds the keyring; nil uses the default source.
+func newTestContinuationStore(t *testing.T, now *time.Time, random io.Reader) *ContinuationStore {
 	t.Helper()
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, nil)
+	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, random)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,6 +28,28 @@ func retentionContinuationStore(t *testing.T, now *time.Time) *ContinuationStore
 	return store
 }
 
+// deterministicKeyringRandom is a fixed keyring random source with enough
+// bytes for a root and a few children.
+func deterministicKeyringRandom() io.Reader {
+	return bytes.NewReader(append(bytes.Repeat([]byte{4}, 16), bytes.Repeat([]byte{5}, 16)...))
+}
+
+// textTranscript is a one-message transcript and its canonical digest.
+func textTranscript(t *testing.T, actor llm.Actor, text string) ([]llm.Item, [32]byte) {
+	t.Helper()
+	items := []llm.Item{llm.Message{Actor: actor, Content: []llm.Part{llm.TextPart{Text: text}}}}
+	return items, canonicalDigest(t, items)
+}
+
+func canonicalDigest(t *testing.T, items []llm.Item) [32]byte {
+	t.Helper()
+	_, digest, err := state.CanonicalTranscript(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
 func retentionChild(t *testing.T, parent state.Continuation, parentHandle state.Handle, text string, expiresAt time.Time) state.Continuation {
 	t.Helper()
 	child := parent.Clone()
@@ -32,22 +57,14 @@ func retentionChild(t *testing.T, parent state.Continuation, parentHandle state.
 	child.Depth = parent.Depth + 1
 	child.LastOperationID = "op"
 	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}})
-	var err error
-	_, child.TranscriptDigest, err = state.CanonicalTranscript(child.Transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	child.TranscriptDigest = canonicalDigest(t, child.Transcript)
 	child.ExpiresAt = expiresAt
 	return child
 }
 
 func retentionRoot(t *testing.T, store *ContinuationStore, expiresAt time.Time) (state.Handle, state.Continuation) {
 	t.Helper()
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
-	_, digest, err := state.CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	items, digest := textTranscript(t, llm.ActorHuman, "hello")
 	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: expiresAt, LastOperationID: "root"})
 	if err != nil {
 		t.Fatal(err)
@@ -59,11 +76,10 @@ func retentionRoot(t *testing.T, store *ContinuationStore, expiresAt time.Time) 
 	return handle, root
 }
 
-// A retry of PutChild with the same parent and operation key after the child
-// expired and was swept must not return the deleted handle.
-func TestContinuationPutChildAfterChildSweepCreatesResolvableChild(t *testing.T) {
-	now := time.Unix(100, 0)
-	store := retentionContinuationStore(t, &now)
+// putShortLivedRetentionChild stores a child that expires a minute after now
+// under a root that lives for an hour, returning the request and its handle.
+func putShortLivedRetentionChild(t *testing.T, store *ContinuationStore, now time.Time) (state.PutChildRequest, state.Handle) {
+	t.Helper()
 	rootHandle, root := retentionRoot(t, store, now.Add(time.Hour))
 	child := retentionChild(t, root, rootHandle, "world", now.Add(time.Minute))
 	request := state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"}
@@ -71,6 +87,15 @@ func TestContinuationPutChildAfterChildSweepCreatesResolvableChild(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return request, first
+}
+
+// A retry of PutChild with the same parent and operation key after the child
+// expired and was swept must not return the deleted handle.
+func TestContinuationPutChildAfterChildSweepCreatesResolvableChild(t *testing.T) {
+	now := time.Unix(100, 0)
+	store := newTestContinuationStore(t, &now, nil)
+	request, first := putShortLivedRetentionChild(t, store, now)
 	now = now.Add(2 * time.Minute)
 	if removed := store.Sweep(now); removed != 1 {
 		t.Fatalf("Sweep removed %d continuations, want 1", removed)
@@ -98,14 +123,8 @@ func TestContinuationPutChildAfterChildSweepCreatesResolvableChild(t *testing.T)
 // treated as absent rather than returned as an unresolvable handle.
 func TestContinuationPutChildAfterChildExpiryWithoutSweep(t *testing.T) {
 	now := time.Unix(100, 0)
-	store := retentionContinuationStore(t, &now)
-	rootHandle, root := retentionRoot(t, store, now.Add(time.Hour))
-	child := retentionChild(t, root, rootHandle, "world", now.Add(time.Minute))
-	request := state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"}
-	first, err := store.PutChild(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, &now, nil)
+	request, first := putShortLivedRetentionChild(t, store, now)
 	now = now.Add(2 * time.Minute)
 	request.Child.ExpiresAt = now.Add(time.Minute)
 	retry, err := store.PutChild(context.Background(), request)
@@ -126,7 +145,7 @@ func TestContinuationPutChildAfterChildExpiryWithoutSweep(t *testing.T) {
 // Writes reclaim expired continuations without an external lifecycle owner.
 func TestContinuationWritesReclaimExpiredRecords(t *testing.T) {
 	now := time.Unix(100, 0)
-	store := retentionContinuationStore(t, &now)
+	store := newTestContinuationStore(t, &now, nil)
 	for range 3 {
 		retentionRoot(t, store, now.Add(time.Minute))
 	}

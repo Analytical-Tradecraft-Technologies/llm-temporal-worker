@@ -43,34 +43,10 @@ func TestCompositionValidateRejectsTypedNilCapabilities(t *testing.T) {
 		name string
 		set  func(*Composition)
 	}{
-		{
-			name: "operations",
-			set: func(composition *Composition) {
-				var value *typedNilAdmissionStore
-				composition.Operations = value
-			},
-		},
-		{
-			name: "continuations",
-			set: func(composition *Composition) {
-				var value *typedNilContinuationStore
-				composition.Continuations = value
-			},
-		},
-		{
-			name: "results",
-			set: func(composition *Composition) {
-				var value *typedNilResultStore
-				composition.Results = value
-			},
-		},
-		{
-			name: "materializer",
-			set: func(composition *Composition) {
-				var value *typedNilMaterializer
-				composition.Materializer = value
-			},
-		},
+		{name: "operations", set: func(composition *Composition) { composition.Operations = (*typedNilAdmissionStore)(nil) }},
+		{name: "continuations", set: func(composition *Composition) { composition.Continuations = (*typedNilContinuationStore)(nil) }},
+		{name: "results", set: func(composition *Composition) { composition.Results = (*typedNilResultStore)(nil) }},
+		{name: "materializer", set: func(composition *Composition) { composition.Materializer = (*typedNilMaterializer)(nil) }},
 	}
 
 	for _, tc := range cases {

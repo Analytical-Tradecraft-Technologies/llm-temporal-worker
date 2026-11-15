@@ -70,8 +70,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("accept = %#v, %v", accepted, err)
 	}
-	claim := durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}
-	if _, err := m.Claim(ctx, claim); err != nil {
+	if _, err := m.Claim(ctx, claimOf(accepted)); err != nil {
 		t.Fatal(err)
 	}
 	pending := request
@@ -131,7 +130,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 			t.Fatalf("eviction modified accounting key %s: %v", key, err)
 		}
 	}
-	if _, err := m.Claim(ctx, claim); !errors.Is(err, durable.ErrAlreadyClaimed) {
+	if _, err := m.Claim(ctx, claimOf(accepted)); !errors.Is(err, durable.ErrAlreadyClaimed) {
 		t.Fatalf("eviction reopened provider dispatch: %v", err)
 	}
 	blocked := request

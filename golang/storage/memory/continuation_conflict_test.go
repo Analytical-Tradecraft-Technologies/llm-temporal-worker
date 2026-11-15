@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -12,30 +11,15 @@ import (
 )
 
 func TestContinuationChildRetryWithDifferentHistoryConflicts(t *testing.T) {
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, bytes.NewReader(append(bytes.Repeat([]byte{4}, 16), bytes.Repeat([]byte{5}, 16)...)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Unix(100, 0)
-	store, err := NewContinuationStore(ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return now }, MaxDepth: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transcript := func(text string) ([]llm.Item, [32]byte) {
-		items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}}
-		_, digest, err := state.CanonicalTranscript(items)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return items, digest
-	}
-	rootItems, rootDigest := transcript("hello")
+	store := newTestContinuationStore(t, &now, deterministicKeyringRandom())
+	rootItems, rootDigest := textTranscript(t, llm.ActorHuman, "hello")
 	parent, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: rootItems, TranscriptDigest: rootDigest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	child := func(text string) state.Continuation {
-		items, digest := transcript(text)
+		items, digest := textTranscript(t, llm.ActorHuman, text)
 		return state.Continuation{Tenant: "tenant", ParentID: parent.String(), Depth: 1, Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "op-1"}
 	}
 	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child("first result"), OperationKey: "op-1"})

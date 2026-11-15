@@ -64,14 +64,8 @@ func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
 	cleanupLivePrefix(t, client, left.Prefix)
 	cleanupLivePrefix(t, client, right.Prefix)
 	now := time.Now().UTC()
-	leftAdmission, err := NewAdmissionStore(AdmissionOptions{Client: client, Mode: AdmissionModeFunction, Keys: left, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rightAdmission, err := NewAdmissionStore(AdmissionOptions{Client: client, Mode: AdmissionModeFunction, Keys: right, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	leftAdmission := openLiveAdmissionStore(t, client, AdmissionModeFunction, left, now)
+	rightAdmission := openLiveAdmissionStore(t, client, AdmissionModeFunction, right, now)
 	request := liveBeginRequest("shared-prefix-operation", "shared-prefix-policy", 1, 10, now)
 	if _, err := leftAdmission.Begin(ctx, request); err != nil {
 		t.Fatalf("left admission = %v", err)
@@ -81,14 +75,8 @@ func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
 	}
 
 	keyring := testKeyring(t)
-	leftContinuation, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: left, Keyring: keyring, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rightContinuation, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: right, Keyring: keyring, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	leftContinuation := openLiveContinuationStore(t, client, left, keyring, now)
+	rightContinuation := openLiveContinuationStore(t, client, right, keyring, now)
 	root := testContinuation(t, now)
 	root.ExpiresAt = now.Add(time.Hour)
 	leftHandle, err := leftContinuation.CreateRoot(ctx, root)
@@ -192,15 +180,7 @@ func TestLiveRedisFunctionBeginDecodesTwoFieldDenial(t *testing.T) {
 	now := time.Now().UTC()
 	keys := liveKeyOptions("begin-denial")
 	cleanupLivePrefix(t, client, keys.Prefix)
-	store, err := NewAdmissionStore(AdmissionOptions{
-		Client: client,
-		Mode:   AdmissionModeFunction,
-		Keys:   keys,
-		Clock:  func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := openLiveAdmissionStore(t, client, AdmissionModeFunction, keys, now)
 	first := liveBeginRequest("begin-denial-first", "begin-denial-policy", 6, 10, now)
 	if result, err := store.Begin(context.Background(), first); err != nil || result.Denied != nil {
 		t.Fatalf("first reservation = %#v, %v", result, err)
@@ -235,7 +215,7 @@ func TestLiveRedisTimeoutAfterMutationResolvesByRead(t *testing.T) {
 	now := time.Now().UTC()
 	keys := liveKeyOptions("timeout")
 	cleanupLivePrefix(t, client, keys.Prefix)
-	invoker := &timeoutAfterMutationInvoker{
+	invoker := &timeoutAfterMutationFunctionInvoker{
 		inner: redisInvoker{client: client, mode: AdmissionModeFunction, version: AdmissionFunctionVersion},
 	}
 	store, err := NewAdmissionStore(AdmissionOptions{
@@ -279,15 +259,7 @@ func TestLiveRedisFunctionAndLuaMismatchFailClosed(t *testing.T) {
 		t.Fatalf("function version mismatch = %v, want unresolved shared state", err)
 	}
 
-	luaStore, err := NewAdmissionStore(AdmissionOptions{
-		Client: client,
-		Mode:   AdmissionModeLua,
-		Keys:   keys,
-		Clock:  func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	luaStore := openLiveAdmissionStore(t, client, AdmissionModeLua, keys, now)
 	if _, err := luaStore.Begin(context.Background(), request); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("Lua digest mismatch = %v, want unresolved shared state", err)
 	}
@@ -369,15 +341,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 		t.Fatal(err)
 	}
 	authority.Ready = true
-	store, err := NewAdmissionStore(AdmissionOptions{
-		Client: client,
-		Mode:   mode,
-		Keys:   keys,
-		Clock:  func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := openLiveAdmissionStore(t, client, mode, keys, now)
 	request := liveBeginRequest("restart", "restart-policy", 1, 10, now)
 	if result, err := store.Begin(ctx, request); err != nil || result.Denied != nil {
 		t.Fatalf("write before Redis restart = %#v, %v", result, err)
@@ -394,8 +358,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("reserve before restart: %#v %v", accepted, err)
 	}
-	claimRequest := durable.ClaimRequest{OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID}
-	if _, err := budgets.Claim(ctx, claimRequest); err != nil {
+	if _, err := budgets.Claim(ctx, claimOf(accepted)); err != nil {
 		t.Fatal(err)
 	}
 	reserveEvent := accepted.Events[0]
@@ -412,7 +375,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	if err != nil || !pending.Accepted {
 		t.Fatalf("pending before restart: %#v %v", pending, err)
 	}
-	pendingClaim := durable.ClaimRequest{OperationID: pending.OperationID, GenerationID: pending.GenerationID, IncarnationID: pending.IncarnationID}
+	pendingClaim := claimOf(pending)
 	if _, err := budgets.Claim(ctx, pendingClaim); err != nil {
 		t.Fatal(err)
 	}
@@ -519,15 +482,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 		t.Fatalf("budget accounting lost on restart: %#v %v", denied, err)
 	}
 
-	restartedStore, err := NewAdmissionStore(AdmissionOptions{
-		Client: restartedClient,
-		Mode:   mode,
-		Keys:   keys,
-		Clock:  func() time.Time { return now },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	restartedStore := openLiveAdmissionStore(t, restartedClient, mode, keys, now)
 	stored, err := restartedStore.Get(context.Background(), request.ID)
 	if err != nil || stored.State != admission.StateReserved {
 		t.Fatalf("persisted operation after Redis restart = %#v, %v", stored, err)
@@ -715,24 +670,8 @@ func liveRedisStoreFactoryWithKeys(client *redisclient.Client, mode AdmissionMod
 			if err != nil {
 				t.Fatal(err)
 			}
-			admissions, err := NewAdmissionStore(AdmissionOptions{
-				Client: client,
-				Mode:   mode,
-				Keys:   keys,
-				Clock:  func() time.Time { return now },
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			continuations, err := NewContinuationStore(ContinuationOptions{
-				Client:  client,
-				Keys:    keys,
-				Keyring: keyring,
-				Clock:   func() time.Time { return now },
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			admissions := openLiveAdmissionStore(t, client, mode, keys, now)
+			continuations := openLiveContinuationStore(t, client, keys, keyring, now)
 			return conformance.Stores{
 				Admission:     admissions,
 				Continuations: continuations,
@@ -740,6 +679,28 @@ func liveRedisStoreFactoryWithKeys(client *redisclient.Client, mode AdmissionMod
 			}
 		},
 	}
+}
+
+// openLiveAdmissionStore opens an admission store on client in mode under
+// keys with a clock fixed at now.
+func openLiveAdmissionStore(t testing.TB, client redisclient.Scripter, mode AdmissionMode, keys KeyOptions, now time.Time) *AdmissionStore {
+	t.Helper()
+	store, err := NewAdmissionStore(AdmissionOptions{Client: client, Mode: mode, Keys: keys, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// openLiveContinuationStore opens a continuation store on client under keys
+// with a clock fixed at now.
+func openLiveContinuationStore(t testing.TB, client redisclient.Scripter, keys KeyOptions, keyring *state.Keyring, now time.Time) *ContinuationStore {
+	t.Helper()
+	store, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: keys, Keyring: keyring, Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func liveKeyOptions(kind string) KeyOptions {
@@ -808,20 +769,4 @@ func runLiveRedisDocker(t *testing.T, arguments ...string) {
 	if err := exec.CommandContext(ctx, "docker", arguments...).Run(); err != nil {
 		t.Fatal("could not restart the isolated Redis dependency")
 	}
-}
-
-type timeoutAfterMutationInvoker struct {
-	inner FunctionInvoker
-	once  atomic.Bool
-}
-
-func (invoker *timeoutAfterMutationInvoker) Run(ctx context.Context, name string, keys []string, args ...string) ([]any, error) {
-	result, err := invoker.inner.Run(ctx, name, keys, args...)
-	if err != nil {
-		return nil, err
-	}
-	if invoker.once.CompareAndSwap(false, true) {
-		return nil, context.DeadlineExceeded
-	}
-	return result, nil
 }

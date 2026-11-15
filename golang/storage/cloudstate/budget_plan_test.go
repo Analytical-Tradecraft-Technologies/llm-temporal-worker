@@ -187,12 +187,7 @@ func TestBudgetPlanUncertainWritesRepairWithoutChangingQuote(t *testing.T) {
 func TestBudgetPlanLoadRepairsDiscoveryBeforeReturningAdmissionFacts(t *testing.T) {
 	r, table, blobs, record, plan := budgetPlanFixture(t)
 	fault := &contracts.StorageError{Kind: contracts.ErrUnavailable}
-	table.hook = func(action string, item kv.KeyValueItem) (error, error) {
-		if action == "replace" && strings.Contains(item.PartitionKey, "/pending/") {
-			return fault, nil
-		}
-		return nil, nil
-	}
+	table.hook = failTableWrites("replace", "/pending/", fault, nil)
 	ctx := context.Background()
 	if err := r.SaveBudgetPlan(ctx, record.Request.Scope, record.Request.ID, plan, plan.QuotedAt); !errors.Is(err, ErrIndexPending) {
 		t.Fatalf("save index failure: %v", err)

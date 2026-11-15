@@ -23,6 +23,19 @@ func memoryReservation(amount, limit pricing.MicroUSD) admission.WindowReservati
 	}
 }
 
+// assertNextBeginSeesActive begins a reservation of 8 against a limit of 10
+// and requires it to be denied with active spend still at active.
+func assertNextBeginSeesActive(t *testing.T, store *AdmissionStore, now time.Time, id string, active pricing.MicroUSD) {
+	t.Helper()
+	denied, err := store.Begin(context.Background(), admission.BeginRequest{
+		ID: id, ScopeKey: "tenant/" + id, RequestDigest: admission.Digest([]byte(id)),
+		Reservation: 8, Reservations: []admission.WindowReservation{memoryReservation(8, 10)}, ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil || denied.Denied == nil || denied.Denied.Active != active {
+		t.Fatalf("%s budget = %#v, %v", id, denied, err)
+	}
+}
+
 func beginMemoryOperation(t *testing.T, store *AdmissionStore, now time.Time, id string, reservation admission.WindowReservation) admission.Operation {
 	t.Helper()
 	result, err := store.Begin(context.Background(), admission.BeginRequest{
@@ -93,14 +106,7 @@ func TestAdmissionCompleteReconcilesReservationAndClonesResult(t *testing.T) {
 	if err := store.Complete(context.Background(), admission.CompleteRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Actual: 99}); err != nil {
 		t.Fatalf("completed replay = %v", err)
 	}
-	next := memoryReservation(8, 10)
-	denied, err := store.Begin(context.Background(), admission.BeginRequest{
-		ID: "after-complete", ScopeKey: "tenant/after-complete", RequestDigest: admission.Digest([]byte("after-complete")),
-		Reservation: 8, Reservations: []admission.WindowReservation{next}, ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil || denied.Denied == nil || denied.Denied.Active != 3 {
-		t.Fatalf("post-completion budget = %#v, %v", denied, err)
-	}
+	assertNextBeginSeesActive(t, store, now, "after-complete", 3)
 }
 
 func TestAdmissionProviderPendingRetainsPollGuidance(t *testing.T) {
@@ -151,14 +157,7 @@ func TestAdmissionDefiniteFailureReconcilesIncurredCost(t *testing.T) {
 		t.Fatalf("failed operation = %#v", got)
 	}
 
-	next := memoryReservation(8, 10)
-	denied, err := store.Begin(context.Background(), admission.BeginRequest{
-		ID: "after-failure", ScopeKey: "tenant/after-failure", RequestDigest: admission.Digest([]byte("after-failure")),
-		Reservation: 8, Reservations: []admission.WindowReservation{next}, ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil || denied.Denied == nil || denied.Denied.Active != 3 {
-		t.Fatalf("post-failure budget = %#v, %v", denied, err)
-	}
+	assertNextBeginSeesActive(t, store, now, "after-failure", 3)
 }
 
 func TestAdmissionContinueReconcilesAndRotatesDispatchToken(t *testing.T) {

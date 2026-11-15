@@ -11,12 +11,29 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
-func TestStorePutGetIsImmutableAndTenantBound(t *testing.T) {
-	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
-	store, err := New(Options{Root: t.TempDir(), MaxBytes: 1024, Clock: func() time.Time { return now }})
+// newTestStore opens a store under root whose clock is fixed at now.
+func newTestStore(t *testing.T, root string, maxBytes int64, now time.Time) *Store {
+	t.Helper()
+	store, err := New(Options{Root: root, MaxBytes: maxBytes, Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return store
+}
+
+// putTestText stores data as a text/plain blob for tenant.
+func putTestText(t *testing.T, store *Store, tenant, data string, expiresAt time.Time) blob.Ref {
+	t.Helper()
+	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: tenant, MediaType: "text/plain", Data: []byte(data), ExpiresAt: expiresAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+func TestStorePutGetIsImmutableAndTenantBound(t *testing.T) {
+	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	store := newTestStore(t, t.TempDir(), 1024, now)
 	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant-a", MediaType: "application/json", Data: []byte(`{"ok":true}`), ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
@@ -48,14 +65,8 @@ func TestStorePutGetIsImmutableAndTenantBound(t *testing.T) {
 func TestStoreDetectsTamperExpiryAndLimit(t *testing.T) {
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	root := t.TempDir()
-	store, err := New(Options{Root: root, MaxBytes: 5, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant-a", MediaType: "text/plain", Data: []byte("hello"), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t, root, 5, now)
+	ref := putTestText(t, store, "tenant-a", "hello", now.Add(time.Hour))
 	prefix, _ := blob.TenantPrefix("tenant-a")
 	if err := os.WriteFile(filepath.Join(root, prefix, ref.Digest), []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)
@@ -87,14 +98,8 @@ func TestStoreHonorsCancellation(t *testing.T) {
 func TestStoreRejectsSymlinkObjects(t *testing.T) {
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	root := t.TempDir()
-	store, err := New(Options{Root: root, MaxBytes: 1024, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant-a", MediaType: "text/plain", Data: []byte("safe"), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t, root, 1024, now)
+	ref := putTestText(t, store, "tenant-a", "safe", now.Add(time.Hour))
 	prefix, _ := blob.TenantPrefix("tenant-a")
 	path := filepath.Join(root, prefix, ref.Digest)
 	if err := os.Remove(path); err != nil {

@@ -114,10 +114,7 @@ func TestAdmissionMutationTimeoutsResolveByRead(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			now := time.Unix(1_700_000_000, 0)
 			harness := newAdmissionHarness(now)
-			store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-			if err != nil {
-				t.Fatal(err)
-			}
+			store := newTestAdmissionStore(t, harness, harness, now)
 			reservation := testReservation(10, 100)
 			result, err := store.Begin(context.Background(), admission.BeginRequest{
 				ID: "timeout-" + test.name, ScopeKey: "tenant/timeout-" + test.name,
@@ -150,13 +147,8 @@ func TestContinuationPutChildTimeoutResolvesByOperationIndex(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	harness := newContinuationHarness()
 	store := newTestContinuationStore(t, harness, harness, now)
-	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	child := testContinuation(t, now)
-	child.ParentID = parent.String()
-	child.Depth = 1
+	parent := createTestRoot(t, store, now)
+	child := testChildContinuation(t, now, parent)
 	const operationKey = "timeout-child-operation"
 	store.invoke = &timeoutAfterMutationContinuationInvoker{inner: harness}
 	if _, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child, OperationKey: operationKey}); !errors.Is(err, ErrUnavailable) {

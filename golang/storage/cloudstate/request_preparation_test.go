@@ -340,40 +340,19 @@ func TestRequestPreparationAttemptSharesParentReference(t *testing.T) {
 // ErrCorrupt and never as a missing preparation, on any parent blob or
 // reference that does not verify.
 func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
-	foreignScope := Scope{Tenant: "other-tenant", Project: "other-project"}
-	cases := map[string]func(*testing.T, *Repository, *memoryBlobs, Record, RequestPreparation, storedRequestPreparation){
-		"missing blob": func(t *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
-			delete(blobs.values, blob.BlobKey(stored.ParentSnapshotRef.Blob))
-		},
-		"tampered blob": func(t *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
-			blobs.values[blob.BlobKey(stored.ParentSnapshotRef.Blob)][20] ^= 1
-		},
-		"wrong digest": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
-			stored.ParentSnapshotRef.Digest = strings.Repeat("0", 64)
-			rewritePreparation(t, r, record, stored)
-		},
-		"wrong length": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
-			stored.ParentSnapshotRef.ByteLength++
-			rewritePreparation(t, r, record, stored)
-		},
+	cases := map[string]parentCorruption{
+		"missing blob":         deleteParentBlob,
+		"tampered blob":        tamperParentBlob,
+		"wrong digest":         zeroParentDigest,
+		"wrong length":         extendParentLength,
+		"other scope":          moveParentToForeignScope,
+		"inline and reference": inlineAndReferenceParent,
 		"other blob": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
 			other, err := r.writeBlob(context.Background(), r.parentSnapshotStream(record.Request.Scope), []byte(`{"other":true}`))
 			if err != nil {
 				t.Fatal(err)
 			}
 			stored.ParentSnapshotRef.Blob = other
-			rewritePreparation(t, r, record, stored)
-		},
-		"other scope": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
-			foreign := r.newParentSnapshotRef(foreignScope, p.ParentSnapshot)
-			if _, err := r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot); err != nil {
-				t.Fatal(err)
-			}
-			stored.ParentSnapshotRef = &foreign
-			rewritePreparation(t, r, record, stored)
-		},
-		"inline and reference": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
-			stored.ParentSnapshot = p.ParentSnapshot
 			rewritePreparation(t, r, record, stored)
 		},
 		"malformed key": func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
@@ -388,22 +367,70 @@ func TestRequestPreparationRejectsTamperedOrMissingParent(t *testing.T) {
 	}
 	for name, corrupt := range cases {
 		t.Run(name, func(t *testing.T) {
-			r, table, blobs, record, preparation := preparationFixture(t)
-			r.parentSnapshotBlob = true
-			ctx := context.Background()
-			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-				t.Fatal(err)
-			}
-			current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			corrupt(t, r, blobs, current, preparation, storedPreparationOf(t, current))
-			if _, err := reopen(t, table, blobs).LoadRequestPreparation(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
+			r, record, _ := corruptedPreparation(t, corrupt)
+			if _, err := r.LoadRequestPreparation(context.Background(), record.Request.Scope, record.Request.ID); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
 				t.Fatalf("accepted a corrupt parent: %v", err)
 			}
 		})
 	}
+}
+
+// parentCorruption damages a saved preparation's parent snapshot or its
+// stored reference.
+type parentCorruption func(*testing.T, *Repository, *memoryBlobs, Record, RequestPreparation, storedRequestPreparation)
+
+// corruptedPreparation saves the fixture preparation with its parent in a
+// blob, applies corrupt to the stored state and returns a reopened
+// repository over the result.
+func corruptedPreparation(t *testing.T, corrupt parentCorruption) (*Repository, Record, RequestPreparation) {
+	t.Helper()
+	r, table, blobs, record, preparation := preparationFixture(t)
+	r.parentSnapshotBlob = true
+	ctx := context.Background()
+	if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
+		t.Fatal(err)
+	}
+	current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt(t, r, blobs, current, preparation, storedPreparationOf(t, current))
+	return reopen(t, table, blobs), record, preparation
+}
+
+func deleteParentBlob(_ *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
+	delete(blobs.values, blob.BlobKey(stored.ParentSnapshotRef.Blob))
+}
+
+func tamperParentBlob(_ *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
+	blobs.values[blob.BlobKey(stored.ParentSnapshotRef.Blob)][20] ^= 1
+}
+
+func zeroParentDigest(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+	stored.ParentSnapshotRef.Digest = strings.Repeat("0", 64)
+	rewritePreparation(t, r, record, stored)
+}
+
+func extendParentLength(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
+	stored.ParentSnapshotRef.ByteLength++
+	rewritePreparation(t, r, record, stored)
+}
+
+// moveParentToForeignScope points the record at an identical parent blob
+// written under another tenant and project.
+func moveParentToForeignScope(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
+	foreignScope := Scope{Tenant: "other-tenant", Project: "other-project"}
+	foreign := r.newParentSnapshotRef(foreignScope, p.ParentSnapshot)
+	if _, err := r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	stored.ParentSnapshotRef = &foreign
+	rewritePreparation(t, r, record, stored)
+}
+
+func inlineAndReferenceParent(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
+	stored.ParentSnapshot = p.ParentSnapshot
+	rewritePreparation(t, r, record, stored)
 }
 
 // TestRequestPreparationStorageSettingWritesAndReads: the default writes the

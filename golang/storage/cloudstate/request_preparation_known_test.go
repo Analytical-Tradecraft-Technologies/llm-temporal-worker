@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
@@ -96,37 +95,16 @@ func TestRequestPreparationKnownParent(t *testing.T) {
 // corrupt case fails closed as before; verified, only the parent blob read
 // earlier in the step is not read again, and every record check still runs.
 func TestRequestPreparationKnownParentStillRejectsCorruption(t *testing.T) {
-	foreignScope := Scope{Tenant: "other-tenant", Project: "other-project"}
 	cases := map[string]struct {
 		blobOnly bool
-		corrupt  func(*testing.T, *Repository, *memoryBlobs, Record, RequestPreparation, storedRequestPreparation)
+		corrupt  parentCorruption
 	}{
-		"missing blob": {true, func(t *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
-			delete(blobs.values, blob.BlobKey(stored.ParentSnapshotRef.Blob))
-		}},
-		"tampered blob": {true, func(t *testing.T, _ *Repository, blobs *memoryBlobs, _ Record, _ RequestPreparation, stored storedRequestPreparation) {
-			blobs.values[blob.BlobKey(stored.ParentSnapshotRef.Blob)][20] ^= 1
-		}},
-		"wrong digest": {false, func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
-			stored.ParentSnapshotRef.Digest = strings.Repeat("0", 64)
-			rewritePreparation(t, r, record, stored)
-		}},
-		"wrong length": {false, func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
-			stored.ParentSnapshotRef.ByteLength++
-			rewritePreparation(t, r, record, stored)
-		}},
-		"other scope": {false, func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
-			foreign := r.newParentSnapshotRef(foreignScope, p.ParentSnapshot)
-			if _, err := r.writeBlob(context.Background(), r.parentSnapshotStream(foreignScope), p.ParentSnapshot); err != nil {
-				t.Fatal(err)
-			}
-			stored.ParentSnapshotRef = &foreign
-			rewritePreparation(t, r, record, stored)
-		}},
-		"inline and reference": {false, func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, p RequestPreparation, stored storedRequestPreparation) {
-			stored.ParentSnapshot = p.ParentSnapshot
-			rewritePreparation(t, r, record, stored)
-		}},
+		"missing blob":         {true, deleteParentBlob},
+		"tampered blob":        {true, tamperParentBlob},
+		"wrong digest":         {false, zeroParentDigest},
+		"wrong length":         {false, extendParentLength},
+		"other scope":          {false, moveParentToForeignScope},
+		"inline and reference": {false, inlineAndReferenceParent},
 		"invalid fields": {false, func(t *testing.T, r *Repository, _ *memoryBlobs, record Record, _ RequestPreparation, stored storedRequestPreparation) {
 			stored.Version = 2
 			rewritePreparation(t, r, record, stored)
@@ -135,19 +113,9 @@ func TestRequestPreparationKnownParentStillRejectsCorruption(t *testing.T) {
 	for name, tc := range cases {
 		for _, verified := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/verified=%t", name, verified), func(t *testing.T) {
-				r, table, blobs, record, preparation := preparationFixture(t)
-				r.parentSnapshotBlob = true
-				ctx := context.Background()
-				if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-					t.Fatal(err)
-				}
-				current, err := r.Read(ctx, record.Request.Scope, record.Request.ID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				tc.corrupt(t, r, blobs, current, preparation, storedPreparationOf(t, current))
+				r, record, preparation := corruptedPreparation(t, tc.corrupt)
 				known := &KnownParent{Snapshot: preparation.ParentSnapshot, Verified: verified}
-				_, _, err = reopen(t, table, blobs).LoadRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, known)
+				_, _, err := r.LoadRequestPreparationKnown(context.Background(), record.Request.Scope, record.Request.ID, known)
 				if verified && tc.blobOnly {
 					// Verified means this step already read and checked
 					// that blob; it is not read again.

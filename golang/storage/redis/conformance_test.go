@@ -73,22 +73,14 @@ func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	fixture := newContinuationRuntimeFixture(func() time.Time { return now })
 	store := newTestContinuationStore(t, fixture, fixture, now)
-	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	child := testContinuation(t, now)
-	child.ParentID = parent.String()
-	child.Depth = 1
+	parent := createTestRoot(t, store, now)
+	child := testChildContinuation(t, now, parent)
 	child.ExpiresAt = now.Add(time.Second)
 	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child, OperationKey: "operation-private-99"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	keys := []string{
 		space.continuationIndexKey(first.String()),
 		space.continuationKey(child.Tenant, first.String()),
@@ -104,9 +96,7 @@ func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 	if _, err := store.Get(context.Background(), first); !errors.Is(err, state.ErrNotFound) {
 		t.Fatalf("expired child read = %v, want not found", err)
 	}
-	replacement := testContinuation(t, now)
-	replacement.ParentID = parent.String()
-	replacement.Depth = 1
+	replacement := testChildContinuation(t, now, parent)
 	replacement.ExpiresAt = now.Add(time.Hour)
 	second, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: replacement, OperationKey: "operation-private-99"})
 	if err != nil {
@@ -127,19 +117,13 @@ func TestContinuationStoreFailsClosedForUnavailableRedisState(t *testing.T) {
 		t.Fatalf("write transport error = %v, want redacted unavailable state", err)
 	}
 	fixture.putErr = nil
-	handle, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	handle := createTestRoot(t, store, now)
 	fixture.getErr = backendErr
 	if _, err := store.Get(context.Background(), handle); !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "redis.example.internal") {
 		t.Fatalf("read transport error = %v, want redacted unavailable state", err)
 	}
 	fixture.getErr = nil
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	fixture.set(space.continuationKey("tenant-a", handle.String()), "not-json", time.Time{})
 	if _, err := store.Get(context.Background(), handle); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("malformed continuation record = %v, want unavailable state", err)
@@ -159,14 +143,8 @@ func TestContinuationStoreTreatsExpiryRaceAsNotFound(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	fixture := newContinuationRuntimeFixture(func() time.Time { return now })
 	store := newTestContinuationStore(t, fixture, fixture, now)
-	handle, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	handle := createTestRoot(t, store, now)
+	space := testKeySpace(t)
 	indexKey := space.continuationIndexKey(handle.String())
 	recordKey := space.continuationKey("tenant-a", handle.String())
 	fixture.mu.Lock()

@@ -35,10 +35,7 @@ func TestStoreConstructorAndPutValidation(t *testing.T) {
 	}
 
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	store, err := New(Options{Root: t.TempDir(), MaxBytes: 16, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t, t.TempDir(), 16, now)
 	for name, request := range map[string]blob.PutRequest{
 		"missing tenant":     {MediaType: "text/plain", Data: []byte("value"), ExpiresAt: now.Add(time.Hour)},
 		"missing media type": {Tenant: "tenant", Data: []byte("value"), ExpiresAt: now.Add(time.Hour)},
@@ -62,10 +59,7 @@ func TestStoreConstructorAndPutValidation(t *testing.T) {
 func TestStorePutConflictAndSecureObjectLayout(t *testing.T) {
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
 	root := t.TempDir()
-	store, err := New(Options{Root: root, MaxBytes: 64, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t, root, 64, now)
 	request := blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("wanted"), ExpiresAt: now.Add(time.Hour)}
 	prefix, err := blob.TenantPrefix(request.Tenant)
 	if err != nil {
@@ -121,14 +115,8 @@ func TestStorePutConflictAndSecureObjectLayout(t *testing.T) {
 
 func TestStoreGetAndProbeHonorCancellationAndValidatePaths(t *testing.T) {
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	store, err := New(Options{Root: t.TempDir(), MaxBytes: 64, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("value"), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t, t.TempDir(), 64, now)
+	ref := putTestText(t, store, "tenant", "value", now.Add(time.Hour))
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := store.Get(canceled, "tenant", ref); !errors.Is(err, context.Canceled) {

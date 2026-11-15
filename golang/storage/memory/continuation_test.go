@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -13,20 +12,9 @@ import (
 )
 
 func TestContinuationStoreBranchesImmutably(t *testing.T) {
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, bytes.NewReader(append(bytes.Repeat([]byte{4}, 16), bytes.Repeat([]byte{5}, 16)...)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Unix(100, 0)
-	store, err := NewContinuationStore(ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return now }, MaxDepth: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
-	_, digest, err := state.CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, &now, deterministicKeyringRandom())
+	items, digest := textTranscript(t, llm.ActorHuman, "hello")
 	root := state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"}
 	rootHandle, err := store.CreateRoot(context.Background(), root)
 	if err != nil {
@@ -46,10 +34,7 @@ func TestContinuationStoreBranchesImmutably(t *testing.T) {
 	child.Depth = 1
 	child.LastOperationID = "op-1"
 	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "world"}}})
-	_, child.TranscriptDigest, err = state.CanonicalTranscript(child.Transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	child.TranscriptDigest = canonicalDigest(t, child.Transcript)
 	childHandle, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -61,20 +46,9 @@ func TestContinuationStoreBranchesImmutably(t *testing.T) {
 }
 
 func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Unix(100, 0)
-	store, err := NewContinuationStore(ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return now }, MaxDepth: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "same-key"}}}}
-	_, digest, err := state.CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, &now, nil)
+	items, digest := textTranscript(t, llm.ActorHuman, "same-key")
 	root, err := store.CreateRoot(context.Background(), state.Continuation{
 		Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true,
 		ExpiresAt: now.Add(time.Hour), LastOperationID: "root",
@@ -83,10 +57,7 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	childItems := append(append([]llm.Item(nil), items...), llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "child"}}})
-	_, childDigest, err := state.CanonicalTranscript(childItems)
-	if err != nil {
-		t.Fatal(err)
-	}
+	childDigest := canonicalDigest(t, childItems)
 	child := state.Continuation{
 		Tenant: "tenant", ParentID: root.String(), Transcript: childItems, TranscriptDigest: childDigest,
 		TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "same-operation", Depth: 1,
@@ -172,25 +143,15 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 }
 
 func TestContinuationStoreDetachesNestedTranscriptData(t *testing.T) {
-	keyring, err := state.NewKeyring([]state.Key{{ID: "k1", Secret: bytes.Repeat([]byte{3}, 32), Primary: true}}, bytes.NewReader(append(bytes.Repeat([]byte{4}, 16), bytes.Repeat([]byte{5}, 16)...)))
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Unix(100, 0)
-	store, err := NewContinuationStore(ContinuationOptions{Keyring: keyring, Clock: func() time.Time { return now }, MaxDepth: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestContinuationStore(t, &now, deterministicKeyringRandom())
 	content := []llm.Part{llm.TextPart{Text: "hello"}}
 	arguments := []byte(`{"q":"x"}`)
 	items := []llm.Item{
 		llm.Message{Actor: llm.ActorHuman, Content: content},
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: arguments},
 	}
-	_, digest, err := state.CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	digest := canonicalDigest(t, items)
 	handle, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"})
 	if err != nil {
 		t.Fatal(err)
