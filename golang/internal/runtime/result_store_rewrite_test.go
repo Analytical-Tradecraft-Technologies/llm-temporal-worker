@@ -19,18 +19,9 @@ import (
 // same reference as the original.
 func TestBlobResultStoreRewritingAStoredResultReturnsItsReference(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UTC()
-	admissions := memoryadmission.NewAdmissionStore(memoryadmission.AdmissionOptions{Clock: func() time.Time { return now }})
-	begin, err := admissions.Begin(ctx, admission.BeginRequest{ID: "operation-rewrite", ScopeKey: "tenant-a\x00request-1", RequestDigest: admission.Digest([]byte("request")), Reservation: pricing.MicroUSD(1), LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewBlobResultStore(newTestBlobStore(), admissions, nil, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	now, admissions, begin, store := beginStoredResult(t, "operation-rewrite", "request-1")
 	actual := pricing.MustUSD("0.000002000000000001")
-	response := llm.Response{OperationKey: "request-1", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "world"}}}}, Usage: llm.Usage{InputTokens: 3, OutputTokens: 1}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &actual, Method: "usage"}, Diagnostics: []llm.Diagnostic{}}
+	response := llm.Response{OperationKey: "request-1", Status: llm.ResponseStatusCompleted, Output: []llm.Item{modelMessage("world")}, Usage: llm.Usage{InputTokens: 3, OutputTokens: 1}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &actual, Method: "usage"}, Diagnostics: []llm.Diagnostic{}}
 	first, err := store.Put(ctx, begin.Operation.ID, response)
 	if err != nil {
 		t.Fatal(err)
@@ -59,16 +50,7 @@ func TestBlobResultStoreRewritingAStoredResultReturnsItsReference(t *testing.T) 
 // and the operation is still dispatching without a ResultRef.
 func TestBlobResultStoreReadsAStoredResultBeforeCompletion(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UTC()
-	admissions := memoryadmission.NewAdmissionStore(memoryadmission.AdmissionOptions{Clock: func() time.Time { return now }})
-	begin, err := admissions.Begin(ctx, admission.BeginRequest{ID: "operation-pending", ScopeKey: "tenant-a\x00request-2", RequestDigest: admission.Digest([]byte("request")), Reservation: pricing.MicroUSD(1), LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewBlobResultStore(newTestBlobStore(), admissions, nil, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	now, admissions, begin, store := beginStoredResult(t, "operation-pending", "request-2")
 	response := llm.Response{OperationKey: "request-2", Status: llm.ResponseStatusCompleted, Output: []llm.Item{}, Diagnostics: []llm.Diagnostic{}}
 	if _, err := store.Put(ctx, begin.Operation.ID, response); err != nil {
 		t.Fatal(err)
@@ -93,4 +75,22 @@ func TestBlobResultStoreReadsAStoredResultBeforeCompletion(t *testing.T) {
 	if _, err := restarted.Get(ctx, begin.Operation.ID); !errors.Is(err, engine.ErrResultNotFound) {
 		t.Fatalf("another process read an uncompleted result: %v", err)
 	}
+}
+
+// beginStoredResult reserves operation id for request in a fresh in-memory
+// admission store and returns the clock reading, the store, the reservation
+// and a blob result store over both.
+func beginStoredResult(t *testing.T, id, request string) (time.Time, *memoryadmission.AdmissionStore, admission.BeginResult, *BlobResultStore) {
+	t.Helper()
+	now := time.Now().UTC()
+	admissions := memoryadmission.NewAdmissionStore(memoryadmission.AdmissionOptions{Clock: func() time.Time { return now }})
+	begin, err := admissions.Begin(context.Background(), admission.BeginRequest{ID: id, ScopeKey: "tenant-a\x00" + request, RequestDigest: admission.Digest([]byte("request")), Reservation: pricing.MicroUSD(1), LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewBlobResultStore(newTestBlobStore(), admissions, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return now, admissions, begin, store
 }

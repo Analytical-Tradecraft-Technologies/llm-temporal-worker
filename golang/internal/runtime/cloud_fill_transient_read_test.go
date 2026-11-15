@@ -52,8 +52,7 @@ func requireRetryableStateUnavailable(t *testing.T, fired *atomic.Int32, err err
 	if fired.Load() != 1 {
 		t.Fatalf("fill record reads failed = %d, want 1 (error %v)", fired.Load(), err)
 	}
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+	if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 		t.Fatalf("transient fill record read = %#v, want retryable state_unavailable", err)
 	}
 	var application *temporal.ApplicationError
@@ -65,12 +64,10 @@ func requireRetryableStateUnavailable(t *testing.T, fired *atomic.Int32, err err
 func TestCloudCompleteTransientFillReadIsRetryable(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ctx, v := f.generateStep(t, llm.ExecutionProviderCompleted)
+	ref := f.ref(v)
 	fired := f.failNextFillRead(t)
-	_, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	_, err := f.runtime.CompleteExecutionV1(ctx, ref)
 	requireRetryableStateUnavailable(t, fired, err)
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)
@@ -78,9 +75,7 @@ func TestCloudCompleteTransientFillReadIsRetryable(t *testing.T) {
 	second.OperationKey = "second"
 	v, err = f.runtime.GenerateStepV1(ctx, second)
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 1 {
-		t.Fatalf("second caller after retried completion: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "second caller after retried completion", v, "hit", 1)
 }
 
 func TestCloudTerminalFillTransientFillReadIsRetryable(t *testing.T) {
@@ -115,13 +110,11 @@ func TestCloudUnknownFillTransientFillReadIsRetryable(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	original := f.adapter.invoke
 	loseResponsesAfterWrite(f)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ctx, v := f.generateStep(t, llm.ExecutionPending)
+	ref := f.ref(v)
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	v, err := f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
 	fired := f.failNextFillRead(t)
 	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
@@ -137,7 +130,5 @@ func TestCloudUnknownFillTransientFillReadIsRetryable(t *testing.T) {
 	second.OperationKey = "second"
 	v, err = f.runtime.GenerateStepV1(ctx, second)
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 2 {
-		t.Fatalf("second caller after recovered unknown fill: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "second caller after recovered unknown fill", v, "hit", 2)
 }

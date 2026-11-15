@@ -52,7 +52,7 @@ func TestCloudGenerateReusedLineageToolCallIDPublishes(t *testing.T) {
 	f.answerWith(
 		[]llm.Item{outputShapeCall("call_0")},
 		[]llm.Item{outputShapeCall("call_0"), outputShapeCall("call_1")},
-		[]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "done"}}}},
+		[]llm.Item{modelMessage("done")},
 	)
 	first := f.finish(t)
 	f.continueFrom(first, "second", outputShapeResult("call_0"))
@@ -81,7 +81,7 @@ func TestCloudGenerateModelTurnContentInsideToolBatchPublishes(t *testing.T) {
 		"call then state":        {outputShapeCall("a"), thinking},
 		"state call state call":  {thinking, outputShapeCall("a"), thinking, outputShapeCall("b")},
 		"call then reference":    {outputShapeCall("a"), citation},
-		"call text state source": {outputShapeCall("a"), llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "checking"}}}, thinking, citation, outputShapeCall("b")},
+		"call text state source": {outputShapeCall("a"), modelMessage("checking"), thinking, citation, outputShapeCall("b")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := boundedCloud(t, false)
@@ -106,9 +106,7 @@ func TestCloudGenerateUnusableOutputFailsTerminally(t *testing.T) {
 			f := boundedCloud(t, false)
 			f.request.Cache = &llm.CachePolicyV1{}
 			f.answerWith(output)
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if v.FailureCode != "incomplete_response" || v.Retryable {
 				t.Fatalf("failure = %+v", v)
 			}
@@ -123,7 +121,7 @@ func TestCloudGenerateUnusableOutputFailsTerminally(t *testing.T) {
 			if err != nil || saved.Execution.Stage != cloudstate.ExecutionSucceeded || !saved.Execution.Settled || saved.Execution.Response.Cost.ActualCostUSD == nil {
 				t.Fatalf("paid attempt was not settled with its cost: %+v, err=%v", saved.Execution, err)
 			}
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ref := f.ref(v)
 			f.now = f.now.Add(time.Hour)
 			f.restart(t)
 			for _, run := range []func() (llm.ExecutionResultV1, error){
@@ -145,7 +143,7 @@ func TestCloudGenerateUnusableOutputFailsTerminally(t *testing.T) {
 				t.Fatalf("unusable output was paid for %d times", f.submits.Load())
 			}
 			// The unusable response is not cached: a new operation is a new attempt.
-			f.answerWith(nil, []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}})
+			f.answerWith(nil, []llm.Item{modelMessage("answer")})
 			f.request.OperationKey = "independent"
 			if next := f.finish(t); next.Generate.Cache.Disposition == "hit" || f.submits.Load() != 2 {
 				t.Fatalf("disposition=%q submits=%d", next.Generate.Cache.Disposition, f.submits.Load())
@@ -174,11 +172,9 @@ func TestCloudGenerateOutputShapeAfterPoll(t *testing.T) {
 		t.Fatal("polled output kept a reused tool-call ID")
 	}
 	f.continueFrom(second, "third", outputShapeResult(id))
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	ctx, v := f.generateStep(t, llm.ExecutionPending)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.PollExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
+	v, err := f.runtime.PollExecutionV1(ctx, f.ref(v))
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.FailureCode != "incomplete_response" || f.submits.Load() != 3 {
 		t.Fatalf("failure=%+v submits=%d", v, f.submits.Load())

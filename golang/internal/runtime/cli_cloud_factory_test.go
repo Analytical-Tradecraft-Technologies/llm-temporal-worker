@@ -219,11 +219,7 @@ func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
 			t.Fatalf("initial policy failure reached secret resolution: %v", err)
 		}
 	}
-	runtime, err := New(context.Background(), encode(value), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), encode(value), options)
 	before := resolved.Load()
 	if before == 0 {
 		t.Fatal("valid configuration skipped secret resolution")
@@ -420,7 +416,7 @@ func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
 	store := &preparationTestStore{}
 	f.runtime.preparation.store = store
 	ctx := context.Background()
-	ref := llm.ExecutionReferenceV1{RequestID: completed.RequestID, Context: f.request.Context, Capability: completed.Capability}
+	ref := f.ref(completed)
 	compact := llm.CompactRequestV1{APIVersion: llm.CompactAPIVersion, OperationKey: "compact", Parent: completed.Generate.Checkpoint.Handle, Context: f.request.Context}
 	for name, call := range map[string]func() error{
 		"plan": func() error { _, err := f.runtime.PlanGenerationV1(ctx, f.request); return err },
@@ -450,12 +446,9 @@ func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
 }
 
 func TestProductionRuntimeReportsUnresolvedSecretAsOperatorDiagnostic(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	t.Setenv("REDIS_USERNAME", "")
-	_, err = newProductionRuntime(context.Background(), data)
+	_, err := newProductionRuntime(context.Background(), data)
 	message, ok := diagnostic.Message(err)
 	if !ok || !strings.Contains(message, `environment secret "REDIS_USERNAME" is not set`) {
 		t.Fatalf("production runtime error = %v, diagnostic = %q", err, message)

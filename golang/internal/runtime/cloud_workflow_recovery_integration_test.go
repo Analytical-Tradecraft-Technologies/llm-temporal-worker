@@ -41,7 +41,7 @@ func TestCloudWorkflowLiveExpiredAdmission(t *testing.T) {
 	ageLiveCloudAttempt(t, h)
 	prepared, err := f.runtime.PrepareExecutionV1(h.ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: prepared.RequestID, Context: f.request.Context, Capability: prepared.Capability}
+	ref := f.ref(prepared)
 	acquired, err := f.runtime.AcquireBudgetV1(h.ctx, ref)
 	boundedState(t, acquired, err, llm.ExecutionAcquired)
 	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
@@ -89,8 +89,7 @@ func TestCloudWorkflowLiveUnknownSubmission(t *testing.T) {
 			ageLiveCloudAttempt(t, h)
 			invoke, submit := f.adapter.invoke, f.adapter.submit
 			lost := func(ctx context.Context, observer provider.Observer) error {
-				f.submits.Add(1)
-				if err := observer.BeforePossibleWrite(ctx); err != nil {
+				if err := countedPossibleWrite(ctx, &f.submits, observer); err != nil {
 					return err
 				}
 				return errors.New("injected loss of accepted provider response")

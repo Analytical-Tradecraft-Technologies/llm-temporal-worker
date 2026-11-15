@@ -86,19 +86,17 @@ func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFix
 	answer := func(call provider.Call) provider.ResumableResult {
 		v := executionResponse(call)
 		v.ProviderOperationID = "job"
-		v.Result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
 		return v
 	}
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		return answer(call).Result, nil
 	}
 	f.adapter.submit = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.ResumableResult, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.ResumableResult{}, err
 		}
 		return provider.ResumableResult{State: provider.ResumablePending, Dispatch: provider.DispatchAccepted, ProviderOperationID: "job", NextPollAfter: time.Second}, nil
@@ -147,7 +145,7 @@ func (f *boundedCloudFixture) finish(t testing.TB) llm.ExecutionResultV1 {
 		return v
 	}
 	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	f.restart(t)
@@ -347,8 +345,7 @@ func TestCloudExecutionRuntimeExpiresUnusedAttempt(t *testing.T) {
 				t.Fatal(err)
 			}
 			if quote {
-				v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-				boundedState(t, v, err, llm.ExecutionBudgetRequired)
+				f.prepareGenerate(t, ctx)
 			}
 			f.now = f.now.Add(16 * time.Minute)
 			result := f.finish(t)
@@ -371,7 +368,7 @@ func TestCloudExecutionRuntimeAuthorizationPrecedesStorage(t *testing.T) {
 	// A panic repository proves even a terminal replay is authorized before access.
 	f.runtime.preparation.store = (*preparationTestStore)(nil)
 	ctx := context.Background()
-	ref := llm.ExecutionReferenceV1{RequestID: completed.RequestID, Context: f.request.Context, Capability: completed.Capability}
+	ref := f.ref(completed)
 	for _, call := range []func() (llm.ExecutionResultV1, error){
 		func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, f.request) },
 		func() (llm.ExecutionResultV1, error) {
@@ -391,10 +388,9 @@ func TestCloudExecutionRuntimeSingleSubmissionUnderConcurrency(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	var wg sync.WaitGroup
 	for range 16 {
@@ -418,27 +414,19 @@ func TestCloudExecutionRuntimeStartAcknowledgementLost(t *testing.T) {
 	fills := &boundedFaultFills{FillRepository: underlying}
 	f.cap.ResponseFills = fills
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	ctx, v := f.generateStep(t, llm.ExecutionPending)
 	if f.submits.Load() != 0 || fills.starts != 1 {
 		t.Fatal("HTTP after uncertain cache fence")
 	}
 	f.restart(t)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
 	if f.submits.Load() != 0 || fills.starts != 1 {
 		t.Fatal("retry reused dispatch authorization")
 	}
 	f.now = f.now.Add(16 * time.Minute)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	ref := f.ref(v)
+	f.acquireGenerateComplete(t, ctx, ref)
 	if f.submits.Load() != 1 {
 		t.Fatal("replacement not submitted once")
 	}
@@ -461,9 +449,7 @@ func (s *boundedFaultFills) Start(ctx context.Context, lease cache.FillLease, no
 func TestCloudExecutionRuntimeCacheWaitAndBudgetWait(t *testing.T) {
 	f := boundedCloud(t, true)
 	f.request.Cache = &llm.CachePolicyV1{}
-	ctx := context.Background()
-	first, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, first, err, llm.ExecutionPending)
+	ctx, first := f.generateStep(t, llm.ExecutionPending)
 	second := f.request
 	second.OperationKey = "second"
 	v, err := f.runtime.GenerateStepV1(ctx, second)
@@ -472,16 +458,14 @@ func TestCloudExecutionRuntimeCacheWaitAndBudgetWait(t *testing.T) {
 		t.Fatal("cache waiter submitted")
 	}
 	f.now = f.now.Add(2 * time.Second)
-	ref := llm.ExecutionReferenceV1{RequestID: first.RequestID, Context: f.request.Context, Capability: first.Capability}
+	ref := f.ref(first)
 	v, err = f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	v, err = f.runtime.GenerateStepV1(ctx, second)
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 1 {
-		t.Fatal("waiter did not consume cache")
-	}
+	f.requireCacheOutcome(t, "waiter did not consume cache", v, "hit", 1)
 	// A fresh uncached request tries once and returns a timer instruction.
 	f.cap.Budgets = &admissionLeaser{BudgetLeaser: f.cap.Budgets, accept: func(_ context.Context, request durable.ReserveRequest) (durable.ReserveResult, error) {
 		return durable.ReserveResult{OperationID: request.OperationID, GenerationID: request.GenerationID, RetryAfter: 2 * time.Second}, nil
@@ -617,16 +601,12 @@ func TestCloudExecutionRuntimeCacheSemanticIdentity(t *testing.T) {
 	f.request.OperationKey = "different-actor"
 	f.request.Context.Actor = "actor-two"
 	hit := f.finish(t)
-	if hit.Generate.Cache.Disposition != "hit" || f.submits.Load() != 1 {
-		t.Fatal("actor changed semantic identity")
-	}
+	f.requireCacheOutcome(t, "actor changed semantic identity", hit, "hit", 1)
 	f.now = f.now.Add(time.Second)
 	f.request.OperationKey = "different-sample"
 	f.request.Cache = &llm.CachePolicyV1{Variant: 1}
 	next := f.finish(t)
-	if next.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
-		t.Fatal("sample index did not break cache")
-	}
+	f.requireCacheOutcome(t, "sample index did not break cache", next, "miss_populated", 2)
 }
 
 func TestCloudExecutionRuntimeRequiresBoundCapabilities(t *testing.T) {
@@ -732,8 +712,7 @@ func TestCloudExecutionRuntimeTerminalFillStorageFailureIsRetryable(t *testing.T
 		return provider.Result{}, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "rejected")
 	}
 	_, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+	if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 		t.Fatalf("transient fill completion error = %#v, want retryable state_unavailable", err)
 	}
 	v, err := f.runtime.GenerateStepV1(context.Background(), f.request)
@@ -773,14 +752,9 @@ func TestCloudExecutionRuntimePreDispatchContextEndIsRetryable(t *testing.T) {
 			}
 			f.adapter.invoke = original
 			ctx := context.Background()
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ref := f.ref(v)
 			f.now = f.now.Add(2 * time.Second)
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			f.acquireGenerateComplete(t, ctx, ref)
 		})
 	}
 }
@@ -828,8 +802,7 @@ func pinnedCloud(t *testing.T) *pinnedCloudFixture {
 	})
 	adapter := p.adapter.executionSyncAdapter
 	adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		p.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &p.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		p.served = append(p.served, call.EndpointID)
@@ -837,7 +810,7 @@ func pinnedCloud(t *testing.T) *pinnedCloudFixture {
 		result.Response.Output = []llm.Item{
 			llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json",
 				Opaque: []byte(`{"type":"reasoning","encrypted_content":"` + call.EndpointID + `"}`)},
-			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}},
+			modelMessage("answer"),
 		}
 		if p.plain {
 			result.Response.Output = result.Response.Output[1:]

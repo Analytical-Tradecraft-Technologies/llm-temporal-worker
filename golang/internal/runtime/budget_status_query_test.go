@@ -146,8 +146,7 @@ func budgetWindow(t *testing.T, raw json.RawMessage) map[string]any {
 
 func requireUnsupportedBudget(t *testing.T, err error) {
 	t.Helper()
-	var classified *provider.Error
-	if !errors.As(err, &classified) || classified.Code != provider.CodeUnsupportedCapability || classified.Retry != provider.RetryNever {
+	if !isProviderError(err, provider.CodeUnsupportedCapability, provider.RetryNever) {
 		t.Fatalf("error = %v, want typed unsupported", err)
 	}
 }

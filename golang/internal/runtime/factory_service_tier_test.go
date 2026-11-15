@@ -247,7 +247,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 	}))
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return []byte("test-key"), nil }),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader: emptySnapshotLoader,
 		HTTPClient:     base,
 		EgressResolver: &egressTestResolver{addresses: []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}},
 		EgressDial: func(ctx context.Context, network, _ string) (net.Conn, error) {

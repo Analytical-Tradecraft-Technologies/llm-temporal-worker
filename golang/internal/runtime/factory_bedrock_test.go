@@ -9,13 +9,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockconverse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockmessages"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
 
 func TestProductionFactoryBuildsBedrockAdaptersWithAWSRegion(t *testing.T) {
@@ -76,9 +74,7 @@ func TestProductionFactoryBuildsBedrockAdaptersWithAWSRegion(t *testing.T) {
 				Family: test.family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
 				Region: test.wantRegion, Auth: config.AuthConfig{Kind: "aws_default_chain"},
 			}}}
-			snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
-			}}}
+			snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
 
 			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if err != nil {
@@ -118,9 +114,7 @@ func TestProductionFactoryRejectsNonDefaultBedrockAuthBeforeDependencies(t *test
 				Family: family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
 				Region: "us-east-1", Auth: config.AuthConfig{Kind: "bearer_env", Name: "BEDROCK_KEY"},
 			}}}
-			snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
-			}}}
+			snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
 
 			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if !errors.Is(err, ErrUnsupportedProviderAuth) {
@@ -192,9 +186,7 @@ func buildGeneratedBedrockAdapter(t *testing.T, family, endpointID, region strin
 			llm.ServiceClassPriority: {ProviderValue: "priority"},
 		},
 	}}}
-	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
-	}}}
+	snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
 	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
@@ -225,9 +217,7 @@ func TestProductionFactoryFailsClosedWhenBedrockAWSConfigFactoryFails(t *testing
 					llm.ServiceClassPriority: {ProviderValue: "priority"},
 				},
 			}}}
-			snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-				"model": {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: "bedrock/v1"}}}},
-			}}}
+			snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
 			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("buildAdapter() error = %v, want AWS config error", err)

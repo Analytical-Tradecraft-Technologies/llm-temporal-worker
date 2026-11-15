@@ -141,33 +141,19 @@ func TestCloudExecutionRuntimeSettlesExpiredUnknownAcrossConfigRollout(t *testin
 // recovered outcome is finished instead of replacing the attempt.
 func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing.T) {
 	f := boundedCloud(t, true)
-	f.adapter.submit = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.ResumableResult, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.ResumableResult{}, err
-		}
-		return provider.ResumableResult{}, errors.New("connection lost after accepting")
-	}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.adapter.submit = submitFailingAfterWrite(&f.submits, errors.New("connection lost after accepting"))
+	ctx, v, ref, scope, first := startPendingAttempt(t, f)
 	recoveries := 0
 	recovery := &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
 		recoveries++
 		v := executionResponse(call)
-		v.Result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
 		return v, nil
 	}}
 	f.cap.Adapters = engine.AdapterMap{"endpoint": recovery}
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(ref.RequestID))
 	if err != nil || attempt.ID != first.ID {
@@ -217,15 +203,7 @@ func TestCloudExecutionRuntimeSettlesLostClaimReplyAfterRecoveryWindow(t *testin
 	}
 	f.cap.Budgets = leaser
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx, v, ref, scope, first := startPendingAttempt(t, f)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Claim != nil || f.submits.Load() != 0 {
 		t.Fatalf("unresolved claim = %+v, %v", saved.Execution, err)
@@ -264,19 +242,11 @@ func TestCloudExecutionRuntimeRenewsUnclaimedUnknownAttempt(t *testing.T) {
 	}
 	f.cap.Budgets = leaser
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx, v, ref, scope, first := startPendingAttempt(t, f)
 	leaser.claim = nil
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
@@ -311,18 +281,11 @@ func TestCloudExecutionRuntimeExpiredClaimRenewsAttempt(t *testing.T) {
 	}
 	f.cap.Budgets = leaser
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	v = boundedState(t, v, err, llm.ExecutionFailed)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) || v.RetryAfterSeconds != 0 {
 		t.Fatalf("expired claim result = %+v", v)
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ref, scope, first := f.firstAttempt(t, ctx, v)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
 		t.Fatalf("expired claim = %+v, %v", saved.Execution, err)
@@ -351,8 +314,7 @@ func TestCloudReloadSettlesCrashedSubmissionOnChangedEndpoint(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
 			f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-				f.submits.Add(1)
-				if err := o.BeforePossibleWrite(ctx); err != nil {
+				if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 					return provider.Result{}, err
 				}
 				panic("worker crashed mid-dispatch")
@@ -395,8 +357,7 @@ func TestCloudReloadSettlesCrashedSubmissionOnChangedEndpoint(t *testing.T) {
 func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T) {
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
 	f.adapter.submit = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.ResumableResult, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.ResumableResult{}, err
 		}
 		panic("worker crashed mid-dispatch")
@@ -405,7 +366,7 @@ func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T
 	f.cap.Adapters = engine.AdapterMap{"endpoint": &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
 		recoveries++
 		v := executionResponse(call)
-		v.Result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
 		return v, nil
 	}}}
 	f.restart(t)
@@ -434,8 +395,7 @@ func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T
 func TestCloudReloadWaitsForCrashedSubmissionOnUnservedEndpoint(t *testing.T) {
 	f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		panic("worker crashed mid-dispatch")
@@ -459,10 +419,9 @@ func TestCloudReloadWaitsForCrashedSubmissionOnUnservedEndpoint(t *testing.T) {
 func crashAfterPossibleWrite(t *testing.T, f *boundedCloudFixture) llm.ExecutionReferenceV1 {
 	t.Helper()
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	func() {
 		defer func() { _ = recover() }()
@@ -483,29 +442,23 @@ func crashAfterPossibleWrite(t *testing.T, f *boundedCloudFixture) llm.Execution
 // possible-write boundary, as a lost paid response does, counting each
 // submission.
 func loseResponsesAfterWrite(f *boundedCloudFixture) {
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
+	f.adapter.invoke = invokeFailingAfterWrite(&f.submits, errors.New("lost paid response"))
 }
 
 // startUnknownOutcome loses the paid response of one Generate step and
-// returns the pending step, its execution reference, the request scope and
-// the request's first attempt.
+// returns what startPendingAttempt returns.
 func startUnknownOutcome(t *testing.T, f *boundedCloudFixture) (context.Context, llm.ExecutionResultV1, llm.ExecutionReferenceV1, cloudstate.Scope, cloudstate.RequestAttempt) {
 	t.Helper()
 	loseResponsesAfterWrite(f)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	return startPendingAttempt(t, f)
+}
+
+// startPendingAttempt runs one Generate step that must stay pending and
+// returns the pending step, its execution reference, the request scope and
+// the request's first attempt.
+func startPendingAttempt(t *testing.T, f *boundedCloudFixture) (context.Context, llm.ExecutionResultV1, llm.ExecutionReferenceV1, cloudstate.Scope, cloudstate.RequestAttempt) {
+	t.Helper()
+	ctx, v := f.generateStep(t, llm.ExecutionPending)
+	ref, scope, first := f.firstAttempt(t, ctx, v)
 	return ctx, v, ref, scope, first
 }

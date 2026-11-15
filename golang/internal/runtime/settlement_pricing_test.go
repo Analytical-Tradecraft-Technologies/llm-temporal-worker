@@ -17,7 +17,7 @@ func settlementPricingPlan(unpriced bool) cloudstate.BudgetPlan {
 }
 
 func TestPriceExecutionResponseTreatsMissingUsageAsUnknownCost(t *testing.T) {
-	response := llm.Response{Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}}
+	response := llm.Response{Status: llm.ResponseStatusCompleted, Output: []llm.Item{modelMessage("answer")}}
 	priceExecutionResponse(settlementPricingPlan(false), &response)
 	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ActualCostUSD != nil {
 		t.Fatalf("missing usage cost = %#v, want unknown", response.Cost)

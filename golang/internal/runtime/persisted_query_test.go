@@ -79,11 +79,7 @@ func persistedQueryTestService(t *testing.T, providerReader *fakePersistedProvid
 
 func providerQueryRequest(t *testing.T, cursor *control.QueryCursor) llm.QueryRequestV1 {
 	t.Helper()
-	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "query-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: llm.QueryProviderStatus, Filter: control.ProviderStatusQuery{IncludeHealthy: boolPtr(true), Page: control.QueryPage{Size: 1, Cursor: cursor}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return encodeTestQuery(t, "query-op", llm.QueryProviderStatus, control.ProviderStatusQuery{IncludeHealthy: boolPtr(true), Page: control.QueryPage{Size: 1, Cursor: cursor}})
 }
 
 func boolPtr(value bool) *bool { return &value }
@@ -144,15 +140,7 @@ func TestPersistedQueryBudgetStatusUsesRedisReaderContract(t *testing.T) {
 	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
 	var audited control.QueryAuditRecord
 	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, Audit: func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil }, CursorCodec: codec, Clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
-	request, err := control.EncodeQueryRequest(control.QueryRequest{
-		OperationKey: "budget-op",
-		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
-		Kind:         llm.QueryBudgetStatus,
-		Filter:       control.BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &activeAt, IncludeWindows: &includeWindows},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := encodeTestQuery(t, "budget-op", llm.QueryBudgetStatus, control.BudgetStatusQuery{PolicyKey: &policy, ActiveAt: &activeAt, IncludeWindows: &includeWindows})
 	response, err := service.Execute(context.Background(), request)
 	if err != nil {
 		t.Fatalf("budget status query: %v", err)
@@ -184,18 +172,8 @@ func TestPersistedQueryBudgetStatusRejectsMismatchedReaderInstant(t *testing.T) 
 		ManifestDigest:      control.ManifestDigest(strings.Repeat("a", 64)),
 		StreamHighWaterMark: control.StreamHighWaterMark("42-0"),
 	}}
-	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
-	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return requested }}
-	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return requested }}
-	request, err := control.EncodeQueryRequest(control.QueryRequest{
-		OperationKey: "budget-op",
-		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
-		Kind:         llm.QueryBudgetStatus,
-		Filter:       control.BudgetStatusQuery{ActiveAt: &requested},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	service := budgetStatusService(reader, requested)
+	request := encodeTestQuery(t, "budget-op", llm.QueryBudgetStatus, control.BudgetStatusQuery{ActiveAt: &requested})
 	if _, err := service.Execute(context.Background(), request); err == nil {
 		t.Fatal("mismatched budget reader instant unexpectedly accepted")
 	}
@@ -220,19 +198,9 @@ func TestPersistedQueryBudgetStatusClassifiesPermanentMisses(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reader := &fakeBudgetStatus{err: test.err}
-			codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
-			handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return now }}
-			service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return now }}
-			request, err := control.EncodeQueryRequest(control.QueryRequest{
-				OperationKey: "budget-op",
-				Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
-				Kind:         llm.QueryBudgetStatus,
-				Filter:       control.BudgetStatusQuery{ActiveAt: test.activeAt},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = service.Execute(context.Background(), request)
+			service := budgetStatusService(reader, now)
+			request := encodeTestQuery(t, "budget-op", llm.QueryBudgetStatus, control.BudgetStatusQuery{ActiveAt: test.activeAt})
+			_, err := service.Execute(context.Background(), request)
 			var providerErr *provider.Error
 			if !errors.As(err, &providerErr) {
 				t.Fatalf("error = %T %v, want provider.Error", err, err)
@@ -285,13 +253,9 @@ func TestNewPersistedQueryServiceBuilderBindsSnapshotRedisBudgetReader(t *testin
 func TestPersistedQueryBudgetAndSpendFailClosed(t *testing.T) {
 	service := persistedQueryTestService(t, &fakePersistedProvider{}, nil)
 	for _, kind := range []llm.QueryKind{llm.QueryBudgetStatus, llm.QuerySpendSummary} {
-		request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "query-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: kind, Filter: budgetOrSpendFilter(kind)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = service.Execute(context.Background(), request)
-		var providerErr *provider.Error
-		if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+		request := encodeTestQuery(t, "query-op", kind, budgetOrSpendFilter(kind))
+		_, err := service.Execute(context.Background(), request)
+		if !isProviderError(err, provider.CodeUnsupportedCapability, provider.RetryNever) {
 			t.Fatalf("kind %s error=%v, want non-retryable unsupported capability", kind, err)
 		}
 	}
@@ -358,18 +322,9 @@ func TestPersistedQuerySpendSummaryFailsClosedWithoutScopeResolver(t *testing.T)
 		cursor: service.CursorCodec,
 		clock:  func() time.Time { return time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC) },
 	}
-	request, err := control.EncodeQueryRequest(control.QueryRequest{
-		OperationKey: "spend-op",
-		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
-		Kind:         llm.QuerySpendSummary,
-		Filter:       control.SpendSummaryQuery{StartTime: time.Unix(1, 0).UTC(), EndTime: time.Unix(2, 0).UTC()},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = service.Execute(context.Background(), request)
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+	request := encodeTestQuery(t, "spend-op", llm.QuerySpendSummary, control.SpendSummaryQuery{StartTime: time.Unix(1, 0).UTC(), EndTime: time.Unix(2, 0).UTC()})
+	_, err := service.Execute(context.Background(), request)
+	if !isProviderError(err, provider.CodeUnsupportedCapability, provider.RetryNever) {
 		t.Fatalf("error=%v, want non-retryable unsupported capability", err)
 	}
 }
@@ -405,18 +360,9 @@ func TestNewPersistedQueryServiceNormalizesMissingOptionalCapabilities(t *testin
 	if handler.provider != nil || handler.inventory != nil || handler.spend != nil || handler.budget != nil {
 		t.Fatalf("missing optional capabilities were not normalized: %#v", handler)
 	}
-	request, err := control.EncodeQueryRequest(control.QueryRequest{
-		OperationKey: "budget-op",
-		Scope:        control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"},
-		Kind:         llm.QueryBudgetStatus,
-		Filter:       control.BudgetStatusQuery{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := encodeTestQuery(t, "budget-op", llm.QueryBudgetStatus, control.BudgetStatusQuery{})
 	_, err = service.Execute(context.Background(), request)
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+	if !isProviderError(err, provider.CodeUnsupportedCapability, provider.RetryNever) {
 		t.Fatalf("typed-nil budget reader error = %v, want non-retryable unsupported capability", err)
 	}
 }
@@ -542,13 +488,9 @@ func TestPersistedQueryTypedNilSpendReaderIsUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "typed-nil-spend", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: llm.QuerySpendSummary, Filter: budgetOrSpendFilter(llm.QuerySpendSummary)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := encodeTestQuery(t, "typed-nil-spend", llm.QuerySpendSummary, budgetOrSpendFilter(llm.QuerySpendSummary))
 	_, err = service.Execute(context.Background(), request)
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Retry != provider.RetryNever {
+	if !isProviderError(err, provider.CodeUnsupportedCapability, provider.RetryNever) {
 		t.Fatalf("typed-nil spend reader: %v", err)
 	}
 }
@@ -563,10 +505,7 @@ func TestProviderStatusPreservesUnknownAvailabilityAndBillingIncident(t *testing
 				reader := &fakePersistedProvider{status: control.ProviderStatusPage{Routes: []control.RouteStatus{{RouteID: "route", EndpointID: "endpoint", Provider: "provider", Availability: availability, Credit: control.CreditUnknown, Billing: billing, Circuit: control.CircuitClosed, ObservedAt: observed, StaleAfter: observed.Add(time.Hour)}}}}
 				service := persistedQueryTestService(t, reader, func(context.Context, control.QueryAuditRecord) error { return nil })
 				filterAvailability := control.QueryAvailability(availability)
-				request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "query-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: llm.QueryProviderStatus, Filter: control.ProviderStatusQuery{Availability: &filterAvailability, IncludeHealthy: boolPtr(true), Page: control.QueryPage{Size: 10}}})
-				if err != nil {
-					t.Fatal(err)
-				}
+				request := encodeTestQuery(t, "query-op", llm.QueryProviderStatus, control.ProviderStatusQuery{Availability: &filterAvailability, IncludeHealthy: boolPtr(true), Page: control.QueryPage{Size: 10}})
 				response, err := service.Execute(context.Background(), request)
 				if reader.lastOpts.Availability != availability {
 					t.Fatalf("filter lost availability: %+v", reader.lastOpts)
@@ -654,4 +593,23 @@ func TestPersistedQueryInventoryPagesWithRealisticPositions(t *testing.T) {
 	if len(reader.after) != 3 || reader.after[1] != positions[0] || reader.after[2] != positions[1] {
 		t.Fatalf("continuations resumed after %+v, want %+v", reader.after, positions)
 	}
+}
+
+// encodeTestQuery encodes a query of kind under operation key in the
+// tenant/project/actor test scope.
+func encodeTestQuery(t *testing.T, key control.OperationKey, kind llm.QueryKind, filter control.QueryFilter) llm.QueryRequestV1 {
+	t.Helper()
+	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: key, Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: kind, Filter: filter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+// budgetStatusService is a query service answering budget status from reader
+// with every clock fixed at now.
+func budgetStatusService(reader BudgetStatusReader, now time.Time) *control.QueryService {
+	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return now }}
+	return &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return now }}
 }

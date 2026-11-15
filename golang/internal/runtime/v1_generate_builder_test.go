@@ -72,33 +72,8 @@ func TestV1RuntimeCapabilitiesValidateGenerateRequiresEveryCapability(t *testing
 	validFactory := func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 		return validBuilderGeneratePorts(nil), nil
 	}
-	base := completeGenerateCapabilities(validFactory)
-	tests := []struct {
-		name   string
-		mutate func(*V1RuntimeCapabilities)
-		want   string
-	}{
-		{name: "snapshot", want: "v1 Generate snapshot source is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Snapshot = nil }},
-		{name: "planner", want: "v1 Generate planner is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Planner = nil }},
-		{name: "adapters", want: "v1 Generate adapter registry is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Adapters = nil }},
-		{name: "checkpoints", want: "v1 Generate checkpoint capabilities: ", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Checkpoints = CheckpointCapabilities{} }},
-		{name: "claim", want: "v1 Generate Redis budgets are not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Budgets = nil }},
-		{name: "clock", want: "v1 Generate clock is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Clock = nil }},
-		{name: "ports factory", want: "v1 Generate ports factory is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.GeneratePortsFactory = nil }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			capabilities := base
-			test.mutate(&capabilities)
-			err := capabilities.ValidateGenerate()
-			if err == nil {
-				t.Fatal("ValidateGenerate unexpectedly accepted incomplete capabilities")
-			}
-			if !strings.HasPrefix(err.Error(), test.want) {
-				t.Fatalf("ValidateGenerate error = %q, want prefix %q", err, test.want)
-			}
-		})
-	}
+	clearPorts := func(capabilities *V1RuntimeCapabilities) { capabilities.GeneratePortsFactory = nil }
+	assertValidationRequiresEveryCapability(t, "Generate", completeGenerateCapabilities(validFactory), clearPorts, V1RuntimeCapabilities.ValidateGenerate)
 }
 
 func TestV1RuntimeCapabilitiesValidateCompactRequiresEveryCapability(t *testing.T) {
@@ -107,29 +82,38 @@ func TestV1RuntimeCapabilitiesValidateCompactRequiresEveryCapability(t *testing.
 	}
 	base := completeGenerateCapabilities(nil)
 	base.CompactPortsFactory = validFactory
+	clearPorts := func(capabilities *V1RuntimeCapabilities) { capabilities.CompactPortsFactory = nil }
+	assertValidationRequiresEveryCapability(t, "Compact", base, clearPorts, V1RuntimeCapabilities.ValidateCompact)
+}
+
+// assertValidationRequiresEveryCapability removes each capability phase
+// needs from base in turn (clearPorts removes the phase's ports factory) and
+// requires validate to name the missing one.
+func assertValidationRequiresEveryCapability(t *testing.T, phase string, base V1RuntimeCapabilities, clearPorts func(*V1RuntimeCapabilities), validate func(V1RuntimeCapabilities) error) {
+	t.Helper()
 	tests := []struct {
 		name   string
 		mutate func(*V1RuntimeCapabilities)
 		want   string
 	}{
-		{name: "snapshot", want: "v1 Compact snapshot source is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Snapshot = nil }},
-		{name: "planner", want: "v1 Compact planner is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Planner = nil }},
-		{name: "adapters", want: "v1 Compact adapter registry is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Adapters = nil }},
-		{name: "checkpoints", want: "v1 Compact checkpoint capabilities: ", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Checkpoints = CheckpointCapabilities{} }},
-		{name: "claim", want: "v1 Compact Redis budgets are not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Budgets = nil }},
-		{name: "clock", want: "v1 Compact clock is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Clock = nil }},
-		{name: "ports factory", want: "v1 Compact ports factory is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.CompactPortsFactory = nil }},
+		{name: "snapshot", want: "snapshot source is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Snapshot = nil }},
+		{name: "planner", want: "planner is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Planner = nil }},
+		{name: "adapters", want: "adapter registry is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Adapters = nil }},
+		{name: "checkpoints", want: "checkpoint capabilities: ", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Checkpoints = CheckpointCapabilities{} }},
+		{name: "claim", want: "Redis budgets are not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Budgets = nil }},
+		{name: "clock", want: "clock is not configured", mutate: func(capabilities *V1RuntimeCapabilities) { capabilities.Clock = nil }},
+		{name: "ports factory", want: "ports factory is not configured", mutate: clearPorts},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			capabilities := base
 			test.mutate(&capabilities)
-			err := capabilities.ValidateCompact()
+			err := validate(capabilities)
 			if err == nil {
-				t.Fatal("ValidateCompact unexpectedly accepted incomplete capabilities")
+				t.Fatalf("Validate%s unexpectedly accepted incomplete capabilities", phase)
 			}
-			if !strings.HasPrefix(err.Error(), test.want) {
-				t.Fatalf("ValidateCompact error = %q, want prefix %q", err, test.want)
+			if want := "v1 " + phase + " " + test.want; !strings.HasPrefix(err.Error(), want) {
+				t.Fatalf("Validate%s error = %q, want prefix %q", phase, err, want)
 			}
 		})
 	}

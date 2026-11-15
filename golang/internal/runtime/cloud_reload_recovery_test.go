@@ -29,7 +29,7 @@ func TestCloudReloadCompletesSavedSuccessAndWaitsForPendingRecovery(t *testing.T
 				want = llm.ExecutionPending
 			}
 			boundedState(t, v, err, want)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ref := f.ref(v)
 			original := f.cap.ConfigDigest
 			f.cap.ConfigDigest[0]++
 			source := f.cap.Snapshot.(*planningSource)
@@ -72,15 +72,14 @@ func TestCloudReloadCompletesSavedSuccessAndWaitsForPendingRecovery(t *testing.T
 func TestCloudReloadWaitsBeforeBudgetAdmission(t *testing.T) {
 	ctx := context.Background()
 	f := boundedCloud(t, false)
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
 	original := f.cap.ConfigDigest
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
 	f.restart(t)
-	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 	if f.submits.Load() != 0 {
 		t.Fatal("reload dispatched before compatible admission")
@@ -88,12 +87,7 @@ func TestCloudReloadWaitsBeforeBudgetAdmission(t *testing.T) {
 	f.cap.ConfigDigest = original
 	source.value.ConfigDigest = original
 	f.restart(t)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.acquireGenerateComplete(t, ctx, ref)
 	if f.submits.Load() != 1 {
 		t.Fatal("request failed to recover exactly once")
 	}
@@ -137,7 +131,7 @@ func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpo
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, unchanged) })
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
@@ -178,7 +172,7 @@ func TestCloudReloadWaitsWhenBoundRouteIsRemoved(t *testing.T) {
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
@@ -222,7 +216,7 @@ func TestCloudReloadPollsPendingPaidWorkRecordedWithLegacyEndpointDigest(t *test
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, legacy) })
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest

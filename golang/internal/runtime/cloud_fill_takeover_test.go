@@ -18,12 +18,11 @@ func TestCloudCacheWaiterOwnsFillAfterOwnerEndsUnpublished(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	v := f.prepareGenerate(t, ctx)
 	waiter := f.request
 	waiter.OperationKey = "waiter"
 	f.now = f.now.Add(time.Second)
-	v, err = f.runtime.GenerateStepV1(ctx, waiter)
+	v, err := f.runtime.GenerateStepV1(ctx, waiter)
 	boundedState(t, v, err, llm.ExecutionCacheWait)
 	original := f.adapter.invoke
 	f.adapter.invoke = func(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
@@ -39,9 +38,7 @@ func TestCloudCacheWaiterOwnsFillAfterOwnerEndsUnpublished(t *testing.T) {
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context, Capability: v.Capability})
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
-		t.Fatalf("waiter after failed owner: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "waiter after failed owner", v, "miss_populated", 2)
 }
 
 // An owner workflow that ends abnormally after starting its fill leaves the
@@ -52,15 +49,13 @@ func TestCloudCacheWaiterOwnsFillAfterOwnerEndsUnpublished(t *testing.T) {
 func TestCloudCacheWaiterBypassesStalledStartedFill(t *testing.T) {
 	f := boundedCloud(t, true)
 	f.request.Cache = &llm.CachePolicyV1{}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	v = boundedState(t, v, err, llm.ExecutionPending)
-	owner := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ctx, v := f.generateStep(t, llm.ExecutionPending)
+	owner := f.ref(v)
 	// The owner's workflow is terminated here: nothing polls it again.
 	waiter := f.request
 	waiter.OperationKey = "waiter"
 	f.now = f.now.Add(cache.StalledFillAfter - time.Second)
-	v, err = f.runtime.GenerateStepV1(ctx, waiter)
+	v, err := f.runtime.GenerateStepV1(ctx, waiter)
 	boundedState(t, v, err, llm.ExecutionCacheWait)
 	f.now = f.now.Add(time.Second)
 	v, err = f.runtime.GenerateStepV1(ctx, waiter)
@@ -82,16 +77,12 @@ func TestCloudCacheWaiterBypassesStalledStartedFill(t *testing.T) {
 	owner.Capability = v.Capability
 	v, err = f.runtime.CompleteExecutionV1(ctx, owner)
 	v = boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
-		t.Fatalf("resumed owner: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "resumed owner", v, "miss_populated", 2)
 	late := f.request
 	late.OperationKey = "late"
 	v, err = f.runtime.GenerateStepV1(ctx, late)
 	v = boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 2 {
-		t.Fatalf("request after the owner published: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "request after the owner published", v, "hit", 2)
 }
 
 type unstartedFills struct {
@@ -118,17 +109,15 @@ func TestCloudUnknownAttemptContinuesAfterFillTakeover(t *testing.T) {
 			f.request.Cache = &llm.CachePolicyV1{}
 			f.cap.ResponseFills = &unstartedFills{FillRepository: f.cap.ResponseFills}
 			f.restart(t)
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionPending)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ctx, v := f.generateStep(t, llm.ExecutionPending)
+			ref := f.ref(v)
 			if f.submits.Load() != 0 {
 				t.Fatal("HTTP without a started fill")
 			}
 			f.now = f.now.Add(16 * time.Minute)
 			second := f.request
 			second.OperationKey = "second"
-			v, err = f.runtime.GenerateStepV1(ctx, second)
+			v, err := f.runtime.GenerateStepV1(ctx, second)
 			boundedState(t, v, err, llm.ExecutionProviderCompleted)
 			v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: second.Context, Capability: v.Capability})
 			boundedState(t, v, err, llm.ExecutionCompleted)
@@ -141,9 +130,7 @@ func TestCloudUnknownAttemptContinuesAfterFillTakeover(t *testing.T) {
 			}
 			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionCompleted)
-			if v.Generate.Cache.Disposition != "hit" || f.submits.Load() != 1 {
-				t.Fatalf("unknown attempt after takeover: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-			}
+			f.requireCacheOutcome(t, "unknown attempt after takeover", v, "hit", 1)
 		})
 	}
 }

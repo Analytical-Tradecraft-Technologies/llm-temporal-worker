@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -42,8 +41,7 @@ func TestCloudRequestLimitsRejectRequestsOverEachConfiguredBound(t *testing.T) {
 		}),
 	} {
 		err := limits.validate(input)
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Retry != provider.RetryNever {
+		if !isProviderError(err, provider.CodeInvalidArgument, provider.RetryNever) {
 			t.Fatalf("%s: error = %v, want a non-retryable invalid_argument", name, err)
 		}
 	}
@@ -68,8 +66,7 @@ func TestCloudRequestLimitsHoldToolCallArgumentsToTheToolArgumentDepth(t *testin
 			t.Fatalf("json_depth %d: tool call at the depth limit rejected: %v", limits.JSONDepth, err)
 		}
 		err := limits.validate(generate(llm.MaxToolArgumentsDepth + 1))
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Retry != provider.RetryNever {
+		if !isProviderError(err, provider.CodeInvalidArgument, provider.RetryNever) {
 			t.Fatalf("json_depth %d: too-deep tool call error = %v", limits.JSONDepth, err)
 		}
 	}

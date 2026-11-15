@@ -31,9 +31,7 @@ func TestCloudExecutionRuntimeCacheHitWritesNoAttempt(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	origin := f.finish(t)
-	if origin.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 1 {
-		t.Fatalf("origin %q after %d submits", origin.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "origin", origin, "miss_populated", 1)
 	ctx := context.Background()
 	prepare := func(key string) (llm.ExecutionResultV1, uint64) {
 		t.Helper()
@@ -89,9 +87,7 @@ func TestCloudExecutionRuntimeCacheHitWritesNoAttempt(t *testing.T) {
 		t.Fatalf("miss has no attempt: %v", err)
 	}
 	result := f.finish(t)
-	if result.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
-		t.Fatalf("miss %q after %d submits", result.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "miss", result, "miss_populated", 2)
 }
 
 // An expired entry is not answered before the attempt: the request pays for
@@ -106,9 +102,7 @@ func TestCloudExecutionRuntimeExpiredCacheEntryIsNotAnsweredEarly(t *testing.T) 
 	f.restart(t)
 	f.request.OperationKey = "after-expiry"
 	again := f.finish(t)
-	if again.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 2 {
-		t.Fatalf("expired entry answered: %q after %d submits", again.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "expired entry answered:", again, "miss_populated", 2)
 }
 
 // The resolve Activity's cache-only step answers a hit, and on a miss leaves

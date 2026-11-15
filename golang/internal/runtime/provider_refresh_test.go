@@ -136,11 +136,7 @@ func inventoryRefreshRequest(t *testing.T, kind llm.QueryKind, endpoint string, 
 	case llm.QueryCreditStatus:
 		filter = control.CreditStatusQuery{Endpoint: endpointID, RefreshIfOlderThan: refresh}
 	}
-	request, err := control.EncodeQueryRequest(control.QueryRequest{OperationKey: "refresh-op", Scope: control.QueryScope{Tenant: "tenant", Project: "project", Actor: "actor"}, Kind: kind, Filter: filter})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return encodeTestQuery(t, "refresh-op", kind, filter)
 }
 
 func seedInventory(t *testing.T, store *memoryInventoryStore, endpoint string, observed time.Time, models ...string) {

@@ -26,8 +26,7 @@ func TestCloudExecutionAdmitsInlineImageOnContextLimitedRoute(t *testing.T) {
 		}}}
 	})
 	ctx := context.Background()
-	prepared, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+	prepared := f.prepareGenerate(t, ctx)
 	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 	attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(prepared.RequestID))
 	if err != nil {

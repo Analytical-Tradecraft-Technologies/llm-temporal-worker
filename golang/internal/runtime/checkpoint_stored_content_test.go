@@ -38,7 +38,7 @@ func publishStoredRoot(t *testing.T, f *boundedCloudFixture, delta []llm.Item) l
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+	output := []llm.Item{modelMessage("answer")}
 	items := append(append([]llm.Item(nil), delta...), output...)
 	checkpoint, err = publication.blobs(ctx, checkpoint, state.MaterializedState{}, settings, delta, output, patch, items, false, nil, nil)
 	if err != nil {
@@ -124,14 +124,13 @@ func TestCloudExecutionRuntimeReplaysStoredPublicMediaURL(t *testing.T) {
 	f.request.Parent = &parent
 	f.request.OperationKey = "public-replay"
 	f.request.SettingsPatch = llm.SettingsPatchV1{}
-	prepared, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+	f.prepareGenerate(t, ctx)
 
 	before := pendingCloudRequests(t, f)
 	rejected := f.request
 	rejected.OperationKey = "new-private-url"
 	rejected.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{URL: "http://127.1/chart.png", MediaType: "image/png"}}}}
-	_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &rejected})
+	_, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &rejected})
 	assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
 	if after := pendingCloudRequests(t, f); after != before {
 		t.Fatalf("rejected request changed pending records from %d to %d", before, after)

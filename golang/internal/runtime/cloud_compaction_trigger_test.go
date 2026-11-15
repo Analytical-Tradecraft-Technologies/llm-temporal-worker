@@ -56,17 +56,7 @@ func (f *boundedCloudFixture) compact(t *testing.T, key string) llm.CheckpointHa
 func (f *boundedCloudFixture) compactWith(t *testing.T, request llm.CompactRequestV1) llm.CheckpointHandle {
 	t.Helper()
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	f.restart(t)
-	v, err = f.runtime.CompactStepV1(ctx, request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	f.restart(t)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v := f.runCompact(t, ctx, request, true)
 	f.request.Parent = &v.Compact.Checkpoint.Handle
 	f.now = f.now.Add(time.Second)
 	return v.Compact.Checkpoint.Handle
@@ -174,7 +164,7 @@ func TestCloudGenerationPlanCountsTheSummaryNearTheTrigger(t *testing.T) {
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
 		result, err := invoke(ctx, call, o)
 		if err == nil && summarize {
-			result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: fmt.Sprintf("%d%s", f.submits.Load(), strings.Repeat("s", 7000))}}}}
+			result.Response.Output = []llm.Item{modelMessage(fmt.Sprintf("%d%s", f.submits.Load(), strings.Repeat("s", 7000)))}
 		}
 		return result, err
 	}

@@ -118,13 +118,7 @@ func TestCloudUnreservedExecutionBothKindsSyncAndAsync(t *testing.T) {
 func TestCloudUnreservedAmbiguousSubmissionNeverRepeats(t *testing.T) {
 	f := newProviderExecutionFixture(t, "generate", true, unreservedPlanning(t, "free"))
 	f.helper.admit.boundary.Materializer = &executionLeaser{}
-	f.adapter.submit = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.ResumableResult, error) {
-		f.submits.Add(1)
-		if err := observer.BeforePossibleWrite(ctx); err != nil {
-			return provider.ResumableResult{}, err
-		}
-		return provider.ResumableResult{}, errors.New("lost provider reply")
-	}
+	f.adapter.submit = submitFailingAfterWrite(&f.submits, errors.New("lost provider reply"))
 	result, err := f.submit(context.Background())
 	if err != nil || result.Saved.Execution.Stage != cloudstate.ExecutionUnknown {
 		t.Fatal("ambiguous result", err)

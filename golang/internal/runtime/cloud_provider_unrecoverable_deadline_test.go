@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
@@ -28,9 +27,7 @@ func TestCloudExecutionUnrecoverableDeadlineIsTerminal(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, budgets := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) { return provider.Result{}, callErr })
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if v.Retryable || v.FailureCode != "provider_error" || v.ErrorCode != string(provider.CodeDeadlineExceeded) || v.Dispatch != string(provider.DispatchAmbiguous) {
 				t.Fatalf("failure=%+v", v)
 			}
@@ -39,18 +36,8 @@ func TestCloudExecutionUnrecoverableDeadlineIsTerminal(t *testing.T) {
 				t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
 			}
 			// The provider may have billed the request: account the reservation.
-			for _, event := range execution.Settlement.Events {
-				if event.CostStatus != budget.CostUnknown || event.AccountedIncreaseUSD.String() != event.ReservedDecreaseUSD.String() {
-					t.Fatalf("settlement event=%+v", event)
-				}
-			}
-			f.now = f.now.Add(16 * time.Minute)
-			f.restart(t)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
-				t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
-			}
+			requireReservationAccounted(t, execution)
+			requireTerminalAfterRecoveryDeadline(t, ctx, f, budgets)
 		})
 	}
 }

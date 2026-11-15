@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -53,14 +52,7 @@ func TestRequireDurableV1RuntimeBuilderIgnoresNonDurableState(t *testing.T) {
 }
 
 func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
+	snapshot := durableBuilderSnapshot(t)
 	loaded := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
@@ -82,14 +74,7 @@ func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(
 }
 
 func TestProductionFactoryRejectsPhaseFactoriesWithoutCompositionBeforeLoadingEngine(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
+	snapshot := durableBuilderSnapshot(t)
 	loaded := false
 	resolverCalled, redisCalled := false, false
 	generateCalled, compactCalled := false, false
@@ -138,14 +123,7 @@ func TestProductionFactoryRejectsInvalidAutomaticCompositionBeforeLoadingEngine(
 // the failure messages.
 func assertCompositionRejectedBeforeEngine(t *testing.T, composition durablestore.Composition, wantError, label string) {
 	t.Helper()
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
+	snapshot := durableBuilderSnapshot(t)
 	loaded := false
 	resolverCalled, redisCalled := false, false
 	compositionCalled := false
@@ -193,10 +171,7 @@ func TestProductionFactoryRejectsMismatchedAutomaticCompositionBeforeLoadingEngi
 }
 
 func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	first, err := config.Compile(context.Background(), data, nil)
 	if err != nil {
 		t.Fatalf("compile first config: %v", err)
@@ -213,7 +188,7 @@ func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t 
 	seen := make(map[[32]byte]int)
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader: emptySnapshotLoader,
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
 		},
@@ -252,7 +227,7 @@ func TestProductionFactoryDoesNotPreflightCompositionForExplicitBuilder(t *testi
 	compositionCalled := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:         secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader:   SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader:   emptySnapshotLoader,
 		V1RuntimeBuilder: NewGenerateV1RuntimeBuilder(),
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
@@ -277,14 +252,7 @@ func TestProductionFactoryDoesNotPreflightCompositionForExplicitBuilder(t *testi
 }
 
 func TestProductionFactoryDoesNotInferDurableBuilderFromCompositionFactory(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
+	snapshot := durableBuilderSnapshot(t)
 	loaded := false
 	compositionCalled := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{

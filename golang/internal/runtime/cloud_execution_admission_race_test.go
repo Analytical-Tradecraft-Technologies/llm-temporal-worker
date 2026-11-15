@@ -65,7 +65,7 @@ func TestCloudExecutionAdmissionResumesConcurrentWinner(t *testing.T) {
 						}
 						v, err := f.runtime.PrepareExecutionV1(ctx, input)
 						boundedState(t, v, err, llm.ExecutionBudgetRequired)
-						ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+						ref := f.ref(v)
 						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 						boundedState(t, v, err, llm.ExecutionAcquired)
 						winner := f.runtime
@@ -120,16 +120,9 @@ func TestCloudExecutionAdmissionResumesConcurrentWinner(t *testing.T) {
 func TestCloudExecutionStaleAdmissionCannotSubmitReplacementAttempt(t *testing.T) {
 	f := boundedCloud(t, false)
 	ctx := context.Background()
-	f.adapter.invoke = func(ctx context.Context, _ provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	f.adapter.invoke = invokeFailingAfterWrite(&f.submits, errors.New("lost paid response"))
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
 	winner := f.runtime
 	f.restart(t)
 	store := &admissionRaceStore{cloudExecutionStore: f.runtime.store, beforePlan: func(n int) {
@@ -143,7 +136,7 @@ func TestCloudExecutionStaleAdmissionCannotSubmitReplacementAttempt(t *testing.T
 		boundedState(t, v, err, llm.ExecutionAcquired)
 	}}
 	f.runtime.store, f.runtime.execution.admission.store = store, store
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
 	if f.submits.Load() != 1 {
 		t.Fatal("stale submission dispatched a replacement paid attempt")

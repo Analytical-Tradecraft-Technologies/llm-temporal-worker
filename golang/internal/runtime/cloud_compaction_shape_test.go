@@ -101,9 +101,9 @@ func TestCloudCompactionRequestAndCheckpointShapeOnUserFirstFamilies(t *testing.
 			f.restart(t)
 			f.answerWith(
 				[]llm.Item{outputShapeCall("call_1")},
-				[]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "model answer"}}}},
-				[]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "the summary"}}}},
-				[]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "after"}}}},
+				[]llm.Item{modelMessage("model answer")},
+				[]llm.Item{modelMessage("the summary")},
+				[]llm.Item{modelMessage("after")},
 			)
 			policy := json.RawMessage(`{"recent_turns":0}`)
 			f.request.SettingsPatch.CompactionPolicy.Set = &policy
@@ -115,15 +115,7 @@ func TestCloudCompactionRequestAndCheckpointShapeOnUserFirstFamilies(t *testing.
 			f.now = f.now.Add(time.Minute)
 			request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
 			ctx := context.Background()
-			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-			boundedState(t, v, err, llm.ExecutionBudgetRequired)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
-			v, err = f.runtime.CompactStepV1(ctx, request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			v := f.runCompact(t, ctx, request, false)
 			if v.Compact == nil || len(calls) != 3 {
 				t.Fatalf("compaction did not dispatch exactly once: calls=%d", len(calls))
 			}

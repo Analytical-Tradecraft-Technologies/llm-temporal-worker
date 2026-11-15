@@ -29,13 +29,7 @@ func (f *boundedCloudFixture) reload(t *testing.T) func() {
 }
 
 func (f *boundedCloudFixture) rejectRetryably() {
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "unavailable")
-	}
+	f.adapter.invoke = invokeFailingAfterWrite(&f.submits, unavailableRejection())
 }
 
 // A retryable failure found after a reload must wait for a compatible worker
@@ -58,7 +52,7 @@ func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 			f.rejectRetryably()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionFailed)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ref := f.ref(v)
 			restore := f.reload(t)
 			f.now = f.now.Add(time.Minute)
 			for i := 0; i < 2; i++ {
@@ -90,13 +84,12 @@ func TestCloudReloadRetryableFailureWaitsForNextAttempt(t *testing.T) {
 func TestCloudReloadFailsUnpaidWorkAfterGrace(t *testing.T) {
 	ctx := context.Background()
 	f := boundedCloud(t, false)
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
 	f.now = f.now.Add(time.Second)
 	restore := f.reload(t)
 	f.now = f.now.Add(defaultCloudReloadGrace - time.Second)
-	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 	f.now = f.now.Add(time.Second)
 	for _, step := range []func() error{
@@ -126,14 +119,13 @@ func TestCloudReloadOlderWorkerWaitsForNewerRequest(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.now = f.now.Add(time.Hour)
 	restore := f.reload(t)
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
 	// The older worker started long before the request was prepared.
 	f.now = f.now.Add(-time.Hour)
 	restore()
 	f.now = f.now.Add(time.Hour + defaultCloudReloadGrace)
-	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 }
 
@@ -147,13 +139,12 @@ func TestCloudReloadNewerWorkerFailsRequestPreparedByDrainingWorker(t *testing.T
 	started := f.now
 	// The old worker prepares the request after the new worker started.
 	f.now = started.Add(3 * time.Minute)
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
 	f.now = started.Add(time.Minute)
 	restore := f.reload(t)
 	f.now = f.now.Add(defaultCloudReloadGrace - time.Second)
-	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 	f.now = f.now.Add(time.Second)
 	for _, step := range []func() error{

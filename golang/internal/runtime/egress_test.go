@@ -215,17 +215,13 @@ func TestProviderEgressRoundTripperClassifiesCallerCancellationBeforeGotConn(t *
 	defer cancel()
 	ctx, outcome := provider.WithEgressOutcome(ctx)
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			cancel()
 			return nil, request.Context().Err()
 		}),
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
 	}
@@ -238,16 +234,12 @@ func TestProviderEgressRoundTripperClassifiesCallerCancellationBeforeGotConn(t *
 func TestProviderEgressRoundTripperClassifiesClientDeadlineBeforeGotConnAsAvailability(t *testing.T) {
 	ctx, outcome := provider.WithEgressOutcome(context.Background())
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 			return nil, context.DeadlineExceeded
 		}),
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("RoundTrip() error = %v, want context.DeadlineExceeded", err)
 	}
@@ -260,16 +252,12 @@ func TestProviderEgressRoundTripperClassifiesClientDeadlineBeforeGotConnAsAvaila
 func TestProviderEgressRoundTripperClassifiesTLSFailureBeforeGotConnAsAvailability(t *testing.T) {
 	ctx, outcome := provider.WithEgressOutcome(context.Background())
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("tls handshake failed")
 		}),
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if !errors.Is(err, provider.ErrProviderPreDispatch) {
 		t.Fatalf("RoundTrip() error = %v, want ErrProviderPreDispatch", err)
 	}
@@ -285,7 +273,7 @@ func TestProviderEgressRoundTripperDoesNotLetLatePreflightPolicyOverwriteCallerC
 	ctx, outcome := provider.WithEgressOutcome(ctx)
 	var finish func(error)
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			state := providerEgressCallStateFromContext(request.Context())
 			if state == nil {
@@ -296,11 +284,7 @@ func TestProviderEgressRoundTripperDoesNotLetLatePreflightPolicyOverwriteCallerC
 			return nil, request.Context().Err()
 		}),
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
 	}
@@ -323,9 +307,7 @@ func TestProviderEgressRoundTripperDoesNotClassifyCanceledRequestAfterConnection
 	defer cancel()
 
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-			"provider.example": {"443": {}},
-		}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			state := providerEgressCallStateFromContext(request.Context())
 			if state == nil {
@@ -343,11 +325,7 @@ func TestProviderEgressRoundTripperDoesNotClassifyCanceledRequestAfterConnection
 		}),
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
 	}
@@ -362,9 +340,7 @@ func TestProviderEgressRoundTripperRecordsCompletedPreflightDenialAfterCancellat
 	defer cancel()
 
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-			"provider.example": {"443": {}},
-		}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			state := providerEgressCallStateFromContext(request.Context())
 			if state == nil {
@@ -377,11 +353,7 @@ func TestProviderEgressRoundTripperRecordsCompletedPreflightDenialAfterCancellat
 		}),
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("RoundTrip() error = %v, want context.Canceled", err)
 	}
@@ -393,9 +365,7 @@ func TestProviderEgressRoundTripperRecordsCompletedPreflightDenialAfterCancellat
 func TestProviderEgressRoundTripperDoesNotReturnEgressDenialAfterConnectionAcquired(t *testing.T) {
 	ctx, outcome := provider.WithEgressOutcome(context.Background())
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-			"provider.example": {"443": {}},
-		}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			state := providerEgressCallStateFromContext(request.Context())
 			if state == nil {
@@ -413,11 +383,7 @@ func TestProviderEgressRoundTripperDoesNotReturnEgressDenialAfterConnectionAcqui
 		}),
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = guard.RoundTrip(request)
+	_, err := guard.RoundTrip(providerExampleRequest(t, ctx))
 	if errors.Is(err, provider.ErrProviderEgressDenied) {
 		t.Fatalf("RoundTrip() error = %v, want an ambiguous error without ErrProviderEgressDenied", err)
 	}
@@ -431,9 +397,7 @@ func TestProviderEgressRoundTripperRejectsDeclaredOversizedResponseAndClosesBody
 
 	body := &trackingResponseBody{Reader: strings.NewReader("oversized-provider-payload")}
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-			"provider.example": {"443": {}},
-		}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode:    http.StatusOK,
@@ -443,12 +407,7 @@ func TestProviderEgressRoundTripperRejectsDeclaredOversizedResponseAndClosesBody
 		}),
 		maxResponseBytes: 4,
 	}
-	request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response, err := guard.RoundTrip(request)
+	response, err := guard.RoundTrip(providerExampleRequest(t, context.Background()))
 	if response != nil {
 		t.Fatalf("RoundTrip() response = %#v, want nil", response)
 	}
@@ -472,20 +431,13 @@ func TestProviderEgressRoundTripperBoundsUnknownLengthResponseBody(t *testing.T)
 			t.Parallel()
 			upstream := &trackingResponseBody{Reader: strings.NewReader("12345")}
 			guard := &providerEgressRoundTripper{
-				policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-					"provider.example": {"443": {}},
-				}},
+				policy: providerExamplePolicy(),
 				next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 					return &http.Response{StatusCode: status, ContentLength: -1, Body: upstream}, nil
 				}),
 				maxResponseBytes: 4,
 			}
-			request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			response, err := guard.RoundTrip(request)
+			response, err := guard.RoundTrip(providerExampleRequest(t, context.Background()))
 			if err != nil {
 				t.Fatalf("RoundTrip() error = %v", err)
 			}
@@ -510,9 +462,7 @@ func TestProviderEgressRoundTripperBoundsBodyWhenDeclaredLengthIsTooSmall(t *tes
 	t.Parallel()
 
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-			"provider.example": {"443": {}},
-		}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode:    http.StatusOK,
@@ -522,12 +472,7 @@ func TestProviderEgressRoundTripperBoundsBodyWhenDeclaredLengthIsTooSmall(t *tes
 		}),
 		maxResponseBytes: 4,
 	}
-	request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response, err := guard.RoundTrip(request)
+	response, err := guard.RoundTrip(providerExampleRequest(t, context.Background()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,9 +492,7 @@ func TestProviderEgressRoundTripperPreservesBoundedStreamingResponse(t *testing.
 	payload := "data: ok\n\n"
 	upstream := &trackingResponseBody{Reader: &fragmentedReader{data: []byte(payload), maximum: 2}}
 	guard := &providerEgressRoundTripper{
-		policy: &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{
-			"provider.example": {"443": {}},
-		}},
+		policy: providerExamplePolicy(),
 		next: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode:    http.StatusOK,
@@ -560,12 +503,7 @@ func TestProviderEgressRoundTripperPreservesBoundedStreamingResponse(t *testing.
 		}),
 		maxResponseBytes: int64(len(payload)),
 	}
-	request, err := http.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response, err := guard.RoundTrip(request)
+	response, err := guard.RoundTrip(providerExampleRequest(t, context.Background()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1090,4 +1028,19 @@ func TestBlockedProviderAddressDecodesNAT64WellKnownPrefix(t *testing.T) {
 			t.Errorf("blockedProviderAddress(%s) = %t, want %t", address, got, blocked)
 		}
 	}
+}
+
+// providerExamplePolicy allows only provider.example on port 443.
+func providerExamplePolicy() *providerEgressPolicy {
+	return &providerEgressPolicy{allowedHosts: map[string]map[string]struct{}{"provider.example": {"443": {}}}}
+}
+
+// providerExampleRequest is a POST to provider.example's Responses endpoint.
+func providerExampleRequest(t *testing.T, ctx context.Context) *http.Request {
+	t.Helper()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://provider.example/v1/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 func providerUnauthorized() *provider.Error {
@@ -37,15 +36,7 @@ func credentialFailoverCloud(t *testing.T, alternate bool, rejection func() *pro
 		if !alternate {
 			return
 		}
-		model := b.source.value.Routes.Models["alias"]
-		second := model.Routes[0]
-		second.ID, second.EndpointID = "alternate", "alternate-endpoint"
-		model.Routes = append(model.Routes, second)
-		b.source.value.Routes.Models["alias"] = model
-		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
-		entry := b.entry
-		entry.EndpointID = "alternate-endpoint"
-		b.prices(t, []pricing.Entry{b.entry, entry})
+		b.addFallbackRoute(t, "alternate", "alternate-endpoint")
 	})
 	shared := &keyedHealthFixture{}
 	f.cap.ProviderRouteStatus, f.cap.ProviderStatusRecorder = shared, shared
@@ -57,8 +48,7 @@ func credentialFailoverCloud(t *testing.T, alternate bool, rejection func() *pro
 		calls[call.EndpointID]++
 		mu.Unlock()
 		if call.EndpointID == "endpoint" {
-			f.submits.Add(1)
-			if err := o.BeforePossibleWrite(ctx); err != nil {
+			if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 				return provider.Result{}, err
 			}
 			return provider.Result{}, rejection()
@@ -94,14 +84,12 @@ func TestCloudCredentialRejectionFailsOverToAnotherRoute(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f, _, calls := credentialFailoverCloud(t, true, test.rejection)
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if !v.Retryable || v.ErrorCode != string(test.code) {
 				t.Fatalf("rejection = %+v, want a retryable %s", v, test.code)
 			}
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			ref := f.ref(v)
+			v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionAcquired)
 			v, err = f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionProviderCompleted)
@@ -133,12 +121,10 @@ func TestCloudCredentialRejectionWithoutAlternativeIsTerminal(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			f, _, _ := credentialFailoverCloud(t, false, test.rejection)
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
+			ref := f.ref(v)
 			f.now = f.now.Add(2 * time.Second)
-			_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 			var classified *provider.Error
 			if !errors.As(err, &classified) || classified.Code != test.code || classified.Retry != provider.RetryNever {
 				t.Fatalf("acquire error = %v, want a terminal %s", err, test.code)
@@ -157,12 +143,10 @@ func TestCloudCredentialRejectionExhaustsAttempts(t *testing.T) {
 	f.cap.ProviderRouteStatus, f.cap.ProviderStatusRecorder = nil, nil
 	f.options.MaxAttempts = 2
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
+	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
@@ -197,13 +181,11 @@ func TestCloudCredentialRejectionTerminalAfterRenewal(t *testing.T) {
 	reader := &flakyHealthReader{keyedHealthFixture: shared}
 	f.cap.ProviderRouteStatus = reader
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
+	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
 	reader.failing = true
-	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	var classified *provider.Error
 	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable {
 		t.Fatalf("acquire error = %v, want the health read failure", err)
@@ -224,9 +206,7 @@ func TestCloudCredentialRejectionTerminalAfterRenewal(t *testing.T) {
 // only counts toward the threshold. The credit hold is short and lapses.
 func TestCloudRouteHealthHoldsInsufficientCredit(t *testing.T) {
 	f, shared, _ := credentialFailoverCloud(t, false, providerPaymentRequired)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	if len(shared.records) != 1 {
 		t.Fatalf("records = %+v, want one", shared.records)
 	}
@@ -241,7 +221,7 @@ func TestCloudRouteHealthHoldsInsufficientCredit(t *testing.T) {
 		failure.SafeDetails = map[string]string{"status": "403"}
 		return failure
 	})
-	v, err = g.runtime.GenerateStepV1(ctx, g.request)
+	v, err := g.runtime.GenerateStepV1(ctx, g.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.Retryable {
 		t.Fatalf("403 = %+v, want a terminal request failure", v)

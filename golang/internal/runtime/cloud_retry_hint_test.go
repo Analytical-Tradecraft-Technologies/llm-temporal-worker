@@ -9,7 +9,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 // retryHintCloud is a bounded cloud fixture with a second, lower-priority
@@ -18,15 +17,7 @@ import (
 func retryHintCloud(t *testing.T, retryAfter time.Duration, limited ...string) (*boundedCloudFixture, func() map[string]int) {
 	t.Helper()
 	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
-		model := b.source.value.Routes.Models["alias"]
-		alternate := model.Routes[0]
-		alternate.ID, alternate.EndpointID = "alternate", "alternate-endpoint"
-		model.Routes = append(model.Routes, alternate)
-		b.source.value.Routes.Models["alias"] = model
-		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
-		entry := b.entry
-		entry.EndpointID = "alternate-endpoint"
-		b.prices(t, []pricing.Entry{b.entry, entry})
+		b.addFallbackRoute(t, "alternate", "alternate-endpoint")
 	})
 	var mu sync.Mutex
 	calls := map[string]int{}
@@ -62,14 +53,12 @@ func retryHintCloud(t *testing.T, retryAfter time.Duration, limited ...string) (
 // alternative the next acquisition fails over at once (#1334).
 func TestCloudRetryAfterDoesNotDelayFailover(t *testing.T) {
 	f, calls := retryHintCloud(t, time.Hour, "endpoint")
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	if !v.Retryable {
 		t.Fatal("rate limit not retryable")
 	}
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	ref := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
@@ -84,11 +73,9 @@ func TestCloudRetryAfterHoldsTheHintedRoute(t *testing.T) {
 	f, calls := retryHintCloud(t, time.Hour, "endpoint", "alternate-endpoint")
 	f.options.MaxAttempts = 3
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
+	ref := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	f.now = f.now.Add(time.Minute)
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
@@ -121,11 +108,9 @@ func TestCloudExhaustionDoesNotWaitForRetryAfter(t *testing.T) {
 		failure.RetryAfter = 6 * time.Hour
 		return provider.Result{}, failure
 	}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
+	ref := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionFailed)
 	if v.Retryable || v.ErrorCode != string(provider.CodeProviderRateLimited) {
 		t.Fatalf("exhausted result = %+v, want the terminal rate limit", v)

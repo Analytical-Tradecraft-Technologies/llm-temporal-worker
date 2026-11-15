@@ -39,10 +39,9 @@ func TestBudgetWaitedSpendCountsFromAcceptance(t *testing.T) {
 	f.now = f.now.Add(30 * time.Second)
 	f.restart(t)
 	f.request.OperationKey = "waiter"
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	waiter := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, waiter)
+	v := f.prepareGenerate(t, ctx)
+	waiter := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, waiter)
 	boundedState(t, v, err, llm.ExecutionBudgetWait)
 
 	// Twelve minutes later the first request's spend has left the window, so

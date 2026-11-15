@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"net/http"
 	"testing"
 
@@ -26,16 +25,7 @@ func TestBudgetDefaultOutputLimitSurvivesRecovery(t *testing.T) {
 			}
 			request.Output.MaxTokens = nil
 			planning := f.planning(t)
-			var planned PlannedBudgetCall
-			var err error
-			if compact {
-				planned, err = planning.Compact(context.Background(), f.summary, f.attempt)
-			} else {
-				planned, err = planning.Generate(context.Background(), f.generate, f.attempt)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			planned := f.plan(t, planning, compact)
 			check := func(request llm.Request) {
 				t.Helper()
 				if request.Output == nil || request.Output.MaxTokens == nil || int64(*request.Output.MaxTokens) != planned.Estimate.OutputTokens {
@@ -47,10 +37,7 @@ func TestBudgetDefaultOutputLimitSurvivesRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			recovery, err := f.cap.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			recovery := mustProviderRecovery(t, f.cap)
 			if compact {
 				_, err = recovery.Compact(context.Background(), f.summary, binding)
 			} else {
@@ -70,14 +57,7 @@ func TestBudgetDefaultOutputLimitSurvivesRecovery(t *testing.T) {
 func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
 	f.generate.Request.Output.MaxTokens = nil
-	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected network call") })}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unexpected network call") })})
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
 	planning := f.planning(t)
 	planned, err := planning.Generate(context.Background(), f.generate, f.attempt)
@@ -105,20 +85,14 @@ func TestBudgetLimitReachesResponsesWireAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := f.cap.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery := mustProviderRecovery(t, f.cap)
 	restored, err := recovery.Generate(context.Background(), f.generate, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
 	check(restored)
 	f.cap.BudgetEstimator.MaxOutput = 32
-	recovery, err = f.cap.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery = mustProviderRecovery(t, f.cap)
 	if _, err := recovery.Generate(context.Background(), f.generate, binding); err == nil {
 		t.Fatal("changed output limit reused an old reservation")
 	}
@@ -141,16 +115,7 @@ func TestBudgetDefaultOutputLimitIsCappedAtRouteCeilingThroughRecovery(t *testin
 			}
 			request.Output.MaxTokens = nil
 			planning := f.planning(t)
-			var planned PlannedBudgetCall
-			var err error
-			if compact {
-				planned, err = planning.Compact(context.Background(), f.summary, f.attempt)
-			} else {
-				planned, err = planning.Generate(context.Background(), f.generate, f.attempt)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			planned := f.plan(t, planning, compact)
 			if planned.Estimate.OutputTokens != 8 {
 				t.Fatalf("reserved %d output tokens, want the route ceiling 8", planned.Estimate.OutputTokens)
 			}
@@ -165,10 +130,7 @@ func TestBudgetDefaultOutputLimitIsCappedAtRouteCeilingThroughRecovery(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			recovery, err := f.cap.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			recovery := mustProviderRecovery(t, f.cap)
 			if compact {
 				_, err = recovery.Compact(context.Background(), f.summary, binding)
 			} else {

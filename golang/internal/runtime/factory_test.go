@@ -399,27 +399,11 @@ func TestProductionFactoryProviderSecretFailsClosed(t *testing.T) {
 }
 
 func TestProductionFactoryBuildsOpenAIResponsesAdapter(t *testing.T) {
-	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
-			if ref.Kind != config.SecretEnv || ref.Name != "OPENAI_KEY" {
-				t.Fatalf("resolved unexpected secret reference: %#v", ref)
-			}
-			return []byte("test-key"), nil
-		}),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
-			return engine.Snapshot{}, nil
-		}),
-		HTTPClient: &http.Client{},
-	})
-	if err != nil {
-		t.Fatalf("NewProductionEngineFactory() error = %v", err)
-	}
+	factory := envSecretFactory(t, "OPENAI_KEY")
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
 		"openai": {Family: "openai_responses", BaseURL: "https://api.openai.com/v1", OutboundHosts: []string{"api.openai.com"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "OPENAI_KEY"}, Extensions: map[string]map[string]any{"openai.responses": {"store": nil, "background": nil}}},
 	}}
-	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: "openai", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
-	}}}
+	snapshot := singleRouteSnapshot("model", "openai", "cap-v1")
 	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "openai", nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
@@ -473,10 +457,8 @@ func TestProductionFactoryBuildsAnthropicAWSGatewayAdapterWithoutSecretResolutio
 			resolvedSecret = true
 			return nil, errors.New("AWS gateway must not resolve a provider secret")
 		}),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
-			return engine.Snapshot{}, nil
-		}),
-		HTTPClient: &http.Client{},
+		SnapshotLoader: emptySnapshotLoader,
+		HTTPClient:     &http.Client{},
 		AnthropicAWSClientFactory: func(ctx context.Context, value anthropicmessages.AWSClientConfig) (*anthropicmessages.Client, error) {
 			constructed = value
 			value.AWSConfig.SkipAuth = true
@@ -493,9 +475,7 @@ func TestProductionFactoryBuildsAnthropicAWSGatewayAdapterWithoutSecretResolutio
 			ServiceClasses: map[llm.ServiceClass]config.TierConfig{llm.ServiceClassStandard: {ProviderValue: "standard_only"}},
 		},
 	}}
-	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: "anthropic-aws", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
-	}}}
+	snapshot := singleRouteSnapshot("model", "anthropic-aws", "cap-v1")
 	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws", nil)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
@@ -519,9 +499,7 @@ func TestProductionFactoryRejectsSecretAuthForAnthropicAWSGateway(t *testing.T) 
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
 		"anthropic-aws": {Family: "anthropic_aws_messages", BaseURL: "https://aws-external-anthropic.us-east-1.api.aws", OutboundHosts: []string{"aws-external-anthropic.us-east-1.api.aws"}, Region: "us-east-1", AWSWorkspaceID: "ws-example-123", Auth: config.AuthConfig{Kind: "bearer_env", Name: "ANTHROPIC_AWS_API_KEY"}},
 	}}
-	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: "anthropic-aws", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
-	}}}
+	snapshot := singleRouteSnapshot("model", "anthropic-aws", "cap-v1")
 	_, err := factory.buildAdapter(context.Background(), value, snapshot, "anthropic-aws", nil)
 	if !errors.Is(err, ErrUnsupportedProviderAuth) {
 		t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
@@ -533,9 +511,7 @@ func TestProductionFactoryRejectsUnknownFamily(t *testing.T) {
 	value := config.Config{Endpoints: map[string]config.EndpointConfig{
 		"unknown": {Family: "provider_future", BaseURL: "https://example.test", OutboundHosts: []string{"example.test"}, Auth: config.AuthConfig{Kind: "bearer_env", Name: "KEY"}},
 	}}
-	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: "unknown", Capabilities: routing.CapabilitySet{Version: "cap-v1"}}}},
-	}}}
+	snapshot := singleRouteSnapshot("model", "unknown", "cap-v1")
 	_, err := factory.buildAdapter(context.Background(), value, snapshot, "unknown", nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported provider family") {
 		t.Fatalf("error = %v, want unsupported provider family", err)
@@ -573,19 +549,7 @@ func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
 }
 
 func TestProductionFactoryBuildsAzureOpenAIChatAdapter(t *testing.T) {
-	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
-			if ref.Kind != config.SecretEnv || ref.Name != "AZURE_OPENAI_API_KEY" {
-				t.Fatalf("resolved unexpected secret reference: %#v", ref)
-			}
-			return []byte("test-key"), nil
-		}),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
-		HTTPClient:     &http.Client{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	factory := envSecretFactory(t, "AZURE_OPENAI_API_KEY")
 	value := azureOpenAIChatConfig(config.AuthConfig{Kind: "header_env", Name: "AZURE_OPENAI_API_KEY"})
 	adapter, err := factory.buildAdapter(context.Background(), value, azureOpenAIChatSnapshot(), "azure-chat", nil)
 	if err != nil {
@@ -628,7 +592,7 @@ func TestProductionFactoryAzureOpenAIChatFailsClosedBeforeSecretResolution(t *te
 					resolved = true
 					return []byte("must-not-resolve"), nil
 				}),
-				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+				SnapshotLoader: emptySnapshotLoader,
 				HTTPClient:     &http.Client{},
 			})
 			if err != nil {
@@ -660,9 +624,7 @@ func azureOpenAIChatConfig(auth config.AuthConfig) config.Config {
 }
 
 func azureOpenAIChatSnapshot() engine.Snapshot {
-	return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
-		"model": {Routes: []routing.Route{{EndpointID: "azure-chat", Capabilities: routing.CapabilitySet{Version: "azure-chat/v1"}}}},
-	}}}
+	return singleRouteSnapshot("model", "azure-chat", "azure-chat/v1")
 }
 
 func TestBuildRedisServiceMeshSkipsCredentialsAndTLS(t *testing.T) {
@@ -682,3 +644,26 @@ func TestBuildRedisServiceMeshSkipsCredentialsAndTLS(t *testing.T) {
 	}
 	defer client.Close()
 }
+
+// envSecretFactory is a production engine factory over an empty engine
+// snapshot whose resolver answers only the environment secret name.
+func envSecretFactory(t *testing.T, name string) *ProductionEngineFactory {
+	t.Helper()
+	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+			if ref.Kind != config.SecretEnv || ref.Name != name {
+				t.Fatalf("resolved unexpected secret reference: %#v", ref)
+			}
+			return []byte("test-key"), nil
+		}),
+		SnapshotLoader: emptySnapshotLoader,
+		HTTPClient:     &http.Client{},
+	})
+	if err != nil {
+		t.Fatalf("NewProductionEngineFactory() error = %v", err)
+	}
+	return factory
+}
+
+// emptySnapshotLoader loads an empty engine snapshot for any configuration.
+var emptySnapshotLoader = SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil })

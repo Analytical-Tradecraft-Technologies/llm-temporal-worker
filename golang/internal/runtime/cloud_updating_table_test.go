@@ -115,17 +115,7 @@ func TestRuntimeKeepsPollingWhileCloudRequestTableIsUpdating(t *testing.T) {
 		return controller, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{cloudRequestProbe(repository)}
-	runtime, err := New(ctx, runtimeConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newStartedRuntime(t, ctx, runtimeConfig(t), options)
 	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
 		t.Fatalf("initial state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
 	}

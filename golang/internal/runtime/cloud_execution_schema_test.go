@@ -94,15 +94,7 @@ func TestCloudExecutionRuntimePublishesSchemaValidAdapterRecords(t *testing.T) {
 	f.now = f.now.Add(time.Minute)
 	ctx := context.Background()
 	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.CompactStepV1(ctx, request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	compacted := boundedState(t, v, err, llm.ExecutionCompleted)
+	compacted := f.runCompact(t, ctx, request, false)
 	if compacted.Compact == nil || compacted.Compact.Cost.CatalogVersion == "" || compacted.Compact.Usage == nil || len(compacted.Compact.Usage.ProviderRaw) == 0 || len(compacted.Compact.Diagnostics) != 1 {
 		t.Fatalf("priced compaction record was not published unfiltered: %+v", compacted.Compact)
 	}

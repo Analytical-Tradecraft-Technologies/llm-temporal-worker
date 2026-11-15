@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -11,10 +10,7 @@ import (
 )
 
 func TestDefaultBlobFactoryBuildsDevelopmentFileStore(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	value := strings.Replace(string(data), "environment: production", "environment: development", -1)
 	value = strings.Replace(value, `blob_store:
   kind: s3

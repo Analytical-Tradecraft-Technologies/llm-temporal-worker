@@ -33,13 +33,44 @@ func toolArgumentsCloud(t *testing.T, invoke func(provider.Call) (provider.Resul
 	f.cap.Budgets = budgets
 	f.restart(t)
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		return invoke(call)
 	}
 	return f, budgets
+}
+
+// requireOneSubmitAndSettlement requires exactly one provider submission and
+// one budget settlement.
+func requireOneSubmitAndSettlement(t *testing.T, f *boundedCloudFixture, budgets *countingSettlement) {
+	t.Helper()
+	if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
+		t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
+	}
+}
+
+// requireTerminalAfterRecoveryDeadline requires the fixture's request to
+// stay failed past the recovery deadline without another submission or
+// settlement.
+func requireTerminalAfterRecoveryDeadline(t *testing.T, ctx context.Context, f *boundedCloudFixture, budgets *countingSettlement) {
+	t.Helper()
+	f.now = f.now.Add(16 * time.Minute)
+	f.restart(t)
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	requireOneSubmitAndSettlement(t, f, budgets)
+}
+
+// requireReservationAccounted requires every settlement event of execution
+// to account its reservation as an unknown cost.
+func requireReservationAccounted(t *testing.T, execution cloudstate.ProviderExecution) {
+	t.Helper()
+	for _, event := range execution.Settlement.Events {
+		if event.CostStatus != budget.CostUnknown || event.AccountedIncreaseUSD.String() != event.ReservedDecreaseUSD.String() {
+			t.Fatalf("settlement event=%+v", event)
+		}
+	}
 }
 
 func toolArgumentsResult(call provider.Call, arguments string) provider.Result {
@@ -69,16 +100,12 @@ func TestCloudExecutionToolArgumentsKeyOrderCompletesFirstAttempt(t *testing.T) 
 	f, budgets := toolArgumentsCloud(t, func(call provider.Call) (provider.Result, error) {
 		return toolArgumentsResult(call, `{"query":"x","limit":5}`), nil
 	})
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
-		t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
-	}
+	ctx, v := f.generateStep(t, llm.ExecutionProviderCompleted)
+	requireOneSubmitAndSettlement(t, f, budgets)
 	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Stage != cloudstate.ExecutionSucceeded || !execution.Settled {
 		t.Fatalf("execution stage=%s settled=%t", execution.Stage, execution.Settled)
 	}
-	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
+	v, err := f.runtime.CompleteExecutionV1(ctx, f.ref(v))
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	// Callers keep receiving the canonical arguments the saved response holds.
 	call, ok := v.Generate.Output[0].(llm.ToolCall)
@@ -103,9 +130,7 @@ func TestCloudExecutionDuplicateKeyToolArgumentsAreTerminal(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, budgets := toolArgumentsCloud(t, invoke)
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if v.Retryable || v.FailureCode != "provider_error" {
 				t.Fatalf("failure=%+v", v)
 			}
@@ -114,14 +139,7 @@ func TestCloudExecutionDuplicateKeyToolArgumentsAreTerminal(t *testing.T) {
 				execution.Failure.Dispatch != provider.DispatchAccepted || execution.Failure.Retryable || !execution.Settled || budgets.calls.Load() != 1 {
 				t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
 			}
-			// Past the recovery deadline the request is still terminal.
-			f.now = f.now.Add(16 * time.Minute)
-			f.restart(t)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
-				t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
-			}
+			requireTerminalAfterRecoveryDeadline(t, ctx, f, budgets)
 		})
 	}
 }
@@ -134,9 +152,7 @@ func TestCloudExecutionMidGenerationFailureIsTerminal(t *testing.T) {
 	f, budgets := toolArgumentsCloud(t, func(provider.Call) (provider.Result, error) {
 		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseLift, provider.DispatchAccepted, provider.RetryNever, "provider failed during generation (reported in a successful response body)")
 	})
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	if v.Retryable || v.FailureCode != "provider_error" || v.ErrorCode != string(provider.CodeProviderUnavailable) || v.Dispatch != string(provider.DispatchAccepted) {
 		t.Fatalf("failure=%+v", v)
 	}
@@ -146,19 +162,8 @@ func TestCloudExecutionMidGenerationFailureIsTerminal(t *testing.T) {
 		t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
 	}
 	// The possibly billed attempt is accounted at its reservation.
-	for _, event := range execution.Settlement.Events {
-		if event.CostStatus != budget.CostUnknown || event.AccountedIncreaseUSD.String() != event.ReservedDecreaseUSD.String() {
-			t.Fatalf("settlement event=%+v", event)
-		}
-	}
-	// Past the recovery deadline the request is still terminal.
-	f.now = f.now.Add(16 * time.Minute)
-	f.restart(t)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
-	if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
-		t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
-	}
+	requireReservationAccounted(t, execution)
+	requireTerminalAfterRecoveryDeadline(t, ctx, f, budgets)
 }
 
 func nestedToolArguments(depth int) json.RawMessage {
@@ -176,12 +181,10 @@ func TestCloudPollToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
 		v.Result = toolArgumentsResult(call, string(nestedToolArguments(llm.MaxToolArgumentsDepth+1)))
 		return v, nil
 	}
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ctx, v := f.generateStep(t, llm.ExecutionPending)
+	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	v, err := f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionFailed)
 	execution := toolArgumentsExecution(t, f, v.RequestID)
 	if v.Retryable || execution.Stage != cloudstate.ExecutionFailed || execution.Failure == nil || execution.Failure.Code != provider.CodeProviderInvalidResponse ||
@@ -210,7 +213,7 @@ func TestCloudGenerateToolArgumentsAtDepthLimitContinue(t *testing.T) {
 			arguments := nestedToolArguments(llm.MaxToolArgumentsDepth)
 			f.answerWith(
 				[]llm.Item{llm.ToolCall{ID: "call_1", Name: "lookup", Arguments: arguments}},
-				[]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "done"}}}},
+				[]llm.Item{modelMessage("done")},
 			)
 			first := f.finish(t)
 			call, ok := first.Generate.Output[0].(llm.ToolCall)
@@ -255,9 +258,7 @@ func TestCloudGenerateToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, budgets := toolArgumentsCloud(t, invoke)
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if v.Retryable || v.FailureCode != "provider_error" {
 				t.Fatalf("failure=%+v", v)
 			}
@@ -266,17 +267,10 @@ func TestCloudGenerateToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
 				execution.Failure.Dispatch != provider.DispatchAccepted || execution.Claim == nil || execution.Settlement == nil || !execution.Settled || budgets.calls.Load() != 1 {
 				t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
 			}
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+			ref := f.ref(v)
+			v, err := f.runtime.CompleteExecutionV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionFailed)
-			// Past the recovery deadline the request is still terminal.
-			f.now = f.now.Add(16 * time.Minute)
-			f.restart(t)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			if f.submits.Load() != 1 || budgets.calls.Load() != 1 {
-				t.Fatalf("submits=%d reconciles=%d, want one each", f.submits.Load(), budgets.calls.Load())
-			}
+			requireTerminalAfterRecoveryDeadline(t, ctx, f, budgets)
 			// A caller echoing such a call is rejected before dispatch.
 			f.request.OperationKey = "echo"
 			f.request.Append = []llm.Item{

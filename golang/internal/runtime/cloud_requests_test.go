@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +21,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
@@ -38,10 +36,7 @@ func testCloudConfig() *config.CloudRequestConfig {
 
 func cloudSnapshot(t *testing.T, namespace string) *config.Snapshot {
 	t.Helper()
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	snapshot, err := config.Compile(context.Background(), data, config.ReferenceResolverFunc(func(_ context.Context, c *config.Config) error {
 		c.State.Requests = testCloudConfig()
 		c.State.Requests.Namespace = namespace
@@ -250,21 +245,7 @@ func TestCloudCheckpointCapabilitiesRejectIncompleteStores(t *testing.T) {
 			if _, err := cloudCheckpointCapabilities(test.repository, test.verifier, time.Now); !errors.Is(err, ErrProductionFactoryInvalid) {
 				t.Fatalf("missing capability accepted: %v", err)
 			}
-			closed, built := false, false
-			factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-				Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
-					return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
-				}),
-				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
-					return test.repository, nil
-				},
-				V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
-					built = true
-					return &cloudInnerRuntime{}, nil
-				},
-			}}
-			clients := &productionClientSet{checkpointVerifier: test.verifier, close: func(context.Context) error { closed = true; return nil }}
-			if _, _, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, "incomplete"), nil, clients); err == nil || !closed || built {
+			if closed, built, err := attachCloudRuntime(t, test.repository, test.verifier, "incomplete", 4); err == nil || !closed || built {
 				t.Fatalf("incomplete checkpoint snapshot not rejected: closed=%t built=%t err=%v", closed, built, err)
 			}
 		})
@@ -304,10 +285,7 @@ func cloudBaseTestProbes() []DependencyProbe {
 // Construction exercises the real factory with in-process storage doubles;
 // the resolver rejects any attempt to request credentials for the removed backend.
 func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	snapshot, err := config.Compile(context.Background(), data, config.ReferenceResolverFunc(func(_ context.Context, c *config.Config) error {
 		c.State.Requests = testCloudConfig()
 		c.Endpoints = map[string]config.EndpointConfig{"openai-prod": c.Endpoints["openai-prod"]}
@@ -355,7 +333,7 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 			closed := false
 			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
-					return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{"test": {Routes: []routing.Route{{EndpointID: "openai-prod", Capabilities: routing.CapabilitySet{Version: "test-v1"}}}}}}}, nil
+					return singleRouteSnapshot("test", "openai-prod", "test-v1"), nil
 				}),
 				Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
 					if strings.Contains(strings.ToLower(ref.Name+ref.Path), "postgres") {
@@ -483,10 +461,7 @@ func TestCloudReadinessRejectsIncompleteClientsBeforeRuntimeBuilder(t *testing.T
 // receipt and authority probe) is production hardening. It must apply to every
 // environment name except development, not only the exact string "production".
 func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	for _, environment := range []string{"Production", "prod", "staging"} {
 		t.Run(environment, func(t *testing.T) {
 			// Budget matchers follow the renamed environment.
@@ -511,7 +486,7 @@ func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *test
 			opened, built := 0, false
 			factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
-					return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{"test": {Routes: []routing.Route{{EndpointID: "openai-prod", Capabilities: routing.CapabilitySet{Version: "test-v1"}}}}}}}, nil
+					return singleRouteSnapshot("test", "openai-prod", "test-v1"), nil
 				}),
 				Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
 					if ref.Name == "REQUEST_KEY" {
@@ -580,4 +555,26 @@ func TestCloudRepositoryFactoryForwardsMRSCOptIn(t *testing.T) {
 			})
 		}
 	}
+}
+
+// attachCloudRuntime attaches the V1 runtime for the namespace cloud snapshot
+// over repository and verifier, with a secret of 32 copies of secret, and
+// reports whether the client bundle was closed and the inner runtime built.
+func attachCloudRuntime(t *testing.T, repository CloudRequestRepository, verifier state.CheckpointHandleVerifier, namespace string, secret byte) (closed, built bool, err error) {
+	t.Helper()
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
+		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+			return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{secret}, 32))), nil
+		}),
+		CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
+			return repository, nil
+		},
+		V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
+			built = true
+			return &cloudInnerRuntime{}, nil
+		},
+	}}
+	clients := &productionClientSet{checkpointVerifier: verifier, close: func(context.Context) error { closed = true; return nil }}
+	_, _, err = factory.attachV1Runtime(context.Background(), cloudSnapshot(t, namespace), nil, clients)
+	return closed, built, err
 }

@@ -125,7 +125,7 @@ func TestCatalogDerivedChatAdapterCompilesTextAndImageRequests(t *testing.T) {
 	snapshot := engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{"model": {Routes: []routing.Route{route}}}}}
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return []byte("test-key"), nil }),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader: emptySnapshotLoader,
 		HTTPClient:     &http.Client{},
 	})
 	if err != nil {

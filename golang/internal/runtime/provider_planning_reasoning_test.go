@@ -12,7 +12,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
 // A v1 request can set reasoning effort and summary but never a reasoning
@@ -61,17 +60,11 @@ func TestProviderPlanningRoutesV1ReasoningEffortOnAnthropicMessages(t *testing.T
 			if test.summary != "" {
 				request.SettingsPatch.ReasoningSummary.Set = preparationPointer(test.summary)
 			}
-			prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			prepared := mustPrepareGenerate(t, request)
 			if prepared.Request.Reasoning == nil || prepared.Request.Reasoning.Mode != "" || prepared.Request.Reasoning.Effort != llm.ReasoningEffortHigh {
 				t.Fatalf("prepared reasoning = %+v", prepared.Request.Reasoning)
 			}
-			planning, err := capabilities.NewProviderPlanning(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			planning := mustProviderPlanning(t, capabilities)
 			planned, err := planning.Generate(context.Background(), prepared)
 			if err != nil {
 				t.Fatalf("v1 reasoning effort is not routable on Anthropic Messages: %v", err)
