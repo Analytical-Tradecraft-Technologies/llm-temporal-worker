@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const reviewedGoPatch = "1.26.10"
+const reviewedGoPatch = "1.26.11"
 
 func TestDockerfileStampsEveryMetadataFieldIntoImageAndBinary(t *testing.T) {
 	dockerfile := readRepositoryFile(t, moduleRoot(t), "Dockerfile")
@@ -237,7 +237,7 @@ test -f "$IMAGE_VERIFY_OCI_LAYOUT/oci-layout"
 test -n "$LLMTW_IMAGE"
 exit 1
 `)
-			cmd := exec.Command("make", "image-verify", "GO="+filepath.Join(dir, "fake-go"), "IMAGE_VERIFY_GO_VERSION=go1.26.10")
+			cmd := exec.Command("make", "image-verify", "GO="+filepath.Join(dir, "fake-go"), "IMAGE_VERIFY_GO_VERSION=go1.26.11")
 			cmd.Dir = moduleRoot(t)
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TMPDIR="+dir, "FAIL_AT="+scenario.failAt, "IMAGE_VERIFY_OCI_LAYOUT="+filepath.Join(dir, "image.oci"))
 			output, err := cmd.CombinedOutput()
