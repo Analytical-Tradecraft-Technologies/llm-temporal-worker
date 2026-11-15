@@ -7,6 +7,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
@@ -17,7 +18,7 @@ import (
 func LargeNonStreamingRequestReachesTransport(t *testing.T, send func(t *testing.T, httpClient *http.Client, params anthropic.MessageNewParams) error) {
 	for _, timeout := range []time.Duration{0, time.Second} {
 		calls := 0
-		httpClient := &http.Client{Timeout: timeout, Transport: adaptertest.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		httpClient := &http.Client{Timeout: timeout, Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			deadline, ok := request.Context().Deadline()
 			if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 10*time.Minute {

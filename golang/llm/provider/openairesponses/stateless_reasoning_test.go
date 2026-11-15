@@ -60,7 +60,7 @@ func reasoningState(t *testing.T, id string, encrypted any) llm.ProviderState {
 	if encrypted != "absent" {
 		item["encrypted_content"] = encrypted
 	}
-	opaque := contract.MarshalJSON(t, item)
+	opaque := testassert.MarshalJSON(t, item)
 	return llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: reasoningStateMediaType, Opaque: opaque}
 }
 
@@ -108,14 +108,14 @@ func TestStorageDeniedRequestsEncryptedReasoning(t *testing.T) {
 }
 
 func TestStorageDeniedReplaysLiftedEncryptedReasoning(t *testing.T) {
-	body := contract.DecodeJSON[map[string]any](t, readContractFixture(t, "openai-responses", "response.completed.json"))
+	body := testassert.UnmarshalJSON[map[string]any](t, readContractFixture(t, "openai-responses", "response.completed.json"))
 	body["output"] = []any{
 		map[string]any{"id": "rs-1", "type": "reasoning", "status": "completed", "summary": []any{}, "encrypted_content": "sealed-reasoning"},
 		map[string]any{"id": "msg-1", "type": "message", "role": "assistant", "status": "completed", "content": []any{
 			map[string]any{"type": "output_text", "text": "hello", "annotations": []any{}, "logprobs": []any{}},
 		}},
 	}
-	encoded := contract.MarshalJSON(t, body)
+	encoded := testassert.MarshalJSON(t, body)
 	adapter := storagePolicyAdapter(t, false, encoded)
 	first := llm.Request{OperationKey: "first-turn", Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}, Input: []llm.Item{llm.HumanText("question")}}
 	call, _ := compileWire(t, adapter, first, true)

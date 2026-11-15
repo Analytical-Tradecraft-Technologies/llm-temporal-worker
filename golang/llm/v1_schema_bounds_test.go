@@ -53,12 +53,12 @@ func TestV1SettingsPatchDecodesTheCompactionPolicyShape(t *testing.T) {
 		}
 	}
 	valid := `{"compaction_policy":{"set":{"version":"generic-2026-07-18","prompt_version":"v1","summary_style":"concise","trigger_tokens":20000,"target_tokens":9000,"recent_turns":4,"output_reserve_tokens":2048,"materialization_threshold_bytes":0}}}`
-	patch := mustUnmarshal[llm.SettingsPatchV1](t, []byte(valid), "a complete valid policy was rejected")
+	patch := testassert.UnmarshalJSON[llm.SettingsPatchV1](t, []byte(valid), "a complete valid policy was rejected")
 	testassert.NoError(t, testassert.Err(patch.MarshalJSON()), "a complete valid policy does not encode")
 }
 
 func TestV1GenerateResponseRejectsANullActualClass(t *testing.T) {
-	fixture := mustUnmarshal[map[string]any](t, readV1Fixture(t, "generate-response-disabled-cache.json"), "decode fixture")
+	fixture := testassert.UnmarshalJSON[map[string]any](t, readV1Fixture(t, "generate-response-disabled-cache.json"), "decode fixture")
 	service := fixture["service"].(map[string]any)
 	delete(service, "actual")
 	omitted, _ := json.Marshal(fixture)

@@ -6,14 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 const requestID = "llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5"
 
 func TestExecutionContractsRoundTripEveryState(t *testing.T) {
-	generate := mustUnmarshal[llm.GenerateResponseV1](t, readV1Fixture(t, "generate-response.json"), "generate-response.json")
-	compact := mustUnmarshal[llm.CompactResponseV1](t, readV1Fixture(t, "compact-response.json"), "compact-response.json")
+	generate := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, readV1Fixture(t, "generate-response.json"), "generate-response.json")
+	compact := testassert.UnmarshalJSON[llm.CompactResponseV1](t, readV1Fixture(t, "compact-response.json"), "compact-response.json")
 	for _, kind := range []string{"generate", "compact"} {
 		for _, state := range []llm.ExecutionStateV1{llm.ExecutionBudgetRequired, llm.ExecutionAcquired, llm.ExecutionBudgetWait, llm.ExecutionCacheWait, llm.ExecutionPending, llm.ExecutionProviderCompleted, llm.ExecutionCompleted, llm.ExecutionFailed, llm.ExecutionOutcomeUnknown} {
 			t.Run(kind+"/"+string(state), func(t *testing.T) {
@@ -32,8 +33,8 @@ func TestExecutionContractsRoundTripEveryState(t *testing.T) {
 						value.Compact = &compact
 					}
 				}
-				data := mustMarshal(t, value)
-				decoded := mustUnmarshal[llm.ExecutionResultV1](t, data, "decode execution result")
+				data := testassert.MarshalJSON(t, value)
+				decoded := testassert.UnmarshalJSON[llm.ExecutionResultV1](t, data, "decode execution result")
 				second, err := json.Marshal(decoded)
 				if err != nil || string(second) != string(data) {
 					t.Fatalf("unstable wire round trip: %v", err)
@@ -84,9 +85,9 @@ func TestExecutionResultRejectsInvalidUnionsAndClosedFields(t *testing.T) {
 
 func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 	generate := readV1GenerateFixture(t, "generate-root.json")
-	compact := mustUnmarshal[llm.CompactRequestV1](t, readV1Fixture(t, "compact-request.json"), "compact-request.json")
+	compact := testassert.UnmarshalJSON[llm.CompactRequestV1](t, readV1Fixture(t, "compact-request.json"), "compact-request.json")
 	for _, request := range []llm.PrepareExecutionV1{{Generate: &generate}, {Compact: &compact}} {
-		mustUnmarshal[llm.PrepareExecutionV1](t, mustMarshal(t, request), "decode prepare")
+		testassert.UnmarshalJSON[llm.PrepareExecutionV1](t, testassert.MarshalJSON(t, request), "decode prepare")
 	}
 	for _, request := range []llm.PrepareExecutionV1{{}, {Generate: &generate, Compact: &compact}} {
 		if _, err := json.Marshal(request); err == nil {
@@ -97,7 +98,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 		requireUnmarshalRejected[llm.PrepareExecutionV1](t, []byte(data), "invalid prepare accepted")
 	}
 	reference := llm.ExecutionReferenceV1{RequestID: requestID, Context: generate.Context}
-	data := mustMarshal(t, reference)
+	data := testassert.MarshalJSON(t, reference)
 	var decoded llm.ExecutionReferenceV1
 	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(reference, decoded) {
 		t.Fatalf("reference: %v", err)
@@ -108,7 +109,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 	// The capability is optional at decode (the runtime verifies it) but
 	// bounded in size and alphabet, and never present but empty.
 	reference.Capability = "ref_v1.k1.abc-_"
-	data = mustMarshal(t, reference)
+	data = testassert.MarshalJSON(t, reference)
 	decoded = llm.ExecutionReferenceV1{}
 	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(reference, decoded) {
 		t.Fatalf("reference with capability: %v", err)

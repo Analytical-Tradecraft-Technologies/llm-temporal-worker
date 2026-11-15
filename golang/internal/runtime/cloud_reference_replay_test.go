@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -17,7 +18,7 @@ import (
 // instead of rejecting the only candidate as no_route.
 func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.T) {
 	f := boundedCloud(t, false)
-	compiler := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+	compiler := responsesAdapter(t, &http.Client{Transport: testkit.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("unexpected HTTP request")
 	})})
 	f.adapter.compile = func(input provider.CompileInput) (provider.Call, error) {

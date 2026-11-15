@@ -3,7 +3,6 @@ package activity
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,9 +132,7 @@ func TestV1PayloadCodecsRejectMalformedAndUnknownFields(t *testing.T) {
 
 func readV1PayloadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "llm", "testdata", "v1", name))
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, filepath.Join("..", "llm", "testdata", "v1", name))
 }
 
 // payloadRoundTrip decodes a fixture into T, encodes it with marshal and

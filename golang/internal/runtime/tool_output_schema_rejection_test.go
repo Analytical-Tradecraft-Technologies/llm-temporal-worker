@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -32,10 +34,7 @@ func TestToolOutputSchemaCompilerRejection(t *testing.T) {
 				input := provider.CompileInput{Request: request, Strict: strict,
 					Query: provider.CapabilityQuery{EndpointID: "endpoint", Family: route.family, Model: request.Model}}
 				_, err := adapter.Compile(context.Background(), input)
-				var mapped *provider.Error
-				if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched {
-					t.Fatalf("strict=%v: compile error = %#v, want unsupported tool output contract", strict, err)
-				}
+				testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Phase: provider.PhaseCompile, Dispatch: provider.DispatchNotDispatched}, fmt.Sprintf("strict=%v: compile error", strict))
 				input.Request.Tools[0].OutputSchema = nil
 				if _, err := adapter.Compile(context.Background(), input); err != nil {
 					t.Fatalf("strict=%v: input-only tool rejected: %v", strict, err)
@@ -45,9 +44,7 @@ func TestToolOutputSchemaCompilerRejection(t *testing.T) {
 				input.Request.Output = &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Strict: true, Schema: toolOutputContract().OutputSchema}}
 				call, err := adapter.Compile(context.Background(), input)
 				if route.family == provider.FamilyBedrockConverse {
-					if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability {
-						t.Fatalf("Converse final-response contract changed: %#v", err)
-					}
+					testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "Converse final-response contract changed")
 				} else if err != nil || len(call.OutputSchema) == 0 {
 					t.Fatalf("strict=%v: final response schema rejected: %v", strict, err)
 				}

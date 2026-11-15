@@ -19,7 +19,7 @@ func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
 		Input:        []llm.Item{llm.HumanText("hello")},
 	}, testProfile(), "default")
 	testassert.NoError(t, err)
-	got := contract.MarshalJSON(t, params)
+	got := testassert.MarshalJSON(t, params)
 	assertCanonicalFixture(t, got, "request.wire.json")
 }
 
@@ -36,7 +36,7 @@ func TestSemanticFixtureMatchesLiftedResponse(t *testing.T) {
 		OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard,
 	}
 	lifted := mustLift(t, testProfile(), call, &response, "req-fixture")
-	got := contract.MarshalJSON(t, lifted)
+	got := testassert.MarshalJSON(t, lifted)
 	assertCanonicalFixture(t, got, "response.semantic.json")
 }
 
@@ -47,5 +47,5 @@ func assertCanonicalFixture(t *testing.T, got []byte, name string) {
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	return contract.ReadFixture(t, "testdata/unit/chat/"+name)
+	return testassert.ReadFile(t, "testdata/unit/chat/"+name)
 }

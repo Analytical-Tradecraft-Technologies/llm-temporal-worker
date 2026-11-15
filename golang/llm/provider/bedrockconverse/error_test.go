@@ -13,6 +13,7 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
@@ -26,9 +27,7 @@ func TestMapErrorMapsRetryAfterFromWrappedSmithyResponse(t *testing.T) {
 		Err: errors.New("provider rate limited the request"),
 	}
 	mapped := mapError(fmt.Errorf("converse request: %w", smithyErr), "bedrock-converse")
-	if mapped.Code != provider.CodeProviderRateLimited || mapped.Retry != provider.RetryAfter {
-		t.Fatalf("mapped error = %#v", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderRateLimited, Retry: provider.RetryAfter})
 	if got, want := mapped.RetryAfter, 2*time.Second; got != want {
 		t.Fatalf("retry after = %s, want %s", got, want)
 	}
@@ -48,9 +47,7 @@ func TestModelProcessingFailuresRemainAmbiguous(t *testing.T) {
 	for name, cause := range cases {
 		t.Run(name, func(t *testing.T) {
 			mapped := mapError(fmt.Errorf("wrapped: %w", cause), "converse")
-			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
-				t.Fatalf("model failure became a rejection: %#v", mapped)
-			}
+			testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Dispatch: provider.DispatchAmbiguous, Retry: provider.RetrySameOperation}, "model failure became a rejection")
 			testassert.ErrorIs(t, mapped, cause, "underlying error was lost")
 			if strings.Contains(mapped.SafeMessage, "sensitive") {
 				t.Fatal("provider details leaked")
@@ -62,9 +59,7 @@ func TestModelProcessingFailuresRemainAmbiguous(t *testing.T) {
 func TestDefiniteConverseRejectionsRemainRejected(t *testing.T) {
 	for _, status := range []int{400, 401, 403, 404, 422, 429} {
 		mapped := mapHTTPError(status, errors.New("rejection"), "converse")
-		if mapped.Dispatch != provider.DispatchRejected {
-			t.Fatalf("status %d became ambiguous", status)
-		}
+		testkit.ProviderError(t, mapped, testkit.ProviderClass{Dispatch: provider.DispatchRejected}, fmt.Sprintf("status %d became ambiguous", status))
 	}
 }
 
@@ -84,7 +79,5 @@ func TestMapErrorClassifiesCommonHTTPStatuses(t *testing.T) {
 
 func TestConversePaymentRequiredIsAccountDenial(t *testing.T) {
 	mapped := mapHTTPError(http.StatusPaymentRequired, errors.New("billing"), "converse")
-	if mapped.Code != provider.CodePermissionDenied || mapped.Retry != provider.RetryNever || mapped.Dispatch != provider.DispatchRejected {
-		t.Fatalf("402 = %#v, want the shared account-denial classification", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodePermissionDenied, Dispatch: provider.DispatchRejected, Retry: provider.RetryNever}, "402")
 }

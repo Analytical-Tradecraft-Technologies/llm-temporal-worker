@@ -18,7 +18,7 @@ func TestSettingsPatchV1SamplingAndReasoningLeavesRoundTrip(t *testing.T) {
 	if string(encoded) != want {
 		t.Fatalf("encoded = %s; want %s", encoded, want)
 	}
-	decoded := mustUnmarshalJSON[SettingsPatchV1](t, encoded, "decode patch")
+	decoded := testassert.UnmarshalJSON[SettingsPatchV1](t, encoded, "decode patch")
 	if decoded.TopP.Set == nil || *decoded.TopP.Set != "0.5" || !reflect.DeepEqual(*decoded.StopSequences.Set, stop) || *decoded.Seed.Set != seed ||
 		*decoded.ReasoningMode.Set != mode || *decoded.ReasoningTokenBudget.Set != budget {
 		t.Fatalf("decoded = %+v", decoded)
@@ -111,7 +111,7 @@ func TestSettingsPatchV1NilSetsRoundTripOrFailToEncode(t *testing.T) {
 			if err != nil || string(encoded) != test.want {
 				t.Fatalf("encoded = %s, %v; want %s", encoded, err, test.want)
 			}
-			decoded := mustUnmarshalJSON[SettingsPatchV1](t, encoded, "decode "+string(encoded))
+			decoded := testassert.UnmarshalJSON[SettingsPatchV1](t, encoded, "decode "+string(encoded))
 			again, err := decoded.MarshalJSON()
 			if err != nil || string(again) != test.want {
 				t.Fatalf("re-encoded = %s, %v; want %s", again, err, test.want)

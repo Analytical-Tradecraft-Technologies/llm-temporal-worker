@@ -142,7 +142,7 @@ func replacementTestConfig(t *testing.T, mutate func(*config.Config)) []byte {
 			value.Budgets.Policies[index].Match.Environment = value.Environment
 		}
 	}
-	return encodeJSON(t, value)
+	return testassert.MarshalJSON(t, value)
 }
 
 // newReplacementApp builds an application from initial that validates

@@ -48,12 +48,12 @@ func unreservedFinalizationFixture(t *testing.T, kind string) (*cloudRequestRunt
 	saved.Execution.UpdatedAt = paid.Completion.CompletedAt
 	var cost llm.CostV1
 	if kind == "generate" {
-		response := decodeJSON[llm.GenerateResponseV1](t, paid.Entry.Response)
+		response := testassert.UnmarshalJSON[llm.GenerateResponseV1](t, paid.Entry.Response)
 		saved.Execution.Response.Status = response.Status
 		saved.Execution.Response.Output = response.Output
 		cost = response.Cost
 	} else {
-		response := decodeJSON[llm.CompactResponseV1](t, paid.Entry.Response)
+		response := testassert.UnmarshalJSON[llm.CompactResponseV1](t, paid.Entry.Response)
 		cost = response.Cost
 	}
 	actual := pricing.MustUSD(*cost.ActualCostUSD)

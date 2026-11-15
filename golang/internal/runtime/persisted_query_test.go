@@ -15,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
@@ -202,14 +203,10 @@ func TestPersistedQueryBudgetStatusClassifiesPermanentMisses(t *testing.T) {
 				t.Fatalf("error = %v, want original cause %v", err, test.err)
 			}
 			if test.permanent {
-				if providerErr.Code != provider.CodeInvalidArgument || providerErr.Retry != provider.RetryNever {
-					t.Fatalf("provider error = %#v, want permanent invalid_argument", providerErr)
-				}
+				testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeInvalidArgument, Retry: provider.RetryNever})
 				return
 			}
-			if providerErr.Code != provider.CodeStateUnavailable || providerErr.Retry != provider.RetrySameOperation {
-				t.Fatalf("provider error = %#v, want retryable state_unavailable", providerErr)
-			}
+			testkit.ProviderError(t, providerErr, testkit.ProviderClass{Code: provider.CodeStateUnavailable, Retry: provider.RetrySameOperation})
 		})
 	}
 }

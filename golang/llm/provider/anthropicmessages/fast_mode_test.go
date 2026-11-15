@@ -10,10 +10,10 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A priority request is Anthropic fast mode: standard capacity at fast speed,
@@ -33,7 +33,7 @@ func TestPriorityInvokesFastMode(t *testing.T) {
 		t.Run(string(tc.class), func(t *testing.T) {
 			var beta string
 			var body map[string]any
-			client, err := NewClient(ClientConfig{BaseURL: "http://127.0.0.1", APIKey: "test-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			client, err := NewClient(ClientConfig{BaseURL: "http://127.0.0.1", APIKey: "test-key", HTTPClient: &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 				beta = request.Header.Get("anthropic-beta")
 				encoded, _ := io.ReadAll(request.Body)
 				if err := json.Unmarshal(encoded, &body); err != nil {
@@ -70,7 +70,7 @@ func TestPriorityInvokesFastMode(t *testing.T) {
 // Fast-mode usage on a call that did not attempt the fast tier still carries
 // a multiplier its catalog entry does not model.
 func TestFastUsageOutsideFastTierStaysUnknown(t *testing.T) {
-	message := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":1,"output_tokens":1,"service_tier":"standard","speed":"fast","inference_geo":"us"}}`))
+	message := testassert.UnmarshalJSON[anthropic.Message](t, []byte(`{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":[{"type":"text","text":"answer"}],"usage":{"input_tokens":1,"output_tokens":1,"service_tier":"standard","speed":"fast","inference_geo":"us"}}`))
 	for _, tier := range []string{"standard_only", FastTier} {
 		got, err := mustProfile(t, testProfile()).liftResponse(provider.Call{
 			OperationKey: "fast-usage", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard, Metadata: provider.CallMetadata{ProviderTier: tier},

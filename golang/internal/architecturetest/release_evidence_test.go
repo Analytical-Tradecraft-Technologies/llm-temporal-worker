@@ -747,7 +747,7 @@ func TestReleaseEvidenceVerifierRejectsUnsafeArtifactProvenanceURLs(t *testing.T
 			artifactPath := filepath.Join(bundle.directory, releaseEvidenceArtifactPaths[test.artifact])
 			document := readJSONObject(t, artifactPath)
 			test.apply(t, document, "https://operator:"+sentinel+"@example.invalid/provenance")
-			data := marshalJSON(t, document)
+			data := testassert.MarshalJSON(t, document)
 			replaceReleaseEvidenceArtifact(t, bundle, evidence, test.artifact, data)
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
@@ -781,7 +781,7 @@ func TestReleaseEvidenceVerifierEnforcesCanonicalProvenanceURLPolicy(t *testing.
 					} else {
 						document["direct_modules"].([]any)[0].(map[string]any)["source"] = test.url
 					}
-					data := marshalJSON(t, document)
+					data := testassert.MarshalJSON(t, document)
 					replaceReleaseEvidenceArtifact(t, bundle, evidence, artifact, data)
 				default:
 					t.Fatalf("unknown provenance target %q", target)
@@ -1881,18 +1881,10 @@ func writeReleaseArtifact(t *testing.T, path string, data []byte) {
 	writeFile(t, path, data, 0o600)
 }
 
-// marshalJSON encodes value as JSON, failing the test on error.
-func marshalJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	testassert.NoError(t, err)
-	return data
-}
-
 // writeJSONArtifact writes value as JSON to path with writeReleaseArtifact.
 func writeJSONArtifact(t *testing.T, path string, value any) {
 	t.Helper()
-	writeReleaseArtifact(t, path, marshalJSON(t, value))
+	writeReleaseArtifact(t, path, testassert.MarshalJSON(t, value))
 }
 
 func readReleaseEvidence(t *testing.T, directory string) map[string]any {
@@ -1908,7 +1900,7 @@ func readReleaseEvidenceJSONArtifact(t *testing.T, directory, name string) map[s
 func cloneReleaseEvidenceJSON(t *testing.T, document map[string]any) map[string]any {
 	t.Helper()
 	var clone map[string]any
-	decodeJSON(t, marshalJSON(t, document), "release evidence clone", &clone)
+	decodeJSON(t, testassert.MarshalJSON(t, document), "release evidence clone", &clone)
 	return clone
 }
 

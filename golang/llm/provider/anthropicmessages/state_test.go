@@ -16,7 +16,7 @@ import (
 
 func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	const raw = `{ "signature": "sig-raw", "thinking": "private", "type": "thinking", "future": {"n": 1} }`
-	response := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"state-1","model":"claude-contract","content":[`+raw+`,{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":"standard"}}`))
+	response := testassert.UnmarshalJSON[anthropic.Message](t, []byte(`{"id":"state-1","model":"claude-contract","content":[`+raw+`,{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":"standard"}}`))
 	profile := mustProfile(t, testProfile())
 	lifted := mustLift(t, profile, liftCall("state", llm.ServiceClassStandard), &response, "req-state")
 	state, ok := lifted.Output[0].(llm.ProviderState)
@@ -40,7 +40,7 @@ func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	if !ok {
 		t.Fatalf("replayed state = %#v", messages[1])
 	}
-	replayedRaw := contract.MarshalJSON(t, replayed)
+	replayedRaw := testassert.MarshalJSON(t, replayed)
 	var want, got any
 	testassert.NoError(t, json.Unmarshal([]byte(raw), &want))
 	testassert.NoError(t, json.Unmarshal(replayedRaw, &got))

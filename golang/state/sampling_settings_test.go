@@ -141,7 +141,7 @@ func TestSnapshotDigestAndEncodingUnchangedWithoutSamplingLeaves(t *testing.T) {
 
 	legacy := legacyModelState{Model: settings.Model, ServiceClass: settings.ServiceClass, Portability: settings.Portability,
 		Temperature: settings.Temperature, TemperatureDecimal: settings.TemperatureDecimal, ReasoningEffort: settings.ReasoningEffort}
-	data := mustJSON(t, struct {
+	data := testassert.MarshalJSON(t, struct {
 		Schema   string
 		Items    []llm.Item
 		Settings legacyModelState

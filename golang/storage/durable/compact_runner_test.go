@@ -3,6 +3,7 @@ package durable
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -205,7 +206,7 @@ func TestCompactV1CancellationAfterCacheFinalizationDoesNotReturnSuccess(t *test
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("CompactV1 error = %v, want context cancellation", err)
 	}
-	if contains(events, "dispatch") || contains(events, "reconcile") {
+	if slices.Contains(events, "dispatch") || slices.Contains(events, "reconcile") {
 		t.Fatalf("cache finalization cancellation reached later side effect: %v", events)
 	}
 }
@@ -307,7 +308,7 @@ func TestCompactV1RejectsMaterializedParentFromAnotherScope(t *testing.T) {
 	}
 	_, err := CompactV1(context.Background(), testCompactRequest(), ports)
 	assertStageFailure(t, err, "materialized parent validation failure")
-	if contains(events, "dispatch") {
+	if slices.Contains(events, "dispatch") {
 		t.Fatalf("wrong-scope replay reached dispatch: %v", events)
 	}
 }

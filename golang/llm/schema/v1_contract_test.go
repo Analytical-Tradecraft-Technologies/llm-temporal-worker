@@ -2,7 +2,6 @@ package schema_test
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,14 +205,10 @@ func readV1Schema(t *testing.T, name string) *schema.Schema {
 // readV1SchemaFile reads the named published v1 schema file.
 func readV1SchemaFile(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, filepath.Join("..", "..", "api", "schema", "v1", name))
 }
 
 func readV1Fixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "testdata", "v1", name))
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, filepath.Join("..", "testdata", "v1", name))
 }

@@ -3,20 +3,19 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func wireMessages(t *testing.T, params openai.ChatCompletionNewParams) []map[string]any {
 	t.Helper()
-	encoded := contract.MarshalJSON(t, params)
+	encoded := testassert.MarshalJSON(t, params)
 	var wire struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -100,8 +99,8 @@ func TestStrictCompileRejectsMixedLevelsWhenApplicationUsesSystemRole(t *testing
 		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "application"},
 	}}
 	query := provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}
-	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: true}); err == nil || !strings.Contains(err.Error(), "instruction hierarchy") || !isUnsupportedCapability(err) {
-		t.Fatalf("strict mixed-level compile error = %v", err)
-	}
+	_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: true})
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability}, "strict mixed-level compile error")
+	testassert.ErrorContains(t, err, "instruction hierarchy", "strict mixed-level compile error")
 	testassert.NoError(t, testassert.Err(adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: query, Strict: false})), "best-effort mixed-level compile error")
 }

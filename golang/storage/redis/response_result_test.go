@@ -38,7 +38,7 @@ func TestResponseResultSealsAndBindsToItsKey(t *testing.T) {
 	store := responseResultTestStore(t, 7)
 	created := time.Unix(1700000000, 0).UTC()
 	key := store.key("acme", "search", "resp_a")
-	plain := []byte(`{"schema":"response-result/v1","created_at":"2023-11-14T22:13:20Z","response":` + mustJSON(t, responseResultTestResponse("resp_a")) + `}`)
+	plain := []byte(`{"schema":"response-result/v1","created_at":"2023-11-14T22:13:20Z","response":` + string(testassert.MarshalJSON(t, responseResultTestResponse("resp_a"))) + `}`)
 	sealed, err := store.seal(key, plain)
 	testassert.NoError(t, err)
 	if bytes.Contains(sealed, []byte("private answer")) || strings.Contains(key, "acme") || strings.Contains(key, "resp_a") {

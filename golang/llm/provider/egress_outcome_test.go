@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestEgressOutcomeRecordsOnlyMarkedDenials(t *testing.T) {
@@ -54,9 +54,7 @@ func TestEgressOutcomeClassifiesPolicyDenialAfterSDKContextReplacement(t *testin
 	if mapped == nil {
 		t.Fatal("ClassifyEgressOutcome() = nil, want policy result")
 	}
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("policy result = %#v, want retryable not-dispatched provider-unavailable", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute}, "policy result")
 	if !errors.Is(mapped, provider.ErrProviderEgressDenied) || !errors.Is(mapped, denial) {
 		t.Fatalf("policy result cause = %v, want retained egress denial", mapped)
 	}
@@ -71,9 +69,7 @@ func TestEgressOutcomeClassifiesPreDispatchAvailabilityAfterSDKContextReplacemen
 	if mapped == nil {
 		t.Fatal("ClassifyEgressOutcome() = nil, want pre-dispatch availability result")
 	}
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("pre-dispatch availability result = %#v, want retryable not-dispatched provider-unavailable", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderUnavailable, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNextRoute}, "pre-dispatch availability result")
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, failure) {
 		t.Fatalf("pre-dispatch availability result cause = %v, want retained pre-dispatch marker", mapped)
 	}
@@ -87,11 +83,9 @@ func TestEgressOutcomeClassifiesOversizedResponseWithoutUnsafeDiagnostics(t *tes
 	if mapped == nil {
 		t.Fatal("ClassifyEgressOutcome() = nil, want oversized-response result")
 	}
-	if mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever {
-		t.Fatalf("oversized-response result = %#v, want accepted non-retryable invalid response", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchAccepted, Retry: provider.RetryNever}, "oversized-response result")
 	testassert.ErrorIs(t, mapped, provider.ErrProviderResponseTooLarge, "oversized-response cause")
-	encoded := contract.MarshalJSON(t, mapped)
+	encoded := testassert.MarshalJSON(t, mapped)
 	for _, unsafe := range []string{"provider.example", "raw-provider-body"} {
 		if strings.Contains(mapped.Error(), unsafe) || strings.Contains(string(encoded), unsafe) {
 			t.Fatalf("oversized-response diagnostics exposed %q: error=%q json=%s", unsafe, mapped.Error(), encoded)
@@ -107,9 +101,7 @@ func TestEgressOutcomeClassifiesCallerCancellationAfterSDKContextReplacement(t *
 	if mapped == nil {
 		t.Fatal("ClassifyEgressOutcome() = nil, want pre-dispatch cancellation result")
 	}
-	if mapped.Code != provider.CodeCanceled || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("pre-dispatch cancellation result = %#v, want non-retryable not-dispatched cancellation", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeCanceled, Phase: provider.PhaseDispatch, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever}, "pre-dispatch cancellation result")
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.Canceled) {
 		t.Fatalf("pre-dispatch cancellation result cause = %v, want retained pre-dispatch cancellation", mapped)
 	}
@@ -125,8 +117,6 @@ func TestEgressOutcomeDoesNotLetLatePreflightOverwriteCallerCancellation(t *test
 	if mapped == nil {
 		t.Fatal("ClassifyEgressOutcome() = nil, want preserved cancellation")
 	}
-	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("late preflight overwrote cancellation: %#v", mapped)
-	}
+	testkit.ProviderError(t, mapped, testkit.ProviderClass{Code: provider.CodeDeadlineExceeded, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetryNever}, "late preflight overwrote cancellation")
 	testassert.ErrorIsNot(t, mapped, provider.ErrProviderEgressDenied, "late policy result overwrote cancellation")
 }

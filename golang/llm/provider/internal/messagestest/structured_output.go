@@ -3,9 +3,9 @@ package messagestest
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -94,10 +94,7 @@ func StructuredOutputRejectsUnrepresentableSchemasAtCompile(t *testing.T, newAda
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := adapter.Compile(context.Background(), input(test.schema, test.strict))
-			var providerErr *provider.Error
-			if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Phase != provider.PhaseCompile || providerErr.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("compile error = %#v", err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeUnsupportedCapability, Phase: provider.PhaseCompile, Dispatch: provider.DispatchNotDispatched}, "compile error")
 		})
 	}
 	if wire != nil {
@@ -120,10 +117,7 @@ func StructuredOutputRejectsExponentialSchemaAtCompile(t *testing.T, newAdapter 
 	var wire []byte
 	adapter := newAdapter(t, `{}`, &wire)
 	_, err := adapter.Compile(context.Background(), input(adaptertest.ExponentialDAGSchema, false))
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeInvalidArgument || providerErr.Phase != provider.PhaseCompile || providerErr.Dispatch != provider.DispatchNotDispatched {
-		t.Fatalf("compile error = %#v", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeInvalidArgument, Phase: provider.PhaseCompile, Dispatch: provider.DispatchNotDispatched}, "compile error")
 	if wire != nil {
 		t.Fatalf("rejected schema reached the provider: %s", wire)
 	}

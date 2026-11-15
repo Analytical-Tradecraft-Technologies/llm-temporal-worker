@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -47,10 +48,7 @@ func TestLoadContinuationRejectsTenantlessRequest(t *testing.T) {
 	if err == nil {
 		t.Fatal("tenantless continuation request was accepted")
 	}
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeInvalidArgument {
-		t.Fatalf("loadContinuation error = %v, want invalid argument provider error", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeInvalidArgument}, "loadContinuation error")
 	if store.getCalls != 0 || store.getForTenant != 0 {
 		t.Fatalf("tenantless request loaded continuation with Get=%d GetForTenant=%d", store.getCalls, store.getForTenant)
 	}

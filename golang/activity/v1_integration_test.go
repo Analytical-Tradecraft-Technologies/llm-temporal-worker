@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -230,20 +231,7 @@ func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
 
 func TestMapMaterializationDeadlineRetainsRetryableStateLoad(t *testing.T) {
 	err := mapMaterializationError(fmt.Errorf("read checkpoint: %w", context.DeadlineExceeded))
-	assertProviderError(t, err, provider.CodeDeadlineExceeded, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetrySameOperation)
-}
-
-// assertProviderError checks err is a *provider.Error with the given code,
-// phase, dispatch certainty and retry disposition.
-func assertProviderError(t *testing.T, err error, code provider.Code, phase provider.Phase, dispatch provider.DispatchCertainty, retry provider.RetryDisposition) {
-	t.Helper()
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) {
-		t.Fatalf("error = %T %v, want provider.Error", err, err)
-	}
-	if providerErr.Code != code || providerErr.Phase != phase || providerErr.Dispatch != dispatch || providerErr.Retry != retry {
-		t.Fatalf("provider error = %#v, want %s/%s/%s/%s", providerErr, code, phase, dispatch, retry)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeDeadlineExceeded, Phase: provider.PhaseStateLoad, Dispatch: provider.DispatchNotDispatched, Retry: provider.RetrySameOperation})
 }
 
 func TestMaterializingV1RuntimeDeadlineUsesRetryableTemporalError(t *testing.T) {

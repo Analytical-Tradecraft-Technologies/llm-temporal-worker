@@ -2,7 +2,7 @@ package config_test
 
 import (
 	"encoding/json"
-	"os"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,9 +16,7 @@ import (
 
 func exampleYAML(t *testing.T) []byte {
 	t.Helper()
-	data, err := os.ReadFile("../config.example.yaml")
-	testassert.NoError(t, err)
-	return data
+	return testassert.ReadFile(t, "../config.example.yaml")
 }
 
 // assertExampleEditRejected replaces the first from in the example with to and
@@ -26,9 +24,7 @@ func exampleYAML(t *testing.T) []byte {
 func assertExampleEditRejected(t *testing.T, from, to, want string) {
 	t.Helper()
 	data := string(replaceExample(t, from, to))
-	if _, err := config.Load([]byte(data)); err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("Load(%s) error = %v, want %q", to, err, want)
-	}
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(data))), want, fmt.Sprintf("Load(%s)", to))
 }
 
 func TestLoadCompleteExample(t *testing.T) {
@@ -147,7 +143,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 
 func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
 	loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
-	encoded := mustMarshalJSON(t, loaded)
+	encoded := testassert.MarshalJSON(t, loaded)
 	var document struct {
 		BlobStore struct {
 			Kind string `json:"kind"`
@@ -453,9 +449,7 @@ func TestLoadRejectsUnquotedAzureExtensionScalars(t *testing.T) {
 		{from: `api_version: "v1"`, to: "api_version: \"v1\"\n        deployment: 7", field: "deployment"},
 	} {
 		_, err := config.Load(replaceExample(t, test.from, test.to))
-		if err == nil || !strings.Contains(err.Error(), "extensions.azure."+test.field+" must be a quoted string") {
-			t.Fatalf("Load(%s) error = %v", test.field, err)
-		}
+		testassert.ErrorContains(t, err, "extensions.azure."+test.field+" must be a quoted string", fmt.Sprintf("Load(%s)", test.field))
 	}
 }
 
@@ -498,9 +492,7 @@ func TestLoadRejectsOutputReservationThatCannotBeReturned(t *testing.T) {
 		{pairs: []string{"inline_payload_bytes: 524288", "inline_payload_bytes: 32768"}, want: "limits.max_output_tokens must be less than server.inline_payload_bytes (32768)"},
 		{pairs: []string{"provider_response_bytes: 16777216", "provider_response_bytes: 32768"}, want: "limits.max_output_tokens must be less than limits.provider_response_bytes (32768)"},
 	} {
-		if _, err := config.Load([]byte(replace(example, test.pairs...))); err == nil || !strings.Contains(err.Error(), test.want) {
-			t.Fatalf("Load(%v) error = %v, want %q", test.pairs, err, test.want)
-		}
+		testassert.ErrorContains(t, testassert.Err(config.Load([]byte(replace(example, test.pairs...)))), test.want, fmt.Sprintf("Load(%v)", test.pairs))
 	}
 	for _, pairs := range [][]string{
 		{"max_output_tokens: 32768", "max_output_tokens: 524287"},
@@ -547,9 +539,7 @@ func TestResponsesAPIListenAddressIsOptionalAndNeedsItsOwnPort(t *testing.T) {
 		"127.0.0.1:9090": "must use a different port",
 		"no-port":        "server.responses_api_listen_address must be host:port",
 	} {
-		if _, err := config.Load(withAddress(address)); err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("Load(%s) error = %v, want %q", address, err, want)
-		}
+		testassert.ErrorContains(t, testassert.Err(config.Load(withAddress(address))), want, fmt.Sprintf("Load(%s)", address))
 	}
 }
 
@@ -607,9 +597,7 @@ func TestResponsesAPIListenerBindsTheHostInProduction(t *testing.T) {
 	}
 	const want = "must bind a loopback or link-local address in production unless server.responses_api_private_network is true"
 	for _, address := range []string{"0.0.0.0:8000", ":8000", "10.0.0.5:8000", "[::]:8000", "worker.internal:8000"} {
-		if _, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"")); err == nil || !strings.Contains(err.Error(), want) {
-			t.Fatalf("Load(%s) error = %v, want %q", address, err, want)
-		}
+		testassert.ErrorContains(t, testassert.Err(config.Load(with("production", "  responses_api_listen_address: \""+address+"\""))), want, fmt.Sprintf("Load(%s)", address))
 		acknowledged, err := config.Load(with("production", "  responses_api_listen_address: \""+address+"\"\n  responses_api_private_network: true"))
 		if err != nil || !acknowledged.Server.ResponsesAPIPrivateNetwork {
 			t.Fatalf("acknowledged %s rejected: %v", address, err)

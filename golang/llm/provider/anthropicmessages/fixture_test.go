@@ -17,7 +17,7 @@ func TestWireFixtureMatchesTypedSDKParams(t *testing.T) {
 	profile := mustProfile(t, testProfile())
 	params, err := lowerRequest(llm.Request{OperationKey: "fixture-op", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}}, profile, "standard_only")
 	testassert.NoError(t, err)
-	assertFixture(t, mustReadFixture(t, "request.wire.json"), contract.MarshalJSON(t, params))
+	assertFixture(t, mustReadFixture(t, "request.wire.json"), testassert.MarshalJSON(t, params))
 }
 
 func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
@@ -25,7 +25,7 @@ func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
 	request := multimodalToolRequest("fixture-multimodal-tools")
 	params, err := lowerRequest(request, profile, "auto")
 	testassert.NoError(t, err)
-	assertFixture(t, mustReadFixture(t, "request.multimodal-tools.json"), contract.MarshalJSON(t, params))
+	assertFixture(t, mustReadFixture(t, "request.multimodal-tools.json"), testassert.MarshalJSON(t, params))
 }
 
 func TestMediaRejectionFixture(t *testing.T) {
@@ -57,13 +57,13 @@ func TestMediaRejectionFixture(t *testing.T) {
 }
 
 func TestResponseFixturesMatchLiftedSemanticContract(t *testing.T) {
-	response := contract.DecodeJSON[anthropic.Message](t, mustReadFixture(t, "response.completed.json"))
+	response := testassert.UnmarshalJSON[anthropic.Message](t, mustReadFixture(t, "response.completed.json"))
 	lifted := mustLift(t, mustProfile(t, testProfile()), liftCall("fixture-op", llm.ServiceClassStandard), &response, "req-fixture")
-	assertFixture(t, mustReadFixture(t, "response.semantic.json"), contract.MarshalJSON(t, lifted))
+	assertFixture(t, mustReadFixture(t, "response.semantic.json"), testassert.MarshalJSON(t, lifted))
 }
 
 func TestThinkingToolFixtureLiftsProviderStateAndUsage(t *testing.T) {
-	response := contract.DecodeJSON[anthropic.Message](t, mustReadFixture(t, "response.thinking-tool.json"))
+	response := testassert.UnmarshalJSON[anthropic.Message](t, mustReadFixture(t, "response.thinking-tool.json"))
 	lifted := mustLift(t, mustProfile(t, testProfile()), liftCall("fixture-thinking", llm.ServiceClassPriority), &response, "req-thinking")
 	if lifted.Status != llm.ResponseStatusToolCalls || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassPriority {
 		t.Fatalf("status/service = %#v %#v", lifted.Status, lifted.Service)

@@ -8,7 +8,6 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // Some providers send an empty string as the arguments of a zero-argument
@@ -18,7 +17,7 @@ func TestEmptyFunctionCallArgumentsLiftAsEmptyObject(t *testing.T) {
 	for name, arguments := range map[string]string{"empty": ``, "whitespace": ` \n\t`} {
 		t.Run(name, func(t *testing.T) {
 			body := `{"id":"resp-empty-args","object":"response","created_at":1,"model":"gpt-contract","status":"completed","service_tier":"default","output":[{"type":"function_call","id":"fc-1","call_id":"call-1","name":"ping","arguments":"` + arguments + `","status":"completed"}],"usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}`
-			response := contract.DecodeJSON[responses.Response](t, []byte(body))
+			response := testassert.UnmarshalJSON[responses.Response](t, []byte(body))
 			lifted, err := liftResponse(call, &response, "req")
 			testassert.NoError(t, err, "empty function call arguments failed the response")
 			if lifted.Status != llm.ResponseStatusToolCalls || len(lifted.Output) != 1 {
@@ -37,7 +36,7 @@ func TestEmptyFunctionCallArgumentsLiftAsEmptyObject(t *testing.T) {
 				if status == "" {
 					item = `"type":"function_call"}]`
 				}
-				contradictory := contract.DecodeJSON[responses.Response](t, []byte(strings.Replace(body, `"status":"completed"}]`, item, 1)))
+				contradictory := testassert.UnmarshalJSON[responses.Response](t, []byte(strings.Replace(body, `"status":"completed"}]`, item, 1)))
 				lifted, err := liftResponse(call, &contradictory, "req")
 				if wantErr != (err != nil) {
 					t.Fatalf("call status %q: lifted = %#v, error = %v", status, lifted.Output, err)
@@ -48,7 +47,7 @@ func TestEmptyFunctionCallArgumentsLiftAsEmptyObject(t *testing.T) {
 			// written is still dropped.
 			cutOff := strings.Replace(body, `"status":"completed","service_tier"`, `"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"service_tier"`, 1)
 			cutOff = strings.Replace(cutOff, `"status":"completed"}]`, `"status":"incomplete"}]`, 1)
-			truncated := contract.DecodeJSON[responses.Response](t, []byte(cutOff))
+			truncated := testassert.UnmarshalJSON[responses.Response](t, []byte(cutOff))
 			lifted, err = liftResponse(call, &truncated, "req")
 			testassert.NoError(t, err)
 			if lifted.Status != llm.ResponseStatusLength || len(lifted.Output) != 0 {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 )
 
 // RetryServer is an in-memory retryable HTTP endpoint. Keeping the transport
@@ -21,7 +23,7 @@ func NewRetryServer(t testing.TB) *RetryServer {
 	t.Helper()
 	server := &RetryServer{}
 	server.URL = "https://127.0.0.1/contract"
-	server.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	server.HTTPClient = &http.Client{Transport: testkit.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		server.Calls.Add(1)
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
@@ -31,12 +33,6 @@ func NewRetryServer(t testing.TB) *RetryServer {
 		}, nil
 	})}
 	return server
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
 }
 
 func (server *RetryServer) Close() {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -17,7 +18,7 @@ import (
 // creditDeniedHTTPClient answers every request with the given provider
 // status and body and counts the requests that reached it.
 func creditDeniedHTTPClient(requests *atomic.Int32, status int, body string) *http.Client {
-	return &http.Client{Transport: planningTransportFunc(func(r *http.Request) (*http.Response, error) {
+	return &http.Client{Transport: testkit.RoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		requests.Add(1)
 		if r.Body != nil {
 			_, _ = io.Copy(io.Discard, r.Body)

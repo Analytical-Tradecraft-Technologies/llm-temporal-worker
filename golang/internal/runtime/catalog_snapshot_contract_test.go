@@ -59,9 +59,9 @@ func TestSnapshotLoaderFuncDelegatesToFunction(t *testing.T) {
 }
 
 func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
-	configData := mustReadFile(t, "../../deploy/local/config.yaml")
-	capabilities := mustReadFile(t, "../../deploy/local/capabilities.yaml")
-	prices := mustReadFile(t, "../../deploy/local/prices.yaml")
+	configData := testassert.ReadFile(t, "../../deploy/local/config.yaml")
+	capabilities := testassert.ReadFile(t, "../../deploy/local/capabilities.yaml")
+	prices := testassert.ReadFile(t, "../../deploy/local/prices.yaml")
 	directory := t.TempDir()
 	capabilitiesPath := filepath.Join(directory, "capabilities.yaml")
 	pricesPath := filepath.Join(directory, "prices.yaml")
@@ -641,11 +641,11 @@ func TestCloudExecutionRecoversPlanAdmittedUnderPinnedPriceVersion(t *testing.T)
 // The endpoint digest is what lets dispatched work outlive a reload, so it
 // must ignore unrelated settings and follow the endpoint's own configuration.
 func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T) {
-	configData := mustReadFile(t, "../../deploy/local/config.yaml")
+	configData := testassert.ReadFile(t, "../../deploy/local/config.yaml")
 	directory := t.TempDir()
 	base := string(configData)
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
-		data := mustReadFile(t, "../../deploy/local/"+name)
+		data := testassert.ReadFile(t, "../../deploy/local/"+name)
 		path := filepath.Join(directory, name)
 		testassert.NoError(t, os.WriteFile(path, data, 0o600))
 		base = strings.ReplaceAll(base, "/etc/llmtw/"+name, path)

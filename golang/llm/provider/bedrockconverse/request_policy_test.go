@@ -2,8 +2,8 @@ package bedrockconverse
 
 import (
 	"context"
+	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
@@ -51,9 +51,7 @@ func TestCompileRejectsUnimplementedStructuredOutput(t *testing.T) {
 			request := llm.Request{OperationKey: "structured", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Hello")}, Output: &llm.OutputSpec{Format: format}}
 			for _, strict := range []bool{false, true} {
 				_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
-				if err == nil || !strings.Contains(err.Error(), "structured") {
-					t.Fatalf("%s contract not rejected, native=%v strict=%v: %v", kind, native, strict, err)
-				}
+				testassert.ErrorContains(t, err, "structured", fmt.Sprintf("%s contract not rejected, native=%v strict=%v", kind, native, strict))
 			}
 		}
 	}
@@ -70,9 +68,7 @@ func TestCompileRejectsUnimplementedSamplingControls(t *testing.T) {
 			request := llm.Request{OperationKey: "sampling", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Hello")}, Sampling: sampling}
 			for _, strict := range []bool{false, true} {
 				_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
-				if err == nil || !strings.Contains(err.Error(), "sampling") {
-					t.Fatalf("sampling control silently dropped, strict=%v: %v", strict, err)
-				}
+				testassert.ErrorContains(t, err, "sampling", fmt.Sprintf("sampling control silently dropped, strict=%v", strict))
 			}
 		})
 	}

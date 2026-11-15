@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -25,7 +26,7 @@ func TestCloudGenerateSanitizesLoneSurrogatesInModelJSON(t *testing.T) {
 		return v.Result, nil
 	}
 	result := f.finish(t)
-	encoded := encodeJSON(t, result.Generate.Output)
+	encoded := testassert.MarshalJSON(t, result.Generate.Output)
 	// The canonical encoder may write the replacement as the \ufffd escape or
 	// as the character itself; both are valid for every strict decoder.
 	if strings.Contains(string(encoded), `\ud83d`) || (!strings.Contains(string(encoded), `x\ufffd`) && !strings.Contains(string(encoded), "x\ufffd")) {
@@ -48,7 +49,7 @@ func TestCloudGenerateSanitizesLoneSurrogatesInProviderValues(t *testing.T) {
 		return v.Result, nil
 	}
 	result := f.finish(t)
-	encoded := encodeJSON(t, result.Generate)
+	encoded := testassert.MarshalJSON(t, result.Generate)
 	if strings.Contains(string(encoded), `\ud83d`) || strings.Contains(string(encoded), `\udc00`) {
 		t.Fatalf("response = %s, want the lone surrogates replaced", encoded)
 	}

@@ -11,6 +11,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -132,10 +133,7 @@ func TestCloudRuntimeStorageAndPendingFailuresDoNotDispatch(t *testing.T) {
 				return llm.GenerateResponseV1{}, nil
 			}
 			_, err := r.GenerateV1(context.Background(), request)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != test.code || mapped.Dispatch != provider.DispatchNotDispatched {
-				t.Fatalf("unsafe classification: %v", err)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: test.code, Dispatch: provider.DispatchNotDispatched}, "unsafe classification")
 		})
 	}
 }
@@ -168,10 +166,7 @@ func TestCloudRuntimeFinalizationFailureRetriesOnlyInnerReplay(t *testing.T) {
 	}
 	repository.completeErr = contracts.ErrOutcomeUnknown
 	_, err := r.GenerateV1(context.Background(), request)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetrySameOperation {
-		t.Fatalf("lost paid result classification: %v", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Dispatch: provider.DispatchAccepted, Retry: provider.RetrySameOperation}, "lost paid result classification")
 	repository.completeErr = nil
 	if _, err := r.GenerateV1(context.Background(), request); err != nil || paidCalls != 1 {
 		t.Fatalf("charged again: %d %v", paidCalls, err)

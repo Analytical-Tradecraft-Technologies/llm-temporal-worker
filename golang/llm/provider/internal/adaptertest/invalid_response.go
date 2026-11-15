@@ -1,9 +1,9 @@
 package adaptertest
 
 import (
-	"errors"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -12,18 +12,12 @@ import (
 // names the case in the failure message.
 func RequireAcceptedInvalidResponse(t testing.TB, err error, what string) {
 	t.Helper()
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("%s = %#v", what, err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Dispatch: provider.DispatchAccepted}, what)
 }
 
 // RequireLiftInvalidResponse is RequireAcceptedInvalidResponse for an error
 // that must also come from lifting the response.
 func RequireLiftInvalidResponse(t testing.TB, err error, what string) {
 	t.Helper()
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("%s = %#v", what, err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeProviderInvalidResponse, Phase: provider.PhaseLift, Dispatch: provider.DispatchAccepted}, what)
 }

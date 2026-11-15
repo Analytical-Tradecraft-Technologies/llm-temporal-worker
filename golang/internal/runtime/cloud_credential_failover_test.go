@@ -10,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -122,10 +123,7 @@ func TestCloudCredentialRejectionWithoutAlternativeIsTerminal(t *testing.T) {
 			ref := f.ref(v)
 			f.now = f.now.Add(2 * time.Second)
 			_, err := f.runtime.AcquireBudgetV1(ctx, ref)
-			var classified *provider.Error
-			if !errors.As(err, &classified) || classified.Code != test.code || classified.Retry != provider.RetryNever {
-				t.Fatalf("acquire error = %v, want a terminal %s", err, test.code)
-			}
+			testkit.ProviderError(t, err, testkit.ProviderClass{Code: test.code, Retry: provider.RetryNever}, "acquire error")
 			if f.submits.Load() != 1 {
 				t.Fatalf("submits = %d, want the held route not dispatched again", f.submits.Load())
 			}
@@ -180,17 +178,12 @@ func TestCloudCredentialRejectionTerminalAfterRenewal(t *testing.T) {
 	f.now = f.now.Add(2 * time.Second)
 	reader.failing = true
 	_, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	var classified *provider.Error
-	if !errors.As(err, &classified) || classified.Code != provider.CodeStateUnavailable {
-		t.Fatalf("acquire error = %v, want the health read failure", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeStateUnavailable}, "acquire error")
 	// The replacement attempt is now old enough to be renewed unused.
 	reader.failing = false
 	f.now = f.now.Add(cache.MaxFillLease)
 	_, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	if !errors.As(err, &classified) || classified.Code != provider.CodeAuthentication || classified.Retry != provider.RetryNever {
-		t.Fatalf("acquire error = %v, want a terminal authentication failure", err)
-	}
+	testkit.ProviderError(t, err, testkit.ProviderClass{Code: provider.CodeAuthentication, Retry: provider.RetryNever}, "acquire error")
 	if f.submits.Load() != 1 {
 		t.Fatalf("submits = %d, want the held route not dispatched again", f.submits.Load())
 	}

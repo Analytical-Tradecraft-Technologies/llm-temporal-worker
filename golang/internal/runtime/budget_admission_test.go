@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -82,10 +83,7 @@ func newBudgetAdmissionFixture(t *testing.T) *budgetAdmissionFixture {
 
 func assertBudgetAdmissionError(t *testing.T, err error, code provider.Code, dispatch provider.DispatchCertainty, retry provider.RetryDisposition) {
 	t.Helper()
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != code || mapped.Phase != provider.PhaseAdmission || mapped.Dispatch != dispatch || mapped.Retry != retry {
-		t.Fatalf("error = %#v, want %s/%s/%s", err, code, dispatch, retry)
-	}
+	mapped := testkit.ProviderError(t, err, testkit.ProviderClass{Code: code, Phase: provider.PhaseAdmission, Dispatch: dispatch, Retry: retry})
 	if strings.Contains(err.Error(), "sensitive") || mapped.Cause != nil || len(mapped.SafeDetails) != 0 {
 		t.Fatal("exposed planner or Redis error")
 	}

@@ -135,7 +135,7 @@ func (activities *Activities) OpenStream(ctx context.Context) {}
 		t.Run(test.name, func(t *testing.T) {
 			file := parseArchitectureSource(t, test.name+".go", test.source)
 			for _, reference := range test.wantReferences {
-				if !containsString(forbiddenTemporalStreamingReferences(file), reference) {
+				if !slices.Contains(forbiddenTemporalStreamingReferences(file), reference) {
 					t.Fatalf("streaming fixture did not report %s", reference)
 				}
 			}
@@ -161,7 +161,7 @@ type streamingReferences struct {
 }
 `)
 	for _, reference := range []string{"StreamingEngine", "EventStream", "StreamingAdapter"} {
-		if !containsString(forbiddenTemporalStreamingReferences(file), reference) {
+		if !slices.Contains(forbiddenTemporalStreamingReferences(file), reference) {
 			t.Fatalf("aliased streaming type did not report %s", reference)
 		}
 	}
@@ -578,15 +578,6 @@ func selectorPackageName(selector *ast.SelectorExpr) string {
 		return ""
 	}
 	return identifier.Name
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func isNamedSelector(expression ast.Expr, packageName, name string) bool {

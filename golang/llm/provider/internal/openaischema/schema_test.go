@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLowerStrictClosesObjectsAndMovesUnsupportedKeywords(t *testing.T) {
@@ -24,7 +23,7 @@ func TestLowerStrictClosesObjectsAndMovesUnsupportedKeywords(t *testing.T) {
 	}`)
 	lowered, err := LowerStrict(schema)
 	testassert.NoError(t, err)
-	got := contract.MarshalJSON(t, lowered)
+	got := testassert.MarshalJSON(t, lowered)
 	want := `{"$defs":{"line":{"additionalProperties":false,"properties":{"next":{"$ref":"#"},"sku":{"type":"string"}},"required":["sku","next"],"type":"object"}},` +
 		`"additionalProperties":false,"properties":{` +
 		`"code":{"description":"{if: {\"minLength\":2}, not: {\"const\":\"x\"}, then: {\"maxLength\":4}}","type":"string"},` +
