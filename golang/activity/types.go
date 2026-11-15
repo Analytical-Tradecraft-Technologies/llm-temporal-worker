@@ -125,19 +125,11 @@ func (request *GenerateRequest) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "request"); err != nil {
 		return err
 	}
-	version, ok := fields["api_version"]
-	if !ok {
-		return fmt.Errorf("missing required JSON field %q", "api_version")
+	if err := decodeRequiredField(fields, "api_version", &request.APIVersion); err != nil {
+		return err
 	}
-	if err := json.Unmarshal(version, &request.APIVersion); err != nil {
-		return fmt.Errorf("api_version: %w", err)
-	}
-	requestRaw, ok := fields["request"]
-	if !ok {
-		return fmt.Errorf("missing required JSON field %q", "request")
-	}
-	if err := json.Unmarshal(requestRaw, &request.Request); err != nil {
-		return fmt.Errorf("request: %w", err)
+	if err := decodeRequiredField(fields, "request", &request.Request); err != nil {
+		return err
 	}
 	_, err = request.Validate(DefaultInlineBytes)
 	return err
@@ -182,15 +174,11 @@ func (response *GenerateResponse) UnmarshalJSON(data []byte) error {
 	if err := checkUnknownFields(fields, "api_version", "response", "metadata"); err != nil {
 		return err
 	}
-	if raw, ok := fields["api_version"]; !ok {
-		return fmt.Errorf("missing required JSON field %q", "api_version")
-	} else if err := json.Unmarshal(raw, &response.APIVersion); err != nil {
-		return fmt.Errorf("api_version: %w", err)
+	if err := decodeRequiredField(fields, "api_version", &response.APIVersion); err != nil {
+		return err
 	}
-	if raw, ok := fields["response"]; !ok {
-		return fmt.Errorf("missing required JSON field %q", "response")
-	} else if err := json.Unmarshal(raw, &response.Response); err != nil {
-		return fmt.Errorf("response: %w", err)
+	if err := decodeRequiredField(fields, "response", &response.Response); err != nil {
+		return err
 	}
 	if raw, ok := fields["metadata"]; ok {
 		if err := json.Unmarshal(raw, &response.Metadata); err != nil {
@@ -198,6 +186,19 @@ func (response *GenerateResponse) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return response.Validate(DefaultInlineBytes)
+}
+
+// decodeRequiredField decodes the required field name into target. Both a
+// missing field and a decode failure name the field.
+func decodeRequiredField(fields map[string]json.RawMessage, name string, target any) error {
+	raw, ok := fields[name]
+	if !ok {
+		return fmt.Errorf("missing required JSON field %q", name)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
 }
 
 func decodeObject(data []byte) (map[string]json.RawMessage, error) {

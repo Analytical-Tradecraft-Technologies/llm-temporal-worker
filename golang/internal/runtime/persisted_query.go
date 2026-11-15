@@ -301,10 +301,7 @@ func (handler *persistedQueryHandler) execute(ctx context.Context, request contr
 }
 
 func (handler *persistedQueryHandler) budgetStatus(ctx context.Context, request control.QueryRequest, now time.Time) (control.QueryResponse, error) {
-	if handler.budget == nil {
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "Redis budget status reader is not configured")
-	}
-	query, err := queryFilterAs[control.BudgetStatusQuery](request, "budget status")
+	query, err := configuredQueryFilter[control.BudgetStatusQuery](request, handler.budget != nil, "Redis budget status reader is not configured", "budget status")
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
@@ -329,10 +326,7 @@ func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request 
 	if handler.spend == nil {
 		return control.QueryResponse{}, unsupportedQuery(request.Kind, "spend summary repository is not configured")
 	}
-	if handler.resolveScope == nil {
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "spend summary scope resolver is not configured")
-	}
-	query, err := queryFilterAs[control.SpendSummaryQuery](request, "spend summary")
+	query, err := configuredQueryFilter[control.SpendSummaryQuery](request, handler.resolveScope != nil, "spend summary scope resolver is not configured", "spend summary")
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
@@ -355,21 +349,14 @@ func (handler *persistedQueryHandler) spendSummary(ctx context.Context, request 
 }
 
 func (handler *persistedQueryHandler) providerStatus(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
-	if handler.provider == nil {
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "provider status repository is not configured")
-	}
-	query, err := queryFilterAs[control.ProviderStatusQuery](request, "provider status")
+	query, err := configuredQueryFilter[control.ProviderStatusQuery](request, handler.provider != nil, "provider status repository is not configured", "provider status")
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
 	horizon, after := claimedPosition(claims, now)
-	var availability control.Availability
-	if query.Availability != nil {
-		availability = control.Availability(*query.Availability)
-	}
 	page, err := handler.provider.ListRouteStatuses(ctx, control.ProviderStatusListOptions{
 		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint),
-		Availability: availability, IncludeHealthy: boolValue(query.IncludeHealthy), SnapshotHorizon: horizon,
+		Availability: control.Availability(stringValue(query.Availability)), IncludeHealthy: boolValue(query.IncludeHealthy), SnapshotHorizon: horizon,
 		AfterRouteID: after, Limit: query.Page.Size,
 	})
 	if err != nil {
@@ -396,10 +383,7 @@ func (handler *persistedQueryHandler) providerStatus(ctx context.Context, reques
 }
 
 func (handler *persistedQueryHandler) modelInventory(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
-	if handler.inventory == nil {
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "model inventory repository is not configured")
-	}
-	query, err := queryFilterAs[control.ModelInventoryQuery](request, "model inventory")
+	query, err := configuredQueryFilter[control.ModelInventoryQuery](request, handler.inventory != nil, "model inventory repository is not configured", "model inventory")
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
@@ -412,12 +396,8 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 			return control.QueryResponse{}, fmt.Errorf("inventory cursor: %w", err)
 		}
 	}
-	var lifecycle control.Lifecycle
-	if query.Lifecycle != nil {
-		lifecycle = control.Lifecycle(*query.Lifecycle)
-	}
 	page, err := handler.inventory.ListInventoryModels(ctx, control.InventoryModelListOptions{
-		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), ModelPrefix: stringValue(query.ModelPrefix), Lifecycle: lifecycle,
+		ConfigDigest: handler.configDigest, Provider: stringValue(query.Provider), EndpointID: stringValue(query.Endpoint), ModelPrefix: stringValue(query.ModelPrefix), Lifecycle: control.Lifecycle(stringValue(query.Lifecycle)),
 		SnapshotHorizon: horizon, After: position, Limit: query.Page.Size,
 	})
 	if err != nil {
@@ -454,10 +434,7 @@ func (handler *persistedQueryHandler) modelInventory(ctx context.Context, reques
 }
 
 func (handler *persistedQueryHandler) creditStatus(ctx context.Context, request control.QueryRequest, claims *control.BoundCursorClaims, now time.Time) (control.QueryResponse, error) {
-	if handler.provider == nil {
-		return control.QueryResponse{}, unsupportedQuery(request.Kind, "credit status repository is not configured")
-	}
-	query, err := queryFilterAs[control.CreditStatusQuery](request, "credit status")
+	query, err := configuredQueryFilter[control.CreditStatusQuery](request, handler.provider != nil, "credit status repository is not configured", "credit status")
 	if err != nil {
 		return control.QueryResponse{}, err
 	}
@@ -567,6 +544,16 @@ func queryFilterAs[T control.QueryFilter](request control.QueryRequest, family s
 		return query, fmt.Errorf("%s filter has unexpected type", family)
 	}
 	return query, nil
+}
+
+// configuredQueryFilter rejects a query whose source is not configured, then
+// returns its filter as T.
+func configuredQueryFilter[T control.QueryFilter](request control.QueryRequest, configured bool, missing, family string) (T, error) {
+	if !configured {
+		var zero T
+		return zero, unsupportedQuery(request.Kind, missing)
+	}
+	return queryFilterAs[T](request, family)
 }
 
 // claimedPosition returns the snapshot horizon and page position a bound

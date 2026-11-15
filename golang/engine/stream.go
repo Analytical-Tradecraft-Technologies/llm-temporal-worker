@@ -69,30 +69,10 @@ type streamSetup struct {
 // receives the ordinary classified error directly; every returned stream has a
 // durable operation identity and can therefore deliver exactly one terminal.
 func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (streamSetup, error) {
-	normalizeCtx, normalizeSpan := engine.startTrace(ctx, "llmtw.normalize", requestTraceAttrs(request)...)
-	normalized, err := engine.dependencies.Estimator.PrepareRequest(request)
-	if err == nil {
-		// The request is caller input here, so the remote-media URL policy
-		// applies. The item codec does not enforce it because it also decodes
-		// stored transcripts.
-		err = llm.ValidateMediaURLs(normalized.Instructions, normalized.Input)
-	}
+	normalizeCtx, normalized, digest, err := engine.normalizeRequest(ctx, request)
 	if err != nil {
-		engine.endTraceError(normalizeCtx, normalizeSpan, err)
-		return streamSetup{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request normalization failed", err)
+		return streamSetup{}, err
 	}
-	if err := llm.RejectBlobMedia(normalized.Instructions, normalized.Input); err != nil {
-		// No adapter can lower blob-referenced media; reject it before
-		// admission instead of reserving budget and failing every route.
-		engine.endTraceError(normalizeCtx, normalizeSpan, err)
-		return streamSetup{}, engineError(provider.CodeUnsupportedCapability, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "blob-referenced media is not supported", err)
-	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		engine.endTraceError(normalizeCtx, normalizeSpan, err)
-		return streamSetup{}, engineError(provider.CodeInvalidArgument, provider.PhaseNormalize, provider.DispatchNotDispatched, provider.RetryNever, "request digest failed", err)
-	}
-	normalizeSpan.End()
 	planCtx, planSpan := engine.startTrace(normalizeCtx, "llmtw.planning", requestTraceAttrs(normalized)...)
 	snapshot, err := engine.dependencies.Snapshots.Current(planCtx)
 	if err != nil {
@@ -100,26 +80,8 @@ func (engine *Engine) prepareStream(ctx context.Context, request llm.Request) (s
 		return streamSetup{}, engineError(provider.CodeConfiguration, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "configuration snapshot unavailable", err)
 	}
 	now := engine.dependencies.Clock()
-	stateCtx, stateSpan := engine.startTrace(planCtx, "llmtw.state.load", requestTraceAttrs(normalized)...)
-	providerRequest, constraints, parent, err := engine.loadContinuation(stateCtx, normalized, now)
+	providerRequest, quoted, parent, err := engine.planRoute(planCtx, planSpan, normalized, snapshot, now)
 	if err != nil {
-		engine.endTraceError(stateCtx, stateSpan, err)
-		planSpan.End()
-		return streamSetup{}, err
-	}
-	stateSpan.End()
-	if err := engine.beat(planCtx, Progress{Phase: "planning", At: now}); err != nil {
-		engine.endTraceError(planCtx, planSpan, err)
-		return streamSetup{}, err
-	}
-	plan, err := engine.dependencies.Planner.Plan(planCtx, routingInput(normalized, snapshot, constraints, now))
-	if err != nil {
-		engine.endTraceError(planCtx, planSpan, err)
-		return streamSetup{}, engineError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "no eligible route", err)
-	}
-	quoted, err := engine.quotePlan(planCtx, normalized, plan, snapshot, now)
-	if err != nil {
-		engine.endTraceError(planCtx, planSpan, err)
 		return streamSetup{}, err
 	}
 	quoted, err = engine.preflightStreamingPlan(planCtx, normalized, quoted)

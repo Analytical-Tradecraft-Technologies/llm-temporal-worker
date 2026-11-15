@@ -69,23 +69,9 @@ func (activities *Activities) GenerateV1(ctx context.Context, request llm.Genera
 	if activities == nil || activities.V1Runtime == nil {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
-	var response llm.GenerateResponseV1
-	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
-		var err error
-		response, err = activities.V1Runtime.GenerateV1(dispatchContext, request)
-		if err != nil {
-			return err
-		}
-		_, err = MarshalGenerateResponseV1(response, activities.payloadLimits())
-		if err != nil {
-			return v1OutputError("Generate", err)
-		}
-		return nil
+	return runV1Checked(ctx, activities, "Generate", MarshalGenerateResponseV1, func(dispatchContext context.Context) (llm.GenerateResponseV1, error) {
+		return activities.V1Runtime.GenerateV1(dispatchContext, request)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &response, nil
 }
 
 // CompactV1 dispatches a bounded, closed Compact v1 record. Compact has its
@@ -97,23 +83,9 @@ func (activities *Activities) CompactV1(ctx context.Context, request llm.Compact
 	if activities == nil || activities.V1Runtime == nil {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
-	var response llm.CompactResponseV1
-	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
-		var err error
-		response, err = activities.V1Runtime.CompactV1(dispatchContext, request)
-		if err != nil {
-			return err
-		}
-		_, err = MarshalCompactResponseV1(response, activities.payloadLimits())
-		if err != nil {
-			return v1OutputError("Compact", err)
-		}
-		return nil
+	return runV1Checked(ctx, activities, "Compact", MarshalCompactResponseV1, func(dispatchContext context.Context) (llm.CompactResponseV1, error) {
+		return activities.V1Runtime.CompactV1(dispatchContext, request)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return &response, nil
 }
 
 // QueryV1 dispatches a bounded, closed Query v1 record. Query is included in
@@ -126,20 +98,26 @@ func (activities *Activities) QueryV1(ctx context.Context, request llm.QueryRequ
 	if activities == nil || (activities.V1Runtime == nil && activities.QueryService == nil) {
 		return nil, ToTemporalError(UnconfiguredV1Runtime{}.unavailable(provider.PhaseStateLoad))
 	}
-	var response llm.QueryResponseV1
+	return runV1Checked(ctx, activities, "Query", MarshalQueryResponseV1, func(dispatchContext context.Context) (llm.QueryResponseV1, error) {
+		if activities.QueryService != nil {
+			return activities.QueryService.Execute(dispatchContext, request)
+		}
+		return activities.V1Runtime.QueryV1(dispatchContext, request)
+	})
+}
+
+// runV1Checked dispatches one closed v1 record through runV1 and checks the
+// response against its bounded codec before returning it to Temporal.
+func runV1Checked[R any](ctx context.Context, activities *Activities, kind string, marshal func(R, PayloadLimits) ([]byte, error), dispatch func(context.Context) (R, error)) (*R, error) {
+	var response R
 	err := activities.runV1(ctx, func(dispatchContext context.Context) error {
 		var err error
-		if activities.QueryService != nil {
-			response, err = activities.QueryService.Execute(dispatchContext, request)
-		} else {
-			response, err = activities.V1Runtime.QueryV1(dispatchContext, request)
-		}
+		response, err = dispatch(dispatchContext)
 		if err != nil {
 			return err
 		}
-		_, err = MarshalQueryResponseV1(response, activities.payloadLimits())
-		if err != nil {
-			return v1OutputError("Query", err)
+		if _, err = marshal(response, activities.payloadLimits()); err != nil {
+			return v1OutputError(kind, err)
 		}
 		return nil
 	})
@@ -264,38 +242,6 @@ func (activities *Activities) generateV1Temporal(ctx context.Context, input conv
 	return rawV1Activity(activities, activities.GenerateStepV1)(ctx, input)
 }
 
-func (activities *Activities) compactV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
-	return rawV1Activity(activities, activities.CompactStepV1)(ctx, input)
-}
-
-func (activities *Activities) queryV1Temporal(ctx context.Context, input converter.RawValue) (*llm.QueryResponseV1, error) {
-	return rawV1Activity(activities, activities.QueryV1)(ctx, input)
-}
-
-func (activities *Activities) prepareV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
-	return rawV1Activity(activities, activities.PrepareExecutionV1)(ctx, input)
-}
-
-func (activities *Activities) acquireBudgetV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
-	return rawV1Activity(activities, activities.AcquireBudgetV1)(ctx, input)
-}
-
-func (activities *Activities) pollV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
-	return rawV1Activity(activities, activities.PollExecutionV1)(ctx, input)
-}
-
-func (activities *Activities) completeV1Temporal(ctx context.Context, input converter.RawValue) (*llm.ExecutionResultV1, error) {
-	return rawV1Activity(activities, activities.CompleteExecutionV1)(ctx, input)
-}
-
-func (activities *Activities) planGenerationV1Temporal(ctx context.Context, input converter.RawValue) (*llm.GenerationPlanV1, error) {
-	return rawV1Activity(activities, activities.PlanGenerationV1)(ctx, input)
-}
-
-func (activities *Activities) resolveGenerationV1Temporal(ctx context.Context, input converter.RawValue) (*llm.GenerationResolutionV1, error) {
-	return rawV1Activity(activities, activities.ResolveGenerationV1)(ctx, input)
-}
-
 // RegisterV1 installs the bounded execution steps and the read-only query.
 // Generate and Compact retain their v1 names, but now return a step result.
 // A runtime lacking ExecutionRuntime fails closed rather than blocking on an
@@ -304,16 +250,19 @@ func (activities *Activities) RegisterV1(registry worker.ActivityRegistry) {
 	if registry == nil {
 		return
 	}
-	registry.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
-	registry.RegisterActivityWithOptions(activities.compactV1Temporal, sdkactivity.RegisterOptions{Name: CompactActivityName})
-	registry.RegisterActivityWithOptions(activities.queryV1Temporal, sdkactivity.RegisterOptions{Name: QueryActivityName})
-	registry.RegisterActivityWithOptions(activities.prepareV1Temporal, sdkactivity.RegisterOptions{Name: PrepareActivityName})
-	registry.RegisterActivityWithOptions(activities.acquireBudgetV1Temporal, sdkactivity.RegisterOptions{Name: AcquireBudgetActivityName})
-	registry.RegisterActivityWithOptions(activities.pollV1Temporal, sdkactivity.RegisterOptions{Name: PollActivityName})
-	registry.RegisterActivityWithOptions(activities.completeV1Temporal, sdkactivity.RegisterOptions{Name: CompleteActivityName})
-	registry.RegisterActivityWithOptions(activities.planGenerationV1Temporal, sdkactivity.RegisterOptions{Name: PlanGenerationActivityName})
-	registry.RegisterActivityWithOptions(activities.resolveGenerationV1Temporal, sdkactivity.RegisterOptions{Name: ResolveGenerationActivityName})
-	registry.RegisterActivityWithOptions(activities.exportLangfuseTemporal, sdkactivity.RegisterOptions{Name: ExportLangfuseActivityName})
+	register := func(fn any, name string) {
+		registry.RegisterActivityWithOptions(fn, sdkactivity.RegisterOptions{Name: name})
+	}
+	register(activities.generateV1Temporal, GenerateActivityName)
+	register(rawV1Activity(activities, activities.CompactStepV1), CompactActivityName)
+	register(rawV1Activity(activities, activities.QueryV1), QueryActivityName)
+	register(rawV1Activity(activities, activities.PrepareExecutionV1), PrepareActivityName)
+	register(rawV1Activity(activities, activities.AcquireBudgetV1), AcquireBudgetActivityName)
+	register(rawV1Activity(activities, activities.PollExecutionV1), PollActivityName)
+	register(rawV1Activity(activities, activities.CompleteExecutionV1), CompleteActivityName)
+	register(rawV1Activity(activities, activities.PlanGenerationV1), PlanGenerationActivityName)
+	register(rawV1Activity(activities, activities.ResolveGenerationV1), ResolveGenerationActivityName)
+	register(activities.exportLangfuseTemporal, ExportLangfuseActivityName)
 }
 
 func (activities *Activities) payloadLimits() PayloadLimits {

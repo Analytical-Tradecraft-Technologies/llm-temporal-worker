@@ -232,3 +232,55 @@ type PutChildRequest struct {
 	Child        Continuation
 	OperationKey string
 }
+
+// IssueRoot is the CreateRoot preamble shared by the continuation stores. It
+// checks ctx and the tenant, issues the root's handle, and returns the
+// continuation with that ID at depth 0, ready to store.
+func IssueRoot(ctx context.Context, keyring *Keyring, continuation Continuation) (Handle, Continuation, error) {
+	if err := ctx.Err(); err != nil {
+		return "", Continuation{}, err
+	}
+	if continuation.Tenant == "" {
+		return "", Continuation{}, fmt.Errorf("continuation tenant is required")
+	}
+	handle, err := keyring.Issue(continuation.Tenant)
+	if err != nil {
+		return "", Continuation{}, err
+	}
+	continuation.ID = handle
+	continuation.Depth = 0
+	return Handle(handle), continuation, nil
+}
+
+// PrepareChild is the PutChild preamble shared by the continuation stores. It
+// checks ctx, loads the parent through get, and returns the parent and a clone
+// of the child that inherits the parent's tenant when it has none. A child of
+// another tenant, depth or parent is ErrConflict, and one deeper than maxDepth
+// is rejected.
+func PrepareChild(ctx context.Context, get func(context.Context, Handle) (Continuation, error), request PutChildRequest, maxDepth int) (Continuation, Continuation, error) {
+	if err := ctx.Err(); err != nil {
+		return Continuation{}, Continuation{}, err
+	}
+	parent, err := get(ctx, request.Parent)
+	if err != nil {
+		return Continuation{}, Continuation{}, err
+	}
+	child := request.Child.Clone()
+	if child.Tenant == "" {
+		child.Tenant = parent.Tenant
+	}
+	if child.Tenant != parent.Tenant || child.Depth != parent.Depth+1 || child.ParentID != request.Parent.String() {
+		return Continuation{}, Continuation{}, ErrConflict
+	}
+	if child.Depth > maxDepth {
+		return Continuation{}, Continuation{}, fmt.Errorf("continuation depth exceeds limit")
+	}
+	return parent, child, nil
+}
+
+// SameChildFacts compares the immutable facts of an idempotent child retry.
+// A retry with the same parent and operation key but a different history is
+// a conflict, not a replay of the stored child.
+func SameChildFacts(stored, incoming Continuation) bool {
+	return stored.TranscriptDigest == incoming.TranscriptDigest && stored.TranscriptComplete == incoming.TranscriptComplete
+}

@@ -50,7 +50,7 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 	}
 	observer.marked = true
 	recordOperationState(ctx, admission.StateDispatching)
-	if err := observer.engine.beat(ctx, Progress{OperationID: observer.operation.ID, Phase: "pre_write", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()}); err != nil {
+	if err := observer.engine.beat(ctx, observer.engine.candidateProgress(observer.operation.ID, "pre_write", observer.candidate)); err != nil {
 		return err
 	}
 	return nil
@@ -62,7 +62,7 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 func (observer *dispatchObserver) AfterResponseHeaders(ctx context.Context, metadata provider.ResponseMetadata) error {
 	beatCtx, cancel := observer.engine.finalizationContext(ctx)
 	defer cancel()
-	return observer.engine.beat(beatCtx, Progress{OperationID: observer.operation.ID, Phase: "response_received", RouteIndex: observer.candidate.RouteIndex, ClassIndex: observer.candidate.FallbackIndex, At: observer.engine.dependencies.Clock()})
+	return observer.engine.beat(beatCtx, observer.engine.candidateProgress(observer.operation.ID, "response_received", observer.candidate))
 }
 
 func (observer *dispatchObserver) OnProgress(ctx context.Context, progress provider.Progress) {

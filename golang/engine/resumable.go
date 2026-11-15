@@ -163,14 +163,9 @@ func recordedAttemptCandidate(quoted quotedPlan, attempt admission.AttemptFacts)
 // The route is pinned by the durable attempt facts and invokeAttempt performs
 // only RecoverByIdempotencyKey; adapters without that extension fail closed.
 func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRequest llm.Request, snapshot Snapshot, quoted quotedPlan, operation admission.Operation, parent *state.Continuation) (llm.Response, error) {
-	index := recordedAttemptCandidate(quoted, operation.Attempt)
-	if index < 0 {
-		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "dispatching attempt is not in the current route plan", nil)
-	}
-	candidate := quoted.candidates[index]
-	adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
+	index, candidate, adapter, err := engine.recordedAdapter(ctx, quoted, operation, "dispatching")
 	if err != nil {
-		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "dispatching adapter is unavailable", err)
+		return llm.Response{}, err
 	}
 	resumable, ok := adapter.(provider.ResumableAdapter)
 	if !ok {
@@ -217,14 +212,9 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 			initialDelay = pollAfter.Sub(now)
 		}
 	}
-	index := recordedAttemptCandidate(quoted, operation.Attempt)
-	if index < 0 {
-		return llm.Response{}, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, "provider pending attempt is not in the current route plan", nil)
-	}
-	candidate := quoted.candidates[index]
-	adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
+	index, candidate, adapter, err := engine.recordedAdapter(ctx, quoted, operation, "provider pending")
 	if err != nil {
-		return llm.Response{}, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, "provider pending adapter is unavailable", err)
+		return llm.Response{}, err
 	}
 	resumable, ok := adapter.(provider.ResumableAdapter)
 	if !ok {
@@ -234,7 +224,7 @@ func (engine *Engine) resumeProviderPending(ctx context.Context, request, provid
 	if err != nil {
 		return llm.Response{}, err
 	}
-	if err := engine.beat(ctx, Progress{OperationID: operation.ID, Phase: "provider_wait", RouteIndex: candidate.candidate.RouteIndex, ClassIndex: candidate.candidate.FallbackIndex, At: engine.dependencies.Clock()}); err != nil {
+	if err := engine.beat(ctx, engine.candidateProgress(operation.ID, "provider_wait", candidate.candidate)); err != nil {
 		return llm.Response{}, err
 	}
 	recordPendingPoll(ctx, "started")
@@ -268,6 +258,21 @@ func pollOutcome(err *provider.Error) string {
 		return "retry"
 	}
 	return "failed"
+}
+
+// recordedAdapter finds the recorded attempt's candidate in the current route
+// plan and resolves its adapter. label names the resume path in errors.
+func (engine *Engine) recordedAdapter(ctx context.Context, quoted quotedPlan, operation admission.Operation, label string) (int, quotedCandidate, provider.Adapter, error) {
+	index := recordedAttemptCandidate(quoted, operation.Attempt)
+	if index < 0 {
+		return 0, quotedCandidate{}, nil, engineError(provider.CodeStateCorrupt, provider.PhasePlan, provider.DispatchAccepted, provider.RetryNever, label+" attempt is not in the current route plan", nil)
+	}
+	candidate := quoted.candidates[index]
+	adapter, err := engine.dependencies.Adapters.Adapter(ctx, candidate.candidate)
+	if err != nil {
+		return 0, quotedCandidate{}, nil, engineError(provider.CodeStateUnavailable, provider.PhaseCompile, provider.DispatchAccepted, provider.RetrySameOperation, label+" adapter is unavailable", err)
+	}
+	return index, candidate, adapter, nil
 }
 
 // pendingPollError preserves retry guidance while an operation is already

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -46,8 +47,7 @@ func (capabilities V1RuntimeCapabilities) NewBudgetAdmission(generate GenerateBu
 // ReserveGenerate returns acquired or wait immediately; workflow timers own any
 // waiting. No provider submission is performed by this callback.
 func (admission *BudgetAdmission) ReserveGenerate(ctx context.Context, request llm.GenerateRequestV1, route durable.RoutePlan) (durable.ReserveResult, error) {
-	_, requestErr := request.MarshalJSON()
-	if err := admission.validate(ctx, route, requestErr); err != nil {
+	if err := admission.validate(ctx, route, request); err != nil {
 		return durable.ReserveResult{}, err
 	}
 	planned, err := admission.generate(ctx, request, route)
@@ -55,8 +55,7 @@ func (admission *BudgetAdmission) ReserveGenerate(ctx context.Context, request l
 }
 
 func (admission *BudgetAdmission) ReserveCompact(ctx context.Context, request llm.CompactRequestV1, route durable.RoutePlan) (durable.ReserveResult, error) {
-	_, requestErr := request.MarshalJSON()
-	if err := admission.validate(ctx, route, requestErr); err != nil {
+	if err := admission.validate(ctx, route, request); err != nil {
 		return durable.ReserveResult{}, err
 	}
 	planned, err := admission.compact(ctx, request, route)
@@ -67,29 +66,27 @@ func (admission *BudgetAdmission) ReserveCompact(ctx context.Context, request ll
 // must be called immediately before submission. An uncertain/duplicate claim
 // never grants permission to dispatch, refund, or reuse the same paid attempt.
 func (admission *BudgetAdmission) ClaimGenerate(ctx context.Context, request llm.GenerateRequestV1, route durable.RoutePlan, reservation durable.ReserveResult) (durable.ClaimReceipt, error) {
-	_, requestErr := request.MarshalJSON()
-	if err := admission.validate(ctx, route, requestErr); err != nil {
+	if err := admission.validate(ctx, route, request); err != nil {
 		return durable.ClaimReceipt{}, err
 	}
 	return admission.claim(ctx, route, reservation)
 }
 
 func (admission *BudgetAdmission) ClaimCompact(ctx context.Context, request llm.CompactRequestV1, route durable.RoutePlan, reservation durable.ReserveResult) (durable.ClaimReceipt, error) {
-	_, requestErr := request.MarshalJSON()
-	if err := admission.validate(ctx, route, requestErr); err != nil {
+	if err := admission.validate(ctx, route, request); err != nil {
 		return durable.ClaimReceipt{}, err
 	}
 	return admission.claim(ctx, route, reservation)
 }
 
-func (admission *BudgetAdmission) validate(ctx context.Context, route durable.RoutePlan, requestErr error) error {
+func (admission *BudgetAdmission) validate(ctx context.Context, route durable.RoutePlan, request json.Marshaler) error {
 	if ctx == nil || admission == nil || admission.generate == nil || admission.compact == nil || admission.boundary.Validate() != nil {
 		return budgetAdmissionError(provider.CodeConfiguration, provider.DispatchNotDispatched, provider.RetryNever)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if requestErr != nil || route.Validate() != nil {
+	if _, err := request.MarshalJSON(); err != nil || route.Validate() != nil {
 		return budgetAdmissionError(provider.CodeInvalidArgument, provider.DispatchNotDispatched, provider.RetryNever)
 	}
 	return nil

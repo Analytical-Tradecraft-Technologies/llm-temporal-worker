@@ -744,18 +744,22 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	if factory == nil || clients == nil {
 		return nil, nil, fmt.Errorf("%w: v1 runtime composition requires factory and clients", ErrProductionFactoryInvalid)
 	}
-	identity, err := cloudRequestIdentity(snapshot.Config().State.Requests)
-	if err != nil {
+	// abort closes the partially composed client set so a rejected reload
+	// cannot leak provider/state credentials or connections.
+	abort := func(err error) (llm.Engine, app.ClientSet, error) {
 		_ = clients.Close(context.Background())
 		return nil, nil, err
+	}
+	identity, err := cloudRequestIdentity(snapshot.Config().State.Requests)
+	if err != nil {
+		return abort(err)
 	}
 	clients.v1Capabilities.CloudIdentity = identity
 	clients.v1Capabilities.RedisIdentity = durablestore.RedisIdentity{KeyPrefix: snapshot.Config().State.Redis.KeyPrefix, HashTag: snapshot.Config().State.Redis.AdmissionHashTag}
 	builder := factory.options.V1RuntimeBuilder
 	if builder == nil {
 		if err := validateRequiredDependencyProbeSet(snapshot.Config().State, clients.probes); err != nil {
-			_ = clients.Close(context.Background())
-			return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
+			return abort(fmt.Errorf("validate durable dependency probes: %w", err))
 		}
 		return engineValue, clients, nil
 	}
@@ -763,35 +767,30 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	if repository == nil {
 		repository, err = factory.buildCloudRequests(ctx, snapshot.Config().State.Requests)
 		if err != nil {
-			_ = clients.Close(context.Background())
-			return nil, nil, err
+			return abort(err)
 		}
 	}
 	clients.v1Capabilities.Requests = repository
 	if repository != nil {
 		checkpoints, err := cloudCheckpointCapabilities(repository, clients.checkpointVerifier, factory.options.Clock)
 		if err != nil {
-			_ = clients.Close(context.Background())
-			return nil, nil, err
+			return abort(err)
 		}
 		clients.checkpoints = checkpoints
 		clients.v1Capabilities.Checkpoints = checkpoints
 		responses, err := cloudResponseCache(repository)
 		if err != nil {
-			_ = clients.Close(context.Background())
-			return nil, nil, err
+			return abort(err)
 		}
 		clients.v1Capabilities.Responses = responses
 		fills, err := cloudResponseFills(repository)
 		if err != nil {
-			_ = clients.Close(context.Background())
-			return nil, nil, err
+			return abort(err)
 		}
 		clients.v1Capabilities.ResponseFills = fills
 		finalizer, err := newCloudFinalizer(repository, responses, fills, clients.v1Capabilities.Budgets, factory.options.Clock)
 		if err != nil {
-			_ = clients.Close(context.Background())
-			return nil, nil, fmt.Errorf("%w: cloud finalization capabilities", ErrProductionFactoryInvalid)
+			return abort(fmt.Errorf("%w: cloud finalization capabilities", ErrProductionFactoryInvalid))
 		}
 		clients.v1Capabilities.Finalizer = finalizer
 		clients.probes = append(clients.probes, cloudRequestProbe(repository))
@@ -799,26 +798,22 @@ func (factory *ProductionEngineFactory) attachV1Runtime(ctx context.Context, sna
 	// Validate the selected backend after attaching cloud capabilities, and
 	// before a phase builder can expose an Activity runtime.
 	if err := validateRequiredDependencyProbeSet(snapshot.Config().State, clients.probes); err != nil {
-		_ = clients.Close(context.Background())
-		return nil, nil, fmt.Errorf("validate durable dependency probes: %w", err)
+		return abort(fmt.Errorf("validate durable dependency probes: %w", err))
 	}
 	v1Runtime, err := builder(ctx, snapshot, engineValue, clients)
 	if err != nil {
-		_ = clients.Close(context.Background())
-		return nil, nil, fmt.Errorf("construct durable v1 runtime: %w", err)
+		return abort(fmt.Errorf("construct durable v1 runtime: %w", err))
 	}
 	// An interface can hold a typed nil pointer. Treat that value as an
 	// incomplete composition and drain the snapshot-owned clients before the
 	// worker can register Activities and panic on the first invocation.
 	if isNilCapability(v1Runtime) {
-		_ = clients.Close(context.Background())
-		return nil, nil, fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid)
+		return abort(fmt.Errorf("%w: v1 runtime builder returned a nil runtime", ErrProductionFactoryInvalid))
 	}
 	_, executes := v1Runtime.(activity.ExecutionRuntime)
 	_, plans := v1Runtime.(activity.GenerationPlanningRuntime)
 	if executes != plans {
-		_ = clients.Close(context.Background())
-		return nil, nil, fmt.Errorf("%w: bounded execution and generation planning must be composed together", ErrProductionFactoryInvalid)
+		return abort(fmt.Errorf("%w: bounded execution and generation planning must be composed together", ErrProductionFactoryInvalid))
 	}
 	// The bounded runtime owns its durable steps and finalization. Wrapping it
 	// in the legacy one-shot adapter would hide both workflow interfaces.
@@ -1637,25 +1632,27 @@ func endpointTiers(endpoint config.EndpointConfig) (map[llm.ServiceClass]string,
 }
 
 func extensionSpecs(endpoint config.EndpointConfig) map[string]openaichat.ExtensionSpec {
-	result := make(map[string]openaichat.ExtensionSpec, len(endpoint.Extensions))
-	for namespace, fields := range endpoint.Extensions {
-		mapped := make(map[string]string, len(fields))
-		for field := range fields {
-			mapped[field] = field
-		}
-		result[namespace] = openaichat.ExtensionSpec{Fields: mapped}
-	}
-	return result
+	return identityExtensionSpecs(endpoint, func(fields map[string]string) openaichat.ExtensionSpec {
+		return openaichat.ExtensionSpec{Fields: fields}
+	})
 }
 
 func anthropicExtensionSpecs(endpoint config.EndpointConfig) map[string]anthropicmessages.ExtensionSpec {
-	result := make(map[string]anthropicmessages.ExtensionSpec, len(endpoint.Extensions))
+	return identityExtensionSpecs(endpoint, func(fields map[string]string) anthropicmessages.ExtensionSpec {
+		return anthropicmessages.ExtensionSpec{Fields: fields}
+	})
+}
+
+// identityExtensionSpecs maps every configured extension field to itself,
+// one spec per namespace.
+func identityExtensionSpecs[S any](endpoint config.EndpointConfig, spec func(map[string]string) S) map[string]S {
+	result := make(map[string]S, len(endpoint.Extensions))
 	for namespace, fields := range endpoint.Extensions {
 		mapped := make(map[string]string, len(fields))
 		for field := range fields {
 			mapped[field] = field
 		}
-		result[namespace] = anthropicmessages.ExtensionSpec{Fields: mapped}
+		result[namespace] = spec(mapped)
 	}
 	return result
 }

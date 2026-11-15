@@ -61,6 +61,8 @@ type operationWire struct {
 // attemptWire is deliberately explicit. The public admission structs do not
 // carry JSON tags, while the Redis Function reads these lower-case names
 // directly from cjson tables.
+// attemptWire is admission.AttemptFacts with its Redis JSON field names; the
+// two convert directly, so a new attempt fact must be added to both.
 type attemptWire struct {
 	RouteID           string                      `json:"route_id"`
 	EndpointID        string                      `json:"endpoint_id"`
@@ -113,7 +115,7 @@ func encodeOperation(operation admission.Operation) ([]byte, error) {
 		Final:        strconv.FormatInt(int64(operation.FinalMicroUSD), 10),
 		Reservations: make([]reservationWire, len(operation.Reservations)),
 		Config:       operation.ConfigVersion, Price: operation.PriceVersion,
-		Attempt: encodeAttemptWire(operation.Attempt), Token: operation.DispatchToken,
+		Attempt: attemptWire(operation.Attempt), Token: operation.DispatchToken,
 		Lease: operation.LeaseUntil, Created: formatRedisTime(operation.CreatedAt),
 		Updated: formatRedisTime(operation.UpdatedAt), Expires: operation.ExpiresAt,
 		Retryable: operation.Retryable,
@@ -162,7 +164,7 @@ func decodeOperation(data []byte) (admission.Operation, error) {
 	operation := admission.Operation{
 		ID: wire.ID, ScopeKey: wire.ScopeKey, RequestDigest: digest, State: wire.State,
 		ReservedMicroUSD: reserved, IncurredMicroUSD: incurred, FinalMicroUSD: final,
-		ConfigVersion: wire.Config, PriceVersion: wire.Price, Attempt: decodeAttemptWire(wire.Attempt),
+		ConfigVersion: wire.Config, PriceVersion: wire.Price, Attempt: admission.AttemptFacts(wire.Attempt),
 		DispatchToken: wire.Token, LeaseUntil: wire.Lease, ExpiresAt: wire.Expires,
 		Retryable: wire.Retryable,
 	}
@@ -199,37 +201,11 @@ func decodeBlobRef(wire blobRefWire) (state.BlobRef, error) {
 	return state.BlobRef{Digest: digest, Size: wire.Size, Media: wire.Media}, nil
 }
 
-func encodeAttemptWire(attempt admission.AttemptFacts) attemptWire {
-	return attemptWire{
-		RouteID:           attempt.RouteID,
-		EndpointID:        attempt.EndpointID,
-		Provider:          attempt.Provider,
-		ResolvedModel:     attempt.ResolvedModel,
-		ProviderRequestID: attempt.ProviderRequestID,
-		ServiceClass:      attempt.ServiceClass,
-		Dispatch:          attempt.Dispatch,
-		AttemptNumber:     attempt.AttemptNumber,
-	}
-}
-
-func decodeAttemptWire(wire attemptWire) admission.AttemptFacts {
-	return admission.AttemptFacts{
-		RouteID:           wire.RouteID,
-		EndpointID:        wire.EndpointID,
-		Provider:          wire.Provider,
-		ResolvedModel:     wire.ResolvedModel,
-		ProviderRequestID: wire.ProviderRequestID,
-		ServiceClass:      wire.ServiceClass,
-		Dispatch:          wire.Dispatch,
-		AttemptNumber:     wire.AttemptNumber,
-	}
-}
-
 func encodeAttempt(attempt admission.AttemptFacts) ([]byte, error) {
 	if err := validateAttempt(attempt); err != nil {
 		return nil, err
 	}
-	return json.Marshal(encodeAttemptWire(attempt))
+	return json.Marshal(attemptWire(attempt))
 }
 
 func validateAttempt(attempt admission.AttemptFacts) error {
@@ -263,7 +239,7 @@ func decodeAttempt(data []byte) (admission.AttemptFacts, error) {
 	if wire.AttemptNumber < 0 {
 		return admission.AttemptFacts{}, fmt.Errorf("invalid attempt number")
 	}
-	return decodeAttemptWire(wire), nil
+	return admission.AttemptFacts(wire), nil
 }
 
 func encodeOutcome(outcome admission.AttemptOutcome) ([]byte, error) {
@@ -274,7 +250,7 @@ func encodeOutcome(outcome admission.AttemptOutcome) ([]byte, error) {
 		Certainty:         outcome.Certainty,
 		Incurred:          strconv.FormatInt(int64(outcome.Incurred), 10),
 		ProviderRequestID: outcome.ProviderRequestID,
-		Attempt:           encodeAttemptWire(outcome.Attempt),
+		Attempt:           attemptWire(outcome.Attempt),
 	})
 }
 
@@ -291,7 +267,7 @@ func decodeOutcome(data []byte) (admission.AttemptOutcome, error) {
 		Certainty:         wire.Certainty,
 		Incurred:          incurred,
 		ProviderRequestID: wire.ProviderRequestID,
-		Attempt:           decodeAttemptWire(wire.Attempt),
+		Attempt:           admission.AttemptFacts(wire.Attempt),
 	}, nil
 }
 

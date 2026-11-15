@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -134,7 +135,7 @@ func (replay *CheckpointReplay) materializeAuthorized(ctx context.Context, calle
 	}
 	materialized.Tenant, materialized.Project = caller.Tenant, caller.Project
 	pending, err := state.ValidateTranscript(materialized.Items)
-	if err != nil || !equalCheckpointFrontier(pending, materialized.PendingToolCalls) {
+	if err != nil || !slices.Equal(pending, materialized.PendingToolCalls) {
 		return state.MaterializedState{}, checkpointReplayError(provider.CodeStateCorrupt)
 	}
 	if err := ctx.Err(); err != nil {
@@ -174,18 +175,6 @@ func validateLineageCapacity(limits state.MaterializeLimits, replay state.Materi
 		return checkpointReplayError(provider.CodeInvalidArgument)
 	}
 	return nil
-}
-
-func equalCheckpointFrontier(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func checkpointReplayError(code provider.Code) error {

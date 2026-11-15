@@ -66,47 +66,34 @@ func V1ActivityDescriptors(taskQueue string) ([]V1ActivityDescriptor, error) {
 	return descriptors, nil
 }
 
+// v1DescriptorTypes is the closed descriptor vocabulary: the input and
+// output types each v1 Activity name must declare, and the label its
+// mismatch error uses.
+var v1DescriptorTypes = map[string]struct{ input, output, label string }{
+	ExportLangfuseActivityName:    {referenceV1InputType, "none", "Langfuse export"},
+	GenerateActivityName:          {generateV1InputType, generateV1OutputType, "Generate v1"},
+	CompactActivityName:           {compactV1InputType, compactV1OutputType, "Compact v1"},
+	QueryActivityName:             {queryV1InputType, queryV1OutputType, "Query v1"},
+	PlanGenerationActivityName:    {generateV1InputType, planV1OutputType, "generation plan"},
+	ResolveGenerationActivityName: {generateV1InputType, resolveV1OutputType, "generation resolution"},
+	PrepareActivityName:           {prepareV1InputType, executionV1OutputType, "Prepare v1"},
+	AcquireBudgetActivityName:     {referenceV1InputType, executionV1OutputType, "execution v1"},
+	PollActivityName:              {referenceV1InputType, executionV1OutputType, "execution v1"},
+	CompleteActivityName:          {referenceV1InputType, executionV1OutputType, "execution v1"},
+}
+
 // Validate checks the closed descriptor vocabulary. It intentionally rejects
 // token/stream names: v1 is a one-shot Temporal boundary.
 func (descriptor V1ActivityDescriptor) Validate() error {
 	if descriptor.TaskQueue == "" || len(descriptor.TaskQueue) > 255 || strings.ContainsAny(descriptor.TaskQueue, "\x00\r\n\t ") {
 		return fmt.Errorf("v1 Activity descriptor has an invalid task queue")
 	}
-	switch descriptor.Name {
-	case ExportLangfuseActivityName:
-		if descriptor.InputType != referenceV1InputType || descriptor.OutputType != "none" {
-			return fmt.Errorf("Langfuse export Activity descriptor types are invalid")
-		}
-	case GenerateActivityName:
-		if descriptor.InputType != generateV1InputType || descriptor.OutputType != generateV1OutputType {
-			return fmt.Errorf("Generate v1 Activity descriptor types are invalid")
-		}
-	case CompactActivityName:
-		if descriptor.InputType != compactV1InputType || descriptor.OutputType != compactV1OutputType {
-			return fmt.Errorf("Compact v1 Activity descriptor types are invalid")
-		}
-	case QueryActivityName:
-		if descriptor.InputType != queryV1InputType || descriptor.OutputType != queryV1OutputType {
-			return fmt.Errorf("Query v1 Activity descriptor types are invalid")
-		}
-	case PlanGenerationActivityName:
-		if descriptor.InputType != generateV1InputType || descriptor.OutputType != planV1OutputType {
-			return fmt.Errorf("generation plan Activity descriptor types are invalid")
-		}
-	case ResolveGenerationActivityName:
-		if descriptor.InputType != generateV1InputType || descriptor.OutputType != resolveV1OutputType {
-			return fmt.Errorf("generation resolution Activity descriptor types are invalid")
-		}
-	case PrepareActivityName:
-		if descriptor.InputType != prepareV1InputType || descriptor.OutputType != executionV1OutputType {
-			return fmt.Errorf("Prepare v1 Activity descriptor types are invalid")
-		}
-	case AcquireBudgetActivityName, PollActivityName, CompleteActivityName:
-		if descriptor.InputType != referenceV1InputType || descriptor.OutputType != executionV1OutputType {
-			return fmt.Errorf("execution v1 Activity descriptor types are invalid")
-		}
-	default:
+	types, ok := v1DescriptorTypes[descriptor.Name]
+	if !ok {
 		return fmt.Errorf("unknown v1 Activity name %q", descriptor.Name)
+	}
+	if descriptor.InputType != types.input || descriptor.OutputType != types.output {
+		return fmt.Errorf("%s Activity descriptor types are invalid", types.label)
 	}
 	return nil
 }

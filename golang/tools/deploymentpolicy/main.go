@@ -47,36 +47,42 @@ func verifyRendered(overlay string, rendered []byte) error {
 		return fmt.Errorf("deployment policy verification cannot decode %s: %w", overlay, err)
 	}
 
-	deployment, err := findResource(documents, "Deployment", "llmtw-worker")
-	if err != nil {
-		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
-	}
-	serviceAccount, err := findResource(documents, "ServiceAccount", "llmtw-worker")
-	if err != nil {
-		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
-	}
-	configMapName, err := configVolumeConfigMapName(deployment)
-	if err != nil {
-		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
-	}
-	configMap, err := findResource(documents, "ConfigMap", configMapName)
-	if err != nil {
-		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
-	}
-	if boolAt(configMap, "immutable") != true {
-		return fmt.Errorf("deployment policy verification %s: ConfigMap %q must be immutable", overlay, configMapName)
-	}
-	networkPolicy, err := findResource(documents, "NetworkPolicy", "llmtw-worker")
-	if err != nil {
-		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
-	}
-	if err := verifyWorkload(overlay, deployment, serviceAccount, configMap); err != nil {
-		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
-	}
-	if err := verifyNetworkPolicy(deployment, networkPolicy); err != nil {
+	if err := verifyDocuments(overlay, documents); err != nil {
 		return fmt.Errorf("deployment policy verification %s: %w", overlay, err)
 	}
 	return nil
+}
+
+// verifyDocuments checks the rendered worker resources; verifyRendered
+// prefixes every failure with the overlay.
+func verifyDocuments(overlay string, documents []map[string]any) error {
+	deployment, err := findResource(documents, "Deployment", "llmtw-worker")
+	if err != nil {
+		return err
+	}
+	serviceAccount, err := findResource(documents, "ServiceAccount", "llmtw-worker")
+	if err != nil {
+		return err
+	}
+	configMapName, err := configVolumeConfigMapName(deployment)
+	if err != nil {
+		return err
+	}
+	configMap, err := findResource(documents, "ConfigMap", configMapName)
+	if err != nil {
+		return err
+	}
+	if boolAt(configMap, "immutable") != true {
+		return fmt.Errorf("ConfigMap %q must be immutable", configMapName)
+	}
+	networkPolicy, err := findResource(documents, "NetworkPolicy", "llmtw-worker")
+	if err != nil {
+		return err
+	}
+	if err := verifyWorkload(overlay, deployment, serviceAccount, configMap); err != nil {
+		return err
+	}
+	return verifyNetworkPolicy(deployment, networkPolicy)
 }
 
 var stateControlPorts = map[int64]struct{}{

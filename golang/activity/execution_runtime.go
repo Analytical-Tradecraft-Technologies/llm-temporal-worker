@@ -45,37 +45,25 @@ func (activities *Activities) PrepareExecutionV1(ctx context.Context, request ll
 	if request.Generate != nil {
 		kind = "generate"
 	}
-	return executionStep(ctx, activities, request, kind, "", observability.ExecutionStepPrepare, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
-		return runtime.PrepareExecutionV1(ctx, request)
-	})
+	return executionStep(ctx, activities, request, kind, "", observability.ExecutionStepPrepare, ExecutionRuntime.PrepareExecutionV1)
 }
 func (activities *Activities) AcquireBudgetV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepAcquire, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
-		return runtime.AcquireBudgetV1(ctx, request)
-	})
+	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepAcquire, ExecutionRuntime.AcquireBudgetV1)
 }
 func (activities *Activities) GenerateStepV1(ctx context.Context, request llm.GenerateRequestV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "generate", "", observability.ExecutionStepGenerate, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
-		return runtime.GenerateStepV1(ctx, request)
-	})
+	return executionStep(ctx, activities, request, "generate", "", observability.ExecutionStepGenerate, ExecutionRuntime.GenerateStepV1)
 }
 func (activities *Activities) CompactStepV1(ctx context.Context, request llm.CompactRequestV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "compact", "", observability.ExecutionStepCompact, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
-		return runtime.CompactStepV1(ctx, request)
-	})
+	return executionStep(ctx, activities, request, "compact", "", observability.ExecutionStepCompact, ExecutionRuntime.CompactStepV1)
 }
 func (activities *Activities) PollExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepPoll, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
-		return runtime.PollExecutionV1(ctx, request)
-	})
+	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepPoll, ExecutionRuntime.PollExecutionV1)
 }
 func (activities *Activities) CompleteExecutionV1(ctx context.Context, request llm.ExecutionReferenceV1) (*llm.ExecutionResultV1, error) {
-	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepComplete, func(ctx context.Context, runtime ExecutionRuntime) (llm.ExecutionResultV1, error) {
-		return runtime.CompleteExecutionV1(ctx, request)
-	})
+	return executionStep(ctx, activities, request, "", request.RequestID, observability.ExecutionStepComplete, ExecutionRuntime.CompleteExecutionV1)
 }
 
-func executionStep[T any](ctx context.Context, activities *Activities, request T, kind, requestID, step string, dispatch func(context.Context, ExecutionRuntime) (llm.ExecutionResultV1, error)) (*llm.ExecutionResultV1, error) {
+func executionStep[T any](ctx context.Context, activities *Activities, request T, kind, requestID, step string, dispatch func(ExecutionRuntime, context.Context, T) (llm.ExecutionResultV1, error)) (*llm.ExecutionResultV1, error) {
 	marshal := func(value T, limits PayloadLimits) ([]byte, error) { return marshalBounded(value, limits) }
 	if err := validateV1Request(ctx, marshal, request, activities); err != nil {
 		return nil, err
@@ -95,7 +83,7 @@ func executionStep[T any](ctx context.Context, activities *Activities, request T
 	defer func() { activities.Metrics.RecordExecutionStep(step, time.Since(started)) }()
 	err := activities.runV1(ctx, func(ctx context.Context) error {
 		var err error
-		response, err = dispatch(ctx, runtime)
+		response, err = dispatch(runtime, ctx, request)
 		if err != nil {
 			return err
 		}
