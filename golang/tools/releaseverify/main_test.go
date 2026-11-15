@@ -19,17 +19,18 @@ func TestResolveOCIManifestDescriptorRejectsCyclicOCIIndexChain(t *testing.T) {
 		digestA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		digestB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	)
-	indexA := []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","size":999}]}`,
-		ociImageIndexMediaType, digestB))
-	indexB := []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","size":999}]}`,
-		ociImageIndexMediaType, digestA))
+	// indexOf is a one-entry image index pointing at the index digest.
+	indexOf := func(digest string, size int) []byte {
+		return []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","size":%d}]}`,
+			ociImageIndexMediaType, digest, size))
+	}
+	indexA := indexOf(digestB, 999)
+	indexB := indexOf(digestA, 999)
 	if len(indexA) > 999 || len(indexB) > 999 {
 		t.Fatal("test index payload no longer fits the stable three-digit size placeholder")
 	}
-	indexA = []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","size":%d}]}`,
-		ociImageIndexMediaType, digestB, len(indexB)))
-	indexB = []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","size":%d}]}`,
-		ociImageIndexMediaType, digestA, len(indexA)))
+	indexA = indexOf(digestB, len(indexB))
+	indexB = indexOf(digestA, len(indexA))
 	entries := map[string]ociLayoutEntry{
 		"blobs/sha256/" + digestA: {size: int64(len(indexA)), digest: digestA, data: indexA},
 		"blobs/sha256/" + digestB: {size: int64(len(indexB)), digest: digestB, data: indexB},
@@ -141,15 +142,7 @@ func TestValidateEvidenceMetadataEnforcesImmutableReleaseSubjects(t *testing.T) 
 			SchemaVersion: evidenceSchemaVersion,
 			GeneratedAt:   "2026-07-19T00:00:00Z",
 			Source:        source{Repository: "https://github.com/example/project", Revision: strings.Repeat("b", 40)},
-			Image: image{
-				Reference: "registry.example/project@sha256:" + digest,
-				Digest:    "sha256:" + digest,
-				MediaType: ociImageIndexMediaType,
-				Platforms: &imagePlatforms{
-					LinuxAMD64: imageSubject{Reference: "registry.example/project@" + amd64, Digest: amd64},
-					LinuxARM64: imageSubject{Reference: "registry.example/project@" + arm64, Digest: arm64},
-				},
-			},
+			Image:         releaseImage("registry.example/project", "sha256:"+digest, amd64, arm64),
 		}
 	}
 	if err := validateEvidenceMetadata(newValid()); err != nil {
@@ -340,41 +333,21 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := run([]string{
-		"verify",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-evidence", filepath.Join(artifactDir, "evidence.json"),
-	}, &stdout); err != nil {
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), &stdout); err != nil {
 		t.Fatalf("verify smoke test failed: %v", err)
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "release evidence verified" {
 		t.Fatalf("verify output = %q", got)
 	}
 
-	testSummary := filepath.Join(artifactDir, canonicalArtifactPaths["test_summary"])
-	data, err := os.ReadFile(testSummary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, testSummary, append(data, '\n'))
-	if err := run([]string{
-		"verify",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-evidence", filepath.Join(artifactDir, "evidence.json"),
-	}, &stdout); err == nil || !strings.Contains(err.Error(), "sha256 does not match") {
+	appendNewline(t, filepath.Join(artifactDir, canonicalArtifactPaths["test_summary"]))
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), &stdout); err == nil || !strings.Contains(err.Error(), "sha256 does not match") {
 		t.Fatalf("tampered evidence verification error = %v, want digest mismatch", err)
 	}
 }
 
 func TestReleaseEvidenceRecordsTheImageIndexAsTheSubject(t *testing.T) {
-	artifactDir := newReleaseEvidenceArtifactDirectory(t)
-	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
-	schemaPath := releaseEvidenceSchemaPath(t)
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
-		t.Fatalf("record rejected a complete multi-platform bundle: %v", err)
-	}
+	artifactDir, subjects := recordReleaseEvidenceBundle(t, releaseEvidenceSchemaPath(t), "record rejected a complete multi-platform bundle")
 	record := readEvidenceRecord(t, artifactDir)
 	if got := record["schema_version"]; got != float64(evidenceSchemaVersion) {
 		t.Fatalf("schema_version = %v, want %d", got, evidenceSchemaVersion)
@@ -464,12 +437,7 @@ func TestReleaseEvidenceRejectsMissingOrMismatchedPlatformEvidence(t *testing.T)
 		{
 			name: "index bytes differ from the published digest",
 			mutate: func(t *testing.T, directory string, _ *releaseEvidenceSubjects, _ *[]string) {
-				path := filepath.Join(directory, canonicalArtifactPaths["image_index"])
-				data, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				writeTestFile(t, path, append(data, '\n'))
+				appendNewline(t, filepath.Join(directory, canonicalArtifactPaths["image_index"]))
 			},
 			want: "image index bytes do not match the evidence image digest",
 		},
@@ -505,10 +473,7 @@ func TestReleaseEvidenceRejectsMissingOrMismatchedPlatformEvidence(t *testing.T)
 			name: "attestation for a foreign manifest",
 			mutate: func(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string) {
 				rewriteImageIndex(t, directory, subjects, arguments, func(manifests []any) []any {
-					return append(manifests, indexDescriptor("sha256:"+strings.Repeat("8", 64), "unknown", "unknown", map[string]any{
-						attestationReferenceTypeKey:   attestationReferenceType,
-						attestationReferenceDigestKey: otherDigest,
-					}))
+					return append(manifests, attestationDescriptor("sha256:"+strings.Repeat("8", 64), otherDigest))
 				})
 			},
 			want: "attestation does not reference a release platform manifest",
@@ -569,15 +534,11 @@ func TestReleaseEvidenceVerifyRejectsDowngradedOrIncompleteMultiPlatformRecords(
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			artifactDir := newReleaseEvidenceArtifactDirectory(t)
-			subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
-			if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
-				t.Fatal(err)
-			}
+			artifactDir, _ := recordReleaseEvidenceBundle(t, schemaPath, "record")
 			record := readEvidenceRecord(t, artifactDir)
 			test.mutate(record)
 			writeEvidenceRecord(t, artifactDir, record)
-			err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}, io.Discard)
+			err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("verify error = %v, want substring %q", err, test.want)
 			}
@@ -586,22 +547,18 @@ func TestReleaseEvidenceVerifyRejectsDowngradedOrIncompleteMultiPlatformRecords(
 }
 
 func TestReleaseEvidenceVerifyAcceptsSingleManifestV1Bundle(t *testing.T) {
-	artifactDir := newReleaseEvidenceArtifactDirectory(t)
-	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 	schemaPath := releaseEvidenceSchemaPath(t)
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
-		t.Fatal(err)
-	}
+	artifactDir, subjects := recordReleaseEvidenceBundle(t, schemaPath, "record")
 	record := downgradeToSingleManifestV1(t, artifactDir, subjects)
 	writeEvidenceRecord(t, artifactDir, record)
-	if err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}, io.Discard); err != nil {
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
 		t.Fatalf("retained single-manifest v1 bundle was rejected: %v", err)
 	}
 
 	// A v1 record must not smuggle multi-platform fields past the v1 rules.
 	record["image"].(map[string]any)["media_type"] = ociImageIndexMediaType
 	writeEvidenceRecord(t, artifactDir, record)
-	if err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}, io.Discard); err == nil {
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err == nil {
 		t.Fatal("v1 record with an image index media type was accepted")
 	}
 }
@@ -627,7 +584,6 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 	if err := run(recordArgs, io.Discard); err != nil {
 		t.Fatalf("record rejected optional worker error summary: %v", err)
 	}
-	evidencePath := filepath.Join(artifactDir, "evidence.json")
 	record := readEvidenceRecord(t, artifactDir)
 	artifacts, ok := record["artifacts"].(map[string]any)
 	if !ok {
@@ -636,7 +592,7 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 	if _, ok := artifacts["worker_error_summary"]; !ok {
 		t.Fatalf("evidence omitted optional worker summary: %#v", artifacts)
 	}
-	if err := run([]string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", evidencePath}, io.Discard); err != nil {
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
 		t.Fatalf("verify rejected optional worker error summary: %v", err)
 	}
 }
@@ -653,15 +609,8 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 	})
 
 	schemaPath := releaseEvidenceSchemaPath(t)
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
-		t.Fatalf("record rejected pre-target_status benchmark summary: %v", err)
-	}
-	if err := run([]string{
-		"verify",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-evidence", filepath.Join(artifactDir, "evidence.json"),
-	}, io.Discard); err != nil {
+	recordReleaseEvidence(t, schemaPath, artifactDir, subjects, "record rejected pre-target_status benchmark summary")
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
 		t.Fatalf("verify rejected pre-target_status benchmark summary: %v", err)
 	}
 }
@@ -706,12 +655,8 @@ func TestReleaseEvidenceRejectsCurrentBenchmarkAtTargetBoundary(t *testing.T) {
 }
 
 func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
-	artifactDir := newReleaseEvidenceArtifactDirectory(t)
-	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 	schemaPath := releaseEvidenceSchemaPath(t)
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
-		t.Fatalf("record smoke test failed: %v", err)
-	}
+	artifactDir, subjects := recordReleaseEvidenceBundle(t, schemaPath, "record smoke test failed")
 
 	// Simulate a retained v1 bundle from before benchmark_summary existed.
 	record := downgradeToSingleManifestV1(t, artifactDir, subjects)
@@ -720,9 +665,7 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 		t.Fatal("evidence artifacts are not an object")
 	}
 	delete(artifacts, "benchmark_summary")
-	if err := os.Remove(filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])); err != nil {
-		t.Fatal(err)
-	}
+	removeArtifactFile(t, artifactDir, "benchmark_summary")
 	legacyVulnerabilities := []byte(`{"schema_version":1,"kind":"vulnerability_results","status":"pass","components":{"test":"pass","source":"pass","go_mod":"pass","vulnerability":"pass"},"direct_module_count":1,"findings":[],"approved_findings":[],"redacted":true}` + "\n")
 	legacyVulnerabilityPath := filepath.Join(artifactDir, canonicalArtifactPaths["vulnerability_results"])
 	writeTestFile(t, legacyVulnerabilityPath, legacyVulnerabilities)
@@ -731,12 +674,7 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	}
 	writeEvidenceRecord(t, artifactDir, record)
 
-	if err := run([]string{
-		"verify",
-		"-schema", schemaPath,
-		"-artifact-dir", artifactDir,
-		"-evidence", filepath.Join(artifactDir, "evidence.json"),
-	}, io.Discard); err != nil {
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
 		t.Fatalf("pre-benchmark v1 bundle was rejected: %v", err)
 	}
 }
@@ -792,6 +730,79 @@ func releaseEvidenceRecordArguments(schemaPath, artifactDir string, subjects rel
 	return arguments
 }
 
+// releaseEvidenceVerifyArguments verifies artifactDir/evidence.json.
+func releaseEvidenceVerifyArguments(schemaPath, artifactDir string) []string {
+	return []string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}
+}
+
+// recordReleaseEvidence records the bundle in artifactDir, failing with
+// failure when record rejects it.
+func recordReleaseEvidence(t *testing.T, schemaPath, artifactDir string, subjects releaseEvidenceSubjects, failure string) {
+	t.Helper()
+	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
+		t.Fatalf("%s: %v", failure, err)
+	}
+}
+
+// recordReleaseEvidenceBundle writes a complete bundle into a new artifact
+// directory and records it.
+func recordReleaseEvidenceBundle(t *testing.T, schemaPath, failure string) (string, releaseEvidenceSubjects) {
+	t.Helper()
+	artifactDir := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
+	recordReleaseEvidence(t, schemaPath, artifactDir, subjects, failure)
+	return artifactDir, subjects
+}
+
+// newReleaseEvidenceSubjects names the index in repository and its platform
+// manifests.
+func newReleaseEvidenceSubjects(repository, indexDigest, amd64Digest, arm64Digest string) releaseEvidenceSubjects {
+	return releaseEvidenceSubjects{
+		repository:     repository,
+		indexReference: repository + "@" + indexDigest,
+		indexDigest:    indexDigest,
+		amd64Digest:    amd64Digest,
+		arm64Digest:    arm64Digest,
+	}
+}
+
+// subjectIn is the immutable reference to digest in repository.
+func subjectIn(repository, digest string) imageSubject {
+	return imageSubject{Reference: repository + "@" + digest, Digest: digest}
+}
+
+// releaseImage is the image index subject in repository with its two
+// platform manifests.
+func releaseImage(repository, indexDigest, amd64Digest, arm64Digest string) image {
+	return image{
+		Reference: repository + "@" + indexDigest,
+		Digest:    indexDigest,
+		MediaType: ociImageIndexMediaType,
+		Platforms: &imagePlatforms{
+			LinuxAMD64: subjectIn(repository, amd64Digest),
+			LinuxARM64: subjectIn(repository, arm64Digest),
+		},
+	}
+}
+
+// appendNewline appends a newline to the file at path.
+func appendNewline(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, path, append(data, '\n'))
+}
+
+// removeArtifactFile deletes the canonical file of the named artifact.
+func removeArtifactFile(t *testing.T, directory, name string) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func replaceArgument(arguments *[]string, flagName, value string) {
 	for index := 0; index < len(*arguments)-1; index++ {
 		if (*arguments)[index] == flagName {
@@ -804,9 +815,7 @@ func replaceArgument(arguments *[]string, flagName, value string) {
 
 func removeArtifact(t *testing.T, directory, name string, arguments *[]string) {
 	t.Helper()
-	if err := os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])); err != nil {
-		t.Fatal(err)
-	}
+	removeArtifactFile(t, directory, name)
 	kept := (*arguments)[:0]
 	for index := 0; index < len(*arguments); index++ {
 		if (*arguments)[index] == "-artifact" && index+1 < len(*arguments) && strings.HasPrefix((*arguments)[index+1], name+"=") {
@@ -831,6 +840,14 @@ func indexDescriptor(digest, operatingSystem, architecture string, annotations m
 	return descriptor
 }
 
+// attestationDescriptor is an index entry attesting the manifest digest.
+func attestationDescriptor(digest, attested string) map[string]any {
+	return indexDescriptor(digest, "unknown", "unknown", map[string]any{
+		attestationReferenceTypeKey:   attestationReferenceType,
+		attestationReferenceDigestKey: attested,
+	})
+}
+
 func imageIndexDocument(manifests []any) []byte {
 	data, err := json.Marshal(map[string]any{
 		"schemaVersion": 2,
@@ -848,11 +865,7 @@ func imageIndexDocument(manifests []any) []byte {
 func rewriteImageIndex(t *testing.T, directory string, subjects *releaseEvidenceSubjects, arguments *[]string, mutate func([]any) []any) {
 	t.Helper()
 	path := filepath.Join(directory, canonicalArtifactPaths["image_index"])
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifests := mustUnmarshalMap(t, data)["manifests"].([]any)
+	manifests := repotest.ReadJSONObject(t, path)["manifests"].([]any)
 	updated := imageIndexDocument(mutate(manifests))
 	writeTestFile(t, path, updated)
 	subjects.indexDigest = "sha256:" + sha256Hex(updated)
@@ -863,11 +876,7 @@ func rewriteImageIndex(t *testing.T, directory string, subjects *releaseEvidence
 
 func readEvidenceRecord(t *testing.T, directory string) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(directory, "evidence.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return mustUnmarshalMap(t, data)
+	return repotest.ReadJSONObject(t, filepath.Join(directory, "evidence.json"))
 }
 
 func writeEvidenceRecord(t *testing.T, directory string, record map[string]any) {
@@ -889,9 +898,7 @@ func downgradeToSingleManifestV1(t *testing.T, directory string, subjects releas
 	artifacts := record["artifacts"].(map[string]any)
 	for _, name := range []string{"image_index", "sbom_arm64", "image_scan_arm64"} {
 		delete(artifacts, name)
-		if err := os.Remove(filepath.Join(directory, canonicalArtifactPaths[name])); err != nil {
-			t.Fatal(err)
-		}
+		removeArtifactFile(t, directory, name)
 	}
 	return record
 }
@@ -932,19 +939,9 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 	index := imageIndexDocument([]any{
 		indexDescriptor(amd64Digest, "linux", "amd64", nil),
 		indexDescriptor(arm64Digest, "linux", "arm64", nil),
-		indexDescriptor("sha256:"+strings.Repeat("f", 64), "unknown", "unknown", map[string]any{
-			attestationReferenceTypeKey:   attestationReferenceType,
-			attestationReferenceDigestKey: amd64Digest,
-		}),
+		attestationDescriptor("sha256:"+strings.Repeat("f", 64), amd64Digest),
 	})
-	indexDigest := "sha256:" + sha256Hex(index)
-	subjects := releaseEvidenceSubjects{
-		repository:     repository,
-		indexReference: repository + "@" + indexDigest,
-		indexDigest:    indexDigest,
-		amd64Digest:    amd64Digest,
-		arm64Digest:    arm64Digest,
-	}
+	subjects := newReleaseEvidenceSubjects(repository, "sha256:"+sha256Hex(index), amd64Digest, arm64Digest)
 	writeTestFile(t, filepath.Join(directory, canonicalArtifactPaths["image_index"]), index)
 	artifacts := map[string]any{
 		"test_summary": gateSummary("test_summary"),
@@ -963,12 +960,8 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 				"profile": "example", "upstream_url": "https://example.invalid/contracts", "upstream_date": "2026-07-19", "manifest_sha256": digest,
 			}}, "redacted": true,
 		},
-		"redis_summary": map[string]any{
-			"schema_version": 1, "kind": "redis_summary", "status": "pass", "service": "redis", "state": "running", "health": "healthy", "redacted": true,
-		},
-		"temporal_summary": map[string]any{
-			"schema_version": 1, "kind": "temporal_summary", "status": "pass", "service": "temporal", "state": "running", "health": "healthy", "redacted": true,
-		},
+		"redis_summary":    serviceSummary("redis_summary", "redis"),
+		"temporal_summary": serviceSummary("temporal_summary", "temporal"),
 		"compose_summary": map[string]any{
 			"schema_version": 1, "kind": "compose_summary", "status": "pass", "services": []string{"redis", "temporal"}, "redacted": true,
 		},
@@ -997,6 +990,12 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 func gateSummary(kind string) map[string]any {
 	return map[string]any{
 		"schema_version": 1, "kind": kind, "status": "pass", "output_sha256": strings.Repeat("d", 64), "output_bytes": 1, "redacted": true,
+	}
+}
+
+func serviceSummary(kind, service string) map[string]any {
+	return map[string]any{
+		"schema_version": 1, "kind": kind, "status": "pass", "service": service, "state": "running", "health": "healthy", "redacted": true,
 	}
 }
 
@@ -1075,15 +1074,7 @@ func TestValidateImageIndexAcceptsThePublishedBuildxIndex(t *testing.T) {
 	)
 	path := filepath.Join(t.TempDir(), "image-index.json")
 	writeTestFile(t, path, []byte(publishedBuildxImageIndex))
-	subject := image{
-		Reference: repository + "@" + indexDigest,
-		Digest:    indexDigest,
-		MediaType: ociImageIndexMediaType,
-		Platforms: &imagePlatforms{
-			LinuxAMD64: imageSubject{Reference: repository + "@" + amd64Digest, Digest: amd64Digest},
-			LinuxARM64: imageSubject{Reference: repository + "@" + arm64Digest, Digest: arm64Digest},
-		},
-	}
+	subject := releaseImage(repository, indexDigest, amd64Digest, arm64Digest)
 	if err := validateImageIndex(releaseEvidenceSchemaPath(t), path, subject); err != nil {
 		t.Fatalf("published Buildx image index rejected: %v", err)
 	}
@@ -1120,19 +1111,10 @@ func TestReleaseEvidenceRecordsAndVerifiesTheOCIMergeIndex(t *testing.T) {
 	writeArtifactJSON(t, artifactDir, "image_scan", releaseEvidenceScan(repository+"@"+amd64Digest, amd64Digest))
 	writeArtifactJSON(t, artifactDir, "sbom_arm64", releaseEvidenceSBOM(repository+"@"+arm64Digest, arm64Digest))
 	writeArtifactJSON(t, artifactDir, "image_scan_arm64", releaseEvidenceScan(repository+"@"+arm64Digest, arm64Digest))
-	subjects := releaseEvidenceSubjects{
-		repository:     repository,
-		indexReference: repository + "@" + indexDigest,
-		indexDigest:    indexDigest,
-		amd64Digest:    amd64Digest,
-		arm64Digest:    arm64Digest,
-	}
+	subjects := newReleaseEvidenceSubjects(repository, indexDigest, amd64Digest, arm64Digest)
 	schemaPath := releaseEvidenceSchemaPath(t)
-	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
-		t.Fatalf("record rejected the ocimerge index: %v", err)
-	}
-	verify := []string{"verify", "-schema", schemaPath, "-artifact-dir", artifactDir, "-evidence", filepath.Join(artifactDir, "evidence.json")}
-	if err := run(verify, io.Discard); err != nil {
+	recordReleaseEvidence(t, schemaPath, artifactDir, subjects, "record rejected the ocimerge index")
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
 		t.Fatalf("verify rejected the ocimerge index: %v", err)
 	}
 
@@ -1146,15 +1128,7 @@ func TestReleaseEvidenceRecordsAndVerifiesTheOCIMergeIndex(t *testing.T) {
 		{name: "arm64 not in the index", amd64: amd64Digest, arm64: "sha256:" + strings.Repeat("9", 64)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			subject := image{
-				Reference: subjects.indexReference,
-				Digest:    indexDigest,
-				MediaType: ociImageIndexMediaType,
-				Platforms: &imagePlatforms{
-					LinuxAMD64: imageSubject{Reference: repository + "@" + test.amd64, Digest: test.amd64},
-					LinuxARM64: imageSubject{Reference: repository + "@" + test.arm64, Digest: test.arm64},
-				},
-			}
+			subject := releaseImage(repository, indexDigest, test.amd64, test.arm64)
 			if err := validateImageIndex(schemaPath, filepath.Join(artifactDir, canonicalArtifactPaths["image_index"]), subject); err == nil {
 				t.Fatal("validateImageIndex accepted platform digests that do not match the index")
 			}
@@ -1163,20 +1137,8 @@ func TestReleaseEvidenceRecordsAndVerifiesTheOCIMergeIndex(t *testing.T) {
 }
 
 func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
-	image := imageSubject{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
-	valid := map[string]any{
-		"bomFormat":   "CycloneDX",
-		"specVersion": "1.5",
-		"metadata": map[string]any{
-			"component": map[string]any{
-				"type": "container",
-				"properties": []any{
-					map[string]any{"name": "org.opencontainers.image.ref.name", "value": image.Reference},
-					map[string]any{"name": "org.opencontainers.image.manifest.digest", "value": image.Digest},
-				},
-			},
-		},
-	}
+	image := subjectIn("registry.example/project", "sha256:"+strings.Repeat("a", 64))
+	valid := releaseEvidenceSBOM(image.Reference, image.Digest)
 	path := filepath.Join(t.TempDir(), "sbom.json")
 	writeTestFile(t, path, mustJSON(t, valid))
 	if err := validateCycloneDXSBOM(path, image); err != nil {
@@ -1214,17 +1176,8 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 }
 
 func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
-	image := imageSubject{Reference: "registry.example/project@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
-	valid := map[string]any{
-		"SchemaVersion": 2,
-		"ArtifactType":  "container_image",
-		"ArtifactName":  "image.oci",
-		"release_subject": map[string]any{
-			"reference": image.Reference,
-			"digest":    image.Digest,
-		},
-		"Results": []any{map[string]any{"Vulnerabilities": []any{}}},
-	}
+	image := subjectIn("registry.example/project", "sha256:"+strings.Repeat("a", 64))
+	valid := releaseEvidenceScan(image.Reference, image.Digest)
 	path := filepath.Join(t.TempDir(), "scan.json")
 	writeTestFile(t, path, mustJSON(t, valid))
 	if err := validateTrivyScan(path, image); err != nil {

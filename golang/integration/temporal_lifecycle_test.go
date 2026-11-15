@@ -368,6 +368,13 @@ func controllerWasStopped(controller *temporalController) bool {
 
 func metricsPolling(t *testing.T, metrics *observability.Metrics) bool {
 	t.Helper()
+	output := metricsText(t, metrics)
+	return strings.Contains(output, "llmtw_worker_polling 1") || strings.Contains(output, "llmtw_worker_polling 1.0")
+}
+
+// metricsText gathers metrics and encodes them in the Prometheus text format.
+func metricsText(t *testing.T, metrics *observability.Metrics) string {
+	t.Helper()
 	families, err := metrics.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +386,7 @@ func metricsPolling(t *testing.T, metrics *observability.Metrics) bool {
 			t.Fatal(err)
 		}
 	}
-	return strings.Contains(output.String(), "llmtw_worker_polling 1") || strings.Contains(output.String(), "llmtw_worker_polling 1.0")
+	return output.String()
 }
 
 func TestTemporalShutdownBoundsGracefulStopAndFlushesTelemetry(t *testing.T) {
@@ -480,19 +487,8 @@ func TestObservabilityRejectsContentAndTenantMarkersAcrossSinks(t *testing.T) {
 	}
 	metrics.RecordProviderAttempt(marker, marker, marker, marker, time.Second)
 	metrics.RecordExactCost("endpoint-1", "model-1", "standard", marker)
-	families, err := metrics.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var encoded strings.Builder
-	textEncoder := expfmt.NewEncoder(&encoded, expfmt.NewFormat(expfmt.TypeTextPlain))
-	for _, family := range families {
-		if err := textEncoder.Encode(family); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if strings.Contains(encoded.String(), marker) || !strings.Contains(encoded.String(), `endpoint="other"`) {
-		t.Fatalf("unsafe metrics output: %s", encoded.String())
+	if encoded := metricsText(t, metrics); strings.Contains(encoded, marker) || !strings.Contains(encoded, `endpoint="other"`) {
+		t.Fatalf("unsafe metrics output: %s", encoded)
 	}
 }
 

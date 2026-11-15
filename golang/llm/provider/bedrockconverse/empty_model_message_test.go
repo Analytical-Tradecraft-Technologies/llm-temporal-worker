@@ -1,13 +1,13 @@
 package bedrockconverse
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 )
 
@@ -31,7 +31,7 @@ func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 	}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Parallel: true}}
 	for name, strict := range map[string]bool{"strict": true, "best effort": false} {
 		t.Run(name, func(t *testing.T) {
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockConverse, Model: request.Model}, Strict: strict})
+			call, err := adaptertest.Compile(adapter, "bedrock-prod", provider.FamilyBedrockConverse, request, strict)
 			if err != nil {
 				t.Fatalf("compile replayed empty model message: %v", err)
 			}

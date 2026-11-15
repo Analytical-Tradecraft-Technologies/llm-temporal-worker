@@ -1,22 +1,18 @@
 package openaichat
 
 import (
-	"encoding/json"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLengthTruncatedToolCallKeepsTheResponseAsLength(t *testing.T) {
-	var truncated openai.ChatCompletion
 	body := `{"id":"truncated","object":"chat.completion","created":1,"model":"chat-model","service_tier":"default","usage":{"prompt_tokens":10,"completion_tokens":64,"total_tokens":74},"choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"Looking that up","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\": \"abc"}}]}}]}`
-	if err := json.Unmarshal([]byte(body), &truncated); err != nil {
-		t.Fatal(err)
-	}
-	lifted, err := testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &truncated, "req")
+	truncated := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
+	lifted, err := liftStandard(&truncated)
 	if err != nil {
 		t.Fatalf("truncated tool call failed the response: %v", err)
 	}
@@ -31,7 +27,7 @@ func TestLengthTruncatedToolCallKeepsTheResponseAsLength(t *testing.T) {
 
 	// Invalid arguments on a non-truncated response are still rejected.
 	truncated.Choices[0].FinishReason = "tool_calls"
-	if _, err := testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &truncated, "req"); err == nil {
+	if _, err := liftStandard(&truncated); err == nil {
 		t.Fatal("invalid tool arguments accepted outside a length truncation")
 	}
 }

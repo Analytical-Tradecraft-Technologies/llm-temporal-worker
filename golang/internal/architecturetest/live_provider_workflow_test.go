@@ -177,11 +177,11 @@ func assertLiveProviderWorkflowSourceAndActionBoundary(t *testing.T, workflow wo
 	if strings.Contains(workflow.raw, "actions/checkout@") {
 		t.Fatalf("%s must use credential-free fixed-source checkout, not actions/checkout", workflow.name)
 	}
-	for _, forbidden := range []string{"github.token", "secrets.GITHUB_TOKEN", "secrets.github_token"} {
-		if strings.Contains(workflow.raw, forbidden) {
-			t.Fatalf("%s must not expose an automatic GitHub token through %q", workflow.name, forbidden)
-		}
-	}
+	assertOmitsEach(t, workflow.raw, workflow.name+" must not expose an automatic GitHub token through %q",
+		"github.token",
+		"secrets.GITHUB_TOKEN",
+		"secrets.github_token",
+	)
 	for _, reference := range actionReferences(t, workflow) {
 		parts := strings.SplitN(reference, "@", 2)
 		if len(parts) != 2 || !immutableActionReference.MatchString(parts[1]) {

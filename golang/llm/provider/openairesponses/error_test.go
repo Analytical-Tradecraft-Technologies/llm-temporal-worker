@@ -2,7 +2,6 @@ package openairesponses
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
@@ -29,10 +29,7 @@ func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 	if mapped.Provider.RequestID != "req-error" || mapped.SafeDetails["provider_code"] != "rate_limit_exceeded" {
 		t.Fatalf("provider facts = %#v", mapped)
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), "secret provider body") {
 		t.Fatalf("raw provider message leaked: %s", encoded)
 	}
@@ -67,10 +64,7 @@ func TestMapErrorClassifiesProviderNeutralFailures(t *testing.T) {
 func TestMapErrorRedactsTransportCause(t *testing.T) {
 	transportCause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
 	mapped := mapError(transportCause)
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	for _, raw := range []string{"provider-secret", "private-content", "opaque-handle", "provider-raw"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe provider error leaked %q: %s", raw, encoded)

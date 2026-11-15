@@ -1,8 +1,6 @@
 package architecturetest
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,11 +9,8 @@ import (
 // documented at golang/.local out of commits and Docker build contexts.
 func TestLocalContinuationKeyPathIsIgnored(t *testing.T) {
 	root := repositoryRoot(t)
-	compose, err := os.ReadFile(filepath.Join(root, "golang", "compose.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(compose), ".local/continuation-hmac") {
+	compose := readText(t, root, "golang", "compose.yaml")
+	if !strings.Contains(compose, ".local/continuation-hmac") {
 		t.Skip("compose no longer documents the .local continuation key")
 	}
 	for path, want := range map[string]string{

@@ -56,8 +56,7 @@ func wireJSON(t *testing.T, fixture string, mutate func(map[string]any)) json.Ra
 // invalidInputEnvironment registers the workflows exactly as the worker does
 // and decodes through the worker's bounded data converter.
 func invalidInputEnvironment(limits activity.PayloadLimits) *testsuite.TestWorkflowEnvironment {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
+	env := newWorkflowEnv()
 	env.SetDataConverter(callerEncodeConverter{activity.BoundedDataConverter(limits)})
 	Register(env, limits)
 	return env
@@ -89,34 +88,23 @@ func assertTypedInvalidInput(t *testing.T, err error) {
 	}
 }
 
-func TestPublicWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
-	limits := activity.PayloadLimits{MaxInlineBytes: 4096}
-	oversize := strings.Repeat("x", 2*limits.MaxInlineBytes)
-	cases := []struct {
-		workflow, name string
-		input          any
-	}{
-		{GenerateWorkflowName, "unknown field", wireJSON(t, "generate-root", func(fields map[string]any) { fields["transcript"] = inputMarker })},
-		{GenerateWorkflowName, "tool name with a space", wireJSON(t, "generate-root", func(fields map[string]any) {
-			fields["settings_patch"].(map[string]any)["tools"] = map[string]any{"set": []any{map[string]any{"name": inputMarker, "description": "Lookup", "input_schema": map[string]any{"type": "object"}}}}
-		})},
-		// Valid apart from its size, so only the inline limit can reject it.
-		{GenerateWorkflowName, "oversize payload", wireJSON(t, "generate-root", func(fields map[string]any) {
-			fields["append"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] = inputMarker + oversize
-		})},
-		{GenerateWorkflowName, "malformed JSON", converter.NewRawValue(&commonpb.Payload{
-			Metadata: map[string][]byte{converter.MetadataEncoding: []byte(converter.MetadataEncodingJSON)},
-			Data:     []byte(`{"api_version":"` + inputMarker + `"`),
-		})},
-		{GenerateWorkflowName, "no payload", nil},
-		{CompactWorkflowName, "unknown field", wireJSON(t, "compact-request", func(fields map[string]any) { fields["transcript"] = inputMarker })},
-		{CompactWorkflowName, "tool name with a space", wireJSON(t, "compact-request", func(fields map[string]any) {
-			fields["policy"].(map[string]any)["tools"] = []any{map[string]any{"name": inputMarker}}
-		})},
-		{CompactWorkflowName, "caller value in decoder message", wireJSON(t, "compact-request", func(fields map[string]any) { fields["api_version"] = inputMarker })},
-		{CompactWorkflowName, "oversize payload", wireJSON(t, "compact-request", func(fields map[string]any) { fields["operation_key"] = inputMarker + oversize })},
-		{CompactWorkflowName, "no payload", nil},
+// setFirstAppendedText replaces the text of the first appended item's first
+// content part.
+func setFirstAppendedText(text string) func(map[string]any) {
+	return func(fields map[string]any) {
+		fields["append"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] = text
 	}
+}
+
+type invalidInputCase struct {
+	workflow, name string
+	input          any
+}
+
+// runInvalidInputCases starts each case's workflow with its input (or none)
+// and requires a completed workflow with the typed invalid-input failure.
+func runInvalidInputCases(t *testing.T, limits activity.PayloadLimits, cases []invalidInputCase) {
+	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.workflow+"/"+tc.name, func(t *testing.T) {
 			env := invalidInputEnvironment(limits)
@@ -133,6 +121,32 @@ func TestPublicWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
 	}
 }
 
+func TestPublicWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
+	limits := activity.PayloadLimits{MaxInlineBytes: 4096}
+	oversize := strings.Repeat("x", 2*limits.MaxInlineBytes)
+	cases := []invalidInputCase{
+		{GenerateWorkflowName, "unknown field", wireJSON(t, "generate-root", func(fields map[string]any) { fields["transcript"] = inputMarker })},
+		{GenerateWorkflowName, "tool name with a space", wireJSON(t, "generate-root", func(fields map[string]any) {
+			fields["settings_patch"].(map[string]any)["tools"] = map[string]any{"set": []any{map[string]any{"name": inputMarker, "description": "Lookup", "input_schema": map[string]any{"type": "object"}}}}
+		})},
+		// Valid apart from its size, so only the inline limit can reject it.
+		{GenerateWorkflowName, "oversize payload", wireJSON(t, "generate-root", setFirstAppendedText(inputMarker+oversize))},
+		{GenerateWorkflowName, "malformed JSON", converter.NewRawValue(&commonpb.Payload{
+			Metadata: map[string][]byte{converter.MetadataEncoding: []byte(converter.MetadataEncodingJSON)},
+			Data:     []byte(`{"api_version":"` + inputMarker + `"`),
+		})},
+		{GenerateWorkflowName, "no payload", nil},
+		{CompactWorkflowName, "unknown field", wireJSON(t, "compact-request", func(fields map[string]any) { fields["transcript"] = inputMarker })},
+		{CompactWorkflowName, "tool name with a space", wireJSON(t, "compact-request", func(fields map[string]any) {
+			fields["policy"].(map[string]any)["tools"] = []any{map[string]any{"name": inputMarker}}
+		})},
+		{CompactWorkflowName, "caller value in decoder message", wireJSON(t, "compact-request", func(fields map[string]any) { fields["api_version"] = inputMarker })},
+		{CompactWorkflowName, "oversize payload", wireJSON(t, "compact-request", func(fields map[string]any) { fields["operation_key"] = inputMarker + oversize })},
+		{CompactWorkflowName, "no payload", nil},
+	}
+	runInvalidInputCases(t, limits, cases)
+}
+
 // The internal workflows are normally started by the public ones, but they are
 // registered by name on the same task queue and get the same typed failure.
 func TestInternalWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
@@ -140,15 +154,10 @@ func TestInternalWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
 	oversize := strings.Repeat("x", 2*limits.MaxInlineBytes)
 	generate := wireFixture(t, "generate-root")
 	reference := `{"request_id":"` + testRequestID + `","context":{"tenant":"acme","project":"claims","actor":"workflow:claim-1"}}`
-	cases := []struct {
-		workflow, name string
-		input          any
-	}{
+	cases := []invalidInputCase{
 		{RequestWorkflowName, "unknown field", json.RawMessage(`{"generate":` + string(generate) + `,"transcript":"` + inputMarker + `"}`)},
 		{RequestWorkflowName, "invalid nested request", json.RawMessage(`{"generate":` + string(wireJSON(t, "generate-root", func(fields map[string]any) { fields["api_version"] = inputMarker })) + `}`)},
-		{RequestWorkflowName, "oversize payload", json.RawMessage(`{"generate":` + string(wireJSON(t, "generate-root", func(fields map[string]any) {
-			fields["append"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"] = inputMarker + oversize
-		})) + `}`)},
+		{RequestWorkflowName, "oversize payload", json.RawMessage(`{"generate":` + string(wireJSON(t, "generate-root", setFirstAppendedText(inputMarker+oversize))) + `}`)},
 		{BudgetWorkflowName, "malformed reference", json.RawMessage(`{"reference":{"request_id":"` + inputMarker + `"},"kind":"generate"}`)},
 		{BudgetWorkflowName, "JSON null", json.RawMessage(`null`)},
 		{BudgetWorkflowName, "unknown field", json.RawMessage(`{"reference":` + reference + `,"kind":"generate","transcript":"` + inputMarker + `"}`)},
@@ -162,20 +171,7 @@ func TestInternalWorkflowsRejectInvalidInputAsTypedNonRetryable(t *testing.T) {
 		{LangfuseExportWorkflowName, "JSON null", json.RawMessage(`null`)},
 		{LangfuseExportWorkflowName, "no payload", nil},
 	}
-	for _, tc := range cases {
-		t.Run(tc.workflow+"/"+tc.name, func(t *testing.T) {
-			env := invalidInputEnvironment(limits)
-			// Any dispatch would fail the assertion below with a different error:
-			// no Activity is registered in this environment.
-			if tc.input == nil {
-				env.ExecuteWorkflow(tc.workflow)
-			} else {
-				env.ExecuteWorkflow(tc.workflow, tc.input)
-			}
-			if !env.IsWorkflowCompleted() {
-				t.Fatal("workflow did not complete")
-			}
-			assertTypedInvalidInput(t, env.GetWorkflowError())
-		})
-	}
+	// Any dispatch would fail the typed-input assertion with a different
+	// error: no Activity is registered in this environment.
+	runInvalidInputCases(t, limits, cases)
 }

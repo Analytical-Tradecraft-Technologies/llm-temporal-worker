@@ -267,10 +267,7 @@ func assertCancellationClosesProviderSource(t *testing.T, adapterName, operation
 	defer cancel()
 	harness := newHarness(t, sourceStreamingAdapter(adapterName, source))
 
-	stream, err := harness.engine.Stream(ctx, baseRequest(operationKey))
-	if err != nil {
-		t.Fatal(err)
-	}
+	stream := harness.mustStream(t, ctx, baseRequest(operationKey))
 	defer stream.Close()
 	waitChannel(t, signals.entered, "provider source read")
 	cancel()
@@ -282,10 +279,7 @@ func TestStreamCloseClosesProviderSourceThatIgnoresContext(t *testing.T) {
 	source := newCloseDrivenProviderSource()
 	harness := newHarness(t, sourceStreamingAdapter("explicit-close-stream", source))
 
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("stream-explicit-close"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	stream := harness.mustStream(t, context.Background(), baseRequest("stream-explicit-close"))
 	emitter, ok := stream.(*streamEmitter)
 	if !ok {
 		t.Fatalf("stream type = %T, want *streamEmitter", stream)
@@ -306,10 +300,7 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 	heartbeat := &cancelOnAdmissionHeartbeat{entered: make(chan struct{})}
 	harness.engine.dependencies.Heartbeat = heartbeat
 
-	stream, err := harness.engine.Stream(ctx, baseRequest("pre-dispatch-cancel"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	stream := harness.mustStream(t, ctx, baseRequest("pre-dispatch-cancel"))
 	defer stream.Close()
 	waitChannel(t, heartbeat.entered, "admission heartbeat")
 	cancel()
@@ -328,10 +319,7 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 func TestStreamAppliesBackpressureBeforePullingMoreProviderEvents(t *testing.T) {
 	source := newGatedProviderSource(streamBufferCapacity)
 	harness := newHarness(t, sourceStreamingAdapter("backpressure-stream", source))
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("stream-backpressure"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	stream := harness.mustStream(t, context.Background(), baseRequest("stream-backpressure"))
 	defer stream.Close()
 	waitChannel(t, source.bufferFilled, "stream buffer fill")
 	select {
@@ -350,10 +338,7 @@ func TestStreamParentCancellationWithFullBufferReleasesProducerAndKeepsTerminal(
 	defer cancel()
 	source := newGatedProviderSource(streamBufferCapacity)
 	harness := newHarness(t, sourceStreamingAdapter("cancel-full-buffer", source))
-	stream, err := harness.engine.Stream(ctx, baseRequest("cancel-full-buffer"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	stream := harness.mustStream(t, ctx, baseRequest("cancel-full-buffer"))
 	defer stream.Close()
 	emitter, ok := stream.(*streamEmitter)
 	if !ok {
@@ -375,10 +360,7 @@ func TestStreamAndGenerateFinalizeEquivalentResponses(t *testing.T) {
 	events := worldStreamEvents()
 	events[len(events)-1] = provider.StreamCompleted{Response: successfulResponse()}
 	harness := newHarness(t, newStreamingAdapter("equivalent-stream", events...))
-	nonStream, err := harness.engine.Generate(context.Background(), baseRequest("equivalent-generate"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	nonStream := harness.mustGenerate(t, baseRequest("equivalent-generate"))
 	streamResponse := completedStreamResponse(streamEvents(t, harness, baseRequest("equivalent-stream")))
 	nonStream.OperationKey, nonStream.OperationID = "", ""
 	streamResponse.OperationKey, streamResponse.OperationID = "", ""

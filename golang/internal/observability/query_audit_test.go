@@ -18,10 +18,7 @@ import (
 
 func TestQueryAuditLogsMetadataWithoutPayloadsOrRawIdentifiers(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Output: &output})
 	started := time.Date(2026, 9, 23, 12, 0, 0, 0, time.FixedZone("Sydney", 10*60*60))
 	cost := "0"
 	record := control.QueryAuditRecord{
@@ -74,17 +71,11 @@ func (writer *failingAuditWriter) Write([]byte) (int, error) {
 
 func TestQueryAuditIgnoresLogWriteFailureAndRespectsLevel(t *testing.T) {
 	writer := &failingAuditWriter{}
-	logger, err := observability.NewLogger(observability.LogOptions{Output: writer})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Output: writer})
 	if err := logger.QueryAudit(context.Background(), control.QueryAuditRecord{}); err != nil || writer.calls != 1 {
 		t.Fatalf("audit err=%v, writes=%d", err, writer.calls)
 	}
-	logger, err = observability.NewLogger(observability.LogOptions{Output: writer, Level: "error"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger = newLogger(t, observability.LogOptions{Output: writer, Level: "error"})
 	if err := logger.QueryAudit(context.Background(), control.QueryAuditRecord{}); err != nil || writer.calls != 1 {
 		t.Fatalf("filtered audit err=%v, writes=%d", err, writer.calls)
 	}
@@ -94,10 +85,7 @@ func TestQueryAuditIgnoresLogWriteFailureAndRespectsLevel(t *testing.T) {
 // never logs the raw tenant or project (#1535).
 func TestScopeAccessDeniedLogsActivityTypeAndHashesOnly(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Format: "json", Output: &output})
 	logger.ScopeAccessDenied(context.Background(), "raw-tenant", "raw-project", "llm.PrepareExecution.v1")
 	var line map[string]any
 	if err := json.Unmarshal(output.Bytes(), &line); err != nil {

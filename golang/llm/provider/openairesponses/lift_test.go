@@ -10,17 +10,14 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/openai/openai-go/v3/shared"
 )
 
 func TestLiftCompletedResponsePreservesItemsUsageAndContinuation(t *testing.T) {
 	response := loadResponseFixture(t, "response.completed.json")
-	call := provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: "op-lift", ServiceClass: llm.ServiceClassEconomy}
-	lifted, err := liftResponse(call, &response, "req-1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, liftCall("op-lift", llm.ServiceClassEconomy), &response, "req-1")
 	if lifted.Status != llm.ResponseStatusToolCalls {
 		t.Fatalf("status = %s, want tool_calls", lifted.Status)
 	}
@@ -89,7 +86,7 @@ func TestLiftMapsActualTiersAndKeepsUnreportedTierUnclassified(t *testing.T) {
 		{responses.ResponseServiceTierPriority, llm.ServiceClassPriority},
 	} {
 		response := minimalResponse(test.tier, responses.ResponseStatusCompleted)
-		call := provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}
+		call := liftCall("op", llm.ServiceClassPriority)
 		got, err := liftResponse(call, &response, "req")
 		if err != nil {
 			t.Fatalf("tier %s: %v", test.tier, err)
@@ -102,7 +99,7 @@ func TestLiftMapsActualTiersAndKeepsUnreportedTierUnclassified(t *testing.T) {
 	// unrecognized tier reports no actual class and keeps the raw value.
 	for _, tier := range []responses.ResponseServiceTier{"", responses.ResponseServiceTierScale} {
 		response := minimalResponse(tier, responses.ResponseStatusCompleted)
-		got, err := liftResponse(provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}, &response, "req")
+		got, err := liftResponse(liftCall("op", llm.ServiceClassPriority), &response, "req")
 		if err != nil {
 			t.Fatalf("tier %q: %v", tier, err)
 		}
@@ -115,13 +112,13 @@ func TestLiftMapsActualTiersAndKeepsUnreportedTierUnclassified(t *testing.T) {
 func TestLiftMapsIncompleteAndRefusal(t *testing.T) {
 	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusIncomplete)
 	response.IncompleteDetails.Reason = "content_filter"
-	got, err := liftResponse(provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &response, "req")
+	got, err := liftResponse(liftCall("op", llm.ServiceClassStandard), &response, "req")
 	if err != nil || got.Status != llm.ResponseStatusContentFiltered {
 		t.Fatalf("content filter = %#v, %v", got, err)
 	}
 	response = minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	response.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"refusal","refusal":"no"}]}]`)
-	got, err = liftResponse(provider.Call{EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &response, "req")
+	got, err = liftResponse(liftCall("op", llm.ServiceClassStandard), &response, "req")
 	if err != nil || got.Status != llm.ResponseStatusRefused {
 		t.Fatalf("refusal = %#v, %v", got, err)
 	}
@@ -138,10 +135,8 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.Call{
-		EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt",
-		OperationKey: "op-json", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
-	}
+	call := liftCall("op-json", llm.ServiceClassStandard)
+	call.SDKParams = params
 	valid := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	valid.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}]`)
 	if _, err := liftResponse(call, &valid, "req"); err != nil {
@@ -151,10 +146,7 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 	invalid.ID = "invalid"
 	invalid.Output = decodeOutputItems(t, `[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":3}","annotations":[]}]}]`)
 	_, err = liftResponse(call, &invalid, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("invalid JSON response error = %#v", err)
-	}
+	adaptertest.RequireAcceptedInvalidResponse(t, err, "invalid JSON response error")
 }
 
 func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
@@ -166,10 +158,8 @@ func TestLiftLocallyValidatesRequestedJSONObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.Call{
-		EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt",
-		OperationKey: "op-json-object", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
-	}
+	call := liftCall("op-json-object", llm.ServiceClassStandard)
+	call.SDKParams = params
 	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	response.Output = decodeOutputItems(t, `[{
 		"type":"message","id":"msg","role":"assistant","status":"completed",
@@ -194,10 +184,7 @@ func loadResponseFixture(t *testing.T, name string) responses.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var response responses.Response
-	if err := json.Unmarshal(data, &response); err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[responses.Response](t, data)
 	return response
 }
 
@@ -207,10 +194,7 @@ func minimalResponse(tier responses.ResponseServiceTier, status responses.Respon
 
 func decodeOutputItems(t *testing.T, raw string) []responses.ResponseOutputItemUnion {
 	t.Helper()
-	var items []responses.ResponseOutputItemUnion
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
-		t.Fatal(err)
-	}
+	items := contract.DecodeJSON[[]responses.ResponseOutputItemUnion](t, []byte(raw))
 	return items
 }
 
@@ -269,10 +253,8 @@ func TestLiftValidatesFinalAnswerAfterCommentary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.Call{
-		EndpointID: "endpoint", Family: provider.FamilyOpenAIResponses, Model: "gpt",
-		OperationKey: "op-phase", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
-	}
+	call := liftCall("op-phase", llm.ServiceClassStandard)
+	call.SDKParams = params
 	commentary := `{"type":"message","id":"msg-1","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"Let me work on that.","annotations":[]}]}`
 	response := minimalResponse(responses.ResponseServiceTierDefault, responses.ResponseStatusCompleted)
 	response.Output = decodeOutputItems(t, `[`+commentary+`,{"type":"message","id":"msg-2","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}]`)
@@ -286,8 +268,20 @@ func TestLiftValidatesFinalAnswerAfterCommentary(t *testing.T) {
 	// The final answer is still held to the schema.
 	response.Output = decodeOutputItems(t, `[`+commentary+`,{"type":"message","id":"msg-2","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"{\"answer\":3}","annotations":[]}]}]`)
 	_, err = liftResponse(call, &response, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("invalid final answer error = %#v", err)
+	adaptertest.RequireAcceptedInvalidResponse(t, err, "invalid final answer error")
+}
+
+// liftCall is a call for the contract model on the openai-prod endpoint.
+func liftCall(operationKey string, class llm.ServiceClass) provider.Call {
+	return provider.Call{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract", OperationKey: operationKey, ServiceClass: class}
+}
+
+// mustLift lifts response for call and fails t on error.
+func mustLift(t *testing.T, call provider.Call, response *responses.Response, requestID string) llm.Response {
+	t.Helper()
+	lifted, err := liftResponse(call, response, requestID)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return lifted
 }

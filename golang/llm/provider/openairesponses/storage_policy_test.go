@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
@@ -30,7 +31,7 @@ func TestStoragePolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "policy", Model: "gpt-contract", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(extension)}}, Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"}, Strict: true})
+			call, err := adaptertest.Compile(adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "policy", Model: "gpt-contract", Extensions: map[string]json.RawMessage{"openai.responses": json.RawMessage(extension)}}, true)
 			if !permitted && extension == `{"store":true}` {
 				if err == nil || calls != 0 {
 					t.Fatalf("override accepted: %s", extension)
@@ -45,14 +46,8 @@ func TestStoragePolicy(t *testing.T) {
 				t.Fatal("storage not explicitly disabled")
 			}
 
-			encoded, err := json.Marshal(params)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var wire map[string]any
-			if err := json.Unmarshal(encoded, &wire); err != nil {
-				t.Fatal(err)
-			}
+			encoded := contract.MarshalJSON(t, params)
+			wire := contract.DecodeJSON[map[string]any](t, encoded)
 			if !permitted && wire["store"] != false {
 				t.Fatalf("serialized store = %v", wire["store"])
 			}
@@ -121,15 +116,12 @@ func TestStoragePolicyReconfigurationPreservesExactSchemas(t *testing.T) {
 			if slot != "tool" {
 				request.Output = &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}
 			}
-			call, err := permitted.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: request.Model}})
+			call, err := adaptertest.Compile(permitted, "openai-prod", provider.FamilyOpenAIResponses, request, false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			_, _ = denied.Invoke(context.Background(), call, nil)
-			var body map[string]json.RawMessage
-			if err := json.Unmarshal(wire, &body); err != nil {
-				t.Fatal(err)
-			}
+			body := contract.DecodeJSON[map[string]json.RawMessage](t, wire)
 			if string(body["store"]) != "false" {
 				t.Fatalf("storage denial missing from actual transport: %s", wire)
 			}

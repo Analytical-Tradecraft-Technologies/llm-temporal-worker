@@ -30,11 +30,7 @@ type chatFixtureProfile struct {
 }
 
 func TestChatContractProfilesAreEnforcedIndependently(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	report, err := contracttest.ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := contract.ValidateRepository(t)
 
 	wantPaths := map[string]string{
 		"openai-chat":     "llm/provider/openaichat/testdata/contracts/common/chat",
@@ -212,10 +208,7 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 				t.Fatal(err)
 			}
 			call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIChat, request)
-			result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			result := adaptertest.Invoke(t, adapter, call)
 			if got == nil {
 				t.Fatal("fixture transport was not called")
 			}
@@ -362,27 +355,7 @@ func assertCanonicalChatFixture(t *testing.T, got []byte, profile chatFixturePro
 
 func assertChatFixtureClassFacts(t *testing.T, profile chatFixtureProfile) {
 	t.Helper()
-	var semantic []struct {
-		Class  llm.ServiceClass `json:"class"`
-		Actual llm.ServiceClass `json:"actual"`
-	}
-	if err := json.Unmarshal(readChatFixture(t, profile, "class-facts.semantic.json"), &semantic); err != nil {
-		t.Fatal(err)
-	}
-	actualByClass := make(map[llm.ServiceClass]llm.ServiceClass, len(semantic))
-	for _, fact := range semantic {
-		actualByClass[fact.Class] = fact.Actual
-	}
-
-	var wire []struct {
-		Class         llm.ServiceClass `json:"class"`
-		Supported     bool             `json:"supported"`
-		RequestedTier string           `json:"requested_tier"`
-		ActualTier    string           `json:"actual_tier"`
-	}
-	if err := json.Unmarshal(readChatFixture(t, profile, "class-facts.wire.json"), &wire); err != nil {
-		t.Fatal(err)
-	}
+	wire, actualByClass := contract.ClassFacts(t, readChatFixture(t, profile, "class-facts.semantic.json"), readChatFixture(t, profile, "class-facts.wire.json"))
 	for _, fact := range wire {
 		tier, err := profile.profile.providerTier(fact.Class)
 		if !fact.Supported {
@@ -471,16 +444,7 @@ func assertChatBestEffortDiagnostic(t *testing.T, profile chatFixtureProfile) {
 
 func assertChatFixtureClassifiedError(t *testing.T, profile chatFixtureProfile) {
 	t.Helper()
-	var fixture struct {
-		Status     int    `json:"status"`
-		Code       string `json:"code"`
-		RequestID  string `json:"request_id"`
-		RetryAfter string `json:"retry_after"`
-		Message    string `json:"message"`
-	}
-	if err := json.Unmarshal(readChatFixture(t, profile, "classified-error.wire.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
+	fixture := contract.DecodeJSON[contract.ClassifiedErrorFixture](t, readChatFixture(t, profile, "classified-error.wire.json"))
 	mapped := mapError(&openai.Error{
 		Code:       fixture.Code,
 		Message:    fixture.Message,

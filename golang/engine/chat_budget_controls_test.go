@@ -50,8 +50,7 @@ func TestChatChoiceCountRejectsBeforeAdmissionAndDispatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			harness := newHarness(t, adapter)
-			recording := &recordingAdmission{AdmissionStore: harness.admission}
-			harness.engine.dependencies.Admission = recording
+			recording := harness.recordAdmission()
 			harness.engine.dependencies.Estimator.MaxOutput = 16
 			routes, err := routing.CompileCatalog("chat-routes", map[string]routing.Model{"logical-model": {Routes: []routing.Route{{ID: "route-1", EndpointID: "endpoint-1", Provider: "provider-1", Family: string(provider.FamilyOpenAIChat), Region: "us-east-1", AccountRegion: "us-east-1", Model: "logical-model", ModelLineage: "provider-lineage", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, PriceVersion: "chat-prices", PriceAvailable: true, ExtensionNames: []string{"choices"}, Capabilities: routing.CapabilitySet{Version: "chat-route/v1", Features: map[routing.Feature]routing.Capability{routing.FeatureText: {State: routing.CapabilityNative}}}}}}})
 			if err != nil {
@@ -110,8 +109,7 @@ func TestRequestPreflightCancellationPreservesCauseWithoutAdmission(t *testing.T
 	inner := &fakeAdapter{name: "endpoint-1", response: successfulResponse()}
 	adapter := &cancelingRequestValidator{Adapter: inner, cancel: cancel}
 	harness := newHarness(t, adapter)
-	recording := &recordingAdmission{AdmissionStore: harness.admission}
-	harness.engine.dependencies.Admission = recording
+	recording := harness.recordAdmission()
 	_, err := harness.engine.Generate(ctx, baseRequest("cancel-during-preflight"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Generate error = %v, want context.Canceled", err)

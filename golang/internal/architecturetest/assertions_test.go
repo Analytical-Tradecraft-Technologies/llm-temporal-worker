@@ -1,6 +1,10 @@
 package architecturetest
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,17 +45,6 @@ func assertOutputOmitsSentinel(t *testing.T, output []byte, sentinel, failure st
 	}
 }
 
-// assertContainsEach stops the test with failure, formatted with the missing
-// value, unless text contains every value.
-func assertContainsEach(t *testing.T, text, failure string, values ...string) {
-	t.Helper()
-	for _, value := range values {
-		if !strings.Contains(text, value) {
-			t.Fatalf(failure, value)
-		}
-	}
-}
-
 // expectContainsEach reports failure, formatted with the value, for every
 // value text does not contain, and lets the test continue.
 func expectContainsEach(t *testing.T, text, failure string, values ...string) {
@@ -61,4 +54,78 @@ func expectContainsEach(t *testing.T, text, failure string, values ...string) {
 			t.Errorf(failure, value)
 		}
 	}
+}
+
+// assertPathAbsent fails with failure and the Stat error unless path does not
+// exist, for example because a rejected command must not leave output behind.
+func assertPathAbsent(t *testing.T, path, failure string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("%s: %v", failure, err)
+	}
+}
+
+// expectOmitsEach reports failure, formatted with the value, for every value
+// text contains, and lets the test continue.
+func expectOmitsEach(t *testing.T, text, failure string, values ...string) {
+	t.Helper()
+	for _, value := range values {
+		if strings.Contains(text, value) {
+			t.Errorf(failure, value)
+		}
+	}
+}
+
+// decodeJSON decodes data into value; label names the document in a decode
+// failure.
+func decodeJSON(t *testing.T, data []byte, label string, value any) {
+	t.Helper()
+	if err := json.Unmarshal(data, value); err != nil {
+		t.Fatalf("decode %s: %v", label, err)
+	}
+}
+
+// readJSONFile decodes the JSON file at path into value; label names the
+// document in a decode failure.
+func readJSONFile(t *testing.T, path, label string, value any) {
+	t.Helper()
+	decodeJSON(t, []byte(readText(t, path)), label, value)
+}
+
+// makeDirectory creates the directory at the joined path elements, and any
+// missing parents, with mode and returns its path.
+func makeDirectory(t *testing.T, mode os.FileMode, elem ...string) string {
+	t.Helper()
+	path := filepath.Join(elem...)
+	if err := os.MkdirAll(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// mappingField returns document[key] as a JSON object, failing with label and
+// the value when it is missing or not an object.
+func mappingField(t *testing.T, label string, document map[string]any, key string) map[string]any {
+	t.Helper()
+	mapping, ok := document[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want mapping", label, document[key])
+	}
+	return mapping
+}
+
+// combinedOutputIn runs the named program with arguments in directory and
+// returns its combined output.
+func combinedOutputIn(directory, name string, arguments ...string) ([]byte, error) {
+	command := exec.Command(name, arguments...)
+	command.Dir = directory
+	return command.CombinedOutput()
+}
+
+// tempFilePaths returns the paths of two named files in a fresh temporary
+// directory, typically a command's input and output.
+func tempFilePaths(t *testing.T, first, second string) (string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	return filepath.Join(directory, first), filepath.Join(directory, second)
 }

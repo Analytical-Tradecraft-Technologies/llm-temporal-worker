@@ -1,12 +1,12 @@
 package bedrockconverse
 
 import (
-	"context"
 	"errors"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // Hosted-tool flags are refused at compile, never silently dropped (#1506).
@@ -20,8 +20,7 @@ func TestCompileRejectsHostedToolFlags(t *testing.T) {
 		for _, strict := range []bool{true, false} {
 			request := llm.Request{OperationKey: "op-hosted", Model: bedrockFixtureModel, Input: []llm.Item{llm.HumanText("hi")}}
 			mutate(&request)
-			_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict,
-				Query: provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: bedrockFixtureModel}})
+			_, err := adaptertest.Compile(adapter, bedrockFixtureEndpoint, provider.FamilyBedrockConverse, request, strict)
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Dispatch != provider.DispatchNotDispatched {
 				t.Fatalf("%s strict=%v: compile = %#v, want unsupported_capability", name, strict, err)

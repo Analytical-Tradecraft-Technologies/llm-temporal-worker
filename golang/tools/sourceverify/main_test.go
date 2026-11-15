@@ -36,11 +36,7 @@ func TestScanContentDetectsRawAndDecodedCredentialFields(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			finding, err := scanContent([]byte(test.content))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if finding == nil {
+			if mustScan(t, scanContent, test.content) == nil {
 				t.Fatal("scanContent accepted an unredacted credential field")
 			}
 		})
@@ -58,11 +54,7 @@ func TestScanContentAllowsExplicitRedactions(t *testing.T) {
 		`api_key=test-provider-key-0123456789`,
 		`password=not-configured`,
 	} {
-		finding, err := scanContent([]byte(content))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if finding != nil {
+		if finding := mustScan(t, scanContent, content); finding != nil {
 			t.Fatalf("scanContent rejected explicit redaction: %#v", finding)
 		}
 	}
@@ -77,11 +69,7 @@ func TestScanContentRejectsRedactionMarkerSubstringCollisions(t *testing.T) {
 		`access_token=smock-provider-token-0123456789`,
 		`secret_key=dislocal-production-key-0123456789`,
 	} {
-		finding, err := scanContent([]byte(content))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if finding == nil {
+		if mustScan(t, scanContent, content) == nil {
 			t.Fatal("scanContent accepted a credential containing a marker substring")
 		}
 	}
@@ -96,11 +84,7 @@ func TestScanCapturedStreamDetectsRawAndDecodedDenyFieldFindings(t *testing.T) {
 		url.QueryEscape(raw),
 		base64.StdEncoding.EncodeToString([]byte(raw)),
 	} {
-		finding, err := scanTestOutput([]byte(output))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if finding == nil {
+		if mustScan(t, scanTestOutput, output) == nil {
 			t.Fatal("scanTestOutput accepted a denied-field leak")
 		}
 	}
@@ -224,12 +208,7 @@ func TestVerifyScansSourceFixturesAndTestOutputWithoutLeakingPayload(t *testing.
 			}
 
 			err := verify(root, outputPath)
-			if err == nil {
-				t.Fatal("verify accepted an unredacted credential field")
-			}
-			if strings.Contains(err.Error(), secret) {
-				t.Fatalf("verify leaked credential bytes: %v", err)
-			}
+			requireRedactedRejection(t, err, "verify accepted an unredacted credential field", secret)
 			if !strings.Contains(err.Error(), test.wantLocation) {
 				t.Fatalf("verify error %q does not identify %q", err, test.wantLocation)
 			}
@@ -255,16 +234,8 @@ func TestVerifyDetectsRecognizedCredentialPatternsInCheckedInText(t *testing.T) 
 	for _, pattern := range patterns {
 		t.Run(pattern.name, func(t *testing.T) {
 			t.Parallel()
-			root := t.TempDir()
-			writeTestFile(t, root, "README.md", []byte("credential: "+pattern.value+"\n"))
-
-			err := verify(root, "")
-			if err == nil {
-				t.Fatal("verify accepted recognized credential-like material")
-			}
-			if strings.Contains(err.Error(), pattern.value) {
-				t.Fatalf("verify leaked credential bytes: %v", err)
-			}
+			err := verifyFile(t, "README.md", "credential: "+pattern.value+"\n")
+			requireRedactedRejection(t, err, "verify accepted recognized credential-like material", pattern.value)
 			if !strings.Contains(err.Error(), "README.md") || !strings.Contains(err.Error(), "credential-like material") {
 				t.Fatalf("verify error %q does not identify the unsafe text file", err)
 			}
@@ -296,15 +267,8 @@ func TestVerifyScansBoundedTextRegardlessOfExtension(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			root := t.TempDir()
-			writeTestFile(t, root, test.path, []byte(test.content))
-			err := verify(root, "")
-			if err == nil {
-				t.Fatal("verify accepted credential-like material in a text file")
-			}
-			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), configSecret) || strings.Contains(err.Error(), privateKey) {
-				t.Fatalf("verify leaked credential bytes: %v", err)
-			}
+			err := verifyFile(t, test.path, test.content)
+			requireRedactedRejection(t, err, "verify accepted credential-like material in a text file", secret, configSecret, privateKey)
 			if !strings.Contains(err.Error(), test.path) {
 				t.Fatalf("verify error %q does not identify %q", err, test.path)
 			}
@@ -315,9 +279,7 @@ func TestVerifyScansBoundedTextRegardlessOfExtension(t *testing.T) {
 func TestVerifyFailsClosedForOversizeTextRegardlessOfExtension(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	writeTestFile(t, root, "config.runtime", []byte(strings.Repeat("x", sourceVerifierTestSourceLimit+1)))
-	err := verify(root, "")
+	err := verifyFile(t, "config.runtime", strings.Repeat("x", sourceVerifierTestSourceLimit+1))
 	if err == nil {
 		t.Fatal("verify accepted oversized text with an unrecognized extension")
 	}
@@ -348,15 +310,7 @@ func TestVerifyDetectsUnquotedCredentialLiteralsInExecutableSource(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			root := t.TempDir()
-			writeTestFile(t, root, test.path, []byte(test.content))
-			err := verify(root, "")
-			if err == nil {
-				t.Fatal("verify accepted an unquoted credential literal")
-			}
-			if strings.Contains(err.Error(), secret) {
-				t.Fatalf("verify leaked credential bytes: %v", err)
-			}
+			requireRedactedRejection(t, verifyFile(t, test.path, test.content), "verify accepted an unquoted credential literal", secret)
 		})
 	}
 }
@@ -377,9 +331,7 @@ func TestVerifyAllowsCredentialVariableWiringInExecutableSource(t *testing.T) {
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			t.Parallel()
-			root := t.TempDir()
-			writeTestFile(t, root, test.path, []byte(test.content))
-			if err := verify(root, ""); err != nil {
+			if err := verifyFile(t, test.path, test.content); err != nil {
 				t.Fatalf("verify rejected credential variable wiring: %v", err)
 			}
 		})
@@ -399,9 +351,7 @@ func TestVerifyAllowsDockerInstructionProse(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			root := t.TempDir()
-			writeTestFile(t, root, "Dockerfile", []byte(test.content))
-			if err := verify(root, ""); err != nil {
+			if err := verifyFile(t, "Dockerfile", test.content); err != nil {
 				t.Fatalf("verify rejected non-ENV Dockerfile prose: %v", err)
 			}
 		})
@@ -442,12 +392,7 @@ func TestVerifySkipsGeneratedBinaryAndVendorArtifacts(t *testing.T) {
 }
 
 func TestVerifyAllowsTestOutputAboveTheRepositoryFileLimit(t *testing.T) {
-	root := t.TempDir()
-	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
-	outputPath := filepath.Join(root, "test-output.json")
-	writeTestFile(t, root, "test-output.json", safeTestOutputAboveRepositoryFileLimit(t, ""))
-
-	if err := verify(root, outputPath); err != nil {
+	if err := verifyTestOutput(t, safeTestOutputAboveRepositoryFileLimit(t, "")); err != nil {
 		t.Fatalf("verify rejected benign bounded test output: %v", err)
 	}
 }
@@ -468,18 +413,8 @@ func TestVerifyDetectsFindingsNearTheTailOfLargeTestStream(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
-			outputPath := filepath.Join(root, "test-output.json")
-			writeTestFile(t, root, "test-output.json", safeTestOutputAboveRepositoryFileLimit(t, "\n"+test.tail))
-
-			err := verify(root, outputPath)
-			if err == nil {
-				t.Fatal("verify accepted a denied value at the tail of large test output")
-			}
-			if strings.Contains(err.Error(), secret) {
-				t.Fatalf("verify leaked credential bytes: %v", err)
-			}
+			err := verifyTestOutput(t, safeTestOutputAboveRepositoryFileLimit(t, "\n"+test.tail))
+			requireRedactedRejection(t, err, "verify accepted a denied value at the tail of large test output", secret)
 			if !strings.Contains(err.Error(), "test output") || !strings.Contains(err.Error(), test.wantPart) {
 				t.Fatalf("verify error %q does not identify the tail leak %q", err, test.wantPart)
 			}
@@ -490,30 +425,15 @@ func TestVerifyDetectsFindingsNearTheTailOfLargeTestStream(t *testing.T) {
 func TestVerifyDetectsBase64FindingAtTheTailOfGoTestJSONStream(t *testing.T) {
 	secret := "Bearer " + strings.Repeat("q", 24)
 	rawCredential := `{"authorization":"` + secret + `"}`
-	root := t.TempDir()
-	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
-	outputPath := filepath.Join(root, "test-output.json")
-	writeTestFile(t, root, "test-output.json", goTestJSONOutputAboveRepositoryFileLimit(t, base64.StdEncoding.EncodeToString([]byte(rawCredential))))
-
-	err := verify(root, outputPath)
-	if err == nil {
-		t.Fatal("verify accepted a base64 credential at the tail of Go JSON test output")
-	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("verify leaked credential bytes: %v", err)
-	}
+	err := verifyTestOutput(t, goTestJSONOutputAboveRepositoryFileLimit(t, base64.StdEncoding.EncodeToString([]byte(rawCredential))))
+	requireRedactedRejection(t, err, "verify accepted a base64 credential at the tail of Go JSON test output", secret)
 	if !strings.Contains(err.Error(), "test output") || !strings.Contains(err.Error(), "credential-like denied field") {
 		t.Fatalf("verify error %q does not identify the base64 tail leak", err)
 	}
 }
 
 func TestVerifyFailsClosedWhenTestOutputExceedsItsBound(t *testing.T) {
-	root := t.TempDir()
-	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
-	outputPath := filepath.Join(root, "test-output.json")
-	writeTestFile(t, root, "test-output.json", []byte(strings.Repeat("safe test output\n", sourceVerifierTestOutputLimit/len("safe test output\n")+1)))
-
-	err := verify(root, outputPath)
+	err := verifyTestOutput(t, []byte(strings.Repeat("safe test output\n", sourceVerifierTestOutputLimit/len("safe test output\n")+1)))
 	if err == nil {
 		t.Fatal("verify accepted test output above its explicit bound")
 	}
@@ -552,14 +472,12 @@ func goTestJSONOutputAboveRepositoryFileLimit(t *testing.T, tail string) []byte 
 func TestVerifyAllowsCredentialVariableWiringInSource(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	writeTestFile(t, root, "internal/factory.go", []byte(`package internal
+	if err := verifyFile(t, "internal/factory.go", `package internal
 
 func configure(password string) {
 	_ = struct{ Password string }{Password: password}
 }
-`))
-	if err := verify(root, ""); err != nil {
+`); err != nil {
 		t.Fatalf("verify rejected a credential variable reference: %v", err)
 	}
 }
@@ -614,32 +532,68 @@ func TestMakefileComposesBoundedSecurityVerify(t *testing.T) {
 func TestSourceScannerIncludesOCamlSourceFiles(t *testing.T) {
 	t.Parallel()
 
-	for _, path := range []string{
-		"ocaml/llm_temporal_worker/lib/client.ml",
-		"ocaml/llm_temporal_worker/lib/client.mli",
-	} {
-		if !isSourceCode(path) {
-			t.Fatalf("isSourceCode(%q) = false, want true", path)
-		}
-	}
+	requireSourceCode(t, "ocaml/llm_temporal_worker/lib/client.ml", "ocaml/llm_temporal_worker/lib/client.mli")
 }
 
 func TestSourceScannerClassifiesExecutableTextAsSource(t *testing.T) {
 	t.Parallel()
 
-	for _, path := range []string{
-		"Dockerfile",
-		"deploy/Dockerfile.worker",
-		"Makefile",
-		"scripts/check.sh",
-		"scripts/check.py",
-	} {
+	requireSourceCode(t, "Dockerfile", "deploy/Dockerfile.worker", "Makefile", "scripts/check.sh", "scripts/check.py")
+	if isSourceCode("README.md") {
+		t.Fatal("isSourceCode(README.md) = true, want false")
+	}
+}
+
+// mustScan runs scan over content and returns its finding, failing the test
+// on a scan error.
+func mustScan(t *testing.T, scan func([]byte) (*finding, error), content string) *finding {
+	t.Helper()
+	finding, err := scan([]byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return finding
+}
+
+// verifyFile verifies a new source root holding only content at path.
+func verifyFile(t *testing.T, path, content string) error {
+	t.Helper()
+	root := t.TempDir()
+	writeTestFile(t, root, path, []byte(content))
+	return verify(root, "")
+}
+
+// verifyTestOutput verifies output as captured test output beside a safe
+// source root.
+func verifyTestOutput(t *testing.T, output []byte) error {
+	t.Helper()
+	root := t.TempDir()
+	writeTestFile(t, root, "internal/safe.go", []byte("package internal\n"))
+	writeTestFile(t, root, "test-output.json", output)
+	return verify(root, filepath.Join(root, "test-output.json"))
+}
+
+// requireRedactedRejection requires err to be a rejection that discloses none
+// of the secrets; accepted is the failure when verification passed.
+func requireRedactedRejection(t *testing.T, err error, accepted string, secrets ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal(accepted)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("verify leaked credential bytes: %v", err)
+		}
+	}
+}
+
+// requireSourceCode requires every path to be classified as source code.
+func requireSourceCode(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, path := range paths {
 		if !isSourceCode(path) {
 			t.Fatalf("isSourceCode(%q) = false, want true", path)
 		}
-	}
-	if isSourceCode("README.md") {
-		t.Fatal("isSourceCode(README.md) = true, want false")
 	}
 }
 

@@ -1,7 +1,6 @@
 package openairesponses
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -36,10 +35,7 @@ func TestCompactionSummaryIgnoresLiftedReasoning(t *testing.T) {
 				t.Fatal(err)
 			}
 			call := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, request)
-			result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			result := adaptertest.Invoke(t, adapter, call)
 			if len(result.Response.Output) != 2 {
 				t.Fatalf("output = %#v, want reasoning and message", result.Response.Output)
 			}

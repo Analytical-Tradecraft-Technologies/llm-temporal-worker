@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,11 +27,7 @@ const (
 )
 
 func TestBedrockContractProfileIsEnforced(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	report, err := contracttest.ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := contract.ValidateRepository(t)
 	for _, profile := range report.Enforced {
 		if profile.ID == "bedrock-anthropic" {
 			return
@@ -241,26 +236,7 @@ func assertBedrockOpaqueStateFixture(t *testing.T, response llm.Response) {
 
 func assertBedrockClassFacts(t *testing.T, adapter *Adapter) {
 	t.Helper()
-	var semantic []struct {
-		Class  llm.ServiceClass `json:"class"`
-		Actual llm.ServiceClass `json:"actual"`
-	}
-	if err := json.Unmarshal(mustReadBedrockFixture(t, "class-facts.semantic.json"), &semantic); err != nil {
-		t.Fatal(err)
-	}
-	var wire []struct {
-		Class         llm.ServiceClass `json:"class"`
-		Supported     bool             `json:"supported"`
-		RequestedTier string           `json:"requested_tier"`
-		ActualTier    string           `json:"actual_tier"`
-	}
-	if err := json.Unmarshal(mustReadBedrockFixture(t, "class-facts.wire.json"), &wire); err != nil {
-		t.Fatal(err)
-	}
-	actualByClass := make(map[llm.ServiceClass]llm.ServiceClass, len(semantic))
-	for _, fact := range semantic {
-		actualByClass[fact.Class] = fact.Actual
-	}
+	wire, actualByClass := contract.ClassFacts(t, mustReadBedrockFixture(t, "class-facts.semantic.json"), mustReadBedrockFixture(t, "class-facts.wire.json"))
 	for _, fact := range wire {
 		if !fact.Supported {
 			continue
@@ -298,17 +274,10 @@ func assertBedrockUsageAndCost(t *testing.T, adapter *Adapter) {
 func assertBedrockStrictLoss(t *testing.T, adapter *Adapter) {
 	t.Helper()
 	request := loadBedrockContractRequest(t, "strict-loss.semantic.json")
-	var expected fixtureProviderError
-	if err := json.Unmarshal(mustReadBedrockFixture(t, "strict-loss.wire.json"), &expected); err != nil {
-		t.Fatal(err)
-	}
+	expected := contract.DecodeJSON[fixtureProviderError](t, mustReadBedrockFixture(t, "strict-loss.wire.json"))
 	for _, portability := range []llm.PortabilityMode{llm.PortabilityStrict, llm.PortabilityBestEffort} {
 		request.Portability = portability
-		_, err := adapter.Compile(context.Background(), provider.CompileInput{
-			Request: request,
-			Query:   provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockMessages, Model: request.Model},
-			Strict:  true,
-		})
+		_, err := adaptertest.Compile(adapter, bedrockFixtureEndpoint, provider.FamilyBedrockMessages, request, true)
 		var providerErr *provider.Error
 		if !errors.As(err, &providerErr) {
 			t.Fatalf("%s strict-loss error = %T %v, want provider error", portability, err, err)
@@ -328,10 +297,7 @@ func assertBedrockClassifiedError(t *testing.T) {
 	if err := json.Unmarshal(mustReadBedrockFixture(t, "classified-error.wire.json"), &fixture); err != nil {
 		t.Fatal(err)
 	}
-	var apiErr anthropic.Error
-	if err := json.Unmarshal(fixture.Body, &apiErr); err != nil {
-		t.Fatal(err)
-	}
+	apiErr := contract.DecodeJSON[anthropic.Error](t, fixture.Body)
 	apiErr.StatusCode = fixture.Status
 	apiErr.RequestID = fixture.RequestID
 	apiErr.Response = &http.Response{Header: http.Header{"X-Amzn-Requestid": []string{fixture.RequestID}}}
@@ -381,11 +347,7 @@ func assertBedrockContinuationCompatibility(t *testing.T, adapter *Adapter) {
 		expectedByName[rejection.Name] = rejection.Expected
 	}
 	for _, incompatible := range semantic.Incompatible {
-		_, err := adapter.Compile(context.Background(), provider.CompileInput{
-			Request: incompatible.Request,
-			Query:   provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockMessages, Model: incompatible.Request.Model},
-			Strict:  true,
-		})
+		_, err := adaptertest.Compile(adapter, bedrockFixtureEndpoint, provider.FamilyBedrockMessages, incompatible.Request, true)
 		var providerErr *provider.Error
 		if !errors.As(err, &providerErr) {
 			t.Fatalf("%s continuation error = %T %v, want provider error", incompatible.Name, err, err)

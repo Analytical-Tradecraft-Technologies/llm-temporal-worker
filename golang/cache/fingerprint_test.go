@@ -25,22 +25,25 @@ func testInput() Input {
 	}
 }
 
-func TestComputeExcludesPerCallControls(t *testing.T) {
-	key := []byte("deployment-secret")
-	base := testInput()
-	first, err := Compute(key, base)
+func mustCompute(t *testing.T, key []byte, input Input) Fingerprint {
+	t.Helper()
+	fingerprint, err := Compute(key, input)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return fingerprint
+}
+
+func TestComputeExcludesPerCallControls(t *testing.T) {
+	key := []byte("deployment-secret")
+	base := testInput()
+	first := mustCompute(t, key, base)
 	base.Request.OperationKey = "operation-b"
 	base.Request.ServiceClass = llm.ServiceClassPriority
 	base.Request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassEconomy}
 	base.Request.Context.Actor = "different-actor"
 	base.Request.Context.Tags = map[string]string{"trace": "two", "new": "tag"}
-	second, err := Compute(key, base)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := mustCompute(t, key, base)
 	if first != second {
 		t.Fatalf("per-call controls changed semantic fingerprint: %s != %s", first.Hex(), second.Hex())
 	}
@@ -48,17 +51,11 @@ func TestComputeExcludesPerCallControls(t *testing.T) {
 
 func TestComputeDomainSeparatesGenerateAndCompact(t *testing.T) {
 	key := []byte("deployment-secret")
-	generate, err := Compute(key, testInput())
-	if err != nil {
-		t.Fatal(err)
-	}
+	generate := mustCompute(t, key, testInput())
 	compact := testInput()
 	compact.Operation = OperationCompact
 	compact.Variant = 0
-	compactResult, err := Compute(key, compact)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compactResult := mustCompute(t, key, compact)
 	if generate == compactResult {
 		t.Fatal("generate and compact fingerprints must be domain-separated")
 	}
@@ -100,14 +97,8 @@ func TestCanonicalizationIgnoresMapInsertionOrder(t *testing.T) {
 		"a": json.RawMessage(`true`),
 		"z": json.RawMessage(`{"a":1,"b":2}`),
 	}
-	firstFingerprint, err := Compute([]byte("secret"), first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondFingerprint, err := Compute([]byte("secret"), second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	firstFingerprint := mustCompute(t, []byte("secret"), first)
+	secondFingerprint := mustCompute(t, []byte("secret"), second)
 	if firstFingerprint != secondFingerprint {
 		t.Fatal("JSON object spelling or map insertion order changed fingerprint")
 	}
@@ -120,14 +111,8 @@ func TestCanonicalizationPreservesLargeIntegerSeeds(t *testing.T) {
 	second := testInput()
 	seedB := int64(9007199254740993)
 	second.Request.Sampling = &llm.SamplingSpec{Seed: &seedB}
-	firstFingerprint, err := Compute([]byte("secret"), first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondFingerprint, err := Compute([]byte("secret"), second)
-	if err != nil {
-		t.Fatal(err)
-	}
+	firstFingerprint := mustCompute(t, []byte("secret"), first)
+	secondFingerprint := mustCompute(t, []byte("secret"), second)
 	if firstFingerprint == secondFingerprint {
 		t.Fatal("distinct int64 sampling seeds must not share a fingerprint")
 	}

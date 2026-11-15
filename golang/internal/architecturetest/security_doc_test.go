@@ -1,8 +1,6 @@
 package architecturetest
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,22 +10,15 @@ import (
 // allowed_tenants; data_regions is recorded but not enforced, and there are no
 // project or data-classification restrictions.
 func TestSecurityDocMatchesModelRouteRestrictions(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(repositoryRoot(t), "docs", "architecture", "security-and-privacy.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc := strings.Join(strings.Fields(string(data)), " ")
+	data := readText(t, repositoryRoot(t), "docs", "architecture", "security-and-privacy.md")
+	doc := strings.Join(strings.Fields(data), " ")
 	expectContainsEach(t, doc, "security architecture document is missing %q",
 		"`allowed_tenants`",
 		"`data_regions` is recorded with the model but not enforced",
 		"There are no project or data-classification route restrictions.",
 	)
-	for _, stale := range []string{
+	expectOmitsEach(t, doc, "security architecture document still claims %q",
 		"allowed tenants/projects",
 		"A continuation cannot cross those restrictions.",
-	} {
-		if strings.Contains(doc, stale) {
-			t.Errorf("security architecture document still claims %q", stale)
-		}
-	}
+	)
 }
