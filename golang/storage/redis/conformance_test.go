@@ -37,16 +37,10 @@ func TestRedisKeyNamespacesDoNotAliasDerivedState(t *testing.T) {
 		{name: "hash tag", keys: KeyOptions{Prefix: base.Prefix, HashTag: "other", KeySecret: append([]byte(nil), base.KeySecret...)}},
 		{name: "key secret", keys: KeyOptions{Prefix: base.Prefix, HashTag: base.HashTag, KeySecret: differentSecret}},
 	}
-	primary, err := newKeySpace(base)
-	if err != nil {
-		t.Fatal(err)
-	}
+	primary := mustCall(t, newKeySpace, base)
 	for _, test := range variants {
 		t.Run(test.name, func(t *testing.T) {
-			variant, err := newKeySpace(test.keys)
-			if err != nil {
-				t.Fatal(err)
-			}
+			variant := mustCall(t, newKeySpace, test.keys)
 			for _, pair := range []struct {
 				name  string
 				base  string
@@ -76,10 +70,7 @@ func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 	parent := createTestRoot(t, store, now)
 	child := testChildContinuation(t, now, parent)
 	child.ExpiresAt = now.Add(time.Second)
-	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child, OperationKey: "operation-private-99"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustPutChild(t, store, state.PutChildRequest{Parent: parent, Child: child, OperationKey: "operation-private-99"})
 	space := testKeySpace(t)
 	keys := []string{
 		space.continuationIndexKey(first.String()),
@@ -98,10 +89,7 @@ func TestContinuationRuntimeFixtureExpiresAllDerivedKeysTogether(t *testing.T) {
 	}
 	replacement := testChildContinuation(t, now, parent)
 	replacement.ExpiresAt = now.Add(time.Hour)
-	second, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: replacement, OperationKey: "operation-private-99"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := mustPutChild(t, store, state.PutChildRequest{Parent: parent, Child: replacement, OperationKey: "operation-private-99"})
 	if second == first {
 		t.Fatalf("expired operation idempotency key returned stale child %q", first)
 	}
@@ -134,9 +122,7 @@ func TestContinuationStoreFailsClosedForUnavailableRedisState(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Get(ctx, handle); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled continuation read = %v", err)
-	}
+	requireErrorIs(t, errOf(store.Get(ctx, handle)), context.Canceled, "canceled continuation read =")
 }
 
 func TestContinuationStoreTreatsExpiryRaceAsNotFound(t *testing.T) {

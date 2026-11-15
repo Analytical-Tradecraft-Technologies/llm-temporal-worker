@@ -3,7 +3,6 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,7 +11,6 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -22,9 +20,7 @@ func completionAttemptFixture(t *testing.T, mode string) (*Repository, *memoryTa
 	r, table, blobs, root, checkpoint, handoff := handoffFixture(t)
 	_, _, _, _, template := budgetPlanFixture(t)
 	preparation := RequestPreparation{Version: 1, ConfigDigest: template.ConfigDigest, CheckpointScope: checkpoint.ScopeID, PreparedAt: root.Request.CreatedAt}
-	if err := r.SaveRequestPreparation(context.Background(), root.Request.Scope, root.Request.ID, preparation); err != nil {
-		t.Fatal(err)
-	}
+	mustSavePreparation(t, r, root.Request.Scope, root.Request.ID, preparation)
 	a := initialRequestAttempt(t, r, root)
 	handoff.Mode = mode
 	if mode == "cache" {
@@ -37,13 +33,8 @@ func completionAttemptFixture(t *testing.T, mode string) (*Repository, *memoryTa
 
 func commitCompletionHandoff(t *testing.T, r *Repository, root Record, checkpoint state.DurableCheckpoint, handoff FinalizationHandoff, now time.Time) {
 	t.Helper()
-	ctx := context.Background()
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SaveFinalizationHandoff(ctx, root.Request.Scope, root.Request.ID, handoff, now); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
+	mustSaveHandoff(t, r, root.Request.Scope, root.Request.ID, handoff, now)
 }
 
 func TestRequestCompletionRepairsChildAndRootLostWrites(t *testing.T) {
@@ -55,15 +46,10 @@ func TestRequestCompletionRepairsChildAndRootLostWrites(t *testing.T) {
 					ctx, scope := context.Background(), root.Request.Scope
 					now := a.CreatedAt.Add(time.Minute)
 					if mode == "provider" {
-						child, err := r.Read(ctx, scope, a.ID)
-						if err != nil {
-							t.Fatal(err)
-						}
+						child := mustRead(t, r, scope, a.ID)
 						plan.Mode, plan.Route.OperationID, plan.QuotedAt = BudgetUnmatched, durable.OperationID(a.ID), a.CreatedAt
 						plan.Reservation = durable.ReserveRequest{OperationID: plan.Route.OperationID, GenerationID: plan.Route.GenerationID, ExpiresAt: plan.QuotedAt.Add(durable.BudgetStartLease)}
-						if err := r.SaveBudgetPlan(ctx, scope, a.ID, plan, plan.QuotedAt); err != nil {
-							t.Fatal(err)
-						}
+						mustSaveBudgetPlan(t, r, scope, a.ID, plan)
 						saved := startExecution(t, r, child, plan, durable.ReserveResult{})
 						saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) { e.Stage = ExecutionSubmitting })
 						advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
@@ -80,9 +66,7 @@ func TestRequestCompletionRepairsChildAndRootLostWrites(t *testing.T) {
 					}
 					table.hook = nil
 					r = reopen(t, table, blobs)
-					if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, now.Add(time.Second)); err != nil {
-						t.Fatal(err)
-					}
+					mustCompleteOperation(t, r, scope, root.Request.ID, result, now.Add(time.Second))
 					for _, id := range []RequestID{root.Request.ID, a.ID} {
 						record, err := r.Read(ctx, scope, id)
 						if err != nil || record.Status != StatusCompleted {
@@ -99,9 +83,7 @@ func TestRequestCompletionRepairsChildAndRootLostWrites(t *testing.T) {
 						t.Error("healthy completion replay wrote table")
 						return nil, nil
 					}
-					if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, now); err != nil {
-						t.Fatal(err)
-					}
+					mustCompleteOperation(t, r, scope, root.Request.ID, result, now)
 				})
 			}
 		}
@@ -116,15 +98,9 @@ func TestRequestCompletionCannotHideUnfinishedPaidChild(t *testing.T) {
 			startExecution(t, r, child, plan, budget)
 			now := plan.QuotedAt.Add(time.Minute)
 			commitCompletionHandoff(t, r, root, checkpoint, handoff, now)
-			if _, err := r.CompleteOperation(context.Background(), root.Request.Scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), now); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatal("unfinished paid child was hidden", err)
-			}
+			requireErrorIs(t, errOf(r.CompleteOperation(context.Background(), root.Request.Scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), now)), contracts.ErrConflict, "unfinished paid child was hidden")
 			for _, id := range []RequestID{root.Request.ID, a.ID} {
-				shard, _ := PendingShard(id)
-				page, err := r.ListPending(context.Background(), shard, 100, "")
-				if err != nil {
-					t.Fatal(err)
-				}
+				page := firstPendingPage(t, r, id)
 				found := false
 				for _, pending := range page.Requests {
 					found = found || pending.ID == id
@@ -142,19 +118,11 @@ func TestCacheCompletionPreservesPreviousUnknownPaidChild(t *testing.T) {
 	ctx, scope := context.Background(), root.Request.Scope
 	child, plan, budget := saveAttemptPlan(t, r, scope, first, template)
 	saved := startExecution(t, r, child, plan, budget)
-	saved = advanceExecution(t, r, child, saved, func(e *ProviderExecution) {
-		e.Stage = ExecutionUnknown
-		e.Failure = &ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-	})
+	saved = markExecutionUnknown(t, r, child, saved)
 	now := saved.Execution.RecoverAfter
-	next, err := r.BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	next := mustBeginRequestAttempt(t, r, scope, root.Request.ID, first.ID, now)
 	commitCompletionHandoff(t, r, root, checkpoint, handoff, now)
-	if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), now); err != nil {
-		t.Fatal(err)
-	}
+	mustCompleteOperation(t, r, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), now)
 	count := 0
 	for shard := range PendingShards {
 		page, err := r.ListPending(ctx, shard, 100, "")
@@ -208,9 +176,7 @@ func TestCacheCompletionAcceptsAttemptRetiredByConcurrentRenewal(t *testing.T) {
 				t.Fatal("attempt was not retired", err)
 			}
 			commitCompletionHandoff(t, r, root, checkpoint, handoff, renewAt)
-			if _, err := reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt); !errors.Is(err, contracts.ErrConflict) {
-				t.Fatal("renewal replaced an attempt after its handoff", err)
-			}
+			requireErrorIs(t, errOf(reopen(t, table, blobs).BeginRequestAttempt(ctx, scope, root.Request.ID, first.ID, renewAt)), contracts.ErrConflict, "renewal replaced an attempt after its handoff")
 			result := json.RawMessage(`{"version":1,"response":{}}`)
 			if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, result, renewAt); err != nil {
 				t.Fatal("retired cache attempt wedged completion", err)
@@ -220,11 +186,7 @@ func TestCacheCompletionAcceptsAttemptRetiredByConcurrentRenewal(t *testing.T) {
 				t.Fatal("request did not finish", err)
 			}
 			for _, id := range []RequestID{root.Request.ID, first.ID} {
-				shard, _ := PendingShard(id)
-				page, err := r.ListPending(ctx, shard, 100, "")
-				if err != nil {
-					t.Fatal(err)
-				}
+				page := firstPendingPage(t, r, id)
 				for _, pending := range page.Requests {
 					if pending.ID == id {
 						t.Fatal("finished work remained pending")
@@ -243,11 +205,7 @@ func TestProviderCompletionRejectsRetiredAttempt(t *testing.T) {
 	ctx, scope := context.Background(), root.Request.Scope
 	_, plan, _ := saveAttemptPlan(t, r, scope, first, template)
 	renewAt := plan.Reservation.ExpiresAt.Add(-UnusedAttemptRenewMargin)
-	if err := r.retireRequestAttempt(ctx, scope, first, renewAt); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, r.retireRequestAttempt(ctx, scope, first, renewAt))
 	commitCompletionHandoff(t, r, root, checkpoint, handoff, renewAt)
-	if _, err := r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), renewAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatal("provider handoff completed without a provider execution", err)
-	}
+	requireErrorIs(t, errOf(r.CompleteOperation(ctx, scope, root.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), renewAt)), contracts.ErrConflict, "provider handoff completed without a provider execution")
 }

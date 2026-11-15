@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +10,7 @@ import (
 )
 
 func TestBudgetKeySpaceKeepsGenerationFamiliesInOneHashSlot(t *testing.T) {
-	keys, err := NewBudgetKeySpace(KeyOptions{Prefix: "worker", HashTag: "budget", KeySecret: []byte(strings.Repeat("k", 32))})
-	if err != nil {
-		t.Fatalf("NewBudgetKeySpace: %v", err)
-	}
+	keys := testBudgetKeySpaceForAdapter(t)
 	for _, key := range []string{keys.ActiveGenerationKey(), keys.EventsKey(), keys.WorkersKey(), keys.ManifestKey("generation-1")} {
 		if !strings.Contains(key, ":{budget}:") {
 			t.Fatalf("key %q does not retain configured hash tag", key)
@@ -89,9 +85,7 @@ func TestMemoryBudgetGenerationPortPublishesAndValidatesPointer(t *testing.T) {
 	}
 	mutated := manifest
 	mutated.IncarnationID = BudgetIncarnationID("incarnation-2")
-	if _, err := port.PublishGeneration(context.Background(), mutated); !errors.Is(err, ErrBudgetGenerationConflict) {
-		t.Fatalf("mutable generation accepted: %v", err)
-	}
+	requireErrorIs(t, errOf(port.PublishGeneration(context.Background(), mutated)), ErrBudgetGenerationConflict, "mutable generation accepted")
 	if _, err := port.PublishGeneration(context.Background(), manifest); err != nil {
 		t.Fatalf("idempotent generation publish: %v", err)
 	}
@@ -130,9 +124,7 @@ func TestBudgetStreamClaimAndExpiryRequireOpaqueMembers(t *testing.T) {
 				}
 				event.OperationHash = strings.Repeat("a", 64)
 			}
-			if _, err := event.Marshal(); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, errOf(event.Marshal()))
 		})
 	}
 }

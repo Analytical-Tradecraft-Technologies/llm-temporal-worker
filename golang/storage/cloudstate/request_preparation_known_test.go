@@ -24,9 +24,7 @@ func TestRequestPreparationKnownParent(t *testing.T) {
 			r, table, blobs, record, preparation := preparationFixture(t)
 			r.parentSnapshotBlob = referenced
 			ctx := context.Background()
-			if err := r.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-				t.Fatal(err)
-			}
+			mustSavePreparation(t, r, record.Request.Scope, record.Request.ID, preparation)
 			reopened := reopen(t, table, blobs)
 			want, wantParent, err := reopened.LoadRequestPreparationParent(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil {
@@ -141,9 +139,7 @@ func TestRequestPreparationKnownParentSave(t *testing.T) {
 			ctx := context.Background()
 			plain, _, _, record, preparation := preparationFixture(t)
 			plain.parentSnapshotBlob = referenced
-			if err := plain.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, plain.SaveRequestPreparation(ctx, record.Request.Scope, record.Request.ID, preparation))
 			want, err := plain.Read(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -153,17 +149,11 @@ func TestRequestPreparationKnownParentSave(t *testing.T) {
 			// A different, corrupt parent is still decoded and rejected.
 			corrupt := preparation
 			corrupt.ParentSnapshot = append([]byte(nil), preparation.ParentSnapshot[:len(preparation.ParentSnapshot)/2]...)
-			if err := known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, corrupt, &KnownParent{Snapshot: preparation.ParentSnapshot}); !errors.Is(err, ErrInvalid) {
-				t.Fatalf("saved a corrupt parent: %v", err)
-			}
+			requireErrorIs(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, corrupt, &KnownParent{Snapshot: preparation.ParentSnapshot}), ErrInvalid, "saved a corrupt parent")
 			invalid := preparation
 			invalid.Version = 2
-			if err := known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, invalid, &KnownParent{Snapshot: preparation.ParentSnapshot}); !errors.Is(err, ErrInvalid) {
-				t.Fatalf("saved invalid fields: %v", err)
-			}
-			if err := known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, preparation, &KnownParent{Snapshot: preparation.ParentSnapshot}); err != nil {
-				t.Fatal(err)
-			}
+			requireErrorIs(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, invalid, &KnownParent{Snapshot: preparation.ParentSnapshot}), ErrInvalid, "saved invalid fields")
+			mustNoError(t, known.SaveRequestPreparationKnown(ctx, record.Request.Scope, record.Request.ID, preparation, &KnownParent{Snapshot: preparation.ParentSnapshot}))
 			got, err := known.Read(ctx, record.Request.Scope, record.Request.ID)
 			if err != nil {
 				t.Fatal(err)

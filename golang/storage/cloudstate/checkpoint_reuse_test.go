@@ -2,7 +2,6 @@ package cloudstate
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,12 +17,8 @@ func TestCheckpointReuseWithinInvocation(t *testing.T) {
 	r, table, blobs, cp := checkpointFixture(t)
 	ctx := WithRecordReuse(context.Background())
 	store := r.Checkpoints()
-	if _, err := store.Get(ctx, cp.ScopeID, cp.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("unpublished checkpoint: %v", err)
-	}
-	if err := publishCheckpoint(context.Background(), store, cp); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(store.Get(ctx, cp.ScopeID, cp.ID)), contracts.ErrNotFound, "unpublished checkpoint")
+	mustPublishCheckpoint(t, store, cp)
 	want, err := store.Get(context.Background(), cp.ScopeID, cp.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -51,18 +46,14 @@ func TestCheckpointReuseWithinInvocation(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(second, want) || opens != 1 {
 		t.Fatalf("reuse lost isolation or read again: opens=%d err=%v", opens, err)
 	}
-	if _, err := store.Get(ctx, "another-scope", cp.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("scope bypass: %v", err)
-	}
+	requireErrorIs(t, errOf(store.Get(ctx, "another-scope", cp.ID)), contracts.ErrNotFound, "scope bypass")
 	for name, read := range map[string]func() error{
 		"new invocation":     func() error { _, err := store.Get(WithRecordReuse(ctx), cp.ScopeID, cp.ID); return err },
 		"plain context":      func() error { _, err := store.Get(context.Background(), cp.ScopeID, cp.ID); return err },
 		"another repository": func() error { _, err := reopen(t, table, blobs).Checkpoints().Get(ctx, cp.ScopeID, cp.ID); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := read(); !errors.Is(err, contracts.ErrNotFound) {
-				t.Fatalf("removed checkpoint was visible: %v", err)
-			}
+			requireErrorIs(t, read(), contracts.ErrNotFound, "removed checkpoint was visible")
 		})
 	}
 }
@@ -102,10 +93,6 @@ func TestPayloadReuseOnlyAfterRead(t *testing.T) {
 	if _, err := store.Read(ctx, cp.ScopeID, written); err != nil {
 		t.Fatalf("validated payload was not reused: %v", err)
 	}
-	if _, err := store.Read(WithRecordReuse(ctx), cp.ScopeID, written); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("lost payload hidden from a new invocation: %v", err)
-	}
-	if _, err := reopen(t, table, blobs).Checkpoints().Read(ctx, cp.ScopeID, written); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("lost payload hidden from another repository: %v", err)
-	}
+	requireErrorIs(t, errOf(store.Read(WithRecordReuse(ctx), cp.ScopeID, written)), ErrCorrupt, "lost payload hidden from a new invocation")
+	requireErrorIs(t, errOf(reopen(t, table, blobs).Checkpoints().Read(ctx, cp.ScopeID, written)), ErrCorrupt, "lost payload hidden from another repository")
 }

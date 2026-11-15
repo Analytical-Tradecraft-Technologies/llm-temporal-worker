@@ -51,6 +51,15 @@ func testCompactCacheReplay(request llm.CompactRequestV1) CompactFinalization {
 	return result
 }
 
+func mustCompactV1(t *testing.T, request llm.CompactRequestV1, ports CompactPorts) llm.CompactResponseV1 {
+	t.Helper()
+	response, err := CompactV1(context.Background(), request, ports)
+	if err != nil {
+		t.Fatalf("CompactV1 error = %v", err)
+	}
+	return response
+}
+
 func testCompactRoutePlan() RoutePlan {
 	return RoutePlan{OperationID: "operation-id", GenerationID: "compact-generation-id", RouteID: "compact-route", EndpointID: "compact-endpoint", Provider: "provider", Model: "model"}
 }
@@ -118,10 +127,7 @@ func testCompactPorts(events *[]string, failStage string) CompactPorts {
 
 func TestCompactV1RunsDistinctDurablePhasesInOrder(t *testing.T) {
 	events := []string{}
-	response, err := CompactV1(context.Background(), testCompactRequest(), testCompactPorts(&events, ""))
-	if err != nil {
-		t.Fatalf("CompactV1 error = %v", err)
-	}
+	response := mustCompactV1(t, testCompactRequest(), testCompactPorts(&events, ""))
 	if response.Checkpoint.Kind != "compaction" || response.OperationKey != "compact-operation-1" {
 		t.Fatalf("response = %#v", response)
 	}
@@ -152,10 +158,7 @@ func TestCompactV1CompletedReplayReturnsWithoutCacheOrProviderWork(t *testing.T)
 		events = append(events, "replay")
 		return CompactReplay{Completed: &completed}, nil
 	}
-	response, err := CompactV1(context.Background(), testCompactRequest(), ports)
-	if err != nil {
-		t.Fatalf("CompactV1 error = %v", err)
-	}
+	response := mustCompactV1(t, testCompactRequest(), ports)
 	if response.OperationID != "operation-id" {
 		t.Fatalf("response operation id = %q", response.OperationID)
 	}
