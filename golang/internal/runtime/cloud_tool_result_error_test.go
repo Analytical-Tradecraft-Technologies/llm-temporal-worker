@@ -17,10 +17,10 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
 
-// A failed tool reported with is_error=true must continue a checkpoint on an
-// OpenAI Responses route: the real adapter compiles it and the request reaches
-// the provider carrying the documented error prefix.
-func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
+// toolCallingCloud is a bounded cloud fixture whose route supports tool calls
+// natively and whose provider answers every call with one "lookup" tool call.
+func toolCallingCloud(t *testing.T) *boundedCloudFixture {
+	t.Helper()
 	f := boundedCloud(t, false)
 	source := f.cap.Snapshot.(*planningSource)
 	model := source.value.Routes.Models["alias"]
@@ -34,6 +34,14 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 		result.Response.Output = []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)}}
 		return result, nil
 	}
+	return f
+}
+
+// A failed tool reported with is_error=true must continue a checkpoint on an
+// OpenAI Responses route: the real adapter compiles it and the request reaches
+// the provider carrying the documented error prefix.
+func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
+	f := toolCallingCloud(t)
 	f.restart(t)
 	parent := f.finish(t)
 
@@ -71,19 +79,7 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 // failed tool result: a transcript whose serialized size fits the route's
 // byte limit but not with the prefix has to be compacted first.
 func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
-	f := boundedCloud(t, false)
-	source := f.cap.Snapshot.(*planningSource)
-	model := source.value.Routes.Models["alias"]
-	model.Routes[0].Capabilities.Features[routing.FeatureToolCall] = routing.Capability{State: routing.CapabilityNative}
-	source.value.Routes.Models["alias"] = model
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
-			return provider.Result{}, err
-		}
-		result := executionResponse(call).Result
-		result.Response.Output = []llm.Item{llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)}}
-		return result, nil
-	}
+	f := toolCallingCloud(t)
 	policy := json.RawMessage(`{"recent_turns":0}`)
 	f.request.SettingsPatch.CompactionPolicy.Set = &policy
 	f.restart(t)

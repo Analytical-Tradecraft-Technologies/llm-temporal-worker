@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -117,6 +118,26 @@ func (f *boundedCloudFixture) firstAttempt(t testing.TB, ctx context.Context, v 
 		t.Fatal(err)
 	}
 	return f.ref(v), testRequestScope, first
+}
+
+// requireRenewedAttemptCompletes acquires ref's budget again, checks the
+// request moved from first to a fresh attempt with no prior candidates, and
+// runs that attempt to completion with exactly one submission in all.
+func (f *boundedCloudFixture) requireRenewedAttemptCompletes(t testing.TB, ctx context.Context, ref llm.ExecutionReferenceV1, scope cloudstate.Scope, first cloudstate.RequestAttempt) {
+	t.Helper()
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionAcquired)
+	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
+	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
+		t.Fatalf("expired attempt not renewed: %+v, %v", next, err)
+	}
+	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	boundedState(t, v, err, llm.ExecutionCompleted)
+	if f.submits.Load() != 1 {
+		t.Fatal("renewed attempt not submitted once", f.submits.Load())
+	}
 }
 
 // appendAliasRoute adds a copy of the alias model's first route as routeID on
@@ -298,4 +319,18 @@ func singleRouteSnapshot(model, endpointID, version string) engine.Snapshot {
 	return engine.Snapshot{Routes: routing.Catalog{Models: map[string]routing.Model{
 		model: {Routes: []routing.Route{{EndpointID: endpointID, Capabilities: routing.CapabilitySet{Version: version}}}},
 	}}}
+}
+
+// requireCleanReturn waits up to two seconds for the run named name to send
+// its result on done, failing the test unless it returns nil in time.
+func requireCleanReturn(t testing.TB, done <-chan error, name string) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s returned %v", name, err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s did not shut down", name)
+	}
 }

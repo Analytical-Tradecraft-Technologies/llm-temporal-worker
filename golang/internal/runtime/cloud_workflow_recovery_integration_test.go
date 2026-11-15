@@ -44,11 +44,7 @@ func TestCloudWorkflowLiveExpiredAdmission(t *testing.T) {
 	ref := f.ref(prepared)
 	acquired, err := f.runtime.AcquireBudgetV1(h.ctx, ref)
 	boundedState(t, acquired, err, llm.ExecutionAcquired)
-	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
-	first, err := f.repository.LoadRequestAttempt(h.ctx, scope, cloudstate.RequestID(ref.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, scope, first := f.firstAttempt(t, h.ctx, acquired)
 	leases := liveCloudLeases(t, h)
 	old, ok := leases[string(first.ID)]
 	if !ok || len(leases) != 1 || old.Claimed {
@@ -102,11 +98,7 @@ func TestCloudWorkflowLiveUnknownSubmission(t *testing.T) {
 			}
 			pending, err := f.runtime.GenerateStepV1(h.ctx, f.request)
 			boundedState(t, pending, err, llm.ExecutionPending)
-			scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
-			first, err := f.repository.LoadRequestAttempt(h.ctx, scope, cloudstate.RequestID(pending.RequestID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			_, scope, first := f.firstAttempt(t, h.ctx, pending)
 			saved, err := f.repository.LoadProviderExecution(h.ctx, scope, first.ID)
 			if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Claim == nil || saved.Execution.Settled {
 				t.Fatal("lost provider response did not preserve the paid claim", err)

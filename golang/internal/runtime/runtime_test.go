@@ -614,17 +614,7 @@ func TestRuntimeReloadDependencyFailureKeepsPriorSnapshot(t *testing.T) {
 func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	probe := &mutableRuntimeProbe{}
 	probe.healthy.Store(true)
-	controller := &monitoringWorker{}
-	var closed atomic.Bool
-	options := testRuntimeOptions(t, &testWorker{}, &closed)
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-		return controller, &testRegistry{}, nil
-	}
-	options.DependencyProbes = []DependencyProbe{probe}
-	runtime := newStartedRuntime(t, context.Background(), runtimeMonitorConfig(t), options)
-	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
-		t.Fatalf("initial monitor state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
-	}
+	runtime, controller := newMonitoredRuntime(t, context.Background(), runtimeMonitorConfig(t), probe)
 	probe.healthy.Store(false)
 	waitForRuntime(t, func() bool { return !runtime.Health.Ready() && controller.stops.Load() >= 1 })
 	if runtime.Health.Live() != true {
@@ -650,9 +640,7 @@ func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
 	var builds atomic.Int32
 	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
 	options.V1Runtime = nil
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-		return controller, &testRegistry{}, nil
-	}
+	useWorker(&options, controller)
 	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
 		clients := &testDependencyProbeClientSet{}
 		if builds.Add(1) > 1 {
@@ -859,6 +847,30 @@ func (worker *monitoringWorker) Start() error {
 
 func (worker *monitoringWorker) Stop() { worker.stops.Add(1) }
 
+// useWorker makes every worker options builds controller.
+func useWorker(options *Options, controller app.WorkerController) {
+	options.WorkerFactory = func(client.Client, string, worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+		return controller, &testRegistry{}, nil
+	}
+}
+
+// newMonitoredRuntime starts a runtime from data whose worker is one
+// monitoringWorker and whose only dependency probe is probe, and checks that
+// it starts ready with the worker started once.
+func newMonitoredRuntime(t *testing.T, ctx context.Context, data []byte, probe DependencyProbe) (*Runtime, *monitoringWorker) {
+	t.Helper()
+	controller := &monitoringWorker{}
+	var closed atomic.Bool
+	options := testRuntimeOptions(t, &testWorker{}, &closed)
+	useWorker(&options, controller)
+	options.DependencyProbes = []DependencyProbe{probe}
+	runtime := newStartedRuntime(t, ctx, data, options)
+	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
+		t.Fatalf("initial state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
+	}
+	return runtime, controller
+}
+
 type drainingMonitoringWorker struct {
 	starts      atomic.Int32
 	stops       atomic.Int32
@@ -981,14 +993,7 @@ func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 		}
 	}
 	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run returned %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not shut down")
-	}
+	requireCleanReturn(t, done, "Run")
 	if runtime.Health.Live() || runtime.Health.Ready() || !controller.stopped.Load() || !closed.Load() {
 		t.Fatal("cancellation did not complete graceful shutdown")
 	}
@@ -1051,17 +1056,7 @@ func TestLoadTLSConfigDoesNotExposeCertificateBytes(t *testing.T) {
 func TestRuntimeToleratesTransientDependencyProbeFailuresBeforePausing(t *testing.T) {
 	probe := &mutableRuntimeProbe{}
 	probe.healthy.Store(true)
-	controller := &monitoringWorker{}
-	var closed atomic.Bool
-	options := testRuntimeOptions(t, &testWorker{}, &closed)
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-		return controller, &testRegistry{}, nil
-	}
-	options.DependencyProbes = []DependencyProbe{probe}
-	runtime := newStartedRuntime(t, context.Background(), runtimeConfig(t), options)
-	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
-		t.Fatalf("initial state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
-	}
+	runtime, controller := newMonitoredRuntime(t, context.Background(), runtimeConfig(t), probe)
 	probe.healthy.Store(false)
 	for round := 1; round < pauseAfterProbeFailures; round++ {
 		if err := runtime.syncDependencyReadiness(context.Background()); err != nil {
@@ -1254,9 +1249,7 @@ func TestDependencyReadinessReleasesItsSnapshotLeaseBeforeResume(t *testing.T) {
 	controller := &blockingStartWorker{entered: make(chan struct{}), release: make(chan struct{})}
 	options := testRuntimeOptions(t, &testWorker{}, &atomic.Bool{})
 	options.V1Runtime = nil
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-		return controller, &testRegistry{}, nil
-	}
+	useWorker(&options, controller)
 	options.EngineFactory = EngineFactoryFunc(func(context.Context, *config.Snapshot) (llm.Engine, app.ClientSet, error) {
 		return testEngine{}, &testDependencyProbeClientSet{probes: []DependencyProbe{healthy}}, nil
 	})

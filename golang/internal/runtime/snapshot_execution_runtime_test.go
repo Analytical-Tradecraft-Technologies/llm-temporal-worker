@@ -127,16 +127,7 @@ func TestSnapshotExecutionLeaseSurvivesReload(t *testing.T) {
 }
 
 func TestSnapshotExecutionStepsFailClosedWithoutBoundedRuntime(t *testing.T) {
-	application, err := app.New(context.Background(), app.Options{
-		InitialConfig: runtimeConfig(t), Builder: app.SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-			return &snapshotClients{v1Runtime: &recordingV1Runtime{}}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer application.Close(context.Background())
+	application := newStaticClientsApp(t, &snapshotClients{v1Runtime: &recordingV1Runtime{}})
 	proxy := &snapshotV1Runtime{application: application}
 	calls := []func() error{
 		func() error { _, err := proxy.PrepareExecutionV1(nil, llm.PrepareExecutionV1{}); return err },

@@ -3,12 +3,10 @@ package runtime
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 )
 
 // Durable state identity is where in-flight requests, budgets and results
@@ -64,23 +62,10 @@ func TestRuntimeReplacementValidatorRejectsStateIdentityChanges(t *testing.T) {
 				base = func(*config.Config) {}
 			}
 			initial := replacementTestConfig(t, base)
-			var clientBuilds atomic.Int32
-			application, err := app.New(context.Background(), app.Options{
-				InitialConfig: initial,
-				Builder:       app.SnapshotBuilder{},
-				Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-					clientBuilds.Add(1)
-					return app.ClientSetFunc(func(context.Context) error { return nil }), nil
-				},
-				ReplacementValidator: validateRuntimeReplacement,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = application.Close(context.Background()) })
+			application, clientBuilds := newReplacementApp(t, initial)
 			before := application.Current()
 
-			err = application.Reload(context.Background(), replacementTestConfig(t, func(value *config.Config) {
+			err := application.Reload(context.Background(), replacementTestConfig(t, func(value *config.Config) {
 				base(value)
 				test.mutate(value)
 			}))

@@ -161,10 +161,7 @@ func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T)
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
 			capabilities, _, _, prepared, _, binding := recoveryFixture(t)
-			capabilities.Adapters = planningRegistryFunc(func(context.Context, routing.Candidate) (provider.Adapter, error) {
-				t.Fatal("invalid recovery reached adapter lookup")
-				return nil, nil
-			})
+			capabilities.Adapters = forbidAdapterLookup(t, "invalid recovery reached adapter lookup")
 			recovery := mustProviderRecovery(t, capabilities)
 			mutate(&binding)
 			_, err := recovery.Generate(context.Background(), prepared, binding)
@@ -184,10 +181,7 @@ func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T)
 	} {
 		t.Run(name, func(t *testing.T) {
 			capabilities, _, _, prepared, _, binding := recoveryFixture(t)
-			capabilities.Adapters = planningRegistryFunc(func(context.Context, routing.Candidate) (provider.Adapter, error) {
-				t.Fatal("incompatible recovery reached adapter lookup")
-				return nil, nil
-			})
+			capabilities.Adapters = forbidAdapterLookup(t, "incompatible recovery reached adapter lookup")
 			recovery := mustProviderRecovery(t, capabilities)
 			mutate(&binding)
 			_, err := recovery.Generate(context.Background(), prepared, binding)
@@ -231,10 +225,7 @@ func TestProviderRecoveryRejectsChangedSemanticInputAndEligibility(t *testing.T)
 				model.Routes[0].ContextBytes = 1
 			}
 			source.value.Routes.Models["alias"] = model
-			capabilities.Adapters = planningRegistryFunc(func(context.Context, routing.Candidate) (provider.Adapter, error) {
-				t.Fatal("changed input/eligibility reached adapter lookup")
-				return nil, nil
-			})
+			capabilities.Adapters = forbidAdapterLookup(t, "changed input/eligibility reached adapter lookup")
 			recovery := mustProviderRecovery(t, capabilities)
 			_, err := recovery.Generate(context.Background(), prepared, binding)
 			assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
@@ -454,5 +445,14 @@ func TestProviderRecoveryConcurrentCallsUseIndependentCompilerInput(t *testing.T
 		if !input.Strict || !reflect.DeepEqual(input.Request.Input, prepared.Request.Input) {
 			t.Fatal("recovery changed content or portability")
 		}
+	}
+}
+
+// forbidAdapterLookup is an adapter registry that fails the test with message
+// if recovery ever looks up an adapter.
+func forbidAdapterLookup(t *testing.T, message string) planningRegistryFunc {
+	return func(context.Context, routing.Candidate) (provider.Adapter, error) {
+		t.Fatal(message)
+		return nil, nil
 	}
 }

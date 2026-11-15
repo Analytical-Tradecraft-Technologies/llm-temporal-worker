@@ -64,43 +64,36 @@ func TestDurableV1RuntimeBuilderComposesBothPhasesFromOneSnapshot(t *testing.T) 
 	}
 }
 
+// requireReusedComposition checks that phase received a valid durable
+// composition that rebuilding returns unchanged, and returns it.
+func requireReusedComposition(t *testing.T, ctx context.Context, phase string, received V1RuntimeCapabilities) durable.Composition {
+	t.Helper()
+	composition, ok := received.DurableComposition()
+	if !ok {
+		t.Fatalf("%s phase did not receive the validated composition", phase)
+	}
+	if err := composition.Validate(); err != nil {
+		t.Fatalf("%s composition is invalid: %v", phase, err)
+	}
+	reused, err := received.BuildDurableComposition(ctx)
+	if err != nil {
+		t.Fatalf("%s rebuild unexpectedly failed: %v", phase, err)
+	}
+	if !reflect.DeepEqual(composition, reused) {
+		t.Fatalf("%s rebuild changed composition: got=%+v want=%+v", phase, reused, composition)
+	}
+	return composition
+}
+
 func TestDurableV1RuntimeBuilderBindsOneValidatedCompositionToBothPhases(t *testing.T) {
 	var generateComposition, compactComposition durable.Composition
 	capabilities := completeDurableBuilderCapabilities(t,
 		func(ctx context.Context, received V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			composition, ok := received.DurableComposition()
-			if !ok {
-				t.Fatal("Generate phase did not receive the validated composition")
-			}
-			if err := composition.Validate(); err != nil {
-				t.Fatalf("Generate composition is invalid: %v", err)
-			}
-			reused, err := received.BuildDurableComposition(ctx)
-			if err != nil {
-				t.Fatalf("Generate rebuild unexpectedly failed: %v", err)
-			}
-			if !reflect.DeepEqual(composition, reused) {
-				t.Fatalf("Generate rebuild changed composition: got=%+v want=%+v", reused, composition)
-			}
-			generateComposition = composition
+			generateComposition = requireReusedComposition(t, ctx, "Generate", received)
 			return validBuilderGeneratePorts(nil), nil
 		},
 		func(ctx context.Context, received V1RuntimeCapabilities) (durable.CompactPorts, error) {
-			composition, ok := received.DurableComposition()
-			if !ok {
-				t.Fatal("Compact phase did not receive the validated composition")
-			}
-			if err := composition.Validate(); err != nil {
-				t.Fatalf("Compact composition is invalid: %v", err)
-			}
-			reused, err := received.BuildDurableComposition(ctx)
-			if err != nil {
-				t.Fatalf("Compact rebuild unexpectedly failed: %v", err)
-			}
-			if !reflect.DeepEqual(composition, reused) {
-				t.Fatalf("Compact rebuild changed composition: got=%+v want=%+v", reused, composition)
-			}
-			compactComposition = composition
+			compactComposition = requireReusedComposition(t, ctx, "Compact", received)
 			return validCompactPorts(), nil
 		},
 	)

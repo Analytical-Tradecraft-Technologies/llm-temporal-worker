@@ -75,24 +75,11 @@ func TestRuntimeReplacementValidatorRejectsProcessLifetimeChanges(t *testing.T) 
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var clientBuilds atomic.Int32
-			application, err := app.New(context.Background(), app.Options{
-				InitialConfig: initial,
-				Builder:       app.SnapshotBuilder{},
-				Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-					clientBuilds.Add(1)
-					return app.ClientSetFunc(func(context.Context) error { return nil }), nil
-				},
-				ReplacementValidator: validateRuntimeReplacement,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = application.Close(context.Background()) })
+			application, clientBuilds := newReplacementApp(t, initial)
 			before := application.Current()
 			beforeVersion := before.Config.ConfigVersion()
 
-			err = application.Reload(context.Background(), replacementTestConfig(t, test.mutate))
+			err := application.Reload(context.Background(), replacementTestConfig(t, test.mutate))
 			if !errors.Is(err, errProcessLifetimeConfigurationChanged) {
 				t.Fatalf("Reload() error = %v, want process-lifetime rejection", err)
 			}
@@ -113,20 +100,7 @@ func TestRuntimeReplacementValidatorAllowsSnapshotScopedChanges(t *testing.T) {
 	initial := replacementTestConfig(t, func(value *config.Config) {
 		value.Environment = "development"
 	})
-	var clientBuilds atomic.Int32
-	application, err := app.New(context.Background(), app.Options{
-		InitialConfig: initial,
-		Builder:       app.SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-			clientBuilds.Add(1)
-			return app.ClientSetFunc(func(context.Context) error { return nil }), nil
-		},
-		ReplacementValidator: validateRuntimeReplacement,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close(context.Background()) })
+	application, clientBuilds := newReplacementApp(t, initial)
 	before := application.Current()
 
 	replacement := replacementTestConfig(t, func(value *config.Config) {
@@ -177,4 +151,26 @@ func replacementTestConfig(t *testing.T, mutate func(*config.Config)) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// newReplacementApp builds an application from initial that validates
+// replacements with validateRuntimeReplacement and counts its client builds.
+// The application closes when the test ends.
+func newReplacementApp(t *testing.T, initial []byte) (*app.App, *atomic.Int32) {
+	t.Helper()
+	clientBuilds := &atomic.Int32{}
+	application, err := app.New(context.Background(), app.Options{
+		InitialConfig: initial,
+		Builder:       app.SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
+			clientBuilds.Add(1)
+			return app.ClientSetFunc(func(context.Context) error { return nil }), nil
+		},
+		ReplacementValidator: validateRuntimeReplacement,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+	return application, clientBuilds
 }

@@ -13,10 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
-	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/worker"
 )
 
 // fakeAWSRequestStores serves the DynamoDB and S3 calls the real AWS provider
@@ -108,17 +105,7 @@ func TestRuntimeKeepsPollingWhileCloudRequestTableIsUpdating(t *testing.T) {
 		t.Fatalf("open cloud request storage: %v", err)
 	}
 
-	controller := &monitoringWorker{}
-	var closed atomic.Bool
-	options := testRuntimeOptions(t, &testWorker{}, &closed)
-	options.WorkerFactory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-		return controller, &testRegistry{}, nil
-	}
-	options.DependencyProbes = []DependencyProbe{cloudRequestProbe(repository)}
-	runtime := newStartedRuntime(t, ctx, runtimeConfig(t), options)
-	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
-		t.Fatalf("initial state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
-	}
+	runtime, controller := newMonitoredRuntime(t, ctx, runtimeConfig(t), cloudRequestProbe(repository))
 
 	stores.status.Store("UPDATING")
 	describes, queries := stores.describeCalls.Load(), stores.queryCalls.Load()

@@ -221,14 +221,7 @@ func TestWatchedReloadNeverPublishesAFileCaughtMidWrite(t *testing.T) {
 	requirePublished(3, 123*time.Second)
 
 	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runWatchedFile returned %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("runWatchedFile did not shut down")
-	}
+	requireCleanReturn(t, done, "runWatchedFile")
 }
 
 // config.Validate must reject exactly the budget windows that budget

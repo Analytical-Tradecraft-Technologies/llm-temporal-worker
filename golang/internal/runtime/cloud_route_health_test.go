@@ -306,11 +306,7 @@ func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 	}
 	shared := &keyedHealthFixture{}
 	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: loaded.ConfigDigest, configEpoch: loaded.ConfigEpoch}
-	(&CloudProviderExecution{statusRecorder: shared}).recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
-		Plan: cloudstate.BudgetPlan{ConfigDigest: loaded.ConfigDigest, ConfigEpoch: loaded.ConfigEpoch, Family: chat.Family, ProviderTier: chat.ProviderTier, Route: durable.RoutePlan{OperationID: "operation", RouteID: chat.RouteID, EndpointID: chat.EndpointID, Provider: chat.Provider, Model: chat.Model,
-			CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(chat.EndpointAccountHMAC[:]))}}},
-		Execution: cloudstate.ProviderExecution{Stage: cloudstate.ExecutionSucceeded, CompletedAt: now},
-	})
+	recordRouteOutcome(context.Background(), shared, loaded.ConfigDigest, loaded.ConfigEpoch, "operation", chat, now, nil)
 	if len(shared.records) != 1 {
 		t.Fatalf("chat success was not recorded: %+v", shared.records)
 	}
@@ -338,29 +334,10 @@ func TestCloudRouteHealthScopedToModelAndTier(t *testing.T) {
 	x, y, xStandard := scoped("gpt-5-mini", "flex"), scoped("gpt-6-astra", "flex"), scoped("gpt-5-mini", "default")
 	shared := &keyedHealthFixture{}
 	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: digest, configEpoch: "epoch"}
-	execution := &CloudProviderExecution{statusRecorder: shared}
-	operation := 0
-	record := func(candidate routing.Candidate, failure *cloudstate.ExecutionFailure) {
-		t.Helper()
-		operation++
-		now = now.Add(time.Second)
-		stage := cloudstate.ExecutionSucceeded
-		if failure != nil {
-			stage = cloudstate.ExecutionFailed
-		}
-		execution.recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
-			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
-				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
-			Execution: cloudstate.ProviderExecution{Stage: stage, CompletedAt: now, Failure: failure},
-		})
-	}
+	record := routeOutcomeRecorder(context.Background(), shared, digest, &now)
 	blocked := func(candidate routing.Candidate) bool {
 		t.Helper()
-		result, err := planning.routeBlocked(context.Background(), candidate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return result
+		return mustRouteBlocked(t, planning, candidate)
 	}
 	rateLimited := &cloudstate.ExecutionFailure{Code: provider.CodeProviderRateLimited, Dispatch: provider.DispatchRejected}
 	for i := 0; i < 2; i++ {
@@ -394,25 +371,13 @@ func TestCloudRouteHealthHoldsAuthenticationFailureForSnapshot(t *testing.T) {
 	candidate := routing.Candidate{RouteID: "primary", EndpointID: "openai-direct", Provider: "openai", Family: "responses", Model: "gpt-5-mini", ProviderTier: "default", EndpointAccountHMAC: account}
 	shared := &keyedHealthFixture{}
 	planning := &ProviderPlanning{routeStatus: shared, clock: func() time.Time { return now }, configDigest: digest, configEpoch: "epoch"}
-	execution := &CloudProviderExecution{statusRecorder: shared}
-	operation := 0
+	recordOutcome := routeOutcomeRecorder(context.Background(), shared, digest, &now)
 	record := func(code provider.Code, dispatch provider.DispatchCertainty) {
-		t.Helper()
-		operation++
-		now = now.Add(time.Second)
-		execution.recordRouteStatus(context.Background(), cloudstate.SavedProviderExecution{
-			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
-				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
-			Execution: cloudstate.ProviderExecution{Stage: cloudstate.ExecutionFailed, CompletedAt: now, Failure: &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch}},
-		})
+		recordOutcome(candidate, &cloudstate.ExecutionFailure{Code: code, Dispatch: dispatch})
 	}
 	blocked := func(planning *ProviderPlanning) bool {
 		t.Helper()
-		result, err := planning.routeBlocked(context.Background(), candidate)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return result
+		return mustRouteBlocked(t, planning, candidate)
 	}
 	// A credential lookup that failed before dispatch can recover without a
 	// snapshot change, so it keeps the short cooldown.
@@ -461,22 +426,8 @@ func TestCloudRouteHealthTransitionsAreCountedAndLogged(t *testing.T) {
 	}
 	ctx := observability.WithLogger(observability.WithMetrics(context.Background(), metrics), logger)
 	shared := &keyedHealthFixture{}
-	execution := &CloudProviderExecution{statusRecorder: shared}
-	operation := 0
-	record := func(failure *cloudstate.ExecutionFailure) {
-		t.Helper()
-		operation++
-		now = now.Add(time.Second)
-		stage := cloudstate.ExecutionSucceeded
-		if failure != nil {
-			stage = cloudstate.ExecutionFailed
-		}
-		execution.recordRouteStatus(ctx, cloudstate.SavedProviderExecution{
-			Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: "epoch", Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: durable.OperationID(fmt.Sprintf("operation-%d", operation)), RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
-				CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(account[:]))}}},
-			Execution: cloudstate.ProviderExecution{Stage: stage, CompletedAt: now, Failure: failure},
-		})
-	}
+	recordOutcome := routeOutcomeRecorder(ctx, shared, digest, &now)
+	record := func(failure *cloudstate.ExecutionFailure) { recordOutcome(candidate, failure) }
 	flips := func(to string) float64 {
 		t.Helper()
 		return cloudMetricTotal(t, metrics, "llmtw_route_health_transition_total", "endpoint", "openai-direct", "to", to)
@@ -538,4 +489,41 @@ func TestRouteHealthTransitionsCountReopeningAfterLapsedHold(t *testing.T) {
 	if got := routeHealthTransitions(lapsed, closed); len(got) != 1 || got[0] != observability.RouteHealthCircuitClosed {
 		t.Fatalf("success after a lapsed hold = %v, want circuit_closed", got)
 	}
+}
+
+// recordRouteOutcome records one provider execution of operation on candidate
+// at now into shared route health. A nil failure records a success.
+func recordRouteOutcome(ctx context.Context, shared *keyedHealthFixture, digest [32]byte, epoch string, operation durable.OperationID, candidate routing.Candidate, now time.Time, failure *cloudstate.ExecutionFailure) {
+	stage := cloudstate.ExecutionSucceeded
+	if failure != nil {
+		stage = cloudstate.ExecutionFailed
+	}
+	(&CloudProviderExecution{statusRecorder: shared}).recordRouteStatus(ctx, cloudstate.SavedProviderExecution{
+		Plan: cloudstate.BudgetPlan{ConfigDigest: digest, ConfigEpoch: epoch, Family: candidate.Family, ProviderTier: candidate.ProviderTier, Route: durable.RoutePlan{OperationID: operation, RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Model: candidate.Model,
+			CacheIdentity: cache.RouteIdentity{Account: cache.Account(hex.EncodeToString(candidate.EndpointAccountHMAC[:]))}}},
+		Execution: cloudstate.ProviderExecution{Stage: stage, CompletedAt: now, Failure: failure},
+	})
+}
+
+// routeOutcomeRecorder returns a recorder that advances *now by a second and
+// records the next numbered operation ("operation-1", ...) of config epoch
+// "epoch" into shared route health.
+func routeOutcomeRecorder(ctx context.Context, shared *keyedHealthFixture, digest [32]byte, now *time.Time) func(routing.Candidate, *cloudstate.ExecutionFailure) {
+	operation := 0
+	return func(candidate routing.Candidate, failure *cloudstate.ExecutionFailure) {
+		operation++
+		*now = now.Add(time.Second)
+		recordRouteOutcome(ctx, shared, digest, "epoch", durable.OperationID(fmt.Sprintf("operation-%d", operation)), candidate, *now, failure)
+	}
+}
+
+// mustRouteBlocked reports whether planning blocks candidate, failing the
+// test on a lookup error.
+func mustRouteBlocked(t *testing.T, planning *ProviderPlanning, candidate routing.Candidate) bool {
+	t.Helper()
+	blocked, err := planning.routeBlocked(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return blocked
 }

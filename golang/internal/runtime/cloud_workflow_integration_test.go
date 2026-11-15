@@ -405,11 +405,7 @@ func TestCloudWorkflowLiveBudgetWait(t *testing.T) {
 	f.restart(t)
 	prepared, err := f.runtime.PrepareExecutionV1(h.ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
-	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
-	attempt, err := f.repository.LoadRequestAttempt(h.ctx, scope, cloudstate.RequestID(prepared.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, scope, attempt := f.firstAttempt(t, h.ctx, prepared)
 	plan, err := f.repository.LoadBudgetPlan(h.ctx, scope, attempt.ID)
 	if err != nil {
 		t.Fatal(err)
