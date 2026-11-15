@@ -574,6 +574,36 @@ func assertRedactedServiceLogFailurePath(t *testing.T, failurePath, testCommand,
 	}
 }
 
+// The Makefile commands that scale the worker to two replicas and run the
+// two-replica smoke against them.
+const (
+	composeTwoReplicaScaleCommand = `$(COMPOSE) --profile worker up --wait --wait-timeout 300 --no-recreate --scale worker=2 worker`
+	composeTwoReplicaTestCommand  = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" LLMTW_COMPOSE_WORKER_CONTAINERS="$$worker_containers" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestComposeTwoWorkerReplicasShareTaskQueueAndRedis$$'`
+)
+
+// TestComposeLiveIntegrationRunsTwoWorkerReplicas pins the v1 gate's
+// two-replica Redis-backed smoke (#1513): after the single-worker suites, the
+// target scales the worker service to two replicas, hands the running
+// container IDs to the smoke test, and fails with redacted logs otherwise.
+func TestComposeLiveIntegrationRunsTwoWorkerReplicas(t *testing.T) {
+	makefile := readMakefile(t)
+	recovery := strings.Index(makefile, "if ! "+composeTemporalRecoveryTestCommand)
+	scale := strings.Index(makefile, "if ! "+composeTwoReplicaScaleCommand)
+	discover := strings.Index(makefile, `worker_containers="$$( $(COMPOSE) ps -q worker | tr '\n' ' ' )";`)
+	smoke := strings.Index(makefile, "if ! "+composeTwoReplicaTestCommand)
+	evidence := strings.Index(makefile, "collect-compose.sh")
+	if recovery < 0 || scale < 0 || discover < 0 || smoke < 0 || evidence < 0 {
+		t.Fatalf("compose live integration target is missing a two-replica step: recovery=%d scale=%d discover=%d smoke=%d evidence=%d", recovery, scale, discover, smoke, evidence)
+	}
+	if !(recovery < scale && scale < discover && discover < smoke && smoke < evidence) {
+		t.Fatalf("two-replica steps run out of order: recovery=%d scale=%d discover=%d smoke=%d evidence=%d", recovery, scale, discover, smoke, evidence)
+	}
+	assertRedactedServiceLogFailurePath(t, makefile[scale:discover], composeTwoReplicaScaleCommand,
+		"compose-live-integration two-replica scale-up service logs (redacted; service output only; no environment inspection):", "two-replica scale-up")
+	assertRedactedServiceLogFailurePath(t, makefile[smoke:evidence], composeTwoReplicaTestCommand,
+		"compose-live-integration two-replica smoke test service logs (redacted; service output only; no environment inspection):", "two-replica smoke")
+}
+
 func TestComposeTemporalRecoveryRefreshesRedisAddressAfterLifecycle(t *testing.T) {
 	const redisAddressRefresh = `redis_address="$$( $(COMPOSE) port redis 6379 )";`
 	makefile := readMakefile(t)
