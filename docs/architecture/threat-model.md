@@ -80,7 +80,7 @@ not stop and the issue that tracks it.
 | Actor | Can read | Can write or cause | Bounding controls | Residual |
 | --- | --- | --- | --- | --- |
 | Temporal namespace caller | Its own results; any workflow history the namespace grants, in plaintext unless the payload codec is on; control queries for any allowed scope | Paid Generate and Compact work charged to any `allowed_scopes` pair; Activity-slot and quota consumption | Exact scope allowlist; per-model `allowed_tenants`; budget policies; request limits; scope-bound handle and reference MACs; content-free denial and access logs | Any caller can act as any allowed tenant ([#1577](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1577)); plaintext history ([#1576](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1576)); no per-tenant concurrency or size quotas ([#1584](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1584)) |
-| Responses API listener client | Stored results of any allowed scope whose response ID it knows | Paid Generate work for any allowed scope | Listener is off by default; production binds loopback or link-local unless `responses_api_private_network` is set; the scope allowlist still applies | No authentication or TLS ([#1578](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1578)) |
+| Responses API listener client | Stored results and workflow results of any tenant/project whose response ID it knows, including a scope later removed from `allowed_scopes` | Paid Generate work for any allowed scope | Listener is off by default; production binds loopback or link-local unless `responses_api_private_network` is set; the scope allowlist bounds new Generate work only | No authentication or TLS ([#1578](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1578)); result retrieval skips the scope allowlist (untracked) |
 | Model provider (hostile or compromised) | Everything sent to it, including content, tool definitions and its credential | Arbitrary response bytes, usage, cost and errors; synced prices and model lists (OpenRouter with `model_sync`) | Pinned outbound hosts and dial-time address checks; no redirects or proxies; response byte cap; local structured-output validation; provider state pinned to its lineage; provider storage off by default | Inflated usage is charged; synced prices are trusted (see [residual risks](#residual-risks)) |
 | Redis writer | HMAC-named keys, budget totals and operation records, route health, the model-sync catalog; not result plaintext | Budget totals and reservations, route holds, the published model-sync catalog, deletion of any key | Admission Function code digest checked by readiness; bounded, schema-checked reads; sealed Responses API result copies | Forged budget state and catalog are trusted (untracked, see [residual risks](#residual-risks)); recovery covers loss, not malice ([#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856)) |
 | DynamoDB or S3 writer | Ciphertext and content-free pointer rows | Deletion, withholding or reordering of rows and objects | AES-256-GCM blobs bound to an HMAC key; pointer events checked for revision and state order | Availability and rollback; IAM scope ([#1581](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1581)) |
@@ -166,7 +166,19 @@ subset of the OpenAI Responses API. It is absent by default.
 `tenant/project/actor` triple and is not a secret
 ([`internal/responsesapi/identity.go`](../../golang/internal/responsesapi/identity.go)).
 Anyone who reaches the listener can start Generate work for any allowed scope
-and poll results. A random response ID has 128 bits of entropy; an ID built
+and poll results.
+
+`GET /v1/responses/{id}` does not consult the scope allowlist. `retrieve` and
+`lookup` in
+[`internal/responsesapi/handler.go`](../../golang/internal/responsesapi/handler.go)
+take the tenant and project from the key and read the Redis result copy, then
+the durable operation record (`LookupGenerate` and
+`lookupIndexedGenerateResult` in
+[`internal/runtime/responses_api.go`](../../golang/internal/runtime/responses_api.go)),
+then the workflow itself through Temporal. None of these calls the scope
+resolver. Removing a pair from `allowed_scopes` therefore stops new Generate
+work for it, but does not revoke retrieval of that pair's existing results by
+anyone who can reach the listener and knows or guesses a response ID. A random response ID has 128 bits of entropy; an ID built
 from a caller's `Idempotency-Key` is as guessable as that key
 ([`internal/responsesapi/ids.go`](../../golang/internal/responsesapi/ids.go)).
 
@@ -178,7 +190,8 @@ from a caller's `Idempotency-Key` is as guessable as that key
   `hostLocalAddress`). Changing the address needs a restart
   ([`internal/runtime/reload_validation.go`](../../golang/internal/runtime/reload_validation.go)).
 - The started workflow goes through the same scope resolver, so a triple
-  outside `allowed_scopes` is refused.
+  outside `allowed_scopes` cannot start work. This bounds `POST` only; result
+  retrieval is not checked, as described above.
 - Workflow IDs bind the response ID to a hash of tenant and project, so one
   project's key cannot address another project's workflow
   (`workflowID` in [`internal/responsesapi/ids.go`](../../golang/internal/responsesapi/ids.go)).
@@ -425,6 +438,7 @@ Each accepted risk links to the issue that tracks its mitigation. A risk marked
 | The OCaml client cannot connect to a TLS or authenticated Temporal endpoint | Network attacker on the caller's path | [#1345](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1345) |
 | No per-tenant concurrency caps, size quotas or positive model allowlist; one tenant can exhaust Activity slots or provider quota | Namespace caller | [#1584](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1584) |
 | The Responses API listener has no authentication or TLS | Listener client | [#1578](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1578) |
+| Listener result retrieval does not check `allowed_scopes`, so removing a pair does not revoke reads of its existing results | Listener client | Untracked |
 | `data_regions` is recorded but not enforced | Namespace caller | Accepted for v1, listed in [#1539](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/1539) |
 | Provider-reported usage and cost are trusted when charging budgets | Provider | Untracked |
 | A Redis writer can forge budget totals, reservations and the model-sync catalog; recovery covers loss, not malice | Redis writer | Untracked; loss recovery is [#856](https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/issues/856) |
@@ -453,7 +467,7 @@ change, and compare the rendered effective configuration
 
 | Field | Risk | Applies on |
 | --- | --- | --- |
-| `authorization.allowed_scopes` | Grants a tenant/project pair to every namespace caller | Reload |
+| `authorization.allowed_scopes` | Grants a tenant/project pair to every namespace caller. Removing a pair stops new work but does not revoke Responses API reads of its existing results | Reload |
 | `models.<name>.allowed_tenants` | An empty list removes the model's tenant restriction | Reload |
 | `endpoints.<id>.auth` and every other secret reference (`kind`, `name`, `path`) | Chooses which secret is resolved and where it is sent | Reload, except process-lifetime references |
 | `endpoints.<id>.base_url`, `endpoints.<id>.outbound_hosts`, new endpoints | Where requests, content and the credential go | `base_url` on reload; hosts on restart |
