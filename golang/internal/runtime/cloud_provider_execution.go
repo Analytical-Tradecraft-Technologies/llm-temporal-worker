@@ -19,6 +19,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -69,7 +70,7 @@ type ProviderExecutionResult struct {
 
 func (capabilities V1RuntimeCapabilities) NewCloudProviderExecution(ctx context.Context) (*CloudProviderExecution, error) {
 	store, ok := capabilities.Requests.(CloudProviderExecutionStore)
-	if !ok || isNilCapability(store) {
+	if !ok || typednil.Is(store) {
 		return nil, budgetPlanningError(provider.CodeConfiguration)
 	}
 	admission, err := capabilities.NewCloudBudgetAdmission(ctx)

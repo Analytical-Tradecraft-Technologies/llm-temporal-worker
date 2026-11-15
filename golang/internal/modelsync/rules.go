@@ -6,8 +6,9 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -151,11 +152,7 @@ func MergeRules(documents ...RulesDocument) (Rules, error) {
 		digest.Write(encoded)
 		merged.Exclude = append(merged.Exclude, document.Exclude...)
 		merged.NativePrecision = mergeMap(merged.NativePrecision, document.NativePrecision)
-		names := make([]string, 0, len(document.Providers))
-		for name := range document.Providers {
-			names = append(names, name)
-		}
-		sort.Strings(names)
+		names := slices.Sorted(maps.Keys(document.Providers))
 		for _, name := range names {
 			layer := document.Providers[name]
 			current := merged.Providers[name]
@@ -181,12 +178,8 @@ func mergeMap[V any](base, layer map[string]V) map[string]V {
 		return nil
 	}
 	result := make(map[string]V, len(base)+len(layer))
-	for key, value := range base {
-		result[key] = value
-	}
-	for key, value := range layer {
-		result[key] = value
-	}
+	maps.Copy(result, base)
+	maps.Copy(result, layer)
 	return result
 }
 

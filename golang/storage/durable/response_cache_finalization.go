@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 )
 
 // CompleteAttempt finishes a started Generate or Compact fill after its origin
@@ -19,7 +20,7 @@ import (
 // incomplete response, provider failure or unknown outcome supplies no entry;
 // its original budget is still settled before the fill can be finished.
 func (c *ResponseCache) CompleteAttempt(ctx context.Context, lease cache.FillLease, completion cache.FillCompletion, entry *cache.ResponseEntry, settleBudget func(context.Context) error) error {
-	if c == nil || nilCacheRepository(c.responses) || nilCacheRepository(c.fills) || ctx == nil || settleBudget == nil {
+	if c == nil || typednil.Is(c.responses) || typednil.Is(c.fills) || ctx == nil || settleBudget == nil {
 		return errors.New("response cache completion requires repositories, context and budget settlement")
 	}
 	if err := ValidateAttemptCompletion(lease, completion, entry); err != nil {
@@ -44,7 +45,7 @@ func (c *ResponseCache) CompleteAttempt(ctx context.Context, lease cache.FillLea
 // the identical use, including CompletedAt; the repository verifies both
 // checkpoints and makes the receipt unique per consuming operation.
 func (c *ResponseCache) RecordUse(ctx context.Context, origin cache.ResponseEntry, use cache.ResponseUse) error {
-	if c == nil || nilCacheRepository(c.responses) || ctx == nil {
+	if c == nil || typednil.Is(c.responses) || ctx == nil {
 		return errors.New("response cache use requires a repository and context")
 	}
 	if err := ValidateResponseUse(origin, use); err != nil {

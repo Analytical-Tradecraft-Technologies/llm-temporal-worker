@@ -7,10 +7,12 @@ package contracttest
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -389,11 +391,7 @@ func contractRootForManifest(manifestPath string) (string, error) {
 }
 
 func scanContractRoots(root string, contractRoots map[string]struct{}) error {
-	roots := make([]string, 0, len(contractRoots))
-	for contractRoot := range contractRoots {
-		roots = append(roots, contractRoot)
-	}
-	sort.Strings(roots)
+	roots := slices.Sorted(maps.Keys(contractRoots))
 	for _, contractRoot := range roots {
 		if err := scanFixtureDirectory(root, contractRoot); err != nil {
 			return err

@@ -315,9 +315,7 @@ func cloneExtensions(values map[string]ExtensionSpec) map[string]ExtensionSpec {
 	copy := make(map[string]ExtensionSpec, len(values))
 	for namespace, spec := range values {
 		fields := make(map[string]string, len(spec.Fields))
-		for field, wire := range spec.Fields {
-			fields[field] = wire
-		}
+		maps.Copy(fields, spec.Fields)
 		copy[namespace] = ExtensionSpec{Fields: fields}
 	}
 	return copy

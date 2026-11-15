@@ -5,13 +5,13 @@ import (
 	"crypto/cipher"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"regexp"
 
 	events "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/eventsourcing"
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	blob "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/kv"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 )
 
 type Options struct {
@@ -47,7 +47,7 @@ type Repository struct {
 var namespacePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
 func NewRepository(options Options) (*Repository, error) {
-	if nilInterface(options.Table) || nilInterface(options.Blobs) || !namespacePattern.MatchString(options.Namespace) || len(options.Secret) != 32 {
+	if typednil.Is(options.Table) || typednil.Is(options.Blobs) || !namespacePattern.MatchString(options.Namespace) || len(options.Secret) != 32 {
 		return nil, ErrInvalid
 	}
 	cipher, err := newCipher(options.Secret)
@@ -57,18 +57,6 @@ func NewRepository(options Options) (*Repository, error) {
 	r := &Repository{table: options.Table, blobs: options.Blobs, namespace: options.Namespace, secret: append([]byte(nil), options.Secret...), cipher: cipher, parentSnapshotBlob: options.ParentSnapshotBlob}
 	r.events, err = events.NewEventStreamStore(options.Table, func() recordPointer { return recordPointer{} }, r.buildState)
 	return r, err
-}
-
-func nilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
 }
 
 type recordPointer struct {

@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // The low-level canonicalizer has a finite resource envelope even when a
@@ -168,11 +169,7 @@ func parseCanonicalValue(decoder *json.Decoder, depth, maxDepth int) (any, error
 func writeCanonicalValue(output *bytes.Buffer, value any) error {
 	switch value := value.(type) {
 	case canonicalObject:
-		keys := make([]string, 0, len(value.values))
-		for key := range value.values {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(value.values))
 		output.WriteByte('{')
 		for index, key := range keys {
 			if index > 0 {

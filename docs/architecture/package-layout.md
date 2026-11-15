@@ -98,7 +98,8 @@ current-layout reference.
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
 │   │   ├── secrets/                Environment/file secret resolution
 │   │   ├── testassert/             Assertions and JSON/file helpers shared by tests across the module
-│   │   └── testkit/                Provider-error, metric and HTTP-fake helpers for tests across areas
+│   │   ├── testkit/                Provider-error, metric and HTTP-fake helpers for tests across areas
+│   │   └── typednil/               Typed-nil dependency check shared by constructors
 │   ├── tools/                      Repository verification and generation commands
 │   │   ├── deploymentpolicy/       Offline Kubernetes workload policy checks
 │   │   ├── modelsyncdefaults/      Regenerates the built-in model-sync rules

@@ -8,6 +8,7 @@ import (
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/responsesapi"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
@@ -55,16 +56,16 @@ func snapshotResultSources(set app.ClientSet) (ResponseResultIndex, operationLoo
 		return nil, nil
 	}
 	source, ok := clients.clients.(V1RuntimeCapabilitiesSource)
-	if !ok || isNilCapability(source) {
+	if !ok || typednil.Is(source) {
 		return nil, nil
 	}
 	capabilities := source.V1RuntimeCapabilities()
 	var index ResponseResultIndex
-	if !isNilCapability(capabilities.ResponseResults) {
+	if !typednil.Is(capabilities.ResponseResults) {
 		index = capabilities.ResponseResults
 	}
 	lookup, ok := capabilities.Requests.(operationLookup)
-	if !ok || isNilCapability(lookup) {
+	if !ok || typednil.Is(lookup) {
 		return index, nil
 	}
 	return index, lookup

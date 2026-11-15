@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"maps"
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/langfuse"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -57,16 +58,16 @@ type CheckpointCapabilities struct {
 // This lets a builder distinguish an intentionally partial rollout from an
 // accidentally unsafe capability without inspecting concrete storage types.
 func (capabilities CheckpointCapabilities) Validate() error {
-	if isNilCapability(capabilities.Repository) {
+	if typednil.Is(capabilities.Repository) {
 		capabilities.Repository = nil
 	}
-	if isNilCapability(capabilities.Blobs) {
+	if typednil.Is(capabilities.Blobs) {
 		capabilities.Blobs = nil
 	}
-	if isNilCapability(capabilities.Materializer) {
+	if typednil.Is(capabilities.Materializer) {
 		capabilities.Materializer = nil
 	}
-	if !isNilCapability(capabilities.BlobWriter) && (capabilities.Repository == nil || capabilities.Blobs == nil) {
+	if !typednil.Is(capabilities.BlobWriter) && (capabilities.Repository == nil || capabilities.Blobs == nil) {
 		return errors.New("checkpoint blob writer requires repository and blob-reader capabilities")
 	}
 	if capabilities.Materializer != nil && capabilities.Repository == nil {
@@ -86,23 +87,10 @@ func (capabilities CheckpointCapabilities) RequireMaterializer() error {
 	if err := capabilities.Validate(); err != nil {
 		return err
 	}
-	if isNilCapability(capabilities.Repository) || isNilCapability(capabilities.Blobs) || isNilCapability(capabilities.Materializer) {
+	if typednil.Is(capabilities.Repository) || typednil.Is(capabilities.Blobs) || typednil.Is(capabilities.Materializer) {
 		return errors.New("complete checkpoint materializer capability is not configured")
 	}
 	return nil
-}
-
-func isNilCapability(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }
 
 // CheckpointCapabilitiesSource is the client-set capability exposed to a
@@ -313,19 +301,19 @@ func (capabilities V1RuntimeCapabilities) ValidateCompact() error {
 // validateShared checks the capabilities Generate and Compact both need,
 // naming phase in each error.
 func (capabilities V1RuntimeCapabilities) validateShared(phase string) error {
-	if isNilCapability(capabilities.Snapshot) {
+	if typednil.Is(capabilities.Snapshot) {
 		return fmt.Errorf("v1 %s snapshot source is not configured", phase)
 	}
-	if isNilCapability(capabilities.Planner) {
+	if typednil.Is(capabilities.Planner) {
 		return fmt.Errorf("v1 %s planner is not configured", phase)
 	}
-	if isNilCapability(capabilities.Adapters) {
+	if typednil.Is(capabilities.Adapters) {
 		return fmt.Errorf("v1 %s adapter registry is not configured", phase)
 	}
 	if err := capabilities.Checkpoints.RequireMaterializer(); err != nil {
 		return fmt.Errorf("v1 %s checkpoint capabilities: %w", phase, err)
 	}
-	if isNilCapability(capabilities.Budgets) {
+	if typednil.Is(capabilities.Budgets) {
 		return fmt.Errorf("v1 %s Redis budgets are not configured", phase)
 	}
 	if capabilities.Clock == nil {
@@ -348,9 +336,7 @@ func (registry snapshotAdapterRegistry) Adapter(ctx context.Context, candidate r
 
 func newSnapshotAdapterRegistry(adapters map[string]provider.Adapter) engine.AdapterRegistry {
 	owned := make(engine.AdapterMap, len(adapters))
-	for endpointID, adapter := range adapters {
-		owned[endpointID] = adapter
-	}
+	maps.Copy(owned, adapters)
 	return snapshotAdapterRegistry{adapters: owned}
 }
 

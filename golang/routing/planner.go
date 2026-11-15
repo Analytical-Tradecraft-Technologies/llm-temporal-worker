@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -290,14 +291,14 @@ func CompileCatalog(version string, models map[string]Model) (Catalog, error) {
 			}
 			seen[route.ID] = struct{}{}
 			route.Classes = append([]llm.ServiceClass(nil), route.Classes...)
-			route.ProviderTiers = cloneClassMap(route.ProviderTiers)
+			route.ProviderTiers = cloneNonEmpty(route.ProviderTiers)
 			route.AllowedTenants = append([]string(nil), route.AllowedTenants...)
 			route.AllowedRegions = append([]string(nil), route.AllowedRegions...)
 			route.ExtensionNames = append([]string(nil), route.ExtensionNames...)
 			if route.PricedWindows != nil {
 				route.PricedWindows = append([]PriceWindow{}, route.PricedWindows...)
 			}
-			route.ProviderFeatures = cloneCapabilityMap(route.ProviderFeatures)
+			route.ProviderFeatures = cloneNonEmpty(route.ProviderFeatures)
 		}
 		copyModels[name] = model
 	}
@@ -329,26 +330,12 @@ func (catalog Catalog) WithClassPolicies(policies []ClassPolicy) (Catalog, error
 	return catalog, nil
 }
 
-func cloneCapabilityMap(input map[string]Capability) map[string]Capability {
+// cloneNonEmpty copies input, normalizing an empty map to nil.
+func cloneNonEmpty[K comparable, V any](input map[K]V) map[K]V {
 	if len(input) == 0 {
 		return nil
 	}
-	output := make(map[string]Capability, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
-}
-
-func cloneClassMap(input map[llm.ServiceClass]string) map[llm.ServiceClass]string {
-	if len(input) == 0 {
-		return nil
-	}
-	output := make(map[llm.ServiceClass]string, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
+	return maps.Clone(input)
 }
 
 var _ Planner = DeterministicPlanner{}

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
@@ -89,7 +90,7 @@ func (recovery *ProviderRecovery) Compact(ctx context.Context, prepared Prepared
 // unchanged. Anything else waits for a compatible worker: a reload or rollout
 // must neither reroute bound work nor fail it permanently.
 func (recovery *ProviderRecovery) recover(ctx context.Context, request llm.Request, pins providerStatePins, binding ProviderRecoveryBinding) (PlannedProviderCall, error) {
-	if ctx == nil || recovery == nil || recovery.providers == nil || isNilCapability(recovery.providers.adapters) {
+	if ctx == nil || recovery == nil || recovery.providers == nil || typednil.Is(recovery.providers.adapters) {
 		return PlannedProviderCall{}, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	if err := ctx.Err(); err != nil {
@@ -201,7 +202,7 @@ func (planning *ProviderPlanning) pinnedCandidate(request llm.Request, candidate
 // serves proves nothing about the adapter that bound it, so it is reported as
 // recoverable and the attempt waits for a worker that serves it.
 func (recovery *ProviderRecovery) recoversByIdempotencyKey(ctx context.Context, route durable.RoutePlan) (bool, error) {
-	if ctx == nil || recovery == nil || recovery.providers == nil || isNilCapability(recovery.providers.adapters) {
+	if ctx == nil || recovery == nil || recovery.providers == nil || typednil.Is(recovery.providers.adapters) {
 		return false, providerPlanningError(provider.CodeConfiguration, provider.PhasePlan, provider.RetryNever)
 	}
 	adapter, err := recovery.providers.adapters.Adapter(ctx, routing.Candidate{RouteID: route.RouteID, EndpointID: route.EndpointID, Provider: route.Provider, Model: route.Model})

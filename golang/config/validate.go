@@ -3,15 +3,18 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
+	"maps"
 	"math"
 	"math/big"
 	"net"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
@@ -77,7 +80,7 @@ func (config Config) Validate() error {
 	if len(config.Endpoints) == 0 {
 		return fmt.Errorf("endpoints must not be empty")
 	}
-	for _, name := range sortedKeys(config.Endpoints) {
+	for _, name := range slices.Sorted(maps.Keys(config.Endpoints)) {
 		if len(name) > maxAdmissionFieldBytes {
 			return fmt.Errorf("endpoints.%s exceeds the %d-byte admission field limit", name, maxAdmissionFieldBytes)
 		}
@@ -99,7 +102,7 @@ func (config Config) Validate() error {
 	if len(config.Models) == 0 && config.ModelSync == nil {
 		return fmt.Errorf("models must not be empty")
 	}
-	for _, name := range sortedKeys(config.Models) {
+	for _, name := range slices.Sorted(maps.Keys(config.Models)) {
 		if err := config.Models[name].validate("models."+name, config.Endpoints); err != nil {
 			return err
 		}

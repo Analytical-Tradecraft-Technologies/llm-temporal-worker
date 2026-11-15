@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/openaischema"
@@ -74,9 +75,7 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 		if err != nil {
 			return nil, loweredToolPolicy{}, err
 		}
-		for key, value := range output {
-			requestMap[key] = value
-		}
+		maps.Copy(requestMap, output)
 	}
 	if request.Sampling != nil {
 		if err := lowerSampling(requestMap, *request.Sampling); err != nil {

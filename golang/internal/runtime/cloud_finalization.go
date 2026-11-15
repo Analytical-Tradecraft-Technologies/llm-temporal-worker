@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -88,11 +89,11 @@ type CloudFinalizer struct {
 
 func newCloudFinalizer(repository CloudRequestRepository, responses cache.ResponseRepository, fills cache.FillRepository, budgets durable.BudgetLeaser, clock func() time.Time) (*CloudFinalizer, error) {
 	store, ok := repository.(CloudFinalizationStore)
-	if !ok || isNilCapability(store) || clock == nil {
+	if !ok || typednil.Is(store) || clock == nil {
 		return nil, errors.New("cloud finalization store and clock are required")
 	}
 	plans, ok := repository.(CloudCheckpointFinalizationStore)
-	if !ok || isNilCapability(plans) {
+	if !ok || typednil.Is(plans) {
 		return nil, errors.New("cloud checkpoint finalization store is required")
 	}
 	responseCache, err := durable.NewResponseCache(responses, fills, clock)
@@ -179,7 +180,7 @@ func (f *CloudFinalizer) save(ctx context.Context, caller llm.RequestContext, ki
 	if err != nil {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
-	if effects.Provider != nil && !effects.Provider.Unreserved && isNilCapability(f.budgets) {
+	if effects.Provider != nil && !effects.Provider.Unreserved && typednil.Is(f.budgets) {
 		return cloudRuntimeError(cloudstate.ErrInvalid, true)
 	}
 	scope := cloudstate.Scope{Tenant: caller.Tenant, Project: caller.Project}
@@ -307,7 +308,7 @@ func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects
 			if paid.Unreserved {
 				return nil
 			}
-			if isNilCapability(f.budgets) {
+			if typednil.Is(f.budgets) {
 				return cloudstate.ErrCorrupt
 			}
 			return f.budgets.Reconcile(ctx, paid.Budget)
@@ -315,7 +316,7 @@ func (f *CloudFinalizer) finish(ctx context.Context, effects FinalizationEffects
 		if paid.Unreserved {
 			return f.cache.CompleteAttempt(ctx, paid.Lease, paid.Completion, paid.Entry, func(context.Context) error { return nil })
 		}
-		if isNilCapability(f.budgets) {
+		if typednil.Is(f.budgets) {
 			return cloudstate.ErrCorrupt
 		}
 		return f.cache.CompleteAttempt(ctx, paid.Lease, paid.Completion, paid.Entry, func(ctx context.Context) error { return f.budgets.Reconcile(ctx, paid.Budget) })
@@ -460,7 +461,7 @@ func (f *CloudFinalizer) verifyUnreserved(ctx context.Context, scope cloudstate.
 	store, ok := f.requests.(interface {
 		LoadProviderExecution(context.Context, cloudstate.Scope, cloudstate.RequestID) (cloudstate.SavedProviderExecution, error)
 	})
-	if !ok || isNilCapability(store) {
+	if !ok || typednil.Is(store) {
 		return cloudstate.ErrCorrupt
 	}
 	saved, err := store.LoadProviderExecution(ctx, scope, id)

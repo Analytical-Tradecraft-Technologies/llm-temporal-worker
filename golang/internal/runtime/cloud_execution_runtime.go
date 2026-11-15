@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -102,7 +103,7 @@ func (c V1RuntimeCapabilities) NewCloudExecutionRuntime(ctx context.Context, opt
 		options.ReloadGrace = defaultCloudReloadGrace
 	}
 	store, ok := c.Requests.(cloudExecutionStore)
-	if !ok || isNilCapability(store) || c.Finalizer == nil || isNilCapability(c.Responses) || isNilCapability(c.ResponseFills) || options.CheckpointTTL <= 0 || options.BudgetGeneration.Validate() != nil {
+	if !ok || typednil.Is(store) || c.Finalizer == nil || typednil.Is(c.Responses) || typednil.Is(c.ResponseFills) || options.CheckpointTTL <= 0 || options.BudgetGeneration.Validate() != nil {
 		return nil, executionError(provider.CodeConfiguration)
 	}
 	preparation, err := c.NewCloudRequestPreparation(options.ResolveScope, options.Limits)
@@ -255,7 +256,7 @@ const responseResultIndexTimeout = 2 * time.Second
 // it a poll reads the durable record as before.
 func (r *CloudExecutionRuntime) indexResponseResult(ctx context.Context, p PreparedCloudRequest, result llm.ExecutionResultV1, err error) {
 	index := r.capabilities.ResponseResults
-	if err != nil || isNilCapability(index) || p.Generate == nil || p.Record.Request.Kind != "generate" {
+	if err != nil || typednil.Is(index) || p.Generate == nil || p.Record.Request.Kind != "generate" {
 		return
 	}
 	entry := redisstore.ResponseResult{CreatedAt: p.Record.Request.CreatedAt}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/typednil"
 )
 
 // UnknownCostResolution identifies one exact billing correction to Redis accounting.
@@ -73,7 +74,7 @@ func (boundary UnknownCostBoundary) Validate() error {
 	if err := boundary.Identity.ValidateBudget(); err != nil {
 		return fmt.Errorf("%w: identity: %v", ErrBudgetBoundaryInvalid, err)
 	}
-	if isNilPort(boundary.Materializer) {
+	if typednil.Is(boundary.Materializer) {
 		return fmt.Errorf("%w: Redis budget materializer is required", ErrBudgetBoundaryInvalid)
 	}
 	return nil

@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -627,15 +626,6 @@ func (config Config) canonicalJSON() ([]byte, error) {
 		return nil, err
 	}
 	return llm.CanonicalJSON(encoded)
-}
-
-func sortedKeys[T any](values map[string]T) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // NormalizeOutboundHost canonicalizes one explicit provider hostname. Provider

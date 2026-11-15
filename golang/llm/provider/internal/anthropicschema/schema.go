@@ -7,7 +7,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -208,21 +209,13 @@ func rejectRecursion(root map[string]any) error {
 		if !ok {
 			return nil
 		}
-		keys := make([]string, 0, len(schema))
-		for key := range schema {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(schema))
 		for _, key := range keys {
 			childPath := schemawire.PointerJoin(path, key)
 			switch key {
 			case "$defs", "properties":
 				children, _ := schema[key].(map[string]any)
-				names := make([]string, 0, len(children))
-				for name := range children {
-					names = append(names, name)
-				}
-				sort.Strings(names)
+				names := slices.Sorted(maps.Keys(children))
 				for _, name := range names {
 					if err := visit(children[name], schemawire.PointerJoin(childPath, name)); err != nil {
 						return err
