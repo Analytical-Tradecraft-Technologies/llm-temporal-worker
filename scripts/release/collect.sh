@@ -132,6 +132,13 @@ python3 "$collector" fixture-manifest \
   --root "$module_root" \
   --output "$artifact_dir/fixture-manifest.json"
 
+# The v1 consumer contract kit manifest carries the schema digest. It is
+# written from the kit embedded in the Go module, so the digest is the one an
+# importer of this revision gets; release.yml packages the tag's kit against
+# it (#1575).
+go -C "$module_root" run ./contractkit/cmd/contractkit manifest \
+  -output "$artifact_dir/contract-kit.json"
+
 if [[ -z "$verified_inputs" ]]; then
   # Mark the unique project for cleanup before starting it: a partial start
   # or health timeout must still be torn down on exit.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/contractkit"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
@@ -660,6 +661,50 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	}
 }
 
+// The contract_kit artifact records the v1 contract kit's schema digest
+// (#1575): the recorder requires it and checks its digests, and schema-v2
+// bundles recorded before it existed stay verifiable.
+func TestReleaseEvidenceRecordsTheContractKit(t *testing.T) {
+	schemaPath := releaseEvidenceSchemaPath(t)
+	artifactDir, _ := recordReleaseEvidenceBundle(t, schemaPath, "record")
+	recorded := readEvidenceRecord(t, artifactDir)["artifacts"].(map[string]any)["contract_kit"]
+	if recorded == nil || recorded.(map[string]any)["path"] != "contract-kit.json" {
+		t.Fatalf("evidence does not record the contract kit: %v", recorded)
+	}
+
+	record := readEvidenceRecord(t, artifactDir)
+	delete(record["artifacts"].(map[string]any), "contract_kit")
+	removeArtifactFile(t, artifactDir, "contract_kit")
+	writeEvidenceRecord(t, artifactDir, record)
+	if err := run(releaseEvidenceVerifyArguments(schemaPath, artifactDir), io.Discard); err != nil {
+		t.Fatalf("pre-contract-kit schema-v2 bundle was rejected: %v", err)
+	}
+
+	missing := newReleaseEvidenceArtifactDirectory(t)
+	subjects := writeReleaseEvidenceArtifacts(t, missing)
+	arguments := releaseEvidenceRecordArguments(schemaPath, missing, subjects)
+	removeArtifact(t, missing, "contract_kit", &arguments)
+	testassert.ErrorContains(t, run(arguments, io.Discard), "missing required artifacts: contract_kit")
+
+	for name, mutate := range map[string]func(map[string]any){
+		"schema digest": func(manifest map[string]any) {
+			manifest["schema_digest"] = "sha256:" + strings.Repeat("0", 64)
+		},
+		"file digest": func(manifest map[string]any) {
+			manifest["files"].([]any)[0].(map[string]any)["sha256"] = strings.Repeat("0", 64)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			directory := newReleaseEvidenceArtifactDirectory(t)
+			subjects := writeReleaseEvidenceArtifacts(t, directory)
+			manifest := contractKitManifest(t)
+			mutate(manifest)
+			writeArtifactJSON(t, directory, "contract_kit", manifest)
+			testassert.ErrorContains(t, run(releaseEvidenceRecordArguments(schemaPath, directory, subjects), io.Discard), "contract kit evidence is invalid")
+		})
+	}
+}
+
 func releaseEvidenceSchemaPath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -877,7 +922,9 @@ func downgradeToSingleManifestV1(t *testing.T, directory string, subjects releas
 		"digest":    subjects.amd64Digest,
 	}
 	artifacts := record["artifacts"].(map[string]any)
-	for _, name := range []string{"image_index", "sbom_arm64", "image_scan_arm64"} {
+	// Schema-v1 bundles predate the multi-platform artifacts and the
+	// contract kit.
+	for _, name := range []string{"image_index", "sbom_arm64", "image_scan_arm64", "contract_kit"} {
 		delete(artifacts, name)
 		removeArtifactFile(t, directory, name)
 	}
@@ -941,6 +988,7 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 				"profile": "example", "upstream_url": "https://example.invalid/contracts", "upstream_date": "2026-07-19", "manifest_sha256": digest,
 			}}, "redacted": true,
 		},
+		"contract_kit":     contractKitManifest(t),
 		"redis_summary":    serviceSummary("redis_summary", "redis"),
 		"temporal_summary": serviceSummary("temporal_summary", "temporal"),
 		"compose_summary": map[string]any{
@@ -966,6 +1014,20 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 		writeArtifactJSON(t, directory, name, value)
 	}
 	return subjects
+}
+
+// contractKitManifest is the embedded contract kit's manifest (#1575).
+func contractKitManifest(t *testing.T) map[string]any {
+	t.Helper()
+	kit, err := contractkit.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(kit.ManifestJSON(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	return manifest
 }
 
 func gateSummary(kind string) map[string]any {

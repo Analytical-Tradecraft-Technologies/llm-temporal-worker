@@ -9,6 +9,7 @@
     { "$ref": "#/$defs/benchmark_summary_legacy_engine" },
     { "$ref": "#/$defs/worker_error_summary" },
     { "$ref": "#/$defs/fixture_manifest" },
+    { "$ref": "#/$defs/contract_kit" },
     { "$ref": "#/$defs/redis_summary" },
     { "$ref": "#/$defs/temporal_summary" },
     { "$ref": "#/$defs/compose_summary" },
@@ -259,6 +260,45 @@
         "completed_attempts": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
         "worker_failed_attempts": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
         "objective_status": { "const": "measurement_only" },
+        "redacted": { "$ref": "#/$defs/redacted" }
+      }
+    },
+    "contract_kit": {
+      "description": "The v1 consumer contract kit manifest (golang/contractkit, #1575): the digest of the published schemas and fixtures and every kit file. The same document is contract-kit.json in the release tarball.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "status",
+        "api_version",
+        "schema_digest",
+        "fixtures_digest",
+        "files",
+        "redacted"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "contract_kit" },
+        "status": { "const": "pass" },
+        "api_version": { "const": "v1" },
+        "schema_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "fixtures_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "files": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "bytes", "sha256"],
+            "properties": {
+              "path": { "type": "string", "pattern": "^(schema/v1/[a-z0-9][a-z0-9.-]{0,127}\\.schema\\.json|fixtures/v1/[a-z0-9][a-z0-9.-]{0,127}\\.(json|tsv))$" },
+              "bytes": { "type": "integer", "minimum": 1, "maximum": 4194304 },
+              "sha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        },
         "redacted": { "$ref": "#/$defs/redacted" }
       }
     },

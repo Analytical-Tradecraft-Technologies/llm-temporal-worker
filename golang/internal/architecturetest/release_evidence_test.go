@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/contractkit"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -22,6 +23,7 @@ var requiredReleaseEvidenceArtifacts = []string{
 	"fuzz_summary",
 	"benchmark_summary",
 	"fixture_manifest",
+	"contract_kit",
 	"redis_summary",
 	"temporal_summary",
 	"compose_summary",
@@ -43,6 +45,7 @@ var releaseEvidenceArtifactPaths = map[string]string{
 	"fuzz_summary":       "fuzz-summary.json",
 	"benchmark_summary":  "benchmark-summary.json",
 	"fixture_manifest":   "fixture-manifest.json",
+	"contract_kit":       "contract-kit.json",
 	"redis_summary":      "redis-summary.json",
 	"temporal_summary":   "temporal-summary.json",
 	"compose_summary":    "compose-summary.json",
@@ -1574,6 +1577,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		"fuzz_summary":          releaseEvidenceGateSummary("fuzz_summary"),
 		"benchmark_summary":     `{"schema_version":1,"kind":"benchmark_summary","status":"pass","benchmark":"BenchmarkV1ActivitiesAdmissionMemory","scope":"memory","samples":4267,"ns_per_op":255245,"p99_ms_per_op":0.7286,"target_ms":25,"target_status":"pass","objective_status":"measurement_only","output_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","output_bytes":256,"redacted":true}`,
 		"fixture_manifest":      `{"schema_version":1,"kind":"fixture_manifest","status":"pass","version":1,"fixtures":[{"profile":"openai-responses","upstream_url":"https://platform.openai.com/docs/api-reference/responses","upstream_date":"2026-07-14","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"redacted":true}`,
+		"contract_kit":          releaseEvidenceContractKit(t),
 		"redis_summary":         `{"schema_version":1,"kind":"redis_summary","status":"pass","service":"redis","state":"running","health":"healthy","redacted":true}`,
 		"temporal_summary":      `{"schema_version":1,"kind":"temporal_summary","status":"pass","service":"temporal","state":"running","health":"healthy","redacted":true}`,
 		"compose_summary":       `{"schema_version":1,"kind":"compose_summary","status":"pass","services":["redis","temporal"],"redacted":true}`,
@@ -1633,6 +1637,17 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		indexReference: indexReference,
 		indexDigest:    indexDigest,
 	}
+}
+
+// releaseEvidenceContractKit is the embedded contract kit's manifest, the
+// contract_kit artifact collection records (#1575).
+func releaseEvidenceContractKit(t *testing.T) string {
+	t.Helper()
+	kit, err := contractkit.Embedded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(kit.ManifestJSON())
 }
 
 // releaseEvidenceImageIndex is a Buildx-shaped OCI image index: one manifest

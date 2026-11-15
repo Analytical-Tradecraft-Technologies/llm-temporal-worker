@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/contractkit"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -67,6 +68,7 @@ var requiredArtifacts = []string{
 	"fuzz_summary",
 	"benchmark_summary",
 	"fixture_manifest",
+	"contract_kit",
 	"redis_summary",
 	"temporal_summary",
 	"compose_summary",
@@ -138,6 +140,7 @@ var canonicalArtifactPaths = map[string]string{
 	"benchmark_summary":     "benchmark-summary.json",
 	"worker_error_summary":  "worker-error-summary.json",
 	"fixture_manifest":      "fixture-manifest.json",
+	"contract_kit":          "contract-kit.json",
 	"redis_summary":         "redis-summary.json",
 	"temporal_summary":      "temporal-summary.json",
 	"compose_summary":       "compose-summary.json",
@@ -161,6 +164,7 @@ var summaryArtifacts = map[string]struct{}{
 	"benchmark_summary":     {},
 	"worker_error_summary":  {},
 	"fixture_manifest":      {},
+	"contract_kit":          {},
 	"redis_summary":         {},
 	"temporal_summary":      {},
 	"compose_summary":       {},
@@ -458,6 +462,9 @@ func runRecord(args []string, stdout io.Writer) error {
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
 		return err
 	}
+	if err := validateContractKit(paths); err != nil {
+		return err
+	}
 	if err := validateImageArtifacts(*schemaPath, paths, record.Image); err != nil {
 		return err
 	}
@@ -597,6 +604,9 @@ func verifyRecord(schemaPath, artifactDir, evidencePath string, requireCanonical
 		return err
 	}
 	if err := validateFixtureManifest(paths["fixture_manifest"]); err != nil {
+		return err
+	}
+	if err := validateContractKit(paths); err != nil {
 		return err
 	}
 	return validateImageArtifacts(schemaPath, paths, record.Image)
@@ -1036,11 +1046,44 @@ func requiredArtifactsForRecord(record evidence) []string {
 		} else {
 			artifactNames = legacyRequiredArtifacts
 		}
+	} else if _, present := record.Artifacts["contract_kit"]; !present {
+		// Schema-v2 bundles recorded before the contract kit (#1575) stay
+		// verifiable; the recorder requires it, and guard.sh refuses to
+		// publish without it.
+		artifactNames = withoutArtifact(artifactNames, "contract_kit")
 	}
 	if _, present := record.Artifacts["worker_error_summary"]; present {
 		artifactNames = append(append([]string(nil), artifactNames...), "worker_error_summary")
 	}
 	return artifactNames
+}
+
+func withoutArtifact(names []string, omitted string) []string {
+	kept := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != omitted {
+			kept = append(kept, name)
+		}
+	}
+	return kept
+}
+
+// validateContractKit requires the contract_kit artifact, when present, to
+// be a self-consistent kit manifest: digests recomputed from its file
+// entries, the schema digest among them (#1575).
+func validateContractKit(paths map[string]string) error {
+	path, present := paths["contract_kit"]
+	if !present {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return errors.New("cannot read contract kit evidence")
+	}
+	if _, err := contractkit.ParseManifest(data); err != nil {
+		return fmt.Errorf("contract kit evidence is invalid: %w", err)
+	}
+	return nil
 }
 
 func validateFixtureManifest(path string) error {

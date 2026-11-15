@@ -1045,6 +1045,7 @@ jobs:
             -artifact fuzz_summary=fuzz-summary.json \
             -artifact benchmark_summary=benchmark-summary.json \
             -artifact fixture_manifest=fixture-manifest.json \
+            -artifact contract_kit=contract-kit.json \
             -artifact redis_summary=redis-summary.json \
             -artifact temporal_summary=temporal-summary.json \
             -artifact compose_summary=compose-summary.json \

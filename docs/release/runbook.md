@@ -173,6 +173,12 @@ assertion for:
   operator supplies a bounded Prometheus snapshot; trusted CI has no production
   metrics access and omits this artifact by default;
 - fixture manifest records with upstream source dates;
+- the v1 consumer contract kit manifest (`contract-kit.json`): the schema and
+  fixture digests and every kit file's size and SHA-256, written from the kit
+  embedded at the evidence revision. The recorder and verifier recompute both
+  digests from the file entries. Schema-v2 bundles recorded before the kit
+  existed stay verifiable, but `guard.sh verify-evidence` will not publish
+  from one (see the [contract kit guide](../testing/contract-kit.md));
 - compact Redis, Temporal, and Compose health summaries from the local test
   stack;
 - three redacted boundary-log records derived from actual `docker compose logs`
@@ -295,6 +301,7 @@ bash scripts/release/record.sh \
   -artifact fuzz_summary=fuzz-summary.json \
   -artifact benchmark_summary=benchmark-summary.json \
   -artifact fixture_manifest=fixture-manifest.json \
+  -artifact contract_kit=contract-kit.json \
   -artifact redis_summary=redis-summary.json \
   -artifact temporal_summary=temporal-summary.json \
   -artifact compose_summary=compose-summary.json \
@@ -519,6 +526,15 @@ master gate and keeps raw scanner output in private temporary files:
   the preflight, which prints only the sanitized finding summary. The workflow
   supplies no registry credentials, so a registry that requires them to read
   the image fails the preflight closed.
+
+Last, `guard.sh package-contract-kit` packages the v1 consumer contract kit.
+It reads only `golang/api/schema/v1` and `golang/llm/testdata/v1` from the tag
+commit with `git archive` and builds the packager from master. It fails unless
+those files are exactly the kit whose `contract-kit.json`, schema digest
+included, the verified evidence records. The preflight retains
+`llmtw-contract-kit-vMAJOR.MINOR.PATCH.tar.gz`, its `.sha256` and the manifest
+as the `contract-kit` workflow artifact; see the
+[contract kit guide](../testing/contract-kit.md#release-artifact).
 
 Neither rescan runs the image, so the preflight does not runtime-test the
 published digest either; see [Runtime tests and scans](#runtime-tests-and-scans).

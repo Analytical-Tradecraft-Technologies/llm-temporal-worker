@@ -259,7 +259,80 @@ for platform in PLATFORMS:
 artifacts = evidence.get("artifacts")
 if not isinstance(artifacts, dict) or any(name not in artifacts for name in PLATFORM_ARTIFACTS):
     raise SystemExit("guarded release: evidence is missing the image index or a platform SBOM or scan")
+# package-contract-kit packages the tag's v1 contract kit against this
+# manifest and its schema digest (#1575).
+if "contract_kit" not in artifacts:
+    raise SystemExit("guarded release: evidence does not record the v1 contract kit")
 PY
+}
+
+# package_contract_kit builds the versioned v1 consumer contract kit (#1575)
+# from the tag commit of the protected checkout in the working directory, as
+# validate-request resolves it. git archive reads only the schema and fixture
+# trees, so no tag code runs, and the packager is built from the trusted
+# master module this script belongs to.
+# The packaged kit must be exactly the one the verified evidence records in
+# contract-kit.json, schema digest included.
+package_contract_kit() {
+  local artifact_dir=""
+  local release_ref=""
+  local tag_commit=""
+  local output_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --artifact-dir)
+        require_option_value "$1" "$#"
+        artifact_dir="$2"
+        shift 2
+        ;;
+      --release-ref)
+        require_option_value "$1" "$#"
+        release_ref="$2"
+        shift 2
+        ;;
+      --tag-commit)
+        require_option_value "$1" "$#"
+        tag_commit="$2"
+        shift 2
+        ;;
+      --output-dir)
+        require_option_value "$1" "$#"
+        output_dir="$2"
+        shift 2
+        ;;
+      *)
+        fail "unknown package-contract-kit option $1"
+        ;;
+    esac
+  done
+
+  [[ -f "$artifact_dir/contract-kit.json" && ! -L "$artifact_dir/contract-kit.json" ]] || fail "release evidence has no contract-kit.json"
+  if [[ ! "$release_ref" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    fail "release_ref must be an exact refs/tags/vMAJOR.MINOR.PATCH reference"
+  fi
+  local version="${release_ref#refs/tags/}"
+  if [[ ! "$tag_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    fail "tag_commit must be a lowercase commit SHA"
+  fi
+  [[ -n "$output_dir" ]] || fail "output_dir is required"
+  [[ ! -e "$output_dir" && ! -L "$output_dir" ]] || fail "contract kit output directory must not already exist"
+
+  local work
+  work="$(mktemp -d "${TMPDIR:-/tmp}/llmtw-contract-kit.XXXXXX")"
+  # shellcheck disable=SC2064 # expand the private directory now
+  trap "rm -rf -- '$work'" EXIT
+  mkdir -- "$work/source"
+  git archive --format=tar "$tag_commit" -- golang/api/schema/v1 golang/llm/testdata/v1 \
+    | tar -x -f - -C "$work/source" \
+    || fail "cannot read the contract kit trees from the tag commit"
+  go -C "$root/golang" build -o "$work/contractkit" ./contractkit/cmd/contractkit
+  mkdir -p -- "$output_dir"
+  "$work/contractkit" package \
+    -source-root "$work/source" \
+    -version "$version" \
+    -output-dir "$output_dir" \
+    -expect "$artifact_dir/contract-kit.json"
 }
 
 case "${1:-}" in
@@ -275,7 +348,11 @@ case "${1:-}" in
     shift
     verify_public_run "$@"
     ;;
+  package-contract-kit)
+    shift
+    package_contract_kit "$@"
+    ;;
   *)
-    fail "usage: $0 {validate-request|verify-public-run|verify-evidence}"
+    fail "usage: $0 {validate-request|verify-public-run|verify-evidence|package-contract-kit}"
     ;;
 esac

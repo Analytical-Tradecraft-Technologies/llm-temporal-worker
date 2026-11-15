@@ -192,6 +192,32 @@ jobs:
           bash scripts/release/preflight-scan.sh image \
             --image-reference "$IMAGE_REFERENCE"
 
+      # The v1 consumer contract kit is the tag commit's schema and fixture
+      # trees, read with git archive so no tag code runs, packaged by the
+      # trusted master module as llmtw-contract-kit-<tag>.tar.gz plus its
+      # .sha256, and required to match the contract_kit manifest, schema
+      # digest included, that the verified evidence records.
+      - name: Package the v1 contract kit from the tag commit
+        shell: bash
+        env:
+          RELEASE_REF: ${{ steps.release-ref.outputs.release_ref }}
+          TAG_COMMIT: ${{ steps.request.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/guard.sh package-contract-kit \
+            --artifact-dir release-artifacts \
+            --release-ref "$RELEASE_REF" \
+            --tag-commit "$TAG_COMMIT" \
+            --output-dir "$RUNNER_TEMP/contract-kit"
+
+      - name: Retain the versioned contract kit and its digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: contract-kit
+          path: ${{ runner.temp }}/contract-kit/
+          if-no-files-found: error
+          retention-days: 14
+
   protected-signing-publication:
     name: Protected signing and publication boundary
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
