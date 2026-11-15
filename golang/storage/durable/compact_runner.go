@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
@@ -160,7 +159,7 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 			return llm.CompactResponseV1{}, err
 		}
 		if err := ports.Reconcile(ctx, request, pending.Route, pending.Reservation, pending.Finalization); err != nil {
-			return llm.CompactResponseV1{}, compactReconciliationError(pending.Route, err)
+			return llm.CompactResponseV1{}, reconciliationError(pending.Route, err)
 		}
 		return pending.Finalization.Response, nil
 	}
@@ -217,19 +216,7 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, err
 	}
 	route, err := ports.Route(ctx, request, replay)
-	if err != nil {
-		return llm.CompactResponseV1{}, stageError("compact route", err)
-	}
-	if err := contextErr(ctx); err != nil {
-		return llm.CompactResponseV1{}, err
-	}
-	if err := route.Validate(); err != nil {
-		return llm.CompactResponseV1{}, stageError("compact route", err)
-	}
-	if err := cache.preparation.validateRoute(route); err != nil {
-		return llm.CompactResponseV1{}, stageError("compact cache route", err)
-	}
-	if err := contextErr(ctx); err != nil {
+	if err := checkRoutePlan(ctx, "compact ", route, err, cache.preparation); err != nil {
 		return llm.CompactResponseV1{}, err
 	}
 	reservation, err := ports.Reserve(ctx, request, route)
@@ -240,10 +227,7 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, stageError("compact Redis reservation", err)
 	}
 	if !reservation.Accepted {
-		mapped := provider.NewError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryAfter, "budget reservation denied")
-		mapped.OperationID = string(route.OperationID)
-		mapped.RetryAfter = reservation.RetryAfter
-		return llm.CompactResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
+		return llm.CompactResponseV1{}, reservationDeniedError(route, reservation)
 	}
 
 	if err := cache.preparation.start(ctx); err != nil {
@@ -271,7 +255,7 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 		return llm.CompactResponseV1{}, err
 	}
 	if err := ports.Reconcile(ctx, request, route, reservation, finalization); err != nil {
-		return llm.CompactResponseV1{}, compactReconciliationError(route, err)
+		return llm.CompactResponseV1{}, reconciliationError(route, err)
 	}
 	return finalization.Response, nil
 }
@@ -317,13 +301,6 @@ func validateCompactPendingReconciliation(request llm.CompactRequestV1, pending 
 		return err
 	}
 	return validateCompactResponse(request, pending.Route.OperationID, pending.Finalization.Response)
-}
-
-func compactReconciliationError(route RoutePlan, cause error) error {
-	mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "Redis reconciliation is pending")
-	mapped.OperationID = string(route.OperationID)
-	mapped.Cause = cause
-	return fmt.Errorf("%w: %w", ErrReconcilePending, mapped)
 }
 
 func validateCompactClaim(reservation ReserveResult, claim ClaimReceipt) error {

@@ -393,40 +393,35 @@ func (materializer *ReferenceBudgetMaterializer) Reconcile(ctx context.Context, 
 	return nil
 }
 
+// adjustReferenceTotals applies one nonzero completion delta to each total
+// with op (pricing.USD.Add or pricing.USD.Sub), stopping at the first error.
+// Callers adjust staged copies, so a partial adjustment is discarded.
+func adjustReferenceTotals(delta pricing.USD, op func(pricing.USD, pricing.USD) (pricing.USD, error), totals ...*pricing.USD) error {
+	if delta.IsZero() {
+		return nil
+	}
+	for _, total := range totals {
+		next, err := op(*total, delta)
+		if err != nil {
+			return err
+		}
+		*total = next
+	}
+	return nil
+}
+
 func applyReferenceCompletion(bucket *referenceBucket, operationID OperationID, entry *referenceEntry, event budget.CompletionEvent) error {
 	if entry == nil {
 		return ErrReferenceReservationNotFound
 	}
-	var err error
-	if !event.ReservedDecreaseUSD.IsZero() {
-		bucket.reserved, err = bucket.reserved.Sub(event.ReservedDecreaseUSD)
-		if err != nil {
-			return err
-		}
-		entry.reserved, err = entry.reserved.Sub(event.ReservedDecreaseUSD)
-		if err != nil {
-			return err
-		}
+	if err := adjustReferenceTotals(event.ReservedDecreaseUSD, pricing.USD.Sub, &bucket.reserved, &entry.reserved); err != nil {
+		return err
 	}
-	if !event.AccountedIncreaseUSD.IsZero() {
-		bucket.accounted, err = bucket.accounted.Add(event.AccountedIncreaseUSD)
-		if err != nil {
-			return err
-		}
-		entry.accounted, err = entry.accounted.Add(event.AccountedIncreaseUSD)
-		if err != nil {
-			return err
-		}
+	if err := adjustReferenceTotals(event.AccountedIncreaseUSD, pricing.USD.Add, &bucket.accounted, &entry.accounted); err != nil {
+		return err
 	}
-	if !event.AccountedDecreaseUSD.IsZero() {
-		bucket.accounted, err = bucket.accounted.Sub(event.AccountedDecreaseUSD)
-		if err != nil {
-			return err
-		}
-		entry.accounted, err = entry.accounted.Sub(event.AccountedDecreaseUSD)
-		if err != nil {
-			return err
-		}
+	if err := adjustReferenceTotals(event.AccountedDecreaseUSD, pricing.USD.Sub, &bucket.accounted, &entry.accounted); err != nil {
+		return err
 	}
 	if entry.reserved.IsZero() {
 		delete(bucket.amounts, operationID)

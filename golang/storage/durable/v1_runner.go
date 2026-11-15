@@ -111,10 +111,7 @@ type RoutePlan struct {
 }
 
 func (plan RoutePlan) Validate() error {
-	if err := plan.OperationID.Validate(); err != nil {
-		return err
-	}
-	if err := plan.GenerationID.Validate(); err != nil {
+	if err := validateIdentities(plan.OperationID, plan.GenerationID); err != nil {
 		return err
 	}
 	for name, value := range map[string]string{
@@ -140,10 +137,7 @@ func (receipt ClaimReceipt) Validate(reservation ReserveResult) error {
 	if receipt.IncarnationID != reservation.IncarnationID {
 		return errors.New("claim incarnation does not match reservation")
 	}
-	if err := receipt.OperationID.Validate(); err != nil {
-		return err
-	}
-	if err := receipt.GenerationID.Validate(); err != nil {
+	if err := validateIdentities(receipt.OperationID, receipt.GenerationID); err != nil {
 		return err
 	}
 	if receipt.OperationID != reservation.OperationID {
@@ -274,7 +268,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 			return llm.GenerateResponseV1{}, err
 		}
 		if err := ports.Reconcile(ctx, request, pending.Route, pending.Reservation, pending.Finalization); err != nil {
-			return llm.GenerateResponseV1{}, generateReconciliationError(pending.Route, err)
+			return llm.GenerateResponseV1{}, reconciliationError(pending.Route, err)
 		}
 		return pending.Finalization.Response, nil
 	}
@@ -350,19 +344,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		return llm.GenerateResponseV1{}, err
 	}
 	route, err := ports.Route(ctx, request, replay, compaction)
-	if err != nil {
-		return llm.GenerateResponseV1{}, stageError("route", err)
-	}
-	if err := contextErr(ctx); err != nil {
-		return llm.GenerateResponseV1{}, err
-	}
-	if err := route.Validate(); err != nil {
-		return llm.GenerateResponseV1{}, stageError("route", err)
-	}
-	if err := decision.preparation.validateRoute(route); err != nil {
-		return llm.GenerateResponseV1{}, stageError("cache route", err)
-	}
-	if err := contextErr(ctx); err != nil {
+	if err := checkRoutePlan(ctx, "", route, err, decision.preparation); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
 	reservation, err := ports.Reserve(ctx, request, route)
@@ -373,10 +355,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		return llm.GenerateResponseV1{}, stageError("Redis reservation", err)
 	}
 	if !reservation.Accepted {
-		mapped := provider.NewError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryAfter, "budget reservation denied")
-		mapped.OperationID = string(route.OperationID)
-		mapped.RetryAfter = reservation.RetryAfter
-		return llm.GenerateResponseV1{}, fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
+		return llm.GenerateResponseV1{}, reservationDeniedError(route, reservation)
 	}
 	// Start is a one-use grant inside this activity invocation, never a token
 	// returned to a workflow. A duplicate or uncertain start cannot reach Claim.
@@ -410,7 +389,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		return llm.GenerateResponseV1{}, err
 	}
 	if err := ports.Reconcile(ctx, request, route, reservation, finalization); err != nil {
-		return llm.GenerateResponseV1{}, generateReconciliationError(route, err)
+		return llm.GenerateResponseV1{}, reconciliationError(route, err)
 	}
 	return finalization.Response, nil
 }
@@ -640,9 +619,39 @@ func stageError(stage string, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrV1Stage, stage, err)
 }
 
-func generateReconciliationError(route RoutePlan, cause error) error {
+// reconciliationError reports a finalized operation whose Redis
+// reconciliation must be retried without dispatching the provider again.
+func reconciliationError(route RoutePlan, cause error) error {
 	mapped := provider.NewError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "Redis reconciliation is pending")
 	mapped.OperationID = string(route.OperationID)
 	mapped.Cause = cause
 	return fmt.Errorf("%w: %w", ErrReconcilePending, mapped)
+}
+
+// reservationDeniedError maps a valid Redis denial to the retry-after budget
+// error the runner returns before any cache start, claim or provider work.
+func reservationDeniedError(route RoutePlan, reservation ReserveResult) error {
+	mapped := provider.NewError(provider.CodeBudgetDenied, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryAfter, "budget reservation denied")
+	mapped.OperationID = string(route.OperationID)
+	mapped.RetryAfter = reservation.RetryAfter
+	return fmt.Errorf("%w: %w", ErrReservationDenied, mapped)
+}
+
+// checkRoutePlan validates a Route port result for the runner whose stage
+// names start with prefix. Context errors at the phase boundaries before and
+// after validation are returned unwrapped, as contextErr documents.
+func checkRoutePlan(ctx context.Context, prefix string, route RoutePlan, err error, preparation *responseCachePreparation) error {
+	if err != nil {
+		return stageError(prefix+"route", err)
+	}
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	if err := route.Validate(); err != nil {
+		return stageError(prefix+"route", err)
+	}
+	if err := preparation.validateRoute(route); err != nil {
+		return stageError(prefix+"cache route", err)
+	}
+	return contextErr(ctx)
 }

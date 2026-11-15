@@ -136,12 +136,8 @@ func testLedger(t *testing.T, factory StoreFactory) {
 		t.Fatalf("request digest conflict = %v, want operation conflict", err)
 	}
 
-	if replay := begin(t, stores.Admission, beginRequest("refund", "complete-policy", 7, 10, now)); replay.State != admission.StateReserved {
-		t.Fatalf("refunded capacity operation = %#v", replay)
-	}
-	if denied, err := stores.Admission.Begin(ctx, beginRequest("refund-over", "complete-policy", 1, 10, now)); err != nil || denied.Denied == nil {
-		t.Fatalf("refund limit boundary = %#v, %v; want denial", denied, err)
-	}
+	requireReserved(t, stores.Admission, beginRequest("refund", "complete-policy", 7, 10, now), "refunded capacity operation")
+	requireDenied(t, stores.Admission, beginRequest("refund-over", "complete-policy", 1, 10, now), "refund limit boundary")
 
 	excess := begin(t, stores.Admission, beginRequest("excess", "excess-policy", 5, 10, now))
 	dispatch(t, stores.Admission, excess, now)
@@ -153,12 +149,8 @@ func testLedger(t *testing.T, factory StoreFactory) {
 	}); err != nil {
 		t.Fatalf("complete excess-cost operation: %v", err)
 	}
-	if accepted := begin(t, stores.Admission, beginRequest("excess-within", "excess-policy", 2, 10, now)); accepted.State != admission.StateReserved {
-		t.Fatalf("excess capacity operation = %#v", accepted)
-	}
-	if denied, err := stores.Admission.Begin(ctx, beginRequest("excess-over", "excess-policy", 1, 10, now)); err != nil || denied.Denied == nil {
-		t.Fatalf("excess-cost limit = %#v, %v; want denial", denied, err)
-	}
+	requireReserved(t, stores.Admission, beginRequest("excess-within", "excess-policy", 2, 10, now), "excess capacity operation")
+	requireDenied(t, stores.Admission, beginRequest("excess-over", "excess-policy", 1, 10, now), "excess-cost limit")
 
 	failed := begin(t, stores.Admission, beginRequest("definite-fail", "definite-fail-policy", 10, 10, now))
 	dispatch(t, stores.Admission, failed, now)
@@ -175,19 +167,11 @@ func testLedger(t *testing.T, factory StoreFactory) {
 	if err != nil || failedValue.State != admission.StateDefiniteFailed || failedValue.ReservedMicroUSD != 0 || failedValue.FinalMicroUSD != 2 {
 		t.Fatalf("definite failed operation = %#v, %v", failedValue, err)
 	}
-	if accepted := begin(t, stores.Admission, beginRequest("after-definite-fail", "definite-fail-policy", 8, 10, now)); accepted.State != admission.StateReserved {
-		t.Fatalf("definite failure refund = %#v", accepted)
-	}
-	if denied, err := stores.Admission.Begin(ctx, beginRequest("after-definite-fail-over", "definite-fail-policy", 1, 10, now)); err != nil || denied.Denied == nil {
-		t.Fatalf("definite failure limit = %#v, %v; want denial", denied, err)
-	}
+	requireReserved(t, stores.Admission, beginRequest("after-definite-fail", "definite-fail-policy", 8, 10, now), "definite failure refund")
+	requireDenied(t, stores.Admission, beginRequest("after-definite-fail-over", "definite-fail-policy", 1, 10, now), "definite failure limit")
 
-	if accepted := begin(t, stores.Admission, beginRequest("exact-boundary", "clock-boundary", 10, 10, now)); accepted.State != admission.StateReserved {
-		t.Fatalf("exact clock boundary admission = %#v", accepted)
-	}
-	if denied, err := stores.Admission.Begin(ctx, beginRequest("past-boundary", "clock-boundary", 1, 10, now)); err != nil || denied.Denied == nil {
-		t.Fatalf("past clock boundary admission = %#v, %v; want denial", denied, err)
-	}
+	requireReserved(t, stores.Admission, beginRequest("exact-boundary", "clock-boundary", 10, 10, now), "exact clock boundary admission")
+	requireDenied(t, stores.Admission, beginRequest("past-boundary", "clock-boundary", 1, 10, now), "past clock boundary admission")
 
 	continued := begin(t, stores.Admission, beginRequest("continue", "continue-policy", 10, 10, now))
 	dispatch(t, stores.Admission, continued, now)
@@ -352,9 +336,7 @@ func testAmbiguity(t *testing.T, factory StoreFactory) {
 	if value.State != admission.StateAmbiguous || value.ReservedMicroUSD != 6 || value.FinalMicroUSD != 6 {
 		t.Fatalf("ambiguous retention = %#v", value)
 	}
-	if denied, err := stores.Admission.Begin(ctx, beginRequest("after-ambiguous", "ambiguous-policy", 5, 10, now)); err != nil || denied.Denied == nil {
-		t.Fatalf("ambiguous retained budget = %#v, %v; want denial", denied, err)
-	}
+	requireDenied(t, stores.Admission, beginRequest("after-ambiguous", "ambiguous-policy", 5, 10, now), "ambiguous retained budget")
 }
 
 func testContinuations(t *testing.T, factory StoreFactory) {
@@ -399,15 +381,7 @@ func testContinuations(t *testing.T, factory StoreFactory) {
 		t.Fatalf("continuation read was mutable: %#v", again)
 	}
 
-	child := again.Clone()
-	child.ParentID = rootHandle.String()
-	child.Depth = again.Depth + 1
-	child.LastOperationID = "child-operation"
-	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "child"}}})
-	_, child.TranscriptDigest, err = state.CanonicalTranscript(child.Transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	child := continuationChild(t, again, rootHandle, "child")
 	childHandle, err := stores.Continuations.PutChild(ctx, state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "child-operation"})
 	if err != nil {
 		t.Fatalf("put immutable child: %v", err)
@@ -422,15 +396,7 @@ func testContinuations(t *testing.T, factory StoreFactory) {
 	if err != nil {
 		t.Fatalf("create second continuation root: %v", err)
 	}
-	otherChild := otherRoot.Clone()
-	otherChild.ParentID = otherRootHandle.String()
-	otherChild.Depth = otherRoot.Depth + 1
-	otherChild.LastOperationID = "child-operation"
-	otherChild.Transcript = append(otherChild.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "other child"}}})
-	_, otherChild.TranscriptDigest, err = state.CanonicalTranscript(otherChild.Transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	otherChild := continuationChild(t, otherRoot, otherRootHandle, "other child")
 	otherChildHandle, err := stores.Continuations.PutChild(ctx, state.PutChildRequest{Parent: otherRootHandle, Child: otherChild, OperationKey: "child-operation"})
 	if err != nil {
 		t.Fatalf("put second child: %v", err)
@@ -527,6 +493,22 @@ func begin(t *testing.T, store admission.AdmissionStore, request admission.Begin
 	return result.Operation
 }
 
+// requireReserved begins request and fails, naming label, unless it reserves.
+func requireReserved(t *testing.T, store admission.AdmissionStore, request admission.BeginRequest, label string) {
+	t.Helper()
+	if operation := begin(t, store, request); operation.State != admission.StateReserved {
+		t.Fatalf("%s = %#v", label, operation)
+	}
+}
+
+// requireDenied begins request and fails, naming label, unless it is denied.
+func requireDenied(t *testing.T, store admission.AdmissionStore, request admission.BeginRequest, label string) {
+	t.Helper()
+	if denied, err := store.Begin(context.Background(), request); err != nil || denied.Denied == nil {
+		t.Fatalf("%s = %#v, %v; want denial", label, denied, err)
+	}
+}
+
 func dispatch(t *testing.T, store admission.AdmissionStore, operation admission.Operation, now time.Time) {
 	t.Helper()
 	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
@@ -587,6 +569,23 @@ func continuation(t *testing.T, now time.Time) state.Continuation {
 		CreatedAt:         now,
 		ExpiresAt:         now.Add(time.Hour),
 	}
+}
+
+// continuationChild derives the "child-operation" child of parent, stored at
+// parentHandle, with one more model message.
+func continuationChild(t *testing.T, parent state.Continuation, parentHandle state.Handle, text string) state.Continuation {
+	t.Helper()
+	child := parent.Clone()
+	child.ParentID = parentHandle.String()
+	child.Depth = parent.Depth + 1
+	child.LastOperationID = "child-operation"
+	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}})
+	var err error
+	_, child.TranscriptDigest, err = state.CanonicalTranscript(child.Transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return child
 }
 
 func tamper(value string) string {

@@ -81,3 +81,30 @@ func TenantPrefix(tenant string) (string, error) {
 	digest := sha256.Sum256([]byte(tenant))
 	return hex.EncodeToString(digest[:]), nil
 }
+
+// Check validates the fields every Store requires before writing request,
+// whose data may be at most maxBytes. clock is read once, only after the
+// request itself is well formed, and now is that reading. It returns the
+// tenant's key prefix and the content digest.
+func (request PutRequest) Check(maxBytes int64, clock func() time.Time) (tenantPrefix, digest string, now time.Time, err error) {
+	if request.Tenant == "" || request.MediaType == "" {
+		return "", "", time.Time{}, fmt.Errorf("blob tenant and media type are required")
+	}
+	if int64(len(request.Data)) > maxBytes {
+		return "", "", time.Time{}, fmt.Errorf("blob exceeds the configured size limit")
+	}
+	now = clock()
+	if request.ExpiresAt.IsZero() || !now.Before(request.ExpiresAt) {
+		return "", "", time.Time{}, ErrExpired
+	}
+	tenantPrefix, err = TenantPrefix(request.Tenant)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	return tenantPrefix, Digest(request.Data), now, nil
+}
+
+// Ref describes request's data stored by store at locator under digest.
+func (request PutRequest) Ref(store, locator, digest string) Ref {
+	return Ref{Store: store, Locator: locator, Digest: digest, ByteLength: int64(len(request.Data)), MediaType: request.MediaType, ExpiresAt: request.ExpiresAt}
+}

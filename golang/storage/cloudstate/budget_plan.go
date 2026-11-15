@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -221,18 +220,13 @@ func (r *Repository) SaveBudgetPlan(ctx context.Context, scope Scope, id Request
 			return r.repairBudgetPlanIndex(ctx, record)
 		}
 		progress["budget_plan"] = encoded
-		data, err := json.Marshal(progress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return ErrInvalid
+		data, err := encodeProgress(progress)
+		if err != nil {
+			return err
 		}
-		if now.Before(record.UpdatedAt) {
-			now = record.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, scope, id, record, "budget-plan", StatusRunning, data, now); !retry {
+			return err
 		}
-		_, err = r.TryUpdate(ctx, scope, id, Update{ExpectedRevision: record.Revision, Token: "budget-plan", Status: StatusRunning, Progress: data, UpdatedAt: now})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return err
 	}
 	return contracts.ErrConflict
 }

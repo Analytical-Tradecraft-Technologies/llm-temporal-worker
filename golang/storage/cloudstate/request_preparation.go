@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -297,19 +296,13 @@ func (r *Repository) SaveRequestPreparationKnown(ctx context.Context, scope Scop
 			written = true
 		}
 		progress["request_preparation"] = encoded
-		data, err := json.Marshal(progress)
-		if err != nil || len(data) > maxPayloadBytes {
-			return ErrInvalid
+		data, err := encodeProgress(progress)
+		if err != nil {
+			return err
 		}
-		now := preparation.PreparedAt
-		if now.Before(record.UpdatedAt) {
-			now = record.UpdatedAt
+		if retry, err := r.tryProgressUpdate(ctx, scope, id, record, "request-preparation", StatusRunning, data, preparation.PreparedAt); !retry {
+			return err
 		}
-		_, err = r.TryUpdate(ctx, scope, id, Update{ExpectedRevision: record.Revision, Token: "request-preparation", Status: StatusRunning, Progress: data, UpdatedAt: now})
-		if errors.Is(err, contracts.ErrConflict) {
-			continue
-		}
-		return err
 	}
 	return contracts.ErrConflict
 }

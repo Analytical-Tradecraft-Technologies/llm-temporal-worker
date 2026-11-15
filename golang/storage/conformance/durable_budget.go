@@ -14,6 +14,42 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
+// acceptRace releases count concurrent Accept calls at once and returns how
+// many were accepted. Any Accept error fails the test.
+func acceptRace(t *testing.T, m durable.BudgetMaterializer, count int, request func(int) durable.ReserveRequest) int {
+	t.Helper()
+	results := make(chan durable.ReserveResult, count)
+	failures := make(chan error, count)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			result, err := m.Accept(context.Background(), request(i))
+			results <- result
+			failures <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	accepted := 0
+	for result := range results {
+		if result.Accepted {
+			accepted++
+		}
+	}
+	return accepted
+}
+
 // RunDurableRollingBudget exercises identical rolling-window behavior in the
 // reference model and live Redis. Each factory call must return isolated state.
 // It is the conformance suite the production Redis Function and the reference
@@ -114,35 +150,9 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				accept("after-batch", true, reservation(0, "1"))
 			case "concurrent":
 				const count = 20
-				results := make(chan durable.ReserveResult, count)
-				errors := make(chan error, count)
-				start := make(chan struct{})
-				var wg sync.WaitGroup
-				for i := 0; i < count; i++ {
-					wg.Add(1)
-					go func(i int) {
-						defer wg.Done()
-						<-start
-						result, err := m.Accept(ctx, durable.ReserveRequest{OperationID: durable.OperationID(fmt.Sprintf("race-%d", i)), GenerationID: "rolling-gen", Reservations: []admission.WindowReservation{reservation(-int64(i%2), "0.60")}})
-						results <- result
-						errors <- err
-					}(i)
-				}
-				close(start)
-				wg.Wait()
-				close(results)
-				close(errors)
-				for err := range errors {
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				accepted := 0
-				for result := range results {
-					if result.Accepted {
-						accepted++
-					}
-				}
+				accepted := acceptRace(t, m, count, func(i int) durable.ReserveRequest {
+					return durable.ReserveRequest{OperationID: durable.OperationID(fmt.Sprintf("race-%d", i)), GenerationID: "rolling-gen", Reservations: []admission.WindowReservation{reservation(-int64(i%2), "0.60")}}
+				})
 				if accepted != 1 {
 					t.Fatalf("accepted %d concurrent cross-bucket requests, want 1", accepted)
 				}
@@ -156,35 +166,9 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 					reservation.WindowID, reservation.DurationNanos, reservation.LimitUSD = "day", int64(24*time.Hour), pricing.MustUSD("3")
 					return reservation
 				}
-				results := make(chan durable.ReserveResult, count)
-				errors := make(chan error, count)
-				start := make(chan struct{})
-				var wg sync.WaitGroup
-				for i := 0; i < count; i++ {
-					wg.Add(1)
-					go func(i int) {
-						defer wg.Done()
-						<-start
-						result, err := m.Accept(ctx, durable.ReserveRequest{OperationID: durable.OperationID(fmt.Sprintf("overlap-%d", i)), GenerationID: "rolling-gen", Reservations: []admission.WindowReservation{reservation(0, "0.60"), day("0.60")}})
-						results <- result
-						errors <- err
-					}(i)
-				}
-				close(start)
-				wg.Wait()
-				close(results)
-				close(errors)
-				for err := range errors {
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-				accepted := 0
-				for result := range results {
-					if result.Accepted {
-						accepted++
-					}
-				}
+				accepted := acceptRace(t, m, count, func(i int) durable.ReserveRequest {
+					return durable.ReserveRequest{OperationID: durable.OperationID(fmt.Sprintf("overlap-%d", i)), GenerationID: "rolling-gen", Reservations: []admission.WindowReservation{reservation(0, "0.60"), day("0.60")}}
+				})
 				if accepted != 1 {
 					t.Fatalf("accepted %d overlapping-window racers, want the hour's capacity of 1", accepted)
 				}

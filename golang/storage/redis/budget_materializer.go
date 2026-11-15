@@ -356,8 +356,6 @@ func (m *RedisBudgetMaterializer) Claim(ctx context.Context, request durable.Cla
 		return durable.ClaimReceipt{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: request.IncarnationID}, nil
 	case "already_claimed":
 		return durable.ClaimReceipt{}, durable.ErrAlreadyClaimed
-	case "expired":
-		return durable.ClaimReceipt{}, durable.ErrLeaseExpired
 	default:
 		return durable.ClaimReceipt{}, mapDurableStatus(status)
 	}
@@ -456,16 +454,6 @@ func (m *RedisBudgetMaterializer) Reconcile(ctx context.Context, request durable
 		return nil
 	case "conflict":
 		return ErrRedisBudgetConflict
-	case "generation_mismatch":
-		return ErrRedisBudgetGenerationMismatch
-	case "incarnation_mismatch":
-		return ErrRedisBudgetIncarnationMismatch
-	case "not_claimed":
-		return durable.ErrClaimRequired
-	case "not_found":
-		return ErrRedisBudgetReservationNotFound
-	case "finalized":
-		return ErrRedisBudgetReservationFinalized
 	default:
 		return mapDurableStatus(status)
 	}

@@ -112,6 +112,41 @@ func (id OperationID) Validate() error   { return validateID(string(id), "operat
 func (id GenerationID) Validate() error  { return validateID(string(id), "generation id") }
 func (id IncarnationID) Validate() error { return validateID(string(id), "incarnation id") }
 
+// validateIdentities checks the operation and then generation identity that
+// every Redis lease message carries.
+func validateIdentities(operation OperationID, generation GenerationID) error {
+	if err := operation.Validate(); err != nil {
+		return err
+	}
+	return generation.Validate()
+}
+
+// validateLeaseIdentities additionally checks the incarnation of an accepted
+// lease, after the operation and generation identities.
+func validateLeaseIdentities(operation OperationID, generation GenerationID, incarnation IncarnationID) error {
+	if err := validateIdentities(operation, generation); err != nil {
+		return err
+	}
+	return incarnation.Validate()
+}
+
+// unchangedIdentity checks that Redis echoed a valid requested identity.
+func unchangedIdentity[ID interface {
+	~string
+	Validate() error
+}](requested, accepted ID, name string) error {
+	if err := requested.Validate(); err != nil {
+		return err
+	}
+	if err := accepted.Validate(); err != nil {
+		return err
+	}
+	if accepted != requested {
+		return fmt.Errorf("%s id changed during Redis acceptance", name)
+	}
+	return nil
+}
+
 // BudgetMaterializer is the authoritative Redis accounting port. Reservations
 // and completions are atomic and idempotent.
 type BudgetMaterializer interface {
@@ -147,23 +182,11 @@ type ReserveResult struct {
 }
 
 func (result ReserveResult) Validate(request ReserveRequest) error {
-	if err := request.OperationID.Validate(); err != nil {
+	if err := unchangedIdentity(request.OperationID, result.OperationID, "operation"); err != nil {
 		return err
 	}
-	if err := result.OperationID.Validate(); err != nil {
+	if err := unchangedIdentity(request.GenerationID, result.GenerationID, "generation"); err != nil {
 		return err
-	}
-	if result.OperationID != request.OperationID {
-		return fmt.Errorf("operation id changed during Redis acceptance")
-	}
-	if err := request.GenerationID.Validate(); err != nil {
-		return err
-	}
-	if err := result.GenerationID.Validate(); err != nil {
-		return err
-	}
-	if result.GenerationID != request.GenerationID {
-		return fmt.Errorf("generation id changed during Redis acceptance")
 	}
 	if result.Accepted {
 		if err := result.IncarnationID.Validate(); err != nil {
@@ -203,13 +226,7 @@ type ReconcileRequest struct {
 }
 
 func (request ReconcileRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
-		return err
-	}
-	if err := request.GenerationID.Validate(); err != nil {
-		return err
-	}
-	if err := request.IncarnationID.Validate(); err != nil {
+	if err := validateLeaseIdentities(request.OperationID, request.GenerationID, request.IncarnationID); err != nil {
 		return err
 	}
 	if len(request.Events) == 0 {
@@ -250,13 +267,7 @@ type ClaimRequest struct {
 }
 
 func (request ClaimRequest) Validate() error {
-	if err := request.OperationID.Validate(); err != nil {
-		return err
-	}
-	if err := request.GenerationID.Validate(); err != nil {
-		return err
-	}
-	return request.IncarnationID.Validate()
+	return validateLeaseIdentities(request.OperationID, request.GenerationID, request.IncarnationID)
 }
 
 // Composition is the snapshot-owned seam consumed by a runtime factory when
