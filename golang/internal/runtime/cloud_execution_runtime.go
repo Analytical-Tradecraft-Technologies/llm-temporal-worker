@@ -681,7 +681,6 @@ func (r *CloudExecutionRuntime) resumeAdmissionWinner(ctx context.Context, p Pre
 }
 
 func (r *CloudExecutionRuntime) resumeAttempt(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, saved cloudstate.SavedProviderExecution, step cloudStep) (llm.ExecutionResultV1, error) {
-	noteAccessRoute(ctx, saved.Plan.Route.RouteID)
 	result := r.execution.result(saved)
 	if step == cloudPoll || step == cloudSubmit || saved.Execution.Stage == cloudstate.ExecutionSucceeded || saved.Execution.Stage == cloudstate.ExecutionFailed {
 		var err error
@@ -706,6 +705,10 @@ func (r *CloudExecutionRuntime) resumeAttempt(ctx context.Context, p PreparedClo
 // soon as the paid response is saved: publication would reject it on every
 // retry, leaving the settled response stranded behind a running request.
 func (r *CloudExecutionRuntime) finishProviderStep(ctx context.Context, p PreparedCloudRequest, attempt cloudstate.RequestAttempt, result ProviderExecutionResult) (llm.ExecutionResultV1, error) {
+	// Every provider result a step reports passes here, whether it was just
+	// submitted or resumed from a saved attempt, so the access event names
+	// its route (#1541).
+	noteAccessRoute(ctx, result.Saved.Plan.Route.RouteID)
 	outcome := cache.FillFailed
 	failed := result.Saved.Execution.Stage == cloudstate.ExecutionFailed
 	unpublishable := false

@@ -126,8 +126,9 @@ worker request ID, which can locate a response, #1362) and
 `parent_checkpoint_hash` when the request continues or compacts a checkpoint.
 A completed event adds `checkpoint_hash` for the published checkpoint,
 `status` (`completed` or `failed`), a failure's `error_code`, and the
-`route_id` of the provider execution when that step finished one; a replayed
-result or cache hit omits `route_id`. Empty optional identifiers are omitted.
+`route_id` of the provider execution when that step reported one, whether it
+submitted it or resumed a saved attempt; a replay of a stored result or a
+cache hit runs no provider execution and omits `route_id`. Empty optional identifiers are omitted.
 Request and response bodies, transcripts, tags, capabilities and raw
 identifiers are never passed to the log handler.
 

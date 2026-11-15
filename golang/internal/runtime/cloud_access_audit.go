@@ -36,8 +36,9 @@ func (r *CloudExecutionRuntime) auditCompleted(ctx context.Context, caller llm.R
 	r.auditAccess(ctx, record)
 }
 
-// accessRouteKey carries, within one Activity step, the route of the saved
-// provider execution the step finished. The cloud path's public response does
+// accessRouteKey carries, within one Activity step, the route of the provider
+// execution whose result the step reported (finishProviderStep), whether just
+// submitted or resumed. The cloud path's public response does
 // not name its route, so this is the only place the access event learns it.
 type accessRouteKey struct{}
 

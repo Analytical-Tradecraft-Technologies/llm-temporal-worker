@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
 
@@ -178,5 +179,32 @@ func TestCloudAccessAuditCompletionStates(t *testing.T) {
 	if len(records) != 1 || records[0].Phase != observability.RequestAccessCompleted || records[0].Status != "failed" ||
 		records[0].ErrorCode != "invalid_argument" || records[0].RouteID != "route-a" || records[0].OperationID != "llmtw_req_1" || records[0].Checkpoint != "" {
 		t.Fatalf("terminal failure record = %+v", records)
+	}
+}
+
+// A permanent provider failure on the initial Generate submission is
+// terminal in that step, which never resumes a saved attempt; its access
+// event still names the route. A later replay of the stored failure runs no
+// provider execution and omits route_id.
+func TestCloudAccessAuditRouteOnInitialSubmissionFailure(t *testing.T) {
+	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
+		b.source.value.Routes.Models["alias"].Routes[0].ID = "audit-route"
+	})
+	var records []observability.RequestAccessRecord
+	f.options.AccessAudit = func(_ context.Context, record observability.RequestAccessRecord) error {
+		records = append(records, record)
+		return nil
+	}
+	f.restart(t)
+	f.adapter.invoke = invokeFailing(&f.submits, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "private"))
+	ctx := context.Background()
+	f.step(t, ctx, f.request, llm.ExecutionFailed)
+	if len(records) != 2 || records[1].Phase != observability.RequestAccessCompleted || records[1].Status != "failed" ||
+		records[1].ErrorCode != string(provider.CodePermissionDenied) || records[1].RouteID != "audit-route" {
+		t.Fatalf("submission failure records = %+v", records)
+	}
+	f.prepare(t, ctx, llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionFailed)
+	if len(records) != 4 || records[3].Phase != observability.RequestAccessCompleted || records[3].Status != "failed" || records[3].RouteID != "" {
+		t.Fatalf("replayed failure records = %+v", records)
 	}
 }
