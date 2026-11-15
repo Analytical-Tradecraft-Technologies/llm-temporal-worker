@@ -12,7 +12,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
-	"go.temporal.io/sdk/temporal"
 )
 
 type materializingRuntimeProbe struct {
@@ -101,6 +100,16 @@ func validMaterializedState(handle state.Handle) state.MaterializedState {
 	}
 }
 
+// childGenerateV1Request is validGenerateV1Request continuing from parent.
+func childGenerateV1Request(parent llm.CheckpointHandle) llm.GenerateRequestV1 {
+	request := validGenerateV1Request()
+	request.Parent = &parent
+	return request
+}
+
+// fixedScopeID resolves every request context to the "scope-id" scope.
+func fixedScopeID(llm.RequestContext) (string, error) { return "scope-id", nil }
+
 func validMaterializedGenerateResponse(operationKey string) llm.GenerateResponseV1 {
 	return llm.GenerateResponseV1{
 		APIVersion: llm.APIVersion, OperationKey: operationKey, OperationID: "operation-generate",
@@ -134,9 +143,7 @@ func TestMaterializingV1RuntimeMaterializesBeforeGenerateDispatch(t *testing.T) 
 			return requestContext.Tenant + "/" + requestContext.Project, nil
 		},
 	}
-	parent := llm.CheckpointHandle("parent")
-	request := validGenerateV1Request()
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	response, err := (&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), request)
 	if err != nil {
 		t.Fatalf("GenerateV1 error = %v", err)
@@ -158,7 +165,7 @@ func TestMaterializingV1RuntimeMaterializesBeforeCompactDispatch(t *testing.T) {
 	materializer := &materializingMaterializerProbe{events: &events, result: validMaterializedState("parent")}
 	wrapped := &MaterializingV1Runtime{
 		Runtime: runtime, Materializer: materializer,
-		Scope: func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope: fixedScopeID,
 	}
 	request := validCompactV1Request()
 	request.Parent = "parent"
@@ -195,11 +202,9 @@ func TestMaterializingV1RuntimeFailsClosedBeforeDispatchOnMaterializationError(t
 	materializer := &materializingMaterializerProbe{events: &events, err: state.ErrNotFound}
 	wrapped := &MaterializingV1Runtime{
 		Runtime: runtime, Materializer: materializer,
-		Scope: func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope: fixedScopeID,
 	}
-	parent := llm.CheckpointHandle("missing")
-	request := validGenerateV1Request()
-	request.Parent = &parent
+	request := childGenerateV1Request("missing")
 	if _, err := (&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), request); err == nil {
 		t.Fatal("GenerateV1 unexpectedly dispatched after materialization failure")
 	}
@@ -209,14 +214,12 @@ func TestMaterializingV1RuntimeFailsClosedBeforeDispatchOnMaterializationError(t
 }
 
 func TestMaterializingV1RuntimeFailsClosedWithoutStateAwareRuntime(t *testing.T) {
-	parent := llm.CheckpointHandle("parent")
-	request := validGenerateV1Request()
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	base := &v1RuntimeStub{}
 	materializer := &materializingMaterializerProbe{events: new([]string), result: validMaterializedState("parent")}
 	wrapped := &MaterializingV1Runtime{
 		Runtime: base, Materializer: materializer,
-		Scope: func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope: fixedScopeID,
 	}
 	if _, err := wrapped.GenerateV1(context.Background(), request); err == nil {
 		t.Fatal("GenerateV1 unexpectedly accepted a runtime without the state-aware extension")
@@ -227,9 +230,7 @@ func TestMaterializingV1RuntimeFailsClosedWithoutStateAwareRuntime(t *testing.T)
 }
 
 func TestMaterializingV1RuntimeMapsScopeResolverFailure(t *testing.T) {
-	parent := llm.CheckpointHandle("parent")
-	request := validGenerateV1Request()
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	wantErr := errors.New("scope lookup failed")
 	wrapped := &MaterializingV1Runtime{
 		Runtime:      &materializingRuntimeProbe{events: new([]string)},
@@ -243,13 +244,11 @@ func TestMaterializingV1RuntimeMapsScopeResolverFailure(t *testing.T) {
 
 func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
 	events := []string{}
-	parent := llm.CheckpointHandle("parent")
-	request := validGenerateV1Request()
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	wrapper := &MaterializingV1Runtime{
 		Runtime:      &materializingRuntimeProbe{events: &events},
 		Materializer: &materializingMaterializerProbe{events: &events, err: fmt.Errorf("load checkpoint: %w", context.Canceled)},
-		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope:        fixedScopeID,
 	}
 	if _, err := (&Activities{V1Runtime: wrapper}).GenerateV1(context.Background(), request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("GenerateV1 error = %v, want context.Canceled", err)
@@ -261,37 +260,35 @@ func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
 
 func TestMapMaterializationDeadlineRetainsRetryableStateLoad(t *testing.T) {
 	err := mapMaterializationError(fmt.Errorf("read checkpoint: %w", context.DeadlineExceeded))
+	assertProviderError(t, err, provider.CodeDeadlineExceeded, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetrySameOperation)
+}
+
+// assertProviderError checks err is a *provider.Error with the given code,
+// phase, dispatch certainty and retry disposition.
+func assertProviderError(t *testing.T, err error, code provider.Code, phase provider.Phase, dispatch provider.DispatchCertainty, retry provider.RetryDisposition) {
+	t.Helper()
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) {
-		t.Fatalf("mapped error = %T %v, want provider.Error", err, err)
+		t.Fatalf("error = %T %v, want provider.Error", err, err)
 	}
-	if providerErr.Code != provider.CodeDeadlineExceeded || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetrySameOperation {
-		t.Fatalf("mapped error = %#v, want retryable state-load deadline", providerErr)
+	if providerErr.Code != code || providerErr.Phase != phase || providerErr.Dispatch != dispatch || providerErr.Retry != retry {
+		t.Fatalf("provider error = %#v, want %s/%s/%s/%s", providerErr, code, phase, dispatch, retry)
 	}
 }
 
 func TestMaterializingV1RuntimeDeadlineUsesRetryableTemporalError(t *testing.T) {
-	parent := llm.CheckpointHandle("parent")
-	request := validGenerateV1Request()
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	wrapper := &MaterializingV1Runtime{
 		Runtime:      &materializingRuntimeProbe{events: new([]string)},
 		Materializer: &deadlineMaterializerProbe{},
-		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope:        fixedScopeID,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	_, err := (&Activities{V1Runtime: wrapper}).GenerateV1(ctx, request)
-	var application *temporal.ApplicationError
-	if !errors.As(err, &application) {
-		t.Fatalf("GenerateV1 error = %T %v, want Temporal application error", err, err)
-	}
+	application, details := safeApplicationError(t, err)
 	if application.Type() != ErrorTypeProviderTransient || application.NonRetryable() {
 		t.Fatalf("application error type=%q non_retryable=%v, want retryable provider transient", application.Type(), application.NonRetryable())
-	}
-	var details SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatal(err)
 	}
 	if details.Code != string(provider.CodeDeadlineExceeded) || details.Phase != string(provider.PhaseStateLoad) {
 		t.Fatalf("safe details = %#v, want state-load deadline", details)
@@ -331,11 +328,9 @@ func TestV1ActivityPayloadDoesNotScaleWithAncestorLineage(t *testing.T) {
 		}
 		wrapped := &MaterializingV1Runtime{
 			Runtime: runtime, Materializer: materializer,
-			Scope: func(llm.RequestContext) (string, error) { return "scope-id", nil },
+			Scope: fixedScopeID,
 		}
-		parent := llm.CheckpointHandle("parent")
-		request := validGenerateV1Request()
-		request.Parent = &parent
+		request := childGenerateV1Request("parent")
 		encodedRequest, err := MarshalGenerateV1(request, limits)
 		if err != nil {
 			t.Fatalf("turns=%d marshal request: %v", turns, err)

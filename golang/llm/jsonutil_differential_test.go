@@ -260,10 +260,7 @@ func parseJSONNode(t testing.TB, data []byte) *jsonNode {
 		}
 		delimiter, ok := token.(json.Delim)
 		if !ok {
-			encoded, err := json.Marshal(token)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := mustMarshalJSON(t, token)
 			return &jsonNode{scalar: string(encoded)}
 		}
 		node := &jsonNode{kind: byte(delimiter)}
@@ -604,4 +601,14 @@ func FuzzFastJSONDecodingMatchesReference(f *testing.F) {
 			requireSameOutcome(t, name, differentialDecoders[name], data)
 		}
 	})
+}
+
+// mustMarshalJSON encodes value as JSON, failing the test on an error.
+func mustMarshalJSON(t testing.TB, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

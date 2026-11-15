@@ -13,10 +13,35 @@ import (
 // bills 2x input and 1.5x output over 272,000 prompt tokens.
 func gpt54LongPromptEntry() pricing.Entry {
 	return pricing.Entry{Family: "openai_responses", Version: "v",
-		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("2.5"), OutputPerMillion: pricing.MustDecimalUSD("15"),
-			CacheReadPerMillion: pricing.MustDecimalUSD("0.25"), CacheWritePerMillion: pricing.MustDecimalUSD("0"), ReasoningPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0")},
-		LongPrompt: &pricing.LongPromptPrices{MinPromptTokens: 272_000, Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("5"), OutputPerMillion: pricing.MustDecimalUSD("22.5"),
-			CacheReadPerMillion: pricing.MustDecimalUSD("0.5"), CacheWritePerMillion: pricing.MustDecimalUSD("0"), ReasoningPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0")}},
+		Prices:     tokenPrices("2.5", "15", "0.25", "0"),
+		LongPrompt: &pricing.LongPromptPrices{MinPromptTokens: 272_000, Prices: tokenPrices("5", "22.5", "0.5", "0")},
+	}
+}
+
+// tokenPrices returns per-million token prices with no reasoning or
+// per-request charge.
+func tokenPrices(input, output, cacheRead, cacheWrite string) pricing.UnitPrices {
+	return pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD(input), OutputPerMillion: pricing.MustDecimalUSD(output),
+		CacheReadPerMillion: pricing.MustDecimalUSD(cacheRead), CacheWritePerMillion: pricing.MustDecimalUSD(cacheWrite), ReasoningPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0")}
+}
+
+type longPromptCase struct {
+	request llm.Request
+	long    bool
+}
+
+// longPromptCases returns two requests whose uncapped estimate can cross a
+// long-prompt threshold, text plus media and a URL PDF, and a short text
+// request that cannot.
+func longPromptCases(operationKey string, maxTokens int, media []llm.Part) map[string]longPromptCase {
+	request := func(parts ...llm.Part) llm.Request {
+		return llm.Request{OperationKey: operationKey, Model: "logical", Output: &llm.OutputSpec{MaxTokens: intPointer(maxTokens)},
+			Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: parts}}}
+	}
+	return map[string]longPromptCase{
+		"text plus images": {request(media...), true},
+		"URL PDF":          {request(llm.TextPart{Text: "summarize"}, llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"}), true},
+		"short text":       {request(llm.TextPart{Text: "hi"}), false},
 	}
 }
 
@@ -30,18 +55,7 @@ func TestEstimateReservesLongPromptPriceWhenMediaCanReachThreshold(t *testing.T)
 	for range 100 {
 		screenshots = append(screenshots, llm.ImagePart{URL: "https://example.com/screen.png", MediaType: "image/png"})
 	}
-	request := func(parts ...llm.Part) llm.Request {
-		return llm.Request{OperationKey: "long-prompt", Model: "logical", Output: &llm.OutputSpec{MaxTokens: intPointer(16_000)},
-			Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: parts}}}
-	}
-	for name, test := range map[string]struct {
-		request llm.Request
-		long    bool
-	}{
-		"text plus images": {request(screenshots...), true},
-		"URL PDF":          {request(llm.TextPart{Text: "summarize"}, llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"}), true},
-		"short text":       {request(llm.TextPart{Text: "hi"}), false},
-	} {
+	for name, test := range longPromptCases("long-prompt", 16_000, screenshots) {
 		t.Run(name, func(t *testing.T) {
 			estimate := assertReservedAtPromptPrice(t, test.request, candidate, entry, test.long)
 			// A prompt over the threshold settles at the long-prompt price;
@@ -64,28 +78,15 @@ func TestEstimateReservesLongPromptPriceWhenMediaCanReachThreshold(t *testing.T)
 // the threshold must reserve at the long-prompt price.
 func TestEstimateReservesHaiku55LongPromptPrice(t *testing.T) {
 	entry := pricing.Entry{Family: "anthropic_messages", Version: "v",
-		Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("0.1"), OutputPerMillion: pricing.MustDecimalUSD("0.5"),
-			CacheReadPerMillion: pricing.MustDecimalUSD("0.01"), CacheWritePerMillion: pricing.MustDecimalUSD("0.125"), ReasoningPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0")},
-		LongPrompt: &pricing.LongPromptPrices{MinPromptTokens: 100_000, Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("0.5"), OutputPerMillion: pricing.MustDecimalUSD("2.5"),
-			CacheReadPerMillion: pricing.MustDecimalUSD("0.05"), CacheWritePerMillion: pricing.MustDecimalUSD("0.625"), ReasoningPerMillion: pricing.MustDecimalUSD("0"), PerRequest: pricing.MustDecimalUSD("0")}},
+		Prices:     tokenPrices("0.1", "0.5", "0.01", "0.125"),
+		LongPrompt: &pricing.LongPromptPrices{MinPromptTokens: 100_000, Prices: tokenPrices("0.5", "2.5", "0.05", "0.625")},
 	}
 	candidate := routing.Candidate{ID: "c", Family: "anthropic_messages", ContextTokens: 1_000_000}
 	parts := []llm.Part{llm.TextPart{Text: strings.Repeat("a", 320_000)}} // about 80,000 tokens
 	for range 40 {
 		parts = append(parts, llm.ImagePart{URL: "https://example.com/page.png", MediaType: "image/png"})
 	}
-	request := func(parts ...llm.Part) llm.Request {
-		return llm.Request{OperationKey: "haiku-long-prompt", Model: "logical", Output: &llm.OutputSpec{MaxTokens: intPointer(4_000)},
-			Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: parts}}}
-	}
-	for name, test := range map[string]struct {
-		request llm.Request
-		long    bool
-	}{
-		"text plus images": {request(parts...), true},
-		"URL PDF":          {request(llm.TextPart{Text: "summarize"}, llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"}), true},
-		"short text":       {request(llm.TextPart{Text: "hi"}), false},
-	} {
+	for name, test := range longPromptCases("haiku-long-prompt", 4_000, parts) {
 		t.Run(name, func(t *testing.T) {
 			assertReservedAtPromptPrice(t, test.request, candidate, entry, test.long)
 		})

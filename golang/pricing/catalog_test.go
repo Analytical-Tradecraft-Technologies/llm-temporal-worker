@@ -9,10 +9,7 @@ import (
 
 func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "default", Version: "entry-v1", EffectiveFrom: time.Unix(1, 0), Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
-	catalog, err := CompileUSD("catalog-v1", []Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCompileUSD(t, "catalog-v1", []Entry{entry})
 	resolver := NewResolver(catalog)
 	quote, err := resolver.Resolve(Query{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "default", At: time.Unix(2, 0)})
 	if err != nil || quote.Entry.Version != "entry-v1" {
@@ -29,10 +26,7 @@ func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 
 func TestCatalogReloadRejectsUnverifiedReplacementAndRetainsSnapshot(t *testing.T) {
 	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Region: "global", Model: "gpt", ProviderTier: "standard", Version: "catalog-v1", Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
-	valid, err := CompileUSD("catalog-v1", []Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	valid := mustCompileUSD(t, "catalog-v1", []Entry{entry})
 	resolver := NewResolver(valid)
 	// Publishing owns the entry slice: mutating the source value after reload
 	// must not mutate the resolver's active snapshot.
@@ -77,10 +71,7 @@ func TestCatalogValidateRequiresCompiledDigest(t *testing.T) {
 func TestPriceResolverSnapshotIsDetachedAndSurvivesReload(t *testing.T) {
 	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard",
 		Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}, UnknownComponents: []PriceComponent{PriceComponentOutput}}
-	catalog, err := CompileUSD("v1", []Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCompileUSD(t, "v1", []Entry{entry})
 	resolver := NewResolver(catalog)
 	pinned := resolver.Snapshot()
 	if err := pinned.Validate(); err != nil {
@@ -89,10 +80,7 @@ func TestPriceResolverSnapshotIsDetachedAndSurvivesReload(t *testing.T) {
 	changed := resolver.Snapshot()
 	changed.Entries[0].Prices.InputPerMillion = MustDecimalUSD("2")
 	changed.Entries[0].UnknownComponents[0] = PriceComponentCacheRead
-	replacement, err := CompileUSD("v2", changed.Entries)
-	if err != nil {
-		t.Fatal(err)
-	}
+	replacement := mustCompileUSD(t, "v2", changed.Entries)
 	if err := resolver.ReloadValidated(replacement); err != nil {
 		t.Fatal(err)
 	}

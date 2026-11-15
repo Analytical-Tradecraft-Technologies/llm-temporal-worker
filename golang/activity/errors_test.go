@@ -12,6 +12,21 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
+// safeApplicationError unwraps err to a Temporal application error and decodes
+// its SafeErrorDetails, failing the test when either is missing.
+func safeApplicationError(t *testing.T, err error) (*temporal.ApplicationError, SafeErrorDetails) {
+	t.Helper()
+	var application *temporal.ApplicationError
+	if !errors.As(err, &application) {
+		t.Fatalf("error = %T %v, want *temporal.ApplicationError", err, err)
+	}
+	var details SafeErrorDetails
+	if err := application.Details(&details); err != nil {
+		t.Fatalf("decode SafeErrorDetails: %v", err)
+	}
+	return application, details
+}
+
 func TestErrorMappingUsesSafeStableTypes(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -31,19 +46,12 @@ func TestErrorMappingUsesSafeStableTypes(t *testing.T) {
 			test.err.OperationID = "operation-1"
 			test.err.RetryAfter = time.Second
 			mapped := ToTemporalError(test.err)
-			var application *temporal.ApplicationError
-			if !errors.As(mapped, &application) {
-				t.Fatalf("mapped error = %T %v", mapped, mapped)
-			}
+			application, details := safeApplicationError(t, mapped)
 			if application.Type() != test.wantType || application.NonRetryable() != test.nonRetryable {
 				t.Fatalf("application error type=%q non_retryable=%v", application.Type(), application.NonRetryable())
 			}
 			if strings.Contains(application.Error(), "secret") {
 				t.Fatal("safe error leaked provider message")
-			}
-			var details SafeErrorDetails
-			if err := application.Details(&details); err != nil {
-				t.Fatal(err)
 			}
 			if details.OperationID != "operation-1" || details.Code != string(test.err.Code) {
 				t.Fatalf("safe details = %#v", details)
@@ -87,16 +95,9 @@ func TestErrorMappingHonorsCertifiedPreDispatchDeadlineRetryNever(t *testing.T) 
 	deadline.OperationID = "operation-pre-dispatch-deadline"
 
 	mapped := ToTemporalError(deadline)
-	var application *temporal.ApplicationError
-	if !errors.As(mapped, &application) {
-		t.Fatalf("mapped error = %T %v, want *temporal.ApplicationError", mapped, mapped)
-	}
+	application, details := safeApplicationError(t, mapped)
 	if application.Type() != ErrorTypeProviderTransient || !application.NonRetryable() {
 		t.Fatalf("application error type=%q non_retryable=%v, want transient non-retryable", application.Type(), application.NonRetryable())
-	}
-	var details SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatal(err)
 	}
 	if details.OperationID != deadline.OperationID || details.Code != string(provider.CodeDeadlineExceeded) || details.Dispatch != string(provider.DispatchNotDispatched) {
 		t.Fatalf("safe details = %#v", details)
@@ -108,19 +109,12 @@ func TestErrorMappingHonorsCertifiedPreDispatchCancellationRetryNever(t *testing
 	canceled.OperationID = "operation-pre-dispatch-canceled"
 
 	mapped := ToTemporalError(canceled)
-	var application *temporal.ApplicationError
-	if !errors.As(mapped, &application) {
-		t.Fatalf("mapped error = %T %v, want *temporal.ApplicationError", mapped, mapped)
-	}
+	application, details := safeApplicationError(t, mapped)
 	if application.Type() != ErrorTypeInvalidArgument || !application.NonRetryable() {
 		t.Fatalf("application error type=%q non_retryable=%v, want invalid argument non-retryable", application.Type(), application.NonRetryable())
 	}
 	if errors.Is(mapped, context.Canceled) {
 		t.Fatal("certified pre-dispatch caller cancellation must be a non-retryable failure, not Temporal task cancellation")
-	}
-	var details SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatal(err)
 	}
 	if details.OperationID != canceled.OperationID || details.Code != string(provider.CodeCanceled) || details.Dispatch != string(provider.DispatchNotDispatched) {
 		t.Fatalf("safe details = %#v", details)
@@ -140,14 +134,7 @@ func TestErrorMappingBoundsProviderControlledDetails(t *testing.T) {
 	providerErr.RetryAfter = 500 * time.Microsecond
 
 	mapped := ToTemporalError(providerErr)
-	var application *temporal.ApplicationError
-	if !errors.As(mapped, &application) {
-		t.Fatalf("mapped error = %T %v, want application error", mapped, mapped)
-	}
-	var details SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatal(err)
-	}
+	_, details := safeApplicationError(t, mapped)
 	if details.OperationID != "" || details.ProviderRequestID != "" {
 		t.Fatalf("unsafe identifiers were copied into Temporal details: %#v", details)
 	}
@@ -169,14 +156,7 @@ func TestErrorMappingBoundsProviderControlledDetails(t *testing.T) {
 func TestErrorMappingCollapsesUnknownProviderEnums(t *testing.T) {
 	providerErr := provider.NewError(provider.Code("provider-controlled-code"), provider.Phase("provider-controlled-phase\nsecret"), provider.DispatchCertainty("provider-controlled-dispatch"), provider.RetryNever, "unsafe provider diagnostic")
 	mapped := ToTemporalError(providerErr)
-	var application *temporal.ApplicationError
-	if !errors.As(mapped, &application) {
-		t.Fatalf("mapped error = %T %v, want application error", mapped, mapped)
-	}
-	var details SafeErrorDetails
-	if err := application.Details(&details); err != nil {
-		t.Fatal(err)
-	}
+	application, details := safeApplicationError(t, mapped)
 	if details.Code != string(provider.CodeInternal) || details.Phase != string(provider.PhaseFinalize) || details.Dispatch != string(provider.DispatchNotDispatched) {
 		t.Fatalf("unknown provider enums were copied into Temporal details: %#v", details)
 	}
@@ -234,14 +214,7 @@ func TestErrorMappingCarriesPlanningReason(t *testing.T) {
 	} {
 		failure := provider.NewError(provider.CodeNoRoute, provider.PhasePlan, provider.DispatchNotDispatched, provider.RetryNever, "provider planning failed")
 		failure.SafeDetails = map[string]string{"reason_1": reason}
-		var application *temporal.ApplicationError
-		if !errors.As(ToTemporalError(failure), &application) {
-			t.Fatal("not an application error")
-		}
-		var details SafeErrorDetails
-		if err := application.Details(&details); err != nil {
-			t.Fatal(err)
-		}
+		_, details := safeApplicationError(t, ToTemporalError(failure))
 		if details.Reason != want || details.Code != string(provider.CodeNoRoute) {
 			t.Fatalf("reason %q: details = %#v, want reason %q", reason, details, want)
 		}

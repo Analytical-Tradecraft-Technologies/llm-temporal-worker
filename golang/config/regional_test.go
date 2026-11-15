@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -10,10 +9,7 @@ import (
 
 func TestRegionalConfigValidation(t *testing.T) {
 	makeConfig := func() config.Config {
-		value, err := config.Load(exampleYAML(t))
-		if err != nil {
-			t.Fatal(err)
-		}
+		value := mustLoadConfig(t, exampleYAML(t))
 		value.State.Requests.Provider.AWS.Region = "region-primary"
 		value.State.Requests.Provider.AWS.AllowMRSC = true
 		value.State.Requests.Provider.AWS.Failover = &config.CloudFailoverConfig{DynamoDBRegions: []string{"region-fallback-a", "region-fallback-b"}, PayloadReplicas: []config.RegionalBucket{{Region: "region-fallback-a", Bucket: "payloads-replica"}}, AttemptTimeout: config.Duration(5 * time.Second)}
@@ -25,10 +21,7 @@ func TestRegionalConfigValidation(t *testing.T) {
 	if err := value.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustMarshalJSON(t, value)
 	compiled := configSchema(t)
 	if err := compiled.Validate(data); err != nil {
 		t.Fatal(err)

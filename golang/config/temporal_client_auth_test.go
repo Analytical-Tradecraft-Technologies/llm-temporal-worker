@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -73,15 +72,9 @@ func TestConfigSchemaMirrorsTemporalCredentialRules(t *testing.T) {
 			c.Temporal.TLS.Enabled, c.Temporal.MeshTransport, c.Temporal.APIKeyFile = false, true, "/key"
 		}},
 	} {
-		loaded, err := config.Load(exampleYAML(t))
-		if err != nil {
-			t.Fatal(err)
-		}
+		loaded := mustLoadConfig(t, exampleYAML(t))
 		test.mutate(&loaded)
-		encoded, err := json.Marshal(loaded)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshalJSON(t, loaded)
 		if err := compiled.Validate(encoded); (err == nil) != test.valid {
 			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}

@@ -38,10 +38,7 @@ func TestExecutionContractsRoundTripEveryState(t *testing.T) {
 						value.Compact = &compact
 					}
 				}
-				data, err := json.Marshal(value)
-				if err != nil {
-					t.Fatal(err)
-				}
+				data := mustMarshal(t, value)
 				var decoded llm.ExecutionResultV1
 				if err := json.Unmarshal(data, &decoded); err != nil {
 					t.Fatal(err)
@@ -104,10 +101,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, request := range []llm.PrepareExecutionV1{{Generate: &generate}, {Compact: &compact}} {
-		data, err := json.Marshal(request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := mustMarshal(t, request)
 		var decoded llm.PrepareExecutionV1
 		if err := json.Unmarshal(data, &decoded); err != nil {
 			t.Fatal(err)
@@ -125,10 +119,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 		}
 	}
 	reference := llm.ExecutionReferenceV1{RequestID: requestID, Context: generate.Context}
-	data, err := json.Marshal(reference)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustMarshal(t, reference)
 	var decoded llm.ExecutionReferenceV1
 	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(reference, decoded) {
 		t.Fatalf("reference: %v", err)
@@ -141,9 +132,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 	// The capability is optional at decode (the runtime verifies it) but
 	// bounded in size and alphabet, and never present but empty.
 	reference.Capability = "ref_v1.k1.abc-_"
-	if data, err = json.Marshal(reference); err != nil {
-		t.Fatal(err)
-	}
+	data = mustMarshal(t, reference)
 	decoded = llm.ExecutionReferenceV1{}
 	if err := json.Unmarshal(data, &decoded); err != nil || !reflect.DeepEqual(reference, decoded) {
 		t.Fatalf("reference with capability: %v", err)

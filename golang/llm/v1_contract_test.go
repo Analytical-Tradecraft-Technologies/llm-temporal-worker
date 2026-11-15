@@ -255,10 +255,7 @@ func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
 }
 
 func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
-	value, err := json.Marshal(llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("10.500000000000"), Method: "provider_reported"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	value := mustMarshal(t, llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("10.500000000000"), Method: "provider_reported"})
 	if !bytes.Contains(value, []byte(`"actual_cost_usd":"10.5"`)) {
 		t.Fatalf("cost was not canonicalized: %s", value)
 	}
@@ -266,7 +263,7 @@ func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"status":"exact","actual_cost_usd":"0.1000","method":"provider_reported"}`), &cost); err != nil {
 		t.Fatal(err)
 	}
-	value, err = json.Marshal(cost)
+	value, err := json.Marshal(cost)
 	if err != nil || !bytes.Contains(value, []byte(`"actual_cost_usd":"0.1"`)) {
 		t.Fatalf("round-trip cost was not canonicalized: %s (%v)", value, err)
 	}
@@ -460,10 +457,7 @@ func TestQueryResponseV1RequiresExplicitActualCost(t *testing.T) {
 	t.Run("unknown marshal emits null actual cost", func(t *testing.T) {
 		response := validQueryResponse(llm.QueryProviderStatus)
 		response.Cost = llm.CostV1{Status: "unknown", UnknownReason: "state_unavailable"}
-		encoded, err := json.Marshal(response)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshal(t, response)
 		if !bytes.Contains(encoded, []byte(`"actual_cost_usd":null`)) {
 			t.Fatalf("unknown query response omitted explicit null actual cost: %s", encoded)
 		}
@@ -475,10 +469,7 @@ func TestQueryResponseV1RequiresExplicitActualCost(t *testing.T) {
 		if err := json.Unmarshal(payload, &response); err != nil {
 			t.Fatalf("exact actual cost was rejected: %v", err)
 		}
-		encoded, err := json.Marshal(response)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshal(t, response)
 		if !bytes.Contains(encoded, []byte(`"actual_cost_usd":"0.1"`)) {
 			t.Fatalf("exact actual cost was not canonicalized: %s", encoded)
 		}
@@ -550,10 +541,7 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	if err := json.Unmarshal(canonicalTemperature, &decimalRequest); err != nil {
 		t.Fatalf("decimal temperature was not decoded: %v", err)
 	}
-	encodedDecimal, err := json.Marshal(decimalRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encodedDecimal := mustMarshal(t, decimalRequest)
 	if !bytes.Contains(encodedDecimal, []byte(`"temperature":{"set":"0.7"}`)) {
 		t.Fatalf("temperature was not canonically re-encoded as a string: %s", encodedDecimal)
 	}
@@ -573,10 +561,7 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	}
 	envelope["route"] = json.RawMessage(`{"route_id":"route-1","endpoint_id":"endpoint-1","api_family":"responses","requested_model":"gpt-test","resolved_model":"gpt-test-2026"}`)
 	envelope["usage"] = json.RawMessage(`{"input_tokens":10,"output_tokens":20,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5}`)
-	data, err := json.Marshal(envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustMarshal(t, envelope)
 	var response llm.GenerateResponseV1
 	if err := json.Unmarshal(data, &response); err != nil {
 		t.Fatal(err)
@@ -598,10 +583,7 @@ func TestV1TemperaturePreservesAllEighteenFractionalDigits(t *testing.T) {
 	if request.SettingsPatch.Temperature.Set == nil || request.SettingsPatch.Temperature.Set.String() != "0.123456789012345678" {
 		t.Fatalf("exact decimal was not retained: %#v", request.SettingsPatch.Temperature.Set)
 	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshal(t, request)
 	if !bytes.Contains(encoded, []byte(`"temperature":{"set":"0.123456789012345678"}`)) {
 		t.Fatalf("exact decimal was rounded during re-encoding: %s", encoded)
 	}
@@ -610,10 +592,7 @@ func TestV1TemperaturePreservesAllEighteenFractionalDigits(t *testing.T) {
 	if err := json.Unmarshal(trailingZeros, &request); err != nil {
 		t.Fatal(err)
 	}
-	encoded, err = json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded = mustMarshal(t, request)
 	if !bytes.Contains(encoded, []byte(`"temperature":{"set":"12.34"}`)) {
 		t.Fatalf("decimal was not normalized on output: %s", encoded)
 	}
@@ -836,10 +815,7 @@ func mustCanonicalJSON(t *testing.T, data []byte) []byte {
 	if err := json.Unmarshal(data, &value); err != nil {
 		t.Fatal(err)
 	}
-	canonical, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	canonical := mustMarshal(t, value)
 	return canonical
 }
 
@@ -866,10 +842,7 @@ func TestV1CompactResponseUsagePreservedAndValidated(t *testing.T) {
 	}
 	valid := `{"input_tokens":9007199254740993,"output_tokens":12,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5,"provider_raw":{"tokens":9007199254740993}}`
 	fields["usage"] = json.RawMessage(valid)
-	data, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustMarshal(t, fields)
 	var response llm.CompactResponseV1
 	if err := json.Unmarshal(data, &response); err != nil {
 		t.Fatal(err)
@@ -877,10 +850,7 @@ func TestV1CompactResponseUsagePreservedAndValidated(t *testing.T) {
 	if response.Usage == nil || response.Usage.InputTokens != 9007199254740993 || response.Usage.OutputTokens != 12 || response.Usage.ReasoningTokens != 3 || response.Usage.CacheReadTokens != 4 || response.Usage.CacheWriteTokens != 5 || string(response.Usage.ProviderRaw["tokens"]) != "9007199254740993" {
 		t.Fatalf("usage lost on decode: %+v", response.Usage)
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshal(t, response)
 	var again llm.CompactResponseV1
 	if err := json.Unmarshal(encoded, &again); err != nil {
 		t.Fatal(err)

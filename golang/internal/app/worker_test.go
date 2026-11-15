@@ -130,6 +130,66 @@ func closeWorkerGate(gate chan struct{}) func() {
 	}
 }
 
+// gatedBlockingWorker returns a blockingWorker whose Stop waits for
+// releaseStop and, when gateStart is set, whose Start waits for releaseStart.
+// Both release functions may be called more than once.
+func gatedBlockingWorker(gateStart bool) (controller *blockingWorker, releaseStart, releaseStop func()) {
+	stopGate := make(chan struct{})
+	controller = &blockingWorker{
+		stopEntered: make(chan struct{}, 1),
+		releaseStop: stopGate,
+		stopExited:  make(chan struct{}, 1),
+	}
+	releaseStart = func() {}
+	if gateStart {
+		startGate := make(chan struct{})
+		controller.startEntered, controller.releaseStart = make(chan struct{}, 1), startGate
+		releaseStart = closeWorkerGate(startGate)
+	}
+	return controller, releaseStart, closeWorkerGate(stopGate)
+}
+
+// firstThenFakeWorkers returns first from its first call and a fresh
+// fakeWorker from every later call, recording each in controllers.
+func firstThenFakeWorkers(first app.WorkerController, controllers *[]app.WorkerController) func(worker.Options) app.WorkerController {
+	return func(worker.Options) app.WorkerController {
+		controller := first
+		if len(*controllers) > 0 {
+			controller = &fakeWorker{}
+		}
+		*controllers = append(*controllers, controller)
+		return controller
+	}
+}
+
+// queueAWorkerOptions returns single-slot "queue-a" options with a one-second
+// graceful stop whose factory pairs each controller from newController with a
+// fresh fakeRegistry. health may be nil.
+func queueAWorkerOptions(health *httpserver.HealthState, newController func(worker.Options) app.WorkerController) app.WorkerOptions {
+	return app.WorkerOptions{
+		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
+		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
+		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+			return newController(options), &fakeRegistry{}, nil
+		},
+	}
+}
+
+func mustNewWorker(t *testing.T, options app.WorkerOptions) *app.TemporalWorker {
+	t.Helper()
+	temporalWorker, err := app.NewWorker(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return temporalWorker
+}
+
+// newQueueAWorker builds a worker from queueAWorkerOptions.
+func newQueueAWorker(t *testing.T, health *httpserver.HealthState, newController func(worker.Options) app.WorkerController) *app.TemporalWorker {
+	t.Helper()
+	return mustNewWorker(t, queueAWorkerOptions(health, newController))
+}
+
 type fakeRegistry struct {
 	name       string
 	workflows  []string
@@ -203,15 +263,12 @@ func TestWorkerRejectsUnsafeTaskQueueBeforeConstructingTemporalWorker(t *testing
 	var factoryCalls atomic.Int32
 	for _, taskQueue := range []string{" queue-a", "queue-a\n", "queue-a\x00"} {
 		t.Run(taskQueue, func(t *testing.T) {
-			_, err := app.NewWorker(app.WorkerOptions{
-				TaskQueue: taskQueue, MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-				GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-				Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-					factoryCalls.Add(1)
-					return &fakeWorker{}, &fakeRegistry{}, nil
-				},
+			options := queueAWorkerOptions(nil, func(worker.Options) app.WorkerController {
+				factoryCalls.Add(1)
+				return &fakeWorker{}
 			})
-			if err == nil {
+			options.TaskQueue = taskQueue
+			if _, err := app.NewWorker(options); err == nil {
 				t.Fatal("NewWorker unexpectedly accepted unsafe task queue")
 			}
 		})
@@ -224,17 +281,9 @@ func TestWorkerRejectsUnsafeTaskQueueBeforeConstructingTemporalWorker(t *testing
 func TestWorkerStartErrorLeavesReadinessFalse(t *testing.T) {
 	health := httpserver.NewHealthState()
 	controller := &fakeWorker{startErr: errors.New("start failed")}
-	registry := &fakeRegistry{}
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			return controller, registry, nil
-		},
+	temporalWorker := newQueueAWorker(t, health, func(_ worker.Options) app.WorkerController {
+		return controller
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := temporalWorker.Start(); err == nil || health.Ready() {
 		t.Fatal("start error did not fail closed")
 	}
@@ -245,23 +294,18 @@ func TestWorkerResumeRebuildsControllerAfterStartFailure(t *testing.T) {
 	failed := &blockingWorker{startErr: startErr}
 	replacement := &fakeWorker{}
 	var factoryCalls atomic.Int32
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			switch factoryCalls.Add(1) {
-			case 1:
-				return failed, &fakeRegistry{}, nil
-			case 2:
-				return replacement, &fakeRegistry{}, nil
-			default:
-				return nil, nil, errors.New("unexpected worker construction")
-			}
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
+	options := queueAWorkerOptions(nil, nil)
+	options.Factory = func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
+		switch factoryCalls.Add(1) {
+		case 1:
+			return failed, &fakeRegistry{}, nil
+		case 2:
+			return replacement, &fakeRegistry{}, nil
+		default:
+			return nil, nil, errors.New("unexpected worker construction")
+		}
 	}
+	temporalWorker := mustNewWorker(t, options)
 	t.Cleanup(func() { temporalWorker.Stop() })
 
 	if err := temporalWorker.Start(); !errors.Is(err, startErr) {
@@ -284,19 +328,12 @@ func TestWorkerResumeRebuildsControllerAfterStartFailure(t *testing.T) {
 func TestWorkerStartFailureSupportsNonComparableController(t *testing.T) {
 	replacement := &fakeWorker{}
 	var factoryCalls atomic.Int32
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			if factoryCalls.Add(1) == 1 {
-				return nonComparableWorker{1}, &fakeRegistry{}, nil
-			}
-			return replacement, &fakeRegistry{}, nil
-		},
+	temporalWorker := newQueueAWorker(t, nil, func(_ worker.Options) app.WorkerController {
+		if factoryCalls.Add(1) == 1 {
+			return nonComparableWorker{1}
+		}
+		return replacement
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() { temporalWorker.Stop() })
 
 	if err := temporalWorker.Start(); err == nil {
@@ -312,28 +349,16 @@ func TestWorkerStartFailureSupportsNonComparableController(t *testing.T) {
 
 func TestWorkerResumeWaitsForFailedStartCleanup(t *testing.T) {
 	startErr := errors.New("start failed")
-	releaseStop := make(chan struct{})
-	release := closeWorkerGate(releaseStop)
-	failed := &blockingWorker{
-		startErr:    startErr,
-		stopEntered: make(chan struct{}, 1),
-		releaseStop: releaseStop,
-	}
+	failed, _, release := gatedBlockingWorker(false)
+	failed.startErr = startErr
 	replacement := &fakeWorker{}
 	var factoryCalls atomic.Int32
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			if factoryCalls.Add(1) == 1 {
-				return failed, &fakeRegistry{}, nil
-			}
-			return replacement, &fakeRegistry{}, nil
-		},
+	temporalWorker := newQueueAWorker(t, nil, func(_ worker.Options) app.WorkerController {
+		if factoryCalls.Add(1) == 1 {
+			return failed
+		}
+		return replacement
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() { temporalWorker.Stop() })
 	t.Cleanup(release)
 
@@ -361,23 +386,11 @@ func TestWorkerResumeWaitsForFailedStartCleanup(t *testing.T) {
 
 func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
 	startErr := errors.New("start failed")
-	releaseStop := make(chan struct{})
-	release := closeWorkerGate(releaseStop)
-	failed := &blockingWorker{
-		startErr:    startErr,
-		stopEntered: make(chan struct{}, 1),
-		releaseStop: releaseStop,
-	}
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{},
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			return failed, &fakeRegistry{}, nil
-		},
+	failed, _, release := gatedBlockingWorker(false)
+	failed.startErr = startErr
+	temporalWorker := newQueueAWorker(t, nil, func(_ worker.Options) app.WorkerController {
+		return failed
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(release)
 
 	started := make(chan error, 1)
@@ -407,18 +420,11 @@ func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
 func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
 	health := httpserver.NewHealthState()
 	controllers := make([]*fakeWorker, 0, 2)
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			controller := &fakeWorker{}
-			controllers = append(controllers, controller)
-			return controller, &fakeRegistry{}, nil
-		},
+	temporalWorker := newQueueAWorker(t, health, func(_ worker.Options) app.WorkerController {
+		controller := &fakeWorker{}
+		controllers = append(controllers, controller)
+		return controller
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := temporalWorker.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -474,23 +480,18 @@ func TestWorkerFatalSDKStopClearsReadinessAndResumeRebuildsController(t *testing
 	}
 	var mu sync.Mutex
 	controllers := make([]*fatalWorker, 0, 2)
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health, Metrics: metrics,
-		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			if options.OnFatalError == nil {
-				t.Fatal("worker options have no OnFatalError callback")
-			}
-			controller := &fatalWorker{onFatal: options.OnFatalError}
-			mu.Lock()
-			controllers = append(controllers, controller)
-			mu.Unlock()
-			return controller, &fakeRegistry{}, nil
-		},
+	options := queueAWorkerOptions(health, func(options worker.Options) app.WorkerController {
+		if options.OnFatalError == nil {
+			t.Fatal("worker options have no OnFatalError callback")
+		}
+		controller := &fatalWorker{onFatal: options.OnFatalError}
+		mu.Lock()
+		controllers = append(controllers, controller)
+		mu.Unlock()
+		return controller
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	options.Metrics = metrics
+	temporalWorker := mustNewWorker(t, options)
 	if err := temporalWorker.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -525,17 +526,10 @@ func TestWorkerFatalSDKStopClearsReadinessAndResumeRebuildsController(t *testing
 func TestWorkerFatalSDKStopAfterPauseIsIgnored(t *testing.T) {
 	health := httpserver.NewHealthState()
 	var controller *fatalWorker
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			controller = &fatalWorker{onFatal: options.OnFatalError}
-			return controller, &fakeRegistry{}, nil
-		},
+	temporalWorker := newQueueAWorker(t, health, func(options worker.Options) app.WorkerController {
+		controller = &fatalWorker{onFatal: options.OnFatalError}
+		return controller
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := temporalWorker.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -552,30 +546,9 @@ func TestWorkerFatalSDKStopAfterPauseIsIgnored(t *testing.T) {
 
 func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) {
 	health := httpserver.NewHealthState()
-	releaseStop := make(chan struct{})
-	release := closeWorkerGate(releaseStop)
-	first := &blockingWorker{
-		stopEntered: make(chan struct{}, 1),
-		releaseStop: releaseStop,
-		stopExited:  make(chan struct{}, 1),
-	}
+	first, _, release := gatedBlockingWorker(false)
 	controllers := make([]app.WorkerController, 0, 2)
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			if len(controllers) == 0 {
-				controllers = append(controllers, first)
-				return first, &fakeRegistry{}, nil
-			}
-			controller := &fakeWorker{}
-			controllers = append(controllers, controller)
-			return controller, &fakeRegistry{}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	temporalWorker := newQueueAWorker(t, health, firstThenFakeWorkers(first, &controllers))
 	t.Cleanup(func() { temporalWorker.Stop() })
 	t.Cleanup(release)
 	if err := temporalWorker.Start(); err != nil {
@@ -609,23 +582,10 @@ func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) 
 
 func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 	health := httpserver.NewHealthState()
-	releaseStop := make(chan struct{})
-	release := closeWorkerGate(releaseStop)
-	first := &blockingWorker{
-		stopEntered: make(chan struct{}, 1),
-		releaseStop: releaseStop,
-		stopExited:  make(chan struct{}, 1),
-	}
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			return first, &fakeRegistry{}, nil
-		},
+	first, _, release := gatedBlockingWorker(false)
+	temporalWorker := newQueueAWorker(t, health, func(_ worker.Options) app.WorkerController {
+		return first
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(release)
 	if err := temporalWorker.Start(); err != nil {
 		t.Fatal(err)
@@ -666,34 +626,9 @@ func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 
 func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t *testing.T) {
 	health := httpserver.NewHealthState()
-	releaseStart := make(chan struct{})
-	releaseStop := make(chan struct{})
-	releaseStartGate := closeWorkerGate(releaseStart)
-	releaseStopGate := closeWorkerGate(releaseStop)
-	first := &blockingWorker{
-		startEntered: make(chan struct{}, 1),
-		releaseStart: releaseStart,
-		stopEntered:  make(chan struct{}, 1),
-		releaseStop:  releaseStop,
-		stopExited:   make(chan struct{}, 1),
-	}
+	first, releaseStartGate, releaseStopGate := gatedBlockingWorker(true)
 	controllers := make([]app.WorkerController, 0, 2)
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			if len(controllers) == 0 {
-				controllers = append(controllers, first)
-				return first, &fakeRegistry{}, nil
-			}
-			controller := &fakeWorker{}
-			controllers = append(controllers, controller)
-			return controller, &fakeRegistry{}, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	temporalWorker := newQueueAWorker(t, health, firstThenFakeWorkers(first, &controllers))
 	t.Cleanup(func() { temporalWorker.Stop() })
 	t.Cleanup(releaseStopGate)
 	t.Cleanup(releaseStartGate)
@@ -742,25 +677,18 @@ func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
 	replacement := &fakeWorker{}
 	buildEntered := make(chan struct{}, 1)
 	var factoryCalls atomic.Int32
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			switch factoryCalls.Add(1) {
-			case 1:
-				return initial, &fakeRegistry{}, nil
-			case 2:
-				signalWorkerEvent(buildEntered)
-				<-releaseBuild
-				return builtWhilePaused, &fakeRegistry{}, nil
-			default:
-				return replacement, &fakeRegistry{}, nil
-			}
-		},
+	temporalWorker := newQueueAWorker(t, health, func(_ worker.Options) app.WorkerController {
+		switch factoryCalls.Add(1) {
+		case 1:
+			return initial
+		case 2:
+			signalWorkerEvent(buildEntered)
+			<-releaseBuild
+			return builtWhilePaused
+		default:
+			return replacement
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() { temporalWorker.Stop() })
 	t.Cleanup(releaseBuildGate)
 	if err := temporalWorker.Start(); err != nil {
@@ -806,27 +734,10 @@ func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
 
 func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 	health := httpserver.NewHealthState()
-	releaseStart := make(chan struct{})
-	releaseStop := make(chan struct{})
-	releaseStartGate := closeWorkerGate(releaseStart)
-	releaseStopGate := closeWorkerGate(releaseStop)
-	first := &blockingWorker{
-		startEntered: make(chan struct{}, 1),
-		releaseStart: releaseStart,
-		stopEntered:  make(chan struct{}, 1),
-		releaseStop:  releaseStop,
-		stopExited:   make(chan struct{}, 1),
-	}
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: time.Second, Activities: &domainactivity.Activities{}, Health: health,
-		Factory: func(_ client.Client, _ string, _ worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			return first, &fakeRegistry{}, nil
-		},
+	first, releaseStartGate, releaseStopGate := gatedBlockingWorker(true)
+	temporalWorker := newQueueAWorker(t, health, func(_ worker.Options) app.WorkerController {
+		return first
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(releaseStartGate)
 	t.Cleanup(releaseStopGate)
 
@@ -963,21 +874,15 @@ func newSDKLikeTemporalWorker(t *testing.T, graceful, pauseDrain time.Duration) 
 	t.Helper()
 	var mu sync.Mutex
 	var controllers []*sdkLikeWorker
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
-		TaskQueue: "queue-a", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
-		GracefulStopTimeout: graceful, PauseDrainTimeout: pauseDrain,
-		Activities: &domainactivity.Activities{}, Health: httpserver.NewHealthState(),
-		Factory: func(_ client.Client, _ string, options worker.Options) (app.WorkerController, app.WorkerRegistry, error) {
-			controller := newSDKLikeWorker(options)
-			mu.Lock()
-			controllers = append(controllers, controller)
-			mu.Unlock()
-			return controller, &fakeRegistry{}, nil
-		},
+	options := queueAWorkerOptions(httpserver.NewHealthState(), func(options worker.Options) app.WorkerController {
+		controller := newSDKLikeWorker(options)
+		mu.Lock()
+		controllers = append(controllers, controller)
+		mu.Unlock()
+		return controller
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	options.GracefulStopTimeout, options.PauseDrainTimeout = graceful, pauseDrain
+	temporalWorker := mustNewWorker(t, options)
 	latest := func() *sdkLikeWorker {
 		mu.Lock()
 		defer mu.Unlock()

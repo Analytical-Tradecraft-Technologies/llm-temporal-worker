@@ -20,10 +20,7 @@ func TestLangfuseEndpointDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestLangfuseCredentialsRequirePair(t *testing.T) {
-	c, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := mustLoadConfig(t, exampleYAML(t))
 	c.Langfuse = &config.LangfuseConfig{BaseURL: "https://cloud.langfuse.com", PublicKey: config.SecretRef{Kind: "env", Name: "LANGFUSE_PUBLIC_KEY"}}
 	if c.Validate() == nil {
 		t.Fatal("missing secret key accepted")
@@ -39,10 +36,7 @@ func TestLangfuseCredentialsRequirePair(t *testing.T) {
 }
 
 func TestLangfuseMaxInFlightDefaultsAndLeavesModelSlots(t *testing.T) {
-	c, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := mustLoadConfig(t, exampleYAML(t))
 	c.Langfuse = &config.LangfuseConfig{BaseURL: "https://cloud.langfuse.com", PublicKey: config.SecretRef{Kind: "env", Name: "LANGFUSE_PUBLIC_KEY"}, SecretKey: config.SecretRef{Kind: "env", Name: "LANGFUSE_SECRET_KEY"}}
 	if err := c.Validate(); err != nil || c.Langfuse.EffectiveMaxInFlight(c.Temporal.Worker.MaxConcurrentActivities) != config.DefaultLangfuseMaxInFlight {
 		t.Fatalf("omitted limit: %v, %d", err, c.Langfuse.EffectiveMaxInFlight(c.Temporal.Worker.MaxConcurrentActivities))

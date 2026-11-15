@@ -48,10 +48,7 @@ func TestV1ToolPolicyPatchRequiresModeAndParallel(t *testing.T) {
 
 	// The encoder always writes both fields, so every patch this module
 	// stored, including one with a zero-value policy, still decodes.
-	encoded, err := json.Marshal(SettingsPatchV1{ToolPolicy: Patch[ToolPolicy]{Set: &ToolPolicy{}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshalJSON(t, SettingsPatchV1{ToolPolicy: Patch[ToolPolicy]{Set: &ToolPolicy{}}})
 	var stored SettingsPatchV1
 	if err := json.Unmarshal(encoded, &stored); err != nil {
 		t.Fatalf("stored patch %s: %v", encoded, err)

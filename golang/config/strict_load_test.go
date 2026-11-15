@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -101,13 +100,10 @@ func TestLoadRejectsBudgetBoundsThatFailAfterValidation(t *testing.T) {
 }
 
 func TestLoadRejectsLegacyBudgetLimitOutsideTheRedisRange(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	window := &loaded.Budgets.Policies[0].Windows[0]
 	*window = config.BudgetWindow{Duration: window.Duration, Bucket: window.Bucket, LimitMicroUSD: 1 << 53}
-	err = loaded.Validate()
+	err := loaded.Validate()
 	if err == nil || !strings.Contains(err.Error(), "budgets.policies[0].windows[0].limit_micro_usd") {
 		t.Fatalf("legacy limit error = %v", err)
 	}
@@ -151,10 +147,7 @@ func TestLoadRejectsBudgetMatchersThatCanNeverMatch(t *testing.T) {
 	})
 
 	t.Run("scopes are not checked without an allowlist", func(t *testing.T) {
-		loaded, err := config.Load(exampleYAML(t))
-		if err != nil {
-			t.Fatal(err)
-		}
+		loaded := mustLoadConfig(t, exampleYAML(t))
 		loaded.Authorization = nil
 		loaded.Budgets.Policies[0].Match.Tenant = "embedding-tenant"
 		if err := loaded.Validate(); err != nil {
@@ -197,17 +190,11 @@ func TestBudgetsJSONRejectsNullSwitchAndPolicy(t *testing.T) {
 // A null or omitted list is the documented spelling of "no restriction", and
 // the rendered effective configuration writes unset lists and maps as null.
 func TestLoadAcceptsNullListsAndTheRenderedEffectiveConfiguration(t *testing.T) {
-	loaded, err := config.Load(replaceExample(t, "allowed_tenants: [acme]", "allowed_tenants: ~"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, replaceExample(t, "allowed_tenants: [acme]", "allowed_tenants: ~"))
 	if tenants := loaded.Models["invoice-summarizer"].AllowedTenants; len(tenants) != 0 {
 		t.Fatalf("allowed_tenants = %v, want no restriction", tenants)
 	}
-	rendered, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rendered := mustMarshalJSON(t, loaded)
 	if !strings.Contains(string(rendered), `"allowed_tenants":null`) {
 		t.Fatal("fixture no longer renders an unset list as null")
 	}
@@ -223,10 +210,7 @@ func TestLoadAcceptsNullListsAndTheRenderedEffectiveConfiguration(t *testing.T) 
 // An endpoint reaches budget matching only through a route of the requested
 // model, so a matcher pairing a model with another model's endpoint is inert.
 func TestValidateRejectsBudgetEndpointOutsideTheMatchedModel(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	var class llm.ServiceClass
 	for class = range loaded.Endpoints["exa-answer"].ServiceClasses {
 		break
@@ -242,7 +226,7 @@ func TestValidateRejectsBudgetEndpointOutsideTheMatchedModel(t *testing.T) {
 		t.Fatalf("endpoint routed by the matched model rejected: %v", err)
 	}
 	match.LogicalModel = "invoice-summarizer"
-	err = loaded.Validate()
+	err := loaded.Validate()
 	if err == nil || !strings.Contains(err.Error(), `budgets.policies[0].match.endpoint "exa-answer" is not used by a route of model "invoice-summarizer"`) {
 		t.Fatalf("endpoint of another model error = %v", err)
 	}

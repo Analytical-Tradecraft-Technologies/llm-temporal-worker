@@ -2,7 +2,6 @@ package config_test
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -49,17 +48,11 @@ func TestParentSnapshotStorageDefaultsInlineWithoutChangingDigest(t *testing.T) 
 
 func TestConfigSchemaParentSnapshotStorage(t *testing.T) {
 	compiled := configSchema(t)
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	for value, valid := range map[string]bool{"": true, "inline": true, "blob": true, "sideways": false} {
 		changed := loaded.Clone()
 		changed.State.Requests.ParentSnapshotStorage = value
-		encoded, err := json.Marshal(changed)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshalJSON(t, changed)
 		if err := compiled.Validate(encoded); (err == nil) != valid {
 			t.Errorf("%q: schema validation = %v, want valid=%t", value, err, valid)
 		}

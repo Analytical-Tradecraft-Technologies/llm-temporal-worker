@@ -14,6 +14,42 @@ func textMessage(actor llm.Actor, text string) llm.Message {
 	return llm.Message{Actor: actor, Content: []llm.Part{llm.TextPart{Text: text}}}
 }
 
+// mustSelectPrefix runs SelectPrefix and fails the test on an error.
+func mustSelectPrefix(t *testing.T, items []llm.Item, recentTurns int) PrefixSelection {
+	t.Helper()
+	selection, err := SelectPrefix(items, recentTurns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selection
+}
+
+// mustSelectRequestPrefix runs SelectRequestPrefix and fails the test on an
+// error.
+func mustSelectRequestPrefix(t *testing.T, source llm.Request, policy Policy) PrefixSelection {
+	t.Helper()
+	selection, err := SelectRequestPrefix(source, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selection
+}
+
+// assertPrefixSplit checks a selection's prefix and retained items and, when
+// turns is not negative, its retained turn count.
+func assertPrefixSplit(t *testing.T, selection PrefixSelection, prefix, retained []llm.Item, turns int) {
+	t.Helper()
+	if !reflect.DeepEqual(selection.Prefix, prefix) {
+		t.Fatalf("prefix = %#v, want %#v", selection.Prefix, prefix)
+	}
+	if !reflect.DeepEqual(selection.Retained, retained) {
+		t.Fatalf("retained = %#v, want %#v", selection.Retained, retained)
+	}
+	if turns >= 0 && selection.RetainedTurns != turns {
+		t.Fatalf("retained turns = %d, want %d", selection.RetainedTurns, turns)
+	}
+}
+
 func TestSelectPrefixRetainsRecentTurns(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "one"),
@@ -21,19 +57,7 @@ func TestSelectPrefixRetainsRecentTurns(t *testing.T) {
 		textMessage(llm.ActorHuman, "three"),
 		textMessage(llm.ActorModel, "four"),
 	}
-	selection, err := SelectPrefix(items, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Prefix, items[:2]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("prefix = %#v, want %#v", got, want)
-	}
-	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("retained = %#v, want %#v", got, want)
-	}
-	if selection.RetainedTurns != 2 {
-		t.Fatalf("retained turns = %d, want 2", selection.RetainedTurns)
-	}
+	assertPrefixSplit(t, mustSelectPrefix(t, items, 2), items[:2], items[2:], 2)
 }
 
 func TestSelectPrefixNeverSplitsToolExchange(t *testing.T) {
@@ -43,16 +67,7 @@ func TestSelectPrefixNeverSplitsToolExchange(t *testing.T) {
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "answer"}}},
 		textMessage(llm.ActorModel, "result"),
 	}
-	selection, err := SelectPrefix(items, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Prefix, items[:1]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("prefix = %#v, want %#v", got, want)
-	}
-	if got, want := selection.Retained, items[1:]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("retained = %#v, want %#v", got, want)
-	}
+	assertPrefixSplit(t, mustSelectPrefix(t, items, 2), items[:1], items[1:], -1)
 }
 
 func TestSelectPrefixRetainsOpenToolFrontierEvenWithZeroRecentTurns(t *testing.T) {
@@ -60,19 +75,7 @@ func TestSelectPrefixRetainsOpenToolFrontierEvenWithZeroRecentTurns(t *testing.T
 		textMessage(llm.ActorHuman, "question"),
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
 	}
-	selection, err := SelectPrefix(items, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Prefix, items[:1]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("prefix = %#v, want %#v", got, want)
-	}
-	if got, want := selection.Retained, items[1:]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("retained = %#v, want %#v", got, want)
-	}
-	if selection.RetainedTurns != 1 {
-		t.Fatalf("retained turns = %d, want 1", selection.RetainedTurns)
-	}
+	assertPrefixSplit(t, mustSelectPrefix(t, items, 0), items[:1], items[1:], 1)
 }
 
 func TestSelectPrefixRejectsInvalidTranscript(t *testing.T) {
@@ -96,10 +99,7 @@ func TestSelectPrefixKeepsProviderStateWithFollowingOutput(t *testing.T) {
 		llm.ProviderState{Provider: "provider", EndpointFamily: "family", MediaType: "opaque", Opaque: []byte{1, 2, 3}},
 		textMessage(llm.ActorModel, "answer"),
 	}
-	selection, err := SelectPrefix(items, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	selection := mustSelectPrefix(t, items, 1)
 	if len(selection.Prefix) != 1 || len(selection.Retained) != 2 {
 		t.Fatalf("selection separated provider state from its output: %#v", selection)
 	}
@@ -118,10 +118,7 @@ func TestSelectPrefixKeepsThinkingWithPendingToolCall(t *testing.T) {
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
 	}
 	for _, recent := range []int{0, 1} {
-		selection, err := SelectPrefix(items, recent)
-		if err != nil {
-			t.Fatal(err)
-		}
+		selection := mustSelectPrefix(t, items, recent)
 		if last := selection.Prefix[len(selection.Prefix)-1]; isProviderState(last) {
 			t.Fatalf("recent=%d prefix ends with provider state: %#v", recent, selection.Prefix)
 		}
@@ -190,10 +187,7 @@ func TestSelectPrefixPreservesPointerToolFrontiers(t *testing.T) {
 		{"open", 1, 0}, {"resolved retained", 2, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := SelectPrefix(items[:test.length], test.retain)
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := mustSelectPrefix(t, items[:test.length], test.retain)
 			if len(got.Prefix) != 0 || !reflect.DeepEqual(got.Retained, items[:test.length]) {
 				t.Fatalf("split pointer tool exchange: %#v", got)
 			}
@@ -222,10 +216,7 @@ func TestSelectPrefixKeepsMixedToolResponseAtomic(t *testing.T) {
 		{"retain exchange", 7, 2, 1}, {"compact exchange", 7, 1, 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			selection, err := SelectPrefix(items[:test.length], test.retain)
-			if err != nil {
-				t.Fatal(err)
-			}
+			selection := mustSelectPrefix(t, items[:test.length], test.retain)
 			if !reflect.DeepEqual(selection.Prefix, items[:test.cut]) || !reflect.DeepEqual(selection.Retained, items[test.cut:test.length]) {
 				t.Fatalf("selection split the mixed tool exchange: %#v", selection)
 			}
@@ -245,10 +236,7 @@ func TestSelectPrefixKeepsThinkingWithToolCallPastInterveningText(t *testing.T) 
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
 	}
 	for _, recent := range []int{0, 1} {
-		selection, err := SelectPrefix(items, recent)
-		if err != nil {
-			t.Fatal(err)
-		}
+		selection := mustSelectPrefix(t, items, recent)
 		if len(selection.Retained) != 4 {
 			t.Fatalf("recent=%d retained = %#v, want the whole thinking response with its tool call", recent, selection.Retained)
 		}
@@ -260,10 +248,7 @@ func TestSelectPrefixKeepsThinkingWithToolCallPastInterveningText(t *testing.T) 
 	}
 	// A following human turn still starts a new turn.
 	closed := append(append([]llm.Item(nil), items[:6]...), textMessage(llm.ActorHuman, "third"))
-	selection, err := SelectPrefix(closed, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	selection := mustSelectPrefix(t, closed, 1)
 	if len(selection.Retained) != 1 {
 		t.Fatalf("human turn after a thinking response = %#v", selection.Retained)
 	}
@@ -281,21 +266,9 @@ func TestSelectPrefixKeepsReferenceWithPrecedingResponse(t *testing.T) {
 		llm.Reference{URI: "https://example.com/second-a"},
 		&llm.Reference{URI: "https://example.com/second-b"},
 	}
-	selection, err := SelectPrefix(items, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The summarized turn's citation cannot survive a plain-text summary, so
 	// it leaves the lossy prefix and stays verbatim ahead of the recent turns.
-	if got, want := selection.Prefix, items[:2]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("prefix = %#v, want %#v", got, want)
-	}
-	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("retained = %#v, want %#v", got, want)
-	}
-	if selection.RetainedTurns != 2 {
-		t.Fatalf("retained turns = %d, want 2", selection.RetainedTurns)
-	}
+	assertPrefixSplit(t, mustSelectPrefix(t, items, 2), items[:2], items[2:], 2)
 }
 
 func TestSelectPrefixCarriesEveryReferencePastTheSummary(t *testing.T) {
@@ -309,19 +282,7 @@ func TestSelectPrefixCarriesEveryReferencePastTheSummary(t *testing.T) {
 		second,
 		textMessage(llm.ActorHuman, "third question"),
 	}
-	selection, err := SelectPrefix(items, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Prefix, []llm.Item{items[0], items[1], items[3], items[4]}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("prefix = %#v, want %#v", got, want)
-	}
-	if got, want := selection.Retained, []llm.Item{first, second, items[6]}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("retained = %#v, want %#v", got, want)
-	}
-	if selection.RetainedTurns != 1 {
-		t.Fatalf("retained turns = %d, want 1", selection.RetainedTurns)
-	}
+	assertPrefixSplit(t, mustSelectPrefix(t, items, 1), []llm.Item{items[0], items[1], items[3], items[4]}, []llm.Item{first, second, items[6]}, 1)
 }
 
 // SelectRequestPrefix keeps the policy's window when the retained request
@@ -338,53 +299,32 @@ func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items, Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Text: strings.Repeat("p", 400)}}}
 	policy := DefaultPolicy()
 	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens, policy.OutputReserveTokens = 3, 2000, 600, 1
-	selection, err := SelectRequestPrefix(source, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 2 {
-		t.Fatalf("retained = %#v (%d turns), want the two turns that fit", got, selection.RetainedTurns)
-	}
-	if got, want := selection.Prefix, items[:2]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("prefix = %#v, want %#v", got, want)
-	}
+	assertPrefixSplit(t, mustSelectRequestPrefix(t, source, policy), items[:2], items[2:], 2)
 
 	// A window that fits is kept in full.
 	policy.TargetTokens = 1900
-	selection, err = SelectRequestPrefix(source, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Retained, items[1:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 3 {
-		t.Fatalf("retained = %#v (%d turns), want the whole window", got, selection.RetainedTurns)
+	if selection := mustSelectRequestPrefix(t, source, policy); !reflect.DeepEqual(selection.Retained, items[1:]) || selection.RetainedTurns != 3 {
+		t.Fatalf("retained = %#v (%d turns), want the whole window", selection.Retained, selection.RetainedTurns)
 	}
 
 	// The summary counts: the same window no longer fits once its output
 	// reserve would push the compacted request past the target (#1347).
 	policy.OutputReserveTokens = 1000
-	selection, err = SelectRequestPrefix(source, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := selection.Retained, items[2:]; !reflect.DeepEqual(got, want) || selection.RetainedTurns != 2 {
-		t.Fatalf("retained = %#v (%d turns), want the two turns that leave room for the summary", got, selection.RetainedTurns)
+	if selection := mustSelectRequestPrefix(t, source, policy); !reflect.DeepEqual(selection.Retained, items[2:]) || selection.RetainedTurns != 2 {
+		t.Fatalf("retained = %#v (%d turns), want the two turns that leave room for the summary", selection.Retained, selection.RetainedTurns)
 	}
 	policy.OutputReserveTokens = 1
 
 	// Instructions count: the same items no longer fit once the prompt grows.
 	source.Instructions[0].Text = strings.Repeat("p", 4000)
-	selection, err = SelectRequestPrefix(source, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selection.RetainedTurns != 2 {
+	if selection := mustSelectRequestPrefix(t, source, policy); selection.RetainedTurns != 2 {
 		t.Fatalf("retained turns = %d, want 2 after the prompt grew", selection.RetainedTurns)
 	}
 
 	// The last turn stays even when it alone exceeds the target, and a zero
 	// window stays empty.
 	policy.TargetTokens = 1
-	selection, err = SelectRequestPrefix(source, policy)
+	selection, err := SelectRequestPrefix(source, policy)
 	if err != nil || selection.RetainedTurns != 1 || !reflect.DeepEqual(selection.Retained, items[3:]) {
 		t.Fatalf("selection = %#v, err = %v, want the last turn alone", selection, err)
 	}
@@ -455,11 +395,7 @@ func TestSelectRequestPrefixDoesNotCountInlineMediaBytesAsText(t *testing.T) {
 	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items}
 	policy := DefaultPolicy()
 	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens, policy.OutputReserveTokens = 2, 2000, 600, 1
-	selection, err := SelectRequestPrefix(source, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selection.RetainedTurns != 2 || !reflect.DeepEqual(selection.Retained, items[2:]) {
+	if selection := mustSelectRequestPrefix(t, source, policy); selection.RetainedTurns != 2 || !reflect.DeepEqual(selection.Retained, items[2:]) {
 		t.Fatalf("retained = %#v (%d turns), want the image turn kept", selection.Retained, selection.RetainedTurns)
 	}
 }

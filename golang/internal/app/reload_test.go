@@ -25,6 +25,16 @@ func (clients *fakeClients) Close(context.Context) error {
 	return clients.closeErr
 }
 
+// sendFakeClients builds a fresh fakeClients for every snapshot and sends it
+// on created.
+func sendFakeClients(created chan<- *fakeClients) func(context.Context, *config.Snapshot) (ClientSet, error) {
+	return func(context.Context, *config.Snapshot) (ClientSet, error) {
+		clients := &fakeClients{}
+		created <- clients
+		return clients, nil
+	}
+}
+
 func (clients *fakeClients) Count() int {
 	clients.mu.Lock()
 	defer clients.mu.Unlock()
@@ -37,11 +47,7 @@ func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
 	application, err := New(context.Background(), Options{
 		InitialConfig: initial,
 		Builder:       SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
-			clients := &fakeClients{}
-			created <- clients
-			return clients, nil
-		},
+		Clients:       sendFakeClients(created),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,11 +156,7 @@ func TestDependencyVerificationFailureNeverPublishesOrLeaksClients(t *testing.T)
 	verificationCalls := 0
 	application, err := New(context.Background(), Options{
 		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
-			clients := &fakeClients{}
-			created <- clients
-			return clients, nil
-		},
+		Clients: sendFakeClients(created),
 		Verify: func(context.Context, *config.Snapshot, ClientSet) error {
 			verificationCalls++
 			if verificationCalls > 1 {
@@ -190,11 +192,7 @@ func TestReloadCannotPublishAfterConcurrentClose(t *testing.T) {
 	verificationCalls := 0
 	application, err := New(context.Background(), Options{
 		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
-			clients := &fakeClients{}
-			created <- clients
-			return clients, nil
-		},
+		Clients: sendFakeClients(created),
 		Verify: func(context.Context, *config.Snapshot, ClientSet) error {
 			verificationCalls++
 			if verificationCalls > 1 {

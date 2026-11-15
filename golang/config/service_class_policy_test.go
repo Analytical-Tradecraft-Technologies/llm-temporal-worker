@@ -9,10 +9,7 @@ import (
 )
 
 func TestServiceClassPoliciesLoadAndKeepStandard(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if policies := loaded.ServiceClassPolicies; len(policies) != 1 || policies[0].ID != "acme-no-priority" || policies[0].Match.Tenant != "acme" ||
 		len(policies[0].Classes) != 2 || policies[0].Classes[1] != llm.ServiceClassStandard {
 		t.Fatalf("service class policies = %+v", policies)

@@ -3,19 +3,14 @@ package state
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
 
 func TestHandleRoundTripAndTenantBinding(t *testing.T) {
-	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{9}, 16)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle, err := keyring.Issue("tenant-a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyring := mustKeyring(t, []Key{{ID: "k1", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{9}, 16)))
+	handle := mustIssue(t, keyring, "tenant-a")
 	if !strings.HasPrefix(handle, "ctn_v1.k1.") {
 		t.Fatalf("unexpected handle %q", handle)
 	}
@@ -28,14 +23,8 @@ func TestHandleRoundTripAndTenantBinding(t *testing.T) {
 }
 
 func TestHandleRejectsTamperingAndRetiredKey(t *testing.T) {
-	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle, err := keyring.Issue("t")
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyring := mustKeyring(t, []Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, nil)
+	handle := mustIssue(t, keyring, "t")
 	parts := strings.Split(handle, ".")
 	replacement := byte('A')
 	if parts[2][0] == replacement {
@@ -59,10 +48,7 @@ func TestKeyringUsesPrimaryKeyAfterRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := keyring.Issue("tenant")
-	if err != nil {
-		t.Fatal(err)
-	}
+	handle := mustIssue(t, keyring, "tenant")
 	if !strings.HasPrefix(handle, "ctn_v1.new.") {
 		t.Fatalf("issued handle = %q, want primary key new", handle)
 	}
@@ -100,16 +86,31 @@ func TestNewKeyringRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestKeyringIssueRejectsEmptyTenantAndEntropyFailure(t *testing.T) {
-	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, errorReader{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyring := mustKeyring(t, []Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, errorReader{})
 	if _, err := keyring.Issue(""); err != ErrInvalidHandle {
 		t.Fatalf("empty tenant error = %v, want ErrInvalidHandle", err)
 	}
 	if _, err := keyring.Issue("tenant"); err == nil || !strings.Contains(err.Error(), "generate continuation handle") {
 		t.Fatalf("entropy failure = %v, want generation error", err)
 	}
+}
+
+func mustKeyring(t testing.TB, keys []Key, reader io.Reader) *Keyring {
+	t.Helper()
+	keyring, err := NewKeyring(keys, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keyring
+}
+
+func mustIssue(t testing.TB, keyring *Keyring, tenant string) string {
+	t.Helper()
+	handle, err := keyring.Issue(tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
 }
 
 type errorReader struct{}
@@ -119,21 +120,11 @@ func (errorReader) Read([]byte) (int, error) {
 }
 
 func FuzzVerifyHandleNeverPanics(f *testing.F) {
-	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{2}, 16)))
-	if err != nil {
-		f.Fatal(err)
-	}
-	valid, err := keyring.Issue("tenant")
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Add(valid)
+	keyring := mustKeyring(f, []Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{2}, 16)))
+	f.Add(mustIssue(f, keyring, "tenant"))
 	f.Add("ctn_v1.k1.AAAAAAAAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 	f.Fuzz(func(t *testing.T, value string) {
-		keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		keyring := mustKeyring(t, []Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, nil)
 		identifier, err := keyring.Verify("tenant", value)
 		if err == nil && len(identifier) != 16 {
 			t.Fatalf("accepted handle has identifier length %d, want 16", len(identifier))
@@ -147,10 +138,7 @@ func FuzzVerifyHandleNeverPanics(f *testing.F) {
 }
 
 func TestReferenceCapabilityBindsScopeRequestAndKey(t *testing.T) {
-	old, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	old := mustKeyring(t, []Key{{ID: "k1", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, nil)
 	capability, err := old.IssueReferenceCapability("tenant", "project", "llmtw_req_a")
 	if err != nil || !strings.HasPrefix(capability, "ref_v1.k1.") || len(capability) > 128 {
 		t.Fatalf("capability=%q err=%v", capability, err)
@@ -171,17 +159,11 @@ func TestReferenceCapabilityBindsScopeRequestAndKey(t *testing.T) {
 	}
 	// A rotation keeps verifying capabilities of a retained key and fails
 	// closed once that key is retired.
-	rotated, err := NewKeyring([]Key{{ID: "k2", Secret: bytes.Repeat([]byte{8}, 32), Primary: true}, {ID: "k1", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rotated := mustKeyring(t, []Key{{ID: "k2", Secret: bytes.Repeat([]byte{8}, 32), Primary: true}, {ID: "k1", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
 	if !rotated.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", capability) {
 		t.Fatal("retained key's capability was rejected")
 	}
-	retired, err := NewKeyring([]Key{{ID: "k2", Secret: bytes.Repeat([]byte{8}, 32), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	retired := mustKeyring(t, []Key{{ID: "k2", Secret: bytes.Repeat([]byte{8}, 32), Primary: true}}, nil)
 	if retired.VerifyReferenceCapability("tenant", "project", "llmtw_req_a", capability) {
 		t.Fatal("retired key's capability was accepted")
 	}

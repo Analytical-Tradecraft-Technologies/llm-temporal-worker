@@ -2,7 +2,6 @@ package config_test
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -37,17 +36,11 @@ func withPayloadCodec(t *testing.T, block string) []byte {
 // The codec is opt-in: the example leaves it unset, and an unset codec does
 // not appear in canonical JSON, so existing configuration digests are kept.
 func TestPayloadCodecIsDisabledByDefault(t *testing.T) {
-	loaded, err := config.Load(exampleYAML(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, exampleYAML(t))
 	if loaded.Temporal.PayloadCodec != nil {
 		t.Fatalf("example configures a payload codec: %+v", loaded.Temporal.PayloadCodec)
 	}
-	encoded, err := json.Marshal(loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustMarshalJSON(t, loaded)
 	if strings.Contains(string(encoded), "payload_codec") {
 		t.Fatal("an unset payload codec appears in canonical JSON")
 	}
@@ -130,10 +123,7 @@ func TestPayloadCodecValidationFailsClosed(t *testing.T) {
 
 func TestPayloadCodecWorkloadIdentityPath(t *testing.T) {
 	block := "  payload_codec:\n    kind: aes256_gcm\n    keys:\n      - id: k1\n        primary: true\n        secret: {kind: workload_identity, audience: codec}\n"
-	loaded, err := config.Load(withPayloadCodec(t, block))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, withPayloadCodec(t, block))
 	found := false
 	for _, path := range loaded.WorkloadIdentityPaths() {
 		found = found || path == "temporal.payload_codec.keys[0].secret"
@@ -145,10 +135,7 @@ func TestPayloadCodecWorkloadIdentityPath(t *testing.T) {
 
 func TestConfigSchemaAcceptsPayloadCodec(t *testing.T) {
 	compiled := configSchema(t)
-	loaded, err := config.Load(withPayloadCodec(t, payloadCodecYAML))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := mustLoadConfig(t, withPayloadCodec(t, payloadCodecYAML))
 	for name, test := range map[string]struct {
 		mutate func(*config.PayloadCodecConfig)
 		valid  bool
@@ -160,10 +147,7 @@ func TestConfigSchemaAcceptsPayloadCodec(t *testing.T) {
 	} {
 		value := loaded.Clone()
 		test.mutate(value.Temporal.PayloadCodec)
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		encoded := mustMarshalJSON(t, value)
 		if err := compiled.Validate(encoded); (err == nil) != test.valid {
 			t.Errorf("%s: schema validation = %v, want valid=%t", name, err, test.valid)
 		}

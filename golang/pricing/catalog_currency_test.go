@@ -12,14 +12,8 @@ func TestCompileUSDHasNoCurrencyInCanonicalCatalog(t *testing.T) {
 		ProviderTier: "standard",
 		Prices:       UnitPrices{InputPerMillion: mustDecimalUSD(t, "1.25")},
 	}
-	first, err := CompileUSD("prices-v1", []Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := CompileUSD("prices-v1", []Entry{entry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustCompileUSD(t, "prices-v1", []Entry{entry})
+	second := mustCompileUSD(t, "prices-v1", []Entry{entry})
 	if first.Digest != second.Digest {
 		t.Fatalf("same USD catalog produced different digests: %s != %s", first.DigestHex(), second.DigestHex())
 	}
@@ -41,14 +35,8 @@ func TestCompileUSDCanonicalizesEquivalentDecimalFormatting(t *testing.T) {
 	firstEntry.Prices.InputPerMillion = mustDecimalUSD(t, "1.23")
 	secondEntry := base
 	secondEntry.Prices.InputPerMillion = mustDecimalUSD(t, "001.2300")
-	first, err := CompileUSD("prices-v1", []Entry{firstEntry})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := CompileUSD("prices-v1", []Entry{secondEntry})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustCompileUSD(t, "prices-v1", []Entry{firstEntry})
+	second := mustCompileUSD(t, "prices-v1", []Entry{secondEntry})
 	if first.Digest != second.Digest {
 		t.Fatalf("equivalent USD formatting produced different digests: %s != %s", first.DigestHex(), second.DigestHex())
 	}
@@ -58,6 +46,15 @@ func TestCompileUSDRejectsIncompleteEntry(t *testing.T) {
 	if _, err := CompileUSD("prices-v1", []Entry{{Provider: "openai"}}); err == nil {
 		t.Fatal("CompileUSD() accepted an incomplete entry")
 	}
+}
+
+func mustCompileUSD(t *testing.T, version string, entries []Entry) Catalog {
+	t.Helper()
+	catalog, err := CompileUSD(version, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
 }
 
 func mustDecimalUSD(t *testing.T, value string) DecimalUSD {

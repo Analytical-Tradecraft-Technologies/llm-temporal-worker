@@ -44,13 +44,18 @@ func TestCompletionEventEnforcesAccountingVocabulary(t *testing.T) {
 	}
 }
 
-func TestCompletionEventSupportsExactReleaseAndAmbiguousRetention(t *testing.T) {
-	release := CompletionEvent{
+// exactReleaseEvent releases a one-dollar reservation at an exact zero cost.
+func exactReleaseEvent() CompletionEvent {
+	return CompletionEvent{
 		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
 		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
 		Kind: JournalRelease, ReservedDecreaseUSD: pricing.MustUSD("1"),
 		ActualCostUSD: ptrUSD(pricing.MustUSD("0")), CostStatus: CostExact,
 	}
+}
+
+func TestCompletionEventSupportsExactReleaseAndAmbiguousRetention(t *testing.T) {
+	release := exactReleaseEvent()
 	if err := release.Validate(); err != nil {
 		t.Fatalf("valid release rejected: %v", err)
 	}
@@ -95,12 +100,7 @@ func TestJournalEventsRejectBadSharedFields(t *testing.T) {
 		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
 		AmountUSD: pricing.MustUSD("1"),
 	}
-	completion := CompletionEvent{
-		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
-		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
-		Kind: JournalRelease, ReservedDecreaseUSD: pricing.MustUSD("1"),
-		ActualCostUSD: ptrUSD(pricing.MustUSD("0")), CostStatus: CostExact,
-	}
+	completion := exactReleaseEvent()
 	for _, test := range []struct {
 		name        string
 		reservation func(*ReservationEvent)

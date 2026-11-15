@@ -27,19 +27,7 @@ func TestV1ContractFixturesValidate(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.fixture, func(t *testing.T) {
-			schemaData, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", test.schemaName))
-			if err != nil {
-				t.Fatal(err)
-			}
-			compiled, err := schema.Parse(schemaData)
-			if err != nil {
-				t.Fatal(err)
-			}
-			fixture, err := os.ReadFile(filepath.Join("..", "testdata", "v1", test.fixture))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := compiled.Validate(fixture); err != nil {
+			if err := readV1Schema(t, test.schemaName).Validate(readV1Fixture(t, test.fixture)); err != nil {
 				t.Fatalf("fixture rejected: %v", err)
 			}
 		})
@@ -47,19 +35,8 @@ func TestV1ContractFixturesValidate(t *testing.T) {
 }
 
 func TestV1ContractRejectsUnknownAndLegacyResponseFields(t *testing.T) {
-	schemaData, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", "generate-request.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(schemaData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bad, err := os.ReadFile(filepath.Join("..", "testdata", "v1", "negative-unknown-field.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := compiled.Validate(bad); err == nil {
+	compiled := readV1Schema(t, "generate-request.schema.json")
+	if err := compiled.Validate(readV1Fixture(t, "negative-unknown-field.json")); err == nil {
 		t.Fatal("unknown transcript field accepted")
 	}
 	legacy := []byte(`{"api_version":"llm.temporal/v1","operation_key":"x","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"transcript":[]}`)

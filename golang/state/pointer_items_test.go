@@ -28,16 +28,7 @@ func TestPointerToolFrontiers(t *testing.T) {
 		{"typed nil reference", []llm.Item{(*llm.Reference)(nil)}, nil, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := ValidateTranscript(test.items)
-			if test.invalid {
-				if err == nil {
-					t.Fatal("accepted invalid transcript")
-				}
-				return
-			}
-			if err != nil || !reflect.DeepEqual(got, test.pending) {
-				t.Fatalf("pending=%v error=%v", got, err)
-			}
+			assertTranscriptPending(t, test.items, test.pending, test.invalid)
 		})
 	}
 }
@@ -47,15 +38,10 @@ func TestCheckpointCopiesPointerToolItems(t *testing.T) {
 	root := rootCheckpoint("pointer-root", "tenant-a", "pointer-op")
 	call := &llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")}
 	root.Output = []llm.Item{call}
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
 	call.ID = "mutated"
 	call.Arguments[0] = '['
-	got, err := graph.Materialize("tenant-a", root.Handle)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := mustMaterialize(t, graph, "tenant-a", root.Handle)
 	if !reflect.DeepEqual(got.PendingToolCalls, []string{"a"}) {
 		t.Fatalf("pending=%v", got.PendingToolCalls)
 	}

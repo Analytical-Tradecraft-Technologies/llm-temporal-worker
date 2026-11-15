@@ -37,9 +37,7 @@ func TestCheckpointGraphReplaysLongLineageWithSnapshotsAndForks(t *testing.T) {
 	published := make([]Checkpoint, 0, turns+4)
 
 	root := syntheticLineageCheckpoint("turn-00000", "", 0, now, true)
-	if err := graph.PutRoot(root); err != nil {
-		t.Fatal(err)
-	}
+	mustPutRoot(t, graph, root)
 	published = append(published, root)
 	head := Handle(root.Handle)
 	current, err := graph.Materialize("tenant-v1", head)

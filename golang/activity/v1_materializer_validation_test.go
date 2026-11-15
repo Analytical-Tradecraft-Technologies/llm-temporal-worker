@@ -5,20 +5,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 )
 
 func validMaterializedStateForValidation(handle state.Handle) state.MaterializedState {
-	return state.MaterializedState{
-		Handle:   handle,
-		Tenant:   "scope-id",
-		Depth:    1,
-		Items:    []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "replayed"}}}},
-		Settings: state.RootModelState("logical-model"),
-		Lineage:  []state.Handle{"root", handle},
-	}
+	value := validMaterializedState(handle)
+	value.Depth = 1
+	return value
 }
 
 type validatingMaterializer struct {
@@ -73,22 +67,13 @@ func TestMaterializingV1RuntimeRejectsInvalidMaterializedStateBeforeDispatch(t *
 			wrapped := &MaterializingV1Runtime{
 				Runtime:      &v1RuntimeStub{},
 				Materializer: validatingMaterializer{result: value},
-				Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+				Scope:        fixedScopeID,
 			}
-			request := validGenerateV1Request()
-			parent := llm.CheckpointHandle("parent")
-			request.Parent = &parent
-			_, err := wrapped.GenerateV1(context.Background(), request)
+			_, err := wrapped.GenerateV1(context.Background(), childGenerateV1Request("parent"))
 			if err == nil {
 				t.Fatal("GenerateV1 unexpectedly accepted invalid materialized state")
 			}
-			var providerErr *provider.Error
-			if !errors.As(err, &providerErr) {
-				t.Fatalf("error = %T %v, want provider error", err, err)
-			}
-			if providerErr.Code != provider.CodeStateCorrupt || providerErr.Phase != provider.PhaseStateLoad || providerErr.Dispatch != provider.DispatchNotDispatched || providerErr.Retry != provider.RetryNever {
-				t.Fatalf("provider error = %#v, want non-retryable state-corrupt state-load error", providerErr)
-			}
+			assertProviderError(t, err, provider.CodeStateCorrupt, provider.PhaseStateLoad, provider.DispatchNotDispatched, provider.RetryNever)
 		})
 	}
 }
@@ -99,11 +84,9 @@ func TestMaterializingV1RuntimeRejectsToolFrontierMismatch(t *testing.T) {
 	wrapped := &MaterializingV1Runtime{
 		Runtime:      &materializingRuntimeProbe{events: new([]string)},
 		Materializer: validatingMaterializer{result: value},
-		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope:        fixedScopeID,
 	}
-	request := validGenerateV1Request()
-	parent := llm.CheckpointHandle("parent")
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	_, err := wrapped.GenerateV1(context.Background(), request)
 	var providerErr *provider.Error
 	if err == nil || !errors.As(err, &providerErr) {
@@ -121,11 +104,9 @@ func TestMaterializingV1RuntimeAcceptsEmptyMaterializedTranscript(t *testing.T) 
 	wrapped := &MaterializingV1Runtime{
 		Runtime:      &materializingRuntimeProbe{events: new([]string)},
 		Materializer: validatingMaterializer{result: value},
-		Scope:        func(llm.RequestContext) (string, error) { return "scope-id", nil },
+		Scope:        fixedScopeID,
 	}
-	request := validGenerateV1Request()
-	parent := llm.CheckpointHandle("parent")
-	request.Parent = &parent
+	request := childGenerateV1Request("parent")
 	if _, err := wrapped.GenerateV1(context.Background(), request); err != nil {
 		t.Fatalf("GenerateV1 rejected an empty materialized transcript: %v", err)
 	}
