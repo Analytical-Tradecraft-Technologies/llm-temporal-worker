@@ -3,10 +3,12 @@ package openaichat
 import (
 	"context"
 	"encoding/json"
+	"testing"
+
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"testing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestProfileRejectsRequestOwnedWireControls(t *testing.T) {
@@ -89,7 +91,7 @@ func TestChatSingleChoicePreservesBudgetedExplicitAndDefaultCap(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := marshalWire(t, call.SDKParams)
+			wire := contract.JSONObject(t, call.SDKParams)
 			if wire["max_completion_tokens"] != float64(16) || wire["n"] != float64(1) {
 				t.Fatalf("wire limits = %v, %v", wire["max_completion_tokens"], wire["n"])
 			}

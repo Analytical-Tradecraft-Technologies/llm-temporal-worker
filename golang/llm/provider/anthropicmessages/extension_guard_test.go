@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
@@ -92,7 +93,7 @@ func TestCompileAcceptsAllowedNonOwnedExtensionField(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if wire := marshalWire(t, call.SDKParams); wire["contract_tag"] != "us" {
+			if wire := contract.JSONObject(t, call.SDKParams); wire["contract_tag"] != "us" {
 				t.Fatalf("wire = %#v", wire)
 			}
 		})

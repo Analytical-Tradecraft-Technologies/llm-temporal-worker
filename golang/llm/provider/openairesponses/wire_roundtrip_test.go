@@ -56,14 +56,7 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "wire-audit", Family: provider.FamilyOpenAIResponses, Model: request.Model},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatalf("Compile() error = %v", err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "wire-audit", provider.FamilyOpenAIResponses, request)
 	// Only the request is under audit; the canned response need not satisfy
 	// the lift for every request shape.
 	_, invokeErr := adapter.Invoke(context.Background(), call, provider.NopObserver{})
@@ -86,22 +79,12 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	requestMap, _, err := adapter.lowerRequestMap(normalized, serviceClass, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(requestMap)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, requestMap)
 	var intended map[string]any
 	if err := json.Unmarshal(encoded, &intended); err != nil {
 		t.Fatal(err)

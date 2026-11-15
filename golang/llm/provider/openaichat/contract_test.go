@@ -213,19 +213,6 @@ func testAdapter(t *testing.T) *Adapter {
 	return &Adapter{endpointID: "chat-prod", profile: validated}
 }
 
-func marshalWire(t *testing.T, value any) map[string]any {
-	t.Helper()
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	return decoded
-}
-
 // compileChatProdCall builds the "chat-prod" adapter over client with the
 // test profile and strictly compiles an empty chat-model request under
 // operationKey.
@@ -235,13 +222,5 @@ func compileChatProdCall(t *testing.T, client *Client, operationKey string) (*Ad
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: operationKey, Model: "chat-model"},
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter, call
+	return adapter, adaptertest.CompileStrict(t, adapter, "chat-prod", provider.FamilyOpenAIChat, llm.Request{OperationKey: operationKey, Model: "chat-model"})
 }

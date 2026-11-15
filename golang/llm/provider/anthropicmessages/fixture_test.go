@@ -1,10 +1,7 @@
 package anthropicmessages
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -12,6 +9,8 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestWireFixtureMatchesTypedSDKParams(t *testing.T) {
@@ -20,7 +19,7 @@ func TestWireFixtureMatchesTypedSDKParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertFixture(t, mustReadFixture(t, "request.wire.json"), mustJSON(t, params))
+	assertFixture(t, mustReadFixture(t, "request.wire.json"), contract.MarshalJSON(t, params))
 }
 
 func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
@@ -58,7 +57,7 @@ func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertFixture(t, mustReadFixture(t, "request.multimodal-tools.json"), mustJSON(t, params))
+	assertFixture(t, mustReadFixture(t, "request.multimodal-tools.json"), contract.MarshalJSON(t, params))
 }
 
 func TestMediaRejectionFixture(t *testing.T) {
@@ -103,7 +102,7 @@ func TestResponseFixturesMatchLiftedSemanticContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertFixture(t, mustReadFixture(t, "response.semantic.json"), mustJSON(t, lifted))
+	assertFixture(t, mustReadFixture(t, "response.semantic.json"), contract.MarshalJSON(t, lifted))
 }
 
 func TestThinkingToolFixtureLiftsProviderStateAndUsage(t *testing.T) {
@@ -126,14 +125,7 @@ func TestThinkingToolFixtureLiftsProviderStateAndUsage(t *testing.T) {
 
 func TestFixtureCompilationUsesNormalizedProviderRequest(t *testing.T) {
 	adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "fixture-op", Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-prod", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "fixture-op", Model: "claude-contract"})
 	if call.Metadata.ProviderTier != "standard_only" || call.Metadata.CapabilityVersion != "anthropic-contract/v1" {
 		t.Fatalf("fixture call metadata = %#v", call.Metadata)
 	}
@@ -141,33 +133,10 @@ func TestFixtureCompilationUsesNormalizedProviderRequest(t *testing.T) {
 
 func mustReadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("testdata/contracts/anthropic-direct/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
-}
-
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return anthropicDirectFixture.read(t, name)
 }
 
 func assertFixture(t *testing.T, want, got []byte) {
 	t.Helper()
-	wantCanonical, err := llm.CanonicalJSON(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(wantCanonical, gotCanonical) {
-		t.Fatalf("fixture mismatch\n got: %s\nwant: %s", gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, want, "fixture")
 }

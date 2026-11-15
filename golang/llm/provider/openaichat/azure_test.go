@@ -22,37 +22,11 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := NewAzureProfile(AzureProfileConfig{
-		ID:                "azure-deployment-a",
-		CapabilityVersion: "azure-chat/v1",
-		BaseURL:           endpoint,
-		Deployment:        "deployment-a",
-		Capabilities:      profileTestCapabilities("azure-chat/v1"),
-		ServiceTiers: map[llm.ServiceClass]string{
-			llm.ServiceClassEconomy:  "",
-			llm.ServiceClassStandard: "default",
-			llm.ServiceClassPriority: "priority",
-		},
-		ActualServiceClasses: map[string]llm.ServiceClass{
-			"default":  llm.ServiceClassStandard,
-			"priority": llm.ServiceClassPriority,
-		},
-	})
+	adapter, err := New(client, "azure-a", azureDeploymentProfile(t, endpoint))
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "azure-a", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "azure-op", Model: "deployment-a", ServiceClass: llm.ServiceClassPriority},
-		Query:   provider.CapabilityQuery{EndpointID: "azure-a", Family: provider.FamilyOpenAIChat, Model: "deployment-a"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "azure-a", provider.FamilyOpenAIChat, llm.Request{OperationKey: "azure-op", Model: "deployment-a", ServiceClass: llm.ServiceClassPriority})
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -71,12 +45,14 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 	}
 }
 
-func TestAzureChatRejectsUnsupportedEconomyBeforeDispatch(t *testing.T) {
-	client := &Client{baseURL: "http://127.0.0.1/"}
+// azureDeploymentProfile is the Azure profile for "deployment-a" at baseURL,
+// which supports Standard and Priority but not Economy.
+func azureDeploymentProfile(t *testing.T, baseURL string) Profile {
+	t.Helper()
 	profile, err := NewAzureProfile(AzureProfileConfig{
 		ID:                "azure-deployment-a",
 		CapabilityVersion: "azure-chat/v1",
-		BaseURL:           "http://127.0.0.1",
+		BaseURL:           baseURL,
 		Deployment:        "deployment-a",
 		Capabilities:      profileTestCapabilities("azure-chat/v1"),
 		ServiceTiers: map[llm.ServiceClass]string{
@@ -84,12 +60,20 @@ func TestAzureChatRejectsUnsupportedEconomyBeforeDispatch(t *testing.T) {
 			llm.ServiceClassStandard: "default",
 			llm.ServiceClassPriority: "priority",
 		},
-		ActualServiceClasses: map[string]llm.ServiceClass{"default": llm.ServiceClassStandard, "priority": llm.ServiceClassPriority},
+		ActualServiceClasses: map[string]llm.ServiceClass{
+			"default":  llm.ServiceClassStandard,
+			"priority": llm.ServiceClassPriority,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "azure-a", profile)
+	return profile
+}
+
+func TestAzureChatRejectsUnsupportedEconomyBeforeDispatch(t *testing.T) {
+	client := &Client{baseURL: "http://127.0.0.1/"}
+	adapter, err := New(client, "azure-a", azureDeploymentProfile(t, "http://127.0.0.1"))
 	if err != nil {
 		t.Fatal(err)
 	}

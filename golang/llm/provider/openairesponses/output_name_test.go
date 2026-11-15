@@ -22,21 +22,10 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 		`"output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"{\"answer\":\"ok\"}","annotations":[]}]}],` +
 		`"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`
 	var wire []byte
-	client, err := NewClient(ClientConfig{
-		BaseURL: "https://127.0.0.1/contract",
-		APIKey:  "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			wire, _ = io.ReadAll(request.Body)
-			return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Request-Id", "req-name"), nil
-		})},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openai-prod", "cap-test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		wire, _ = io.ReadAll(request.Body)
+		return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Request-Id", "req-name"), nil
+	})})
 	names := make([]string, 0, 2)
 	for range 2 {
 		call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{

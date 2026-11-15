@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -66,18 +67,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: anthropicDirectFixtureEndpoint,
-			Family:     provider.FamilyAnthropicMessages,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, anthropicDirectFixtureEndpoint, provider.FamilyAnthropicMessages, request)
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -93,10 +83,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 	if got.URL.Path != "/v1/messages" || got.Header.Get("X-Api-Key") != "fixture-anthropic-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("Anthropic direct transport = %s %#v", got.URL, got.Header)
 	}
-	gotSemantic, err := json.Marshal(result.Response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotSemantic := contract.MarshalJSON(t, result.Response)
 	anthropicDirectFixture.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
 
@@ -144,10 +131,7 @@ func assertAnthropicDirectFixtureClassifiedError(t *testing.T) {
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryAfter || mapped.Provider.RequestID != fixture.RequestID || mapped.SafeDetails["retry_after"] != fixture.RetryAfter {
 		t.Fatalf("mapped error = %#v", mapped)
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), fixture.Message) {
 		t.Fatal("classified error leaked fixture body")
 	}

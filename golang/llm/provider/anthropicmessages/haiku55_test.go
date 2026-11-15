@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
@@ -107,7 +108,7 @@ func TestHaiku55PreservesSupportedParameters(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				test.check(t, marshalWire(t, call.SDKParams))
+				test.check(t, contract.JSONObject(t, call.SDKParams))
 			})
 		}
 	}
@@ -125,7 +126,7 @@ func TestHaiku55ConstraintsDoNotChangeOtherModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := marshalWire(t, call.SDKParams)
+	wire := contract.JSONObject(t, call.SDKParams)
 	if wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["temperature"] != temperature || wire["top_k"] != float64(topK) {
 		t.Fatal(wire)
 	}
@@ -139,7 +140,7 @@ func TestHaiku55ConstraintsDoNotChangeOtherModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wire := marshalWire(t, call.SDKParams); wire["thinking"].(map[string]any)["type"] != "enabled" {
+	if wire := contract.JSONObject(t, call.SDKParams); wire["thinking"].(map[string]any)["type"] != "enabled" {
 		t.Fatal(wire)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
@@ -24,30 +25,19 @@ func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: "test-key", HTTPClient: server.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := NewOpenAIProfile(testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := NewOpenAIAdapter(client, "openai-direct", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := newInventoryAdapter(t, server, "test-key")
 	first, err := adapter.ListModels(nil, provider.ModelListQuery{EndpointID: "openai-direct", Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Complete || !strings.HasSuffix(first.NextCursor, ":2") || modelIDs(first.Models) != "alpha,beta" {
+	if first.Complete || !strings.HasSuffix(first.NextCursor, ":2") || adaptertest.ModelIDs(first.Models) != "alpha,beta" {
 		t.Fatalf("first page = %#v, want alpha,beta with cursor 2", first)
 	}
 	second, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.Complete || second.NextCursor != "" || modelIDs(second.Models) != "zeta" {
+	if !second.Complete || second.NextCursor != "" || adaptertest.ModelIDs(second.Models) != "zeta" {
 		t.Fatalf("second page = %#v, want zeta complete", second)
 	}
 	if got := second.Models[0].CreatedAt.Unix(); got != 1700000000 {
@@ -61,19 +51,8 @@ func TestListModelsRedactsProviderErrors(t *testing.T) {
 		http.Error(w, secret, http.StatusBadGateway)
 	}))
 	defer server.Close()
-	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: "test-key", HTTPClient: server.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := NewOpenAIProfile(testProfile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := NewOpenAIAdapter(client, "openai-direct", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Limit: 1})
+	adapter := newInventoryAdapter(t, server, "test-key")
+	_, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Limit: 1})
 	if err == nil || !strings.Contains(err.Error(), "provider model inventory request failed") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("redacted error = %v", err)
 	}
@@ -112,7 +91,22 @@ func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
 		io.WriteString(w, `{"object":"list","data":[{"id":"alpha","created":1,"owned_by":"openai"},{"id":"changed","created":2,"owned_by":"openai"}]}`)
 	}))
 	defer server.Close()
-	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: "key", HTTPClient: server.Client()})
+	adapter := newInventoryAdapter(t, server, "key")
+	first, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "snapshot changed") {
+		t.Fatalf("changed snapshot error = %v", err)
+	}
+}
+
+// newInventoryAdapter builds the "openai-direct" model-listing adapter over
+// server's /v1 API with apiKey.
+func newInventoryAdapter(t *testing.T, server *httptest.Server, apiKey string) *ModelListerAdapter {
+	t.Helper()
+	client, err := NewClient(ClientConfig{BaseURL: server.URL + "/v1", APIKey: apiKey, HTTPClient: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,20 +118,5 @@ func TestListModelsRejectsChangedSnapshotCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Limit: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-direct", Cursor: first.NextCursor, Limit: 1})
-	if err == nil || !strings.Contains(err.Error(), "snapshot changed") {
-		t.Fatalf("changed snapshot error = %v", err)
-	}
-}
-
-func modelIDs(models []provider.Model) string {
-	ids := make([]string, len(models))
-	for i, model := range models {
-		ids[i] = model.ProviderModelID
-	}
-	return strings.Join(ids, ",")
+	return adapter
 }

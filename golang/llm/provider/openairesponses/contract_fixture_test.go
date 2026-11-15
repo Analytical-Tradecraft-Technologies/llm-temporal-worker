@@ -6,19 +6,18 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
-	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -37,22 +36,12 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 	for _, profile := range responsesFixtureProfiles {
 		t.Run(profile.id, func(t *testing.T) {
 			request := loadContractRequestFixture(t, profile.id, "request.semantic.json")
-			normalized, err := llm.NormalizeRequest(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-			if err != nil {
-				t.Fatal(err)
-			}
+			normalized, serviceClass := contract.NormalizeRequest(t, request)
 			params, err := fixtureAdapterForProfile(t, profile).lowerRequest(normalized, serviceClass, "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotWire, err := json.Marshal(params)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotWire := contract.MarshalJSON(t, params)
 			assertCanonicalFixtureJSON(t, gotWire, profile.id, "request.wire.json")
 
 			response := loadContractResponseFixture(t, profile.id, "response.completed.json")
@@ -68,10 +57,7 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotSemantic, err := json.Marshal(lifted)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotSemantic := contract.MarshalJSON(t, lifted)
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 
 			want := loadContractSemanticResponseFixture(t, profile.id, "response.semantic.json")
@@ -163,10 +149,7 @@ func TestResponsesContractFixturesCoverUsageClassAndStrictLoss(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := json.Marshal(lifted)
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := contract.MarshalJSON(t, lifted)
 			assertCanonicalFixtureJSON(t, got, profile.id, "usage-cost.semantic.json")
 			if lifted.Cost != (llm.Cost{}) {
 				t.Fatalf("provider cost should remain unreported for fixture response: %#v", lifted.Cost)
@@ -188,25 +171,11 @@ func TestResponsesContractFixturesCoverContinuationCompatibility(t *testing.T) {
 		t.Run(profile.id, func(t *testing.T) {
 			request := loadContractRequestFixture(t, profile.id, "continuation-compatibility.semantic.json")
 			adapter := fixtureAdapterForProfile(t, profile)
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: request,
-				Query: provider.CapabilityQuery{
-					EndpointID: profile.endpoint,
-					Family:     provider.FamilyOpenAIResponses,
-					Model:      request.Model,
-				},
-				Strict: true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
 			if !call.Metadata.OpaqueStateRequired {
 				t.Fatal("continuation call did not retain opaque-state requirement")
 			}
-			gotWire, err := json.Marshal(call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotWire := contract.MarshalJSON(t, call.SDKParams)
 			assertCanonicalFixtureJSON(t, gotWire, profile.id, "continuation-compatibility.wire.json")
 		})
 	}
@@ -266,10 +235,7 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotSemantic, err := json.Marshal(assembled)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotSemantic := contract.MarshalJSON(t, assembled)
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "stream.decoder.semantic.json")
 			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readContractFixture(t, profile.id, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
 				return streamtest.AssembleJSON(events, "fixture-stream", DecodeStream)
@@ -302,18 +268,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: profile.endpoint,
-			Family:     provider.FamilyOpenAIResponses,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -332,10 +287,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCanonicalFixtureJSON(t, body, profile.id, "request.wire.json")
-	gotSemantic, err := json.Marshal(result.Response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotSemantic := contract.MarshalJSON(t, result.Response)
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 }
 
@@ -360,18 +312,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: profile.endpoint,
-			Family:     provider.FamilyOpenAIResponses,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -387,10 +328,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCanonicalFixtureJSON(t, body, profile.id, "request.wire.json")
-	gotSemantic, err := json.Marshal(result.Response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotSemantic := contract.MarshalJSON(t, result.Response)
 	assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 }
 
@@ -438,7 +376,7 @@ func assertProfileClassFacts(t *testing.T, profile responsesFixtureProfile) {
 		if err != nil {
 			t.Fatalf("%s %s: %v", profile.id, fact.Class, err)
 		}
-		if got := marshalParams(t, params)["service_tier"]; got != fact.RequestedTier {
+		if got := contract.JSONObject(t, params)["service_tier"]; got != fact.RequestedTier {
 			t.Fatalf("%s %s requested tier = %#v, want %q", profile.id, fact.Class, got, fact.RequestedTier)
 		}
 		actual := serviceClassForTier(responses.ResponseServiceTier(fact.ActualTier))
@@ -496,10 +434,7 @@ func assertClassifiedErrorFixture(t *testing.T, profile responsesFixtureProfile)
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Provider.RequestID != fixture.RequestID {
 		t.Fatalf("%s mapped error = %#v", profile.id, mapped)
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), fixture.Message) {
 		t.Fatalf("%s classified error leaked fixture body", profile.id)
 	}
@@ -550,61 +485,30 @@ func fixtureAdapterForProfile(t *testing.T, profile responsesFixtureProfile) *Ad
 
 func loadContractRequestFixture(t *testing.T, profile, name string) llm.Request {
 	t.Helper()
-	var request llm.Request
-	if err := json.Unmarshal(readContractFixture(t, profile, name), &request); err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return contract.DecodeJSON[llm.Request](t, readContractFixture(t, profile, name))
 }
 
 func loadContractResponseFixture(t *testing.T, profile, name string) responses.Response {
 	t.Helper()
-	var response responses.Response
-	if err := json.Unmarshal(readContractFixture(t, profile, name), &response); err != nil {
-		t.Fatal(err)
-	}
-	return response
+	return contract.DecodeJSON[responses.Response](t, readContractFixture(t, profile, name))
 }
 
 func loadContractFixtureMetadata(t *testing.T, profile string) contracttest.Metadata {
 	t.Helper()
-	var metadata contracttest.Metadata
-	if err := yaml.Unmarshal(readContractFixture(t, profile, "metadata.yaml"), &metadata); err != nil {
-		t.Fatal(err)
-	}
-	return metadata
+	return contract.DecodeMetadata(t, readContractFixture(t, profile, "metadata.yaml"))
 }
 
 func loadContractSemanticResponseFixture(t *testing.T, profile, name string) llm.Response {
 	t.Helper()
-	var response llm.Response
-	if err := json.Unmarshal(readContractFixture(t, profile, name), &response); err != nil {
-		t.Fatal(err)
-	}
-	return response
+	return contract.DecodeJSON[llm.Response](t, readContractFixture(t, profile, name))
 }
 
 func readContractFixture(t *testing.T, profile, name string) []byte {
 	t.Helper()
-	path := filepath.Join("testdata", "contracts", profile, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return contract.ReadFixture(t, filepath.Join("testdata", "contracts", profile, name))
 }
 
 func assertCanonicalFixtureJSON(t *testing.T, got []byte, profile, name string) {
 	t.Helper()
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(readContractFixture(t, profile, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("%s/%s mismatch\n got: %s\nwant: %s", profile, name, gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, readContractFixture(t, profile, name), profile+"/"+name)
 }

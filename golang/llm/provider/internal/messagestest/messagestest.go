@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // Compile compiles request on a fresh adapter of the family under test whose
@@ -31,20 +32,6 @@ func PortabilityName(strict bool) string {
 		return "/strict"
 	}
 	return "/best effort"
-}
-
-// Wire decodes the request body that SDK parameters would send.
-func Wire(t *testing.T, params any) map[string]any {
-	t.Helper()
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result map[string]any
-	if err := json.Unmarshal(encoded, &result); err != nil {
-		t.Fatal(err)
-	}
-	return result
 }
 
 func isNonRetryableUnsupported(err error, want string) bool {
@@ -165,7 +152,7 @@ func SamplingTheModelAccepts(t *testing.T, compile Compile) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := Wire(t, call.SDKParams)
+			wire := contract.JSONObject(t, call.SDKParams)
 			for field, value := range test.want {
 				if wire[field] != value {
 					t.Fatalf("%s = %#v, want %#v in %#v", field, wire[field], value, wire)
@@ -183,7 +170,7 @@ func ExtraHighEffortByModel(t *testing.T, compile Compile) {
 		if err != nil {
 			t.Fatalf("%s: %v", model, err)
 		}
-		wire := Wire(t, call.SDKParams)
+		wire := contract.JSONObject(t, call.SDKParams)
 		if config, _ := wire["output_config"].(map[string]any); config["effort"] != "xhigh" {
 			t.Fatalf("%s: output_config = %#v, want effort xhigh", model, wire["output_config"])
 		}
@@ -272,7 +259,7 @@ func SkipsReplayedReferenceAnnotations(t *testing.T, compile Compile) {
 			if err != nil {
 				t.Fatalf("compile replayed references: %v", err)
 			}
-			wire := Wire(t, call.SDKParams)
+			wire := contract.JSONObject(t, call.SDKParams)
 			messages := wire["messages"].([]any)
 			roles := make([]string, 0, len(messages))
 			for _, message := range messages {
@@ -285,5 +272,27 @@ func SkipsReplayedReferenceAnnotations(t *testing.T, compile Compile) {
 				t.Fatalf("reference reached the wire: %s (%v)", encoded, err)
 			}
 		})
+	}
+}
+
+// StrictRejectsMixedInstructionLevels checks that strict compile rejects
+// policy and application instructions together, which the Messages API
+// cannot keep apart, as an unsupported capability before dispatch.
+func StrictRejectsMixedInstructionLevels(t *testing.T, compile Compile) {
+	_, err := compile(t, llm.Request{
+		OperationKey: "strict-instructions",
+		Model:        ContractModel,
+		Portability:  llm.PortabilityStrict,
+		Instructions: []llm.Instruction{
+			{Level: llm.InstructionLevelPolicy, Text: "policy"},
+			{Level: llm.InstructionLevelApplication, Text: "application"},
+		},
+	}, true)
+	var mapped *provider.Error
+	if !errors.As(err, &mapped) {
+		t.Fatalf("compile error = %T %v, want provider error", err, err)
+	}
+	if mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
+		t.Fatalf("compile error = %#v, want strict instruction hierarchy rejection", mapped)
 	}
 }

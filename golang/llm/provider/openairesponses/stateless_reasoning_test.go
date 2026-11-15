@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 const encryptedReasoningInclude = "reasoning.encrypted_content"
@@ -37,7 +38,7 @@ func compileWire(t *testing.T, adapter *ModelListerAdapter, request llm.Request,
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	return call, marshalParams(t, call.SDKParams.(responses.ResponseNewParams))
+	return call, contract.JSONObject(t, call.SDKParams.(responses.ResponseNewParams))
 }
 
 func wireIncludes(wire map[string]any) []string {

@@ -2,15 +2,15 @@ package bedrockconverse
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -46,30 +46,17 @@ func TestBedrockConverseContractFixturesMatchLoweringAndLifting(t *testing.T) {
 	}
 	profile := mustBedrockConverseProfile(t)
 	adapter := &Adapter{endpointID: bedrockFixtureEndpoint, profile: profile}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire, err := json.Marshal(call.SDKParams)
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, bedrockFixtureEndpoint, provider.FamilyBedrockConverse, request)
+	wire := contract.MarshalJSON(t, call.SDKParams)
 	assertBedrockConverseCanonicalFixture(t, wire, "request.wire.json")
 
 	response := bedrockConverseResponse("Hello from the fixture response.", 7, 6)
-	assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), "response.completed.json")
+	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, response), "response.completed.json")
 	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	semantic, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	semantic := contract.MarshalJSON(t, lifted)
 	assertBedrockConverseCanonicalFixture(t, semantic, "response.semantic.json")
 }
 
@@ -94,17 +81,14 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 				text, inputTokens, outputTokens = "Class fixture response.", 1, 1
 			}
 			response := bedrockConverseResponseForTier(text, inputTokens, outputTokens, fixture.providerTier)
-			assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), fixture.wire)
+			assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, response), fixture.wire)
 			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fixture"}}}}}
 			call := provider.Call{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model, OperationKey: fixture.operation, ServiceClass: fixture.requested}
 			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			semantic, err := json.Marshal(lifted)
-			if err != nil {
-				t.Fatal(err)
-			}
+			semantic := contract.MarshalJSON(t, lifted)
 			assertBedrockConverseCanonicalFixture(t, semantic, fixture.semantic)
 			if lifted.Usage.InputTokens <= 0 || lifted.Usage.OutputTokens <= 0 {
 				t.Fatalf("usage was not lifted: %#v", lifted.Usage)
@@ -139,15 +123,8 @@ func TestBedrockConverseToolUseContractFixtures(t *testing.T) {
 	request := loadBedrockConverseRequestFixture(t, "request.tool-use.semantic.json")
 	profile := mustBedrockConverseProfile(t)
 	adapter := &Adapter{endpointID: bedrockFixtureEndpoint, profile: profile}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertBedrockConverseCanonicalFixture(t, mustJSON(t, call.SDKParams), "request.tool-use.wire.json")
+	call := adaptertest.CompileStrict(t, adapter, bedrockFixtureEndpoint, provider.FamilyBedrockConverse, request)
+	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, call.SDKParams), "request.tool-use.wire.json")
 	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
 	if !ok || params.ToolConfig == nil || len(params.ToolConfig.Tools) != 1 {
 		t.Fatalf("tool request configuration = %#v", params.ToolConfig)
@@ -167,12 +144,12 @@ func TestBedrockConverseToolUseContractFixtures(t *testing.T) {
 	}
 
 	response := bedrockConverseToolResponse()
-	assertBedrockConverseCanonicalFixture(t, mustJSON(t, response), "response.tool-use.completed.json")
+	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, response), "response.tool-use.completed.json")
 	lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertBedrockConverseCanonicalFixture(t, mustJSON(t, lifted), "response.tool-use.semantic.json")
+	assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, lifted), "response.tool-use.semantic.json")
 }
 
 func mustBedrockConverseProfile(t *testing.T) Profile {
@@ -190,36 +167,17 @@ func bedrockConverseFixtureRoot() string {
 
 func readBedrockConverseFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(bedrockConverseFixtureRoot(), name))
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
-	}
-	return data
+	return contract.ReadFixture(t, filepath.Join(bedrockConverseFixtureRoot(), name))
 }
 
 func loadBedrockConverseRequestFixture(t *testing.T, name string) llm.Request {
 	t.Helper()
-	var request llm.Request
-	if err := json.Unmarshal(readBedrockConverseFixture(t, name), &request); err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return contract.DecodeJSON[llm.Request](t, readBedrockConverseFixture(t, name))
 }
 
 func assertBedrockConverseCanonicalFixture(t *testing.T, got []byte, name string) {
 	t.Helper()
-	want := readBedrockConverseFixture(t, name)
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotCanonical) != string(wantCanonical) {
-		t.Fatalf("fixture %s mismatch\n got: %s\nwant: %s", name, gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, readBedrockConverseFixture(t, name), "fixture "+name)
 }
 
 func bedrockConverseResponse(text string, inputTokens, outputTokens int32) bedrockruntime.ConverseOutput {
@@ -245,15 +203,6 @@ func bedrockConverseToolResponse() bedrockruntime.ConverseOutput {
 		Usage:       &types.TokenUsage{InputTokens: aws.Int32(5), OutputTokens: aws.Int32(7)},
 		ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypePriority},
 	}
-}
-
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
 }
 
 func containsBytes(value, needle []byte) bool {

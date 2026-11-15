@@ -14,18 +14,12 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestCompileUsesAdapterCapabilitiesAndMetadata(t *testing.T) {
 	adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-compile", Model: "gpt-contract", ServiceClass: llm.ServiceClassPriority},
-		Query:   provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "op-compile", Model: "gpt-contract", ServiceClass: llm.ServiceClassPriority})
 	if call.OperationKey != "op-compile" || call.ServiceClass != llm.ServiceClassPriority || call.Metadata.ProviderTier != "priority" {
 		t.Fatalf("call = %#v", call)
 	}
@@ -36,7 +30,7 @@ func TestCompileUsesAdapterCapabilitiesAndMetadata(t *testing.T) {
 	if !ok {
 		t.Fatalf("SDK params type = %T", call.SDKParams)
 	}
-	if got := marshalParams(t, params)["service_tier"]; got != "priority" {
+	if got := contract.JSONObject(t, params)["service_tier"]; got != "priority" {
 		t.Fatalf("compiled service tier = %#v", got)
 	}
 }
@@ -146,19 +140,12 @@ func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := newFixtureAdapter(t, responseBody)
-	first, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{
-			OperationKey: "op-first",
-			Model:        "gpt-contract",
-			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "first turn"}}}},
-			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)},
-		},
-		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict: true,
+	first := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
+		OperationKey: "op-first",
+		Model:        "gpt-contract",
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "first turn"}}}},
+		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	firstResult, err := adapter.Invoke(context.Background(), first, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -166,24 +153,17 @@ func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 	if firstResult.Response.Continuation == nil {
 		t.Fatal("stored response did not yield a continuation")
 	}
-	followUp, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{
-			OperationKey: "op-follow-up",
-			Model:        "gpt-contract",
-			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
-			Continuation: firstResult.Response.Continuation,
-		},
-		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict: true,
+	followUp := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
+		OperationKey: "op-follow-up",
+		Model:        "gpt-contract",
+		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
+		Continuation: firstResult.Response.Continuation,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	params, ok := followUp.SDKParams.(responses.ResponseNewParams)
 	if !ok {
 		t.Fatalf("follow-up SDK params type = %T", followUp.SDKParams)
 	}
-	if got := marshalParams(t, params)["previous_response_id"]; got != "resp-1" {
+	if got := contract.JSONObject(t, params)["previous_response_id"]; got != "resp-1" {
 		t.Fatalf("previous response ID = %#v, want resp-1", got)
 	}
 }
@@ -194,18 +174,11 @@ func TestInvokeOmitsContinuationForUnstoredResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := newFixtureAdapter(t, responseBody)
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{
-			OperationKey: "op-unstored",
-			Model:        "gpt-contract",
-			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":false}`)},
-		},
-		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict: true,
+	call := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
+		OperationKey: "op-unstored",
+		Model:        "gpt-contract",
+		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":false}`)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -225,25 +198,10 @@ func TestCapabilitiesRejectMismatchedFamily(t *testing.T) {
 
 func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {
 	cause := errors.New("Authorization: Bearer provider-secret; prompt=private-content; continuation=opaque-handle; body=provider-raw")
-	client, err := NewClient(ClientConfig{
-		BaseURL: "https://provider.example/v1",
-		APIKey:  "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return nil, cause
-		})},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openai-prod", "cap-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "op-transport", Model: "gpt-contract"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = adapter.Invoke(context.Background(), call, nil)
+	adapter, call := compileOpenAIProdCall(t, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, cause
+	})}, "op-transport")
+	_, err := adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) {
 		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
@@ -267,23 +225,15 @@ func TestInvokeTransportErrorIncludesEndpointIDAndRedactsCause(t *testing.T) {
 
 func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 	var calls, redirects int
-	client, err := NewClient(ClientConfig{
-		BaseURL: "https://provider.example/v1",
-		APIKey:  "test-key",
-		HTTPClient: &http.Client{
-			Transport: adaptertest.RedirectTransport(&calls, `{"error":{"message":"redirect"}}`),
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				redirects++
-				return http.ErrUseLastResponse
-			},
+	adapter, call := compileOpenAIProdCall(t, &http.Client{
+		Transport: adaptertest.RedirectTransport(&calls, `{"error":{"message":"redirect"}}`),
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			redirects++
+			return http.ErrUseLastResponse
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, call := compileOpenAIProdCall(t, client, "op-redirect")
+	}, "op-redirect")
 	observer := &adaptertest.Observer{}
-	_, err = adapter.Invoke(context.Background(), call, observer)
+	_, err := adapter.Invoke(context.Background(), call, observer)
 	mapped := adaptertest.AmbiguousRedirect(t, err)
 	if calls != 1 || redirects != 1 {
 		t.Fatalf("transport/redirect calls = %d/%d, want 1/1", calls, redirects)
@@ -302,26 +252,30 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 
 func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 	transport := adaptertest.NewPreDialDeadlineTransport()
-	client, err := NewClient(ClientConfig{
-		BaseURL:    "https://provider.example/v1",
-		APIKey:     "test-key",
-		HTTPClient: &http.Client{Transport: transport},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, call := compileOpenAIProdCall(t, client, "op-pre-dial-deadline")
+	adapter, call := compileOpenAIProdCall(t, &http.Client{Transport: transport}, "op-pre-dial-deadline")
 	assertCallerDeadlineBeforeDial(t, transport, adapter, call)
 }
 
-// compileOpenAIProdCall builds the "openai-prod" adapter over client and
-// compiles an empty gpt-contract request under operationKey.
-func compileOpenAIProdCall(t *testing.T, client *Client, operationKey string) (*Adapter, provider.Call) {
+// newOpenAIProdAdapter builds the "openai-prod" adapter over a client for
+// baseURL that sends requests through httpClient.
+func newOpenAIProdAdapter(t *testing.T, baseURL string, httpClient *http.Client, options ...AdapterOption) *Adapter {
 	t.Helper()
-	adapter, err := New(client, "openai-prod", "cap-test")
+	client, err := NewClient(ClientConfig{BaseURL: baseURL, APIKey: "test-key", HTTPClient: httpClient})
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter, err := New(client, "openai-prod", "cap-test", options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+// compileOpenAIProdCall builds the "openai-prod" adapter over httpClient and
+// compiles an empty gpt-contract request under operationKey.
+func compileOpenAIProdCall(t *testing.T, httpClient *http.Client, operationKey string) (*Adapter, provider.Call) {
+	t.Helper()
+	adapter := newOpenAIProdAdapter(t, "https://provider.example/v1", httpClient)
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: operationKey, Model: "gpt-contract"}})
 	if err != nil {
 		t.Fatal(err)
@@ -350,24 +304,12 @@ func newFixtureAdapter(t *testing.T, body []byte) *Adapter {
 
 func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *Adapter {
 	t.Helper()
-	client, err := NewClient(ClientConfig{
-		BaseURL: "https://127.0.0.1/contract",
-		APIKey:  "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			if onCall != nil {
-				onCall()
-			}
-			return adaptertest.JSONResponse(request, http.StatusOK, string(body), "X-Request-Id", "req-invoke"), nil
-		})},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openai-prod", "cap-test", allowSupportedExtensions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter
+	return newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if onCall != nil {
+			onCall()
+		}
+		return adaptertest.JSONResponse(request, http.StatusOK, string(body), "X-Request-Id", "req-invoke"), nil
+	})}, allowSupportedExtensions)
 }
 
 // allowSupportedExtensions allows every supported openai.responses extension

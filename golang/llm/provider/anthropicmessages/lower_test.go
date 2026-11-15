@@ -3,12 +3,12 @@ package anthropicmessages
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
@@ -56,7 +56,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	if call.Metadata.ProviderTier != FastTier || call.OperationKey != request.OperationKey {
 		t.Fatalf("call metadata = %#v", call)
 	}
-	wire := marshalWire(t, call.SDKParams)
+	wire := contract.JSONObject(t, call.SDKParams)
 	if wire["model"] != "claude-contract" || wire["service_tier"] != "standard_only" || wire["speed"] != "fast" || wire["max_tokens"] != float64(maxTokens) {
 		t.Fatalf("wire identity = %#v", wire)
 	}
@@ -97,30 +97,6 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 	}
 	if wire["contract_tag"] != "us" {
 		t.Fatalf("extension = %#v", wire["contract_tag"])
-	}
-}
-
-func TestCompileStrictRejectsMixedInstructionLevels(t *testing.T) {
-	adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
-	_, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{
-			OperationKey: "anthropic-strict-instructions",
-			Model:        "claude-contract",
-			Portability:  llm.PortabilityStrict,
-			Instructions: []llm.Instruction{
-				{Level: llm.InstructionLevelPolicy, Text: "policy"},
-				{Level: llm.InstructionLevelApplication, Text: "application"},
-			},
-		},
-		Query:  provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict: true,
-	})
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) {
-		t.Fatalf("compile error = %T %v, want provider error", err, err)
-	}
-	if mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
-		t.Fatalf("compile error = %#v, want strict instruction hierarchy rejection", mapped)
 	}
 }
 
@@ -203,7 +179,7 @@ func TestCompileMapsAdaptiveReasoningEffortToOutputConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := marshalWire(t, call.SDKParams)
+	wire := contract.JSONObject(t, call.SDKParams)
 	thinking, ok := wire["thinking"].(map[string]any)
 	if !ok || thinking["type"] != "adaptive" {
 		t.Fatalf("thinking = %#v", wire["thinking"])
@@ -252,7 +228,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := marshalWire(t, call.SDKParams)
+			wire := contract.JSONObject(t, call.SDKParams)
 			thinking, exists := wire["thinking"]
 			if test.wantType == "" {
 				if exists {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
@@ -38,7 +39,7 @@ func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := marshalWire(t, params)
+	wire := contract.JSONObject(t, params)
 	messages := wire["messages"].([]any)
 	if len(messages) != 2 {
 		t.Fatalf("replay messages = %#v", messages)

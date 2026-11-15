@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 
@@ -19,7 +18,7 @@ import (
 )
 
 func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
-	responseBody := string(mustReadAWSFixture(t, "response.completed.json"))
+	responseBody := string(anthropicAWSFixture.read(t, "response.completed.json"))
 	calls := 0
 	var requestBody []byte
 	client, err := NewAWSClient(context.Background(), AWSClientConfig{
@@ -47,14 +46,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "aws-once", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}},
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-once", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}})
 	result, err := adapter.Invoke(context.Background(), call, nil)
 	if err != nil {
 		var providerErr *provider.Error
@@ -66,7 +58,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("AWS gateway request count = %d, want 1", calls)
 	}
-	assertFixture(t, mustReadAWSFixture(t, "request.wire.json"), requestBody)
+	assertFixture(t, anthropicAWSFixture.read(t, "request.wire.json"), requestBody)
 	response := result.Response
 	if response.Provider.ResponseID != "msg-aws-fixture" || response.Provider.RequestID != "aws-req-1" || response.Usage.InputTokens != 4 || response.Usage.OutputTokens != 3 {
 		t.Fatalf("AWS gateway response facts = %#v", response)
@@ -91,14 +83,7 @@ func TestAWSConfigAndCallsDoNotSerializeCredentialValues(t *testing.T) {
 		profile.ExpectedBaseURL = ""
 		return profile
 	}())}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "aws-credentials", Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-credentials", Model: "claude-contract"})
 	encodedCall, err := json.Marshal(call)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +128,7 @@ func TestAWSGatewayClientRejectsSecretOnlyAuthentication(t *testing.T) {
 
 func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 	calls := 0
-	body := string(mustReadAWSFixture(t, "error.authentication.json"))
+	body := string(anthropicAWSFixture.read(t, "error.authentication.json"))
 	client, err := NewAWSClient(context.Background(), AWSClientConfig{
 		BaseURL: "http://127.0.0.1/aws-contract",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -161,14 +146,7 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "aws-auth", Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-auth", Model: "claude-contract"})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeAuthentication || providerErr.Provider.RequestID != "aws-auth-1" {
@@ -181,7 +159,7 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 
 func TestAWSGatewayFixtureTextOnlyResponseDoesNotLiftContinuation(t *testing.T) {
 	var response anthropic.Message
-	if err := json.Unmarshal(mustReadAWSFixture(t, "response.completed.json"), &response); err != nil {
+	if err := json.Unmarshal(anthropicAWSFixture.read(t, "response.completed.json"), &response); err != nil {
 		t.Fatal(err)
 	}
 	call := provider.Call{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "aws-fixture", ServiceClass: llm.ServiceClassStandard}
@@ -192,13 +170,4 @@ func TestAWSGatewayFixtureTextOnlyResponseDoesNotLiftContinuation(t *testing.T) 
 	if lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard || lifted.Continuation != nil {
 		t.Fatalf("AWS fixture response = %#v", lifted)
 	}
-}
-
-func mustReadAWSFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile("testdata/contracts/anthropic-aws/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }

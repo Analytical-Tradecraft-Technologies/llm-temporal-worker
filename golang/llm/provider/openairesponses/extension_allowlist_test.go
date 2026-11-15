@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func compileResponsesExtension(t *testing.T, extension string, strict bool, options ...AdapterOption) (provider.Call, error) {
@@ -63,7 +64,7 @@ func TestCompileGatesExtensionFieldsByEndpointAllowlist(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s strict=%v: %v", test.name, strict, err)
 				}
-				if wire := mustMarshalMap(t, call.SDKParams); wire["truncation"] != "auto" {
+				if wire := contract.JSONObject(t, call.SDKParams); wire["truncation"] != "auto" {
 					t.Fatalf("%s strict=%v wire = %#v", test.name, strict, wire)
 				}
 				continue
@@ -73,17 +74,4 @@ func TestCompileGatesExtensionFieldsByEndpointAllowlist(t *testing.T) {
 			}
 		}
 	}
-}
-
-func mustMarshalMap(t *testing.T, value any) map[string]any {
-	t.Helper()
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	return decoded
 }

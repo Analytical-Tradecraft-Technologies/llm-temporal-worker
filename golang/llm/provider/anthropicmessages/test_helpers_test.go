@@ -1,9 +1,6 @@
 package anthropicmessages
 
 import (
-	"encoding/json"
-	"testing"
-
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -25,17 +22,4 @@ func testCapabilities(profile Profile) provider.CapabilitySet {
 		panic(err)
 	}
 	return copy.Capabilities
-}
-
-func marshalWire(t *testing.T, value any) map[string]any {
-	t.Helper()
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	return decoded
 }

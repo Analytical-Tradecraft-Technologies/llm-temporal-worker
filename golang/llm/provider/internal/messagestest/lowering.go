@@ -28,6 +28,7 @@ func CompileTests(t *testing.T, compile Compile) {
 		{"ReasoningSummaryMapsToThinkingDisplay", ReasoningSummaryMapsToThinkingDisplay},
 		{"ExtraHighReturnsUnsupportedCapability", ExtraHighReturnsUnsupportedCapability},
 		{"DisabledReasoningIgnoresEffort", DisabledReasoningIgnoresEffort},
+		{"StrictRejectsMixedInstructionLevels", StrictRejectsMixedInstructionLevels},
 	} {
 		t.Run(test.name, func(t *testing.T) { test.run(t, compile) })
 	}

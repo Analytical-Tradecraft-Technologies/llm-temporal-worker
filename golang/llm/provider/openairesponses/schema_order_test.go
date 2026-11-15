@@ -23,18 +23,10 @@ func sendSchemaRequest(t *testing.T, toolSchema, toolOutputSchema, outputSchema 
 		t.Fatal(err)
 	}
 	var sent []byte
-	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			sent, _ = io.ReadAll(request.Body)
-			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody)), nil
-		})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openai-prod", "cap-test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := newOpenAIProdAdapter(t, "https://127.0.0.1/contract", &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		sent, _ = io.ReadAll(request.Body)
+		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody)), nil
+	})})
 	tool := llm.Tool{Name: "lookup", InputSchema: json.RawMessage(toolSchema)}
 	if toolOutputSchema != "" {
 		tool.OutputSchema = json.RawMessage(toolOutputSchema)

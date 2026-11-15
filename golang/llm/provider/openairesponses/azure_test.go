@@ -41,14 +41,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "azure-op", Model: "gpt-contract", ServiceClass: llm.ServiceClassStandard},
-		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "azure-responses", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "azure-op", Model: "gpt-contract", ServiceClass: llm.ServiceClassStandard})
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -214,15 +207,7 @@ func compileAzureCall(t *testing.T, client *Client, operationKey string) (*Adapt
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: operationKey, Model: "gpt-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter, call
+	return adapter, adaptertest.CompileStrict(t, adapter, "azure-responses", provider.FamilyOpenAIResponses, llm.Request{OperationKey: operationKey, Model: "gpt-contract"})
 }
 
 func TestAzureResponsesPathShimLeavesOtherRoutesUntouched(t *testing.T) {

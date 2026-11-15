@@ -2,10 +2,12 @@ package anthropicmessages
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/anthropics/anthropic-sdk-go"
-	"testing"
 )
 
 func TestHostedToolsAndPausedContinuation(t *testing.T) {
@@ -15,7 +17,7 @@ func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := marshalWire(t, params)
+	wire := contract.JSONObject(t, params)
 	tools := wire["tools"].([]any)
 	if len(tools) != 3 {
 		t.Fatalf("tools=%#v", tools)
@@ -42,7 +44,7 @@ func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot replay paused result: %v", err)
 	}
-	if marshalWire(t, replay)["container"] != "container-1" {
+	if contract.JSONObject(t, replay)["container"] != "container-1" {
 		t.Fatal("paused continuation lost container")
 	}
 	request.Input = nil
@@ -51,7 +53,7 @@ func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cannot replay continuation state: %v", err)
 	}
-	if marshalWire(t, replay)["container"] != "container-1" {
+	if contract.JSONObject(t, replay)["container"] != "container-1" {
 		t.Fatal("legacy continuation lost container")
 	}
 }

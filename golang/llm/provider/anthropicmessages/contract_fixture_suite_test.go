@@ -6,17 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // anthropicContractFixture is one Anthropic Messages contract-fixture
@@ -86,14 +86,7 @@ func (f anthropicContractFixture) testProfileIsEnforced(t *testing.T) {
 func (f anthropicContractFixture) testLoweringAndLifting(t *testing.T) {
 	profile := f.profile(t)
 	request := f.loadRequest(t, "request.semantic.json")
-	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	tier, err := profile.providerTier(serviceClass)
 	if err != nil {
 		t.Fatal(err)
@@ -102,10 +95,7 @@ func (f anthropicContractFixture) testLoweringAndLifting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotWire, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotWire := contract.MarshalJSON(t, params)
 	f.assertCanonical(t, gotWire, "request.wire.json")
 
 	response := f.loadResponse(t, "response.completed.json")
@@ -113,10 +103,7 @@ func (f anthropicContractFixture) testLoweringAndLifting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotSemantic, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotSemantic := contract.MarshalJSON(t, lifted)
 	f.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
 
@@ -180,54 +167,27 @@ func (f anthropicContractFixture) testSemanticRoundTrip(t *testing.T) {
 
 func (f anthropicContractFixture) read(t *testing.T, name string) []byte {
 	t.Helper()
-	path := filepath.Join("testdata", "contracts", f.id, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return contract.ReadFixture(t, filepath.Join("testdata", "contracts", f.id, name))
 }
 
 func (f anthropicContractFixture) loadRequest(t *testing.T, name string) llm.Request {
 	t.Helper()
-	var request llm.Request
-	if err := json.Unmarshal(f.read(t, name), &request); err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return contract.DecodeJSON[llm.Request](t, f.read(t, name))
 }
 
 func (f anthropicContractFixture) loadResponse(t *testing.T, name string) anthropic.Message {
 	t.Helper()
-	var response anthropic.Message
-	if err := json.Unmarshal(f.read(t, name), &response); err != nil {
-		t.Fatal(err)
-	}
-	return response
+	return contract.DecodeJSON[anthropic.Message](t, f.read(t, name))
 }
 
 func (f anthropicContractFixture) loadMetadata(t *testing.T) contracttest.Metadata {
 	t.Helper()
-	var metadata contracttest.Metadata
-	if err := yaml.Unmarshal(f.read(t, "metadata.yaml"), &metadata); err != nil {
-		t.Fatal(err)
-	}
-	return metadata
+	return contract.DecodeMetadata(t, f.read(t, "metadata.yaml"))
 }
 
 func (f anthropicContractFixture) assertCanonical(t *testing.T, got []byte, name string) {
 	t.Helper()
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(f.read(t, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("%s/%s mismatch\n got: %s\nwant: %s", f.id, name, gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, f.read(t, name), f.id+"/"+name)
 }
 
 func (f anthropicContractFixture) call(request llm.Request, serviceClass llm.ServiceClass) provider.Call {
@@ -332,22 +292,8 @@ func (f anthropicContractFixture) assertContinuation(t *testing.T, profile Profi
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: f.endpoint,
-			Family:     provider.FamilyAnthropicMessages,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wire, err := json.Marshal(call.SDKParams)
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, f.endpoint, provider.FamilyAnthropicMessages, request)
+	wire := contract.MarshalJSON(t, call.SDKParams)
 	f.assertCanonical(t, wire, "continuation-compatibility.wire.json")
 
 	incompatible := request
@@ -385,10 +331,7 @@ func (f anthropicContractFixture) assertUsageClassesLossAndContinuation(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotUsage, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotUsage := contract.MarshalJSON(t, lifted)
 	f.assertCanonical(t, gotUsage, "usage-cost.semantic.json")
 
 	f.assertCompileError(t, profile, f.loadRequest(t, "strict-loss.semantic.json"), "strict-loss.wire.json")

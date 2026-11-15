@@ -10,6 +10,8 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
@@ -54,7 +56,7 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 	if !ok {
 		t.Fatalf("SDK params type = %T", call.SDKParams)
 	}
-	wire := marshalWire(t, params)
+	wire := contract.JSONObject(t, params)
 	if wire["model"] != "chat-model" || wire["service_tier"] != "priority" {
 		t.Fatalf("wire identity = %#v", wire)
 	}
@@ -160,16 +162,10 @@ func TestCompilePreservesDisabledReasoning(t *testing.T) {
 	for _, effort := range []llm.ReasoningEffort{"", llm.ReasoningEffortProviderDefault, llm.ReasoningEffortHigh, llm.ReasoningEffortMaximum} {
 		t.Run(string(effort), func(t *testing.T) {
 			adapter := testAdapter(t)
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: llm.Request{OperationKey: "disabled-reasoning", Model: "chat-model", ServiceClass: llm.ServiceClassStandard,
-					Input:     []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
-					Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: effort}},
-				Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			wire := marshalWire(t, call.SDKParams)
+			call := adaptertest.CompileStrict(t, adapter, "chat-prod", provider.FamilyOpenAIChat, llm.Request{OperationKey: "disabled-reasoning", Model: "chat-model", ServiceClass: llm.ServiceClassStandard,
+				Input:     []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+				Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: effort}})
+			wire := contract.JSONObject(t, call.SDKParams)
 			if wire["reasoning_effort"] != "none" {
 				t.Fatalf("disabled reasoning wire effort = %#v", wire["reasoning_effort"])
 			}
@@ -191,7 +187,7 @@ func TestCompileOmitsToolControlsWithoutTools(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := marshalWire(t, call.SDKParams)
+			wire := contract.JSONObject(t, call.SDKParams)
 			for _, key := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
 				if value, ok := wire[key]; ok {
 					t.Fatalf("mode=%q parallel=%v: unexpected %s=%#v", mode, parallel, key, value)

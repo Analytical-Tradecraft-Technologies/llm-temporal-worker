@@ -11,11 +11,12 @@ import (
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -46,10 +47,7 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 	adapter := fixtureBedrockAdapter(t)
 	call := compileBedrockFixture(t, adapter, request)
 
-	encodedWire, err := json.Marshal(call.SDKParams)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encodedWire := contract.MarshalJSON(t, call.SDKParams)
 	assertBedrockFixtureJSON(t, encodedWire, "request.wire.json")
 
 	response := loadBedrockContractResponse(t, "response.completed.json")
@@ -57,10 +55,7 @@ func TestBedrockContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotSemantic, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotSemantic := contract.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, gotSemantic, "response.semantic.json")
 	assertBedrockOpaqueStateFixture(t, lifted)
 
@@ -133,10 +128,7 @@ func assertBedrockPriorityDowngrade(t *testing.T, adapter *Adapter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, got, "priority-downgrade.semantic.json")
 	if lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard {
 		t.Fatalf("priority downgrade actual class = %#v, want standard", lifted.Service.Actual)
@@ -206,66 +198,27 @@ func fixtureBedrockAdapter(t *testing.T) *Adapter {
 
 func compileBedrockFixture(t *testing.T, adapter *Adapter, request llm.Request) provider.Call {
 	t.Helper()
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: bedrockFixtureEndpoint,
-			Family:     provider.FamilyBedrockMessages,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return call
+	return adaptertest.CompileStrict(t, adapter, bedrockFixtureEndpoint, provider.FamilyBedrockMessages, request)
 }
 
 func loadBedrockContractRequest(t *testing.T, name string) llm.Request {
 	t.Helper()
-	var request llm.Request
-	if err := json.Unmarshal(mustReadBedrockFixture(t, name), &request); err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return contract.DecodeJSON[llm.Request](t, mustReadBedrockFixture(t, name))
 }
 
 func loadBedrockContractResponse(t *testing.T, name string) anthropic.Message {
 	t.Helper()
-	var response anthropic.Message
-	if err := json.Unmarshal(mustReadBedrockFixture(t, name), &response); err != nil {
-		t.Fatal(err)
-	}
-	return response
+	return contract.DecodeJSON[anthropic.Message](t, mustReadBedrockFixture(t, name))
 }
 
 func loadBedrockFixtureMetadata(t *testing.T) contracttest.Metadata {
 	t.Helper()
-	var metadata contracttest.Metadata
-	if err := yaml.Unmarshal(mustReadBedrockFixture(t, "metadata.yaml"), &metadata); err != nil {
-		t.Fatal(err)
-	}
-	return metadata
+	return contract.DecodeMetadata(t, mustReadBedrockFixture(t, "metadata.yaml"))
 }
 
 func assertBedrockFixtureJSON(t *testing.T, got []byte, name string) {
 	t.Helper()
-	assertBedrockCanonicalJSON(t, got, mustReadBedrockFixture(t, name), name)
-}
-
-func assertBedrockCanonicalJSON(t *testing.T, got, want []byte, name string) {
-	t.Helper()
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("%s mismatch\n got: %s\nwant: %s", name, gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, mustReadBedrockFixture(t, name), name)
 }
 
 func assertBedrockOpaqueStateFixture(t *testing.T, response llm.Response) {
@@ -316,7 +269,7 @@ func assertBedrockClassFacts(t *testing.T, adapter *Adapter) {
 		if call.Metadata.ProviderTier != fact.RequestedTier {
 			t.Fatalf("%s provider tier = %q, want %q", fact.Class, call.Metadata.ProviderTier, fact.RequestedTier)
 		}
-		params := marshalBedrockWire(t, call.SDKParams)
+		params := contract.JSONObject(t, call.SDKParams)
 		if tier, present := params["service_tier"]; present {
 			t.Fatalf("%s wire body carried service_tier %#v; InvokeModel takes it as a header", fact.Class, tier)
 		}
@@ -335,10 +288,7 @@ func assertBedrockUsageAndCost(t *testing.T, adapter *Adapter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, lifted)
 	assertBedrockFixtureJSON(t, got, "usage-cost.semantic.json")
 	if lifted.Cost != (llm.Cost{}) {
 		t.Fatalf("Bedrock cost should remain unreported: %#v", lifted.Cost)
@@ -390,10 +340,7 @@ func assertBedrockClassifiedError(t *testing.T) {
 	if mapped.Provider.RequestID != fixture.RequestID {
 		t.Fatalf("classified request ID = %q, want %q", mapped.Provider.RequestID, fixture.RequestID)
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	if bytes.Contains(encoded, []byte("fixture body [REDACTED]")) {
 		t.Fatal("classified error leaked provider response body")
 	}
@@ -425,12 +372,9 @@ func assertBedrockContinuationCompatibility(t *testing.T, adapter *Adapter) {
 	if !replay.Metadata.OpaqueStateRequired {
 		t.Fatal("Bedrock continuation call did not retain opaque-state requirement")
 	}
-	params := marshalBedrockWire(t, replay.SDKParams)
-	replayMessages, err := json.Marshal(params["messages"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertBedrockCanonicalJSON(t, replayMessages, wire.ReplayMessages, "continuation replay messages")
+	params := contract.JSONObject(t, replay.SDKParams)
+	replayMessages := contract.MarshalJSON(t, params["messages"])
+	contract.AssertCanonicalJSON(t, replayMessages, wire.ReplayMessages, "continuation replay messages")
 
 	expectedByName := make(map[string]fixtureProviderError, len(wire.Rejections))
 	for _, rejection := range wire.Rejections {
