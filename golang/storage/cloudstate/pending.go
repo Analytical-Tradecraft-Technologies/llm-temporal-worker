@@ -114,9 +114,11 @@ func (r *Repository) advanceIndex(ctx context.Context, record Record) error {
 // ListPending is a privileged recovery/diagnostic query, not a public activity.
 // It reads one bounded page of one shard without scanning a table or using a
 // secondary index. Complete all eight shards and follow empty pages with tokens.
-// Status can conservatively lag a committed event; always ReadForRecovery before
-// acting. No pagination snapshot or automatic recovery/cleanup is promised.
-// Terminal discovery rows are retained for now and filtered from returned pages.
+// Status can conservatively lag a committed event; always ReadForRecovery or
+// InspectPending before acting. No pagination snapshot is promised. The
+// operator pending-list/pending-recover commands walk it; nothing recovers or
+// cleans up automatically. Terminal discovery rows are retained, because
+// ListBudgetRecovery reads them, and filtered from returned pages.
 func (r *Repository) ListPending(ctx context.Context, shard, pageSize int, token string) (PendingPage, error) {
 	rows, nextPageToken, err := r.discoveryPage(ctx, shard, pageSize, token)
 	if err != nil {
