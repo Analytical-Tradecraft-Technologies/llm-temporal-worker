@@ -1755,15 +1755,18 @@ func defaultRedisFactory(_ context.Context, value config.RedisConfig, username, 
 
 // blobMaxBytes bounds one blob in the shared request/result store. Results
 // are complete serialized responses, so the input request limit alone would
-// reject a valid response larger than the request that produced it. Allow the
-// larger of the request limit and twice the provider response limit, which
-// covers JSON re-encoding (escaping) of a maximal provider body.
+// reject a valid response larger than the request that produced it. A result
+// is the response re-encoded as JSON, which writes <, > and & as six-byte
+// escapes, so allow the larger of the request limit and the same worst case
+// the durable record bound uses (#1319): config.SavedResponseExpansion times
+// the provider response limit, plus the bookkeeping reserve that covers the
+// response's route, usage, cost and diagnostic facts.
 func blobMaxBytes(limits config.LimitsConfig) int64 {
 	response := limits.ProviderResponseBytes
 	if response <= 0 {
 		response = config.DefaultProviderResponseBytes
 	}
-	return max(int64(limits.RequestBytes), 2*response)
+	return max(int64(limits.RequestBytes), config.SavedResponseExpansion*response+config.DurableRecordBookkeepingBytes)
 }
 
 func defaultBlobFactory(ctx context.Context, value config.Config) (blob.Store, io.Closer, error) {

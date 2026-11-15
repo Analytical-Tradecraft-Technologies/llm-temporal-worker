@@ -371,7 +371,8 @@ blob_store:
 
 limits:
   # Input request size. Stored results are bounded separately: a blob may be
-  # up to the larger of request_bytes and twice provider_response_bytes.
+  # up to the larger of request_bytes and 6 x provider_response_bytes + 256 KiB,
+  # the escaped worst case of a response that limit admits.
   request_bytes: 1048576
   items: 512
   parts_per_item: 64
