@@ -35,12 +35,8 @@ func TestLiveRedisBudgetStatusFailsClosedOnExpiryBacklog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Set(ctx, pointer, active, 0).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.XAdd(ctx, &redisclient.XAddArgs{Stream: stream, ID: "1-0", Values: []string{"event", "seed"}}).Err(); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, client.Set(ctx, pointer, active, 0).Err())
+	mustNoError(t, client.XAdd(ctx, &redisclient.XAddArgs{Stream: stream, ID: "1-0", Values: []string{"event", "seed"}}).Err())
 	if err := client.HSet(ctx, window, map[string]any{
 		"schema": BudgetStatusWindowSchema, "generation_id": generation, "incarnation_id": incarnation, "manifest_digest": digest,
 		"member_key": "policy/window", "limit_nano_usd": "1000000000", "reserved_nano_usd": "300", "accounted_nano_usd": "0",
@@ -49,9 +45,7 @@ func TestLiveRedisBudgetStatusFailsClosedOnExpiryBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 	past := float64(time.Now().Add(-time.Minute).UnixMilli())
-	if err := client.ZAdd(ctx, expiry, redisclient.Z{Score: past, Member: generation + "|100"}, redisclient.Z{Score: past, Member: generation + "|200"}).Err(); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, client.ZAdd(ctx, expiry, redisclient.Z{Score: past, Member: generation + "|100"}, redisclient.Z{Score: past, Member: generation + "|200"}).Err())
 
 	read := func(limit int) []any {
 		t.Helper()
@@ -122,36 +116,22 @@ func TestLiveRedisBudgetStatusRefusesDurableLedgerSpend(t *testing.T) {
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("durable reservation = %#v, %v", accepted, err)
 	}
-	space, err := newKeySpace(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := mustCall(t, newKeySpace, options)
 	ledger, err := client.HGetAll(ctx, space.durableBudgetKey("policy", "hour")).Result()
 	if err != nil || ledger["sum:"+strconv.FormatInt(now.Unix()/60, 10)] != "250000000" {
 		t.Fatalf("durable ledger = %v, %v; want the 0.25 USD reservation", ledger, err)
 	}
 
-	keys, err := NewBudgetKeySpace(options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := mustCall(t, NewBudgetKeySpace, options)
 	start := now.Truncate(time.Hour)
 	members := []BudgetManifestMember{{PolicyID: "policy", WindowID: "hour", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), ConfigVersion: "config-1", PriceVersion: "price-1", CoverageStart: start, CoverageEnd: start.Add(time.Hour), BucketCount: 60, BucketWidth: time.Minute, BucketCatalogDigest: strings.Repeat("c", 64), LimitNanoUSD: "1000000000"}}
-	catalog, err := MemberCatalogDigest(members)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCall(t, MemberCatalogDigest, members)
 	generations, err := NewRedisBudgetGenerationPort(client, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := generations.PublishGeneration(ctx, BudgetManifest{Schema: BudgetManifestSchema, GenerationID: "status-generation", IncarnationID: "status-incarnation", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: start.Add(time.Hour), PolicyCount: 1, WindowCount: 1, BucketCount: 60, StreamHighWaterMark: "1-0", RoundingVersion: BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members}); err != nil {
-		t.Fatal(err)
-	}
-	reader, err := NewRedisBudgetStatusReader(BudgetStatusReaderOptions{Client: client, Mode: AdmissionModeFunction, Generation: generations, Keys: keys})
-	if err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(generations.PublishGeneration(ctx, BudgetManifest{Schema: BudgetManifestSchema, GenerationID: "status-generation", IncarnationID: "status-incarnation", ConfigVersion: "config-1", PriceVersion: "price-1", PolicyHash: strings.Repeat("d", 64), WindowHash: strings.Repeat("e", 64), RebuildComplete: true, CoverageStart: start, CoverageEnd: start.Add(time.Hour), PolicyCount: 1, WindowCount: 1, BucketCount: 60, StreamHighWaterMark: "1-0", RoundingVersion: BudgetRoundingVersion, MemberCatalogDigest: catalog, Members: members})))
+	reader := mustCall(t, NewRedisBudgetStatusReader, BudgetStatusReaderOptions{Client: client, Mode: AdmissionModeFunction, Generation: generations, Keys: keys})
 	result, err := reader.ReadBudgetStatus(ctx, control.BudgetStatusQuery{}, time.Now())
 	if !errors.Is(err, ErrBudgetStatusUnavailable) {
 		t.Fatalf("budget status over durable spend = %+v, %v; want a refused read, never zero usage", result, err)

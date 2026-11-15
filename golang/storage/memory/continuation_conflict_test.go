@@ -13,11 +13,7 @@ import (
 func TestContinuationChildRetryWithDifferentHistoryConflicts(t *testing.T) {
 	now := time.Unix(100, 0)
 	store := newTestContinuationStore(t, &now, deterministicKeyringRandom())
-	rootItems, rootDigest := textTranscript(t, llm.ActorHuman, "hello")
-	parent, err := store.CreateRoot(context.Background(), state.Continuation{Tenant: "tenant", Transcript: rootItems, TranscriptDigest: rootDigest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "root"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	parent, _ := createTextRoot(t, store, "hello", now.Add(time.Hour))
 	child := func(text string) state.Continuation {
 		items, digest := textTranscript(t, llm.ActorHuman, text)
 		return state.Continuation{Tenant: "tenant", ParentID: parent.String(), Depth: 1, Transcript: items, TranscriptDigest: digest, TranscriptComplete: true, ExpiresAt: now.Add(time.Hour), LastOperationID: "op-1"}

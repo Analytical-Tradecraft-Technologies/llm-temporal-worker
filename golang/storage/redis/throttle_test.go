@@ -113,10 +113,7 @@ func TestThrottleKeysAreOpaqueAndCoLocated(t *testing.T) {
 
 func TestThrottleAcquireIsAtomicIdempotentAndReleases(t *testing.T) {
 	harness := newThrottleHarness()
-	store, err := NewThrottleStore(ThrottleOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewThrottleStore, ThrottleOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions()})
 	limits := []ThrottleLimit{
 		{Kind: ThrottleRequests, Scope: "tenant-a", Amount: 2, Limit: 2, Window: time.Minute},
 		{Kind: ThrottleTokens, Scope: "tenant-a", Amount: 4, Limit: 8, Window: time.Minute},
@@ -129,21 +126,13 @@ func TestThrottleAcquireIsAtomicIdempotentAndReleases(t *testing.T) {
 	if err != nil || !replay.Existing || replay.Reservation.Digest != first.Reservation.Digest {
 		t.Fatalf("replay acquire = %#v, %v", replay, err)
 	}
-	if _, err := store.Acquire(context.Background(), "reservation-1", append([]ThrottleLimit(nil), ThrottleLimit{Kind: ThrottleRequests, Scope: "tenant-a", Amount: 2, Limit: 2, Window: time.Minute})); !errors.Is(err, ErrThrottleConflict) {
-		t.Fatalf("digest conflict = %v", err)
-	}
-	if _, err := store.Acquire(context.Background(), "reservation-2", limits); !errors.Is(err, ErrThrottleDenied) {
-		t.Fatalf("limit denial = %v", err)
-	}
-	if err := store.Release(context.Background(), first.Reservation); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(store.Acquire(context.Background(), "reservation-1", append([]ThrottleLimit(nil), ThrottleLimit{Kind: ThrottleRequests, Scope: "tenant-a", Amount: 2, Limit: 2, Window: time.Minute}))), ErrThrottleConflict, "digest conflict =")
+	requireErrorIs(t, errOf(store.Acquire(context.Background(), "reservation-2", limits)), ErrThrottleDenied, "limit denial =")
+	mustNoError(t, store.Release(context.Background(), first.Reservation))
 	if err := store.Release(context.Background(), first.Reservation); err != nil {
 		t.Fatalf("idempotent release = %v", err)
 	}
-	if _, err := store.Lookup(context.Background(), "reservation-1"); !errors.Is(err, ErrThrottleNotFound) {
-		t.Fatalf("released lookup = %v", err)
-	}
+	requireErrorIs(t, errOf(store.Lookup(context.Background(), "reservation-1")), ErrThrottleNotFound, "released lookup =")
 }
 
 // The throttle names carry the Lua source digest, and the compose fixture

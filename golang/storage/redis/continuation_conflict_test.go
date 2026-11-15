@@ -58,10 +58,7 @@ func assertChildRetryConflicts(t *testing.T, store *ContinuationStore, parent st
 		}
 		return value
 	}
-	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child("first result"), OperationKey: "op-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustPutChild(t, store, state.PutChildRequest{Parent: parent, Child: child("first result"), OperationKey: "op-1"})
 	if replay, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child("first result"), OperationKey: "op-1"}); err != nil || replay != first {
 		t.Fatalf("identical retry = %q, %v", replay, err)
 	}
@@ -74,9 +71,6 @@ func assertChildRetryConflicts(t *testing.T, store *ContinuationStore, parent st
 // key space and keyring and a clock fixed at now.
 func newTestContinuationStore(t *testing.T, invoker ContinuationInvoker, reader StringReader, now time.Time) *ContinuationStore {
 	t.Helper()
-	store, err := NewContinuationStore(ContinuationOptions{Invoker: invoker, Reader: reader, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewContinuationStore, ContinuationOptions{Invoker: invoker, Reader: reader, Keys: testKeyOptions(), Keyring: testKeyring(t), Clock: func() time.Time { return now }})
 	return store
 }

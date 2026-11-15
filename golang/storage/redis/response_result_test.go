@@ -15,10 +15,7 @@ func responseResultTestStore(t *testing.T, secret byte) *ResponseResultStore {
 	// The client never connects; these tests exercise sealing only.
 	client := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:1"})
 	t.Cleanup(func() { _ = client.Close() })
-	store, err := NewResponseResultStore(ResponseResultOptions{Client: client, Keys: KeyOptions{Prefix: "worker", HashTag: "admission", KeySecret: bytes.Repeat([]byte{secret}, 32)}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewResponseResultStore, ResponseResultOptions{Client: client, Keys: KeyOptions{Prefix: "worker", HashTag: "admission", KeySecret: bytes.Repeat([]byte{secret}, 32)}})
 	return store
 }
 

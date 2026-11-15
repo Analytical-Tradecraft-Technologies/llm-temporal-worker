@@ -20,10 +20,7 @@ func TestCloudCacheFinalizationRetriesPublicationSettlementAndFillReceipt(t *tes
 	newFinalizer := func() *durable.ResponseCache {
 		t.Helper()
 		opened := reopen(t, table, blobs)
-		result, err := durable.NewResponseCache(opened.Responses(), opened.ResponseFills(), func() time.Time { return completion.CompletedAt })
-		if err != nil {
-			t.Fatal(err)
-		}
+		result := mustResponseCache(t, opened.Responses(), opened.ResponseFills(), func() time.Time { return completion.CompletedAt })
 		return result
 	}
 	settlements := 0
@@ -40,14 +37,10 @@ func TestCloudCacheFinalizationRetriesPublicationSettlementAndFillReceipt(t *tes
 	}); !errors.Is(err, settlementFailure) {
 		t.Fatal(err)
 	}
-	if hit := lookupResponse(t, r, entry.Key, entry.CompletedAt); hit == nil || hit.ID != entry.ID {
-		t.Fatal("committed success not visible after settlement failure")
-	}
+	requireResponseHit(t, r, entry, entry.CompletedAt, "committed success not visible after settlement failure")
 	mustAcquireFill(t, r.ResponseFills(), lease, cache.FillRecoveryNeeded)
 	table.hook = failTableWrites("replace", "/cache/fill/", nil, contracts.ErrOutcomeUnknown)
-	if err := newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle), contracts.ErrOutcomeUnknown, "")
 	table.hook = nil
 	if err := newFinalizer().CompleteAttempt(ctx, lease, completion, &entry, settle); err != nil {
 		t.Fatalf("restart completion: %v", err)
@@ -61,9 +54,7 @@ func TestCloudCacheFinalizationRetriesPublicationSettlementAndFillReceipt(t *tes
 func TestCloudCacheFinalizationUnknownOutcomeDoesNotInvalidateSuccess(t *testing.T) {
 	r, table, blobs, entry, _ := responseCacheFixture(t)
 	ctx := context.Background()
-	if err := r.Responses().Publish(ctx, entry); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishResponse(t, r, entry)
 	next := fillLease(entry)
 	next.Attempt = "unknown-attempt"
 	next.OperationID = "unknown-operation"
@@ -71,10 +62,7 @@ func TestCloudCacheFinalizationUnknownOutcomeDoesNotInvalidateSuccess(t *testing
 	next.ExpiresAt = next.AcquiredAt.Add(time.Minute)
 	mustAcquireFill(t, r.ResponseFills(), next, cache.FillOwned)
 	mustStartFill(t, r.ResponseFills(), next, next.AcquiredAt)
-	finalizer, err := durable.NewResponseCache(reopen(t, table, blobs).Responses(), reopen(t, table, blobs).ResponseFills(), func() time.Time { return next.ExpiresAt })
-	if err != nil {
-		t.Fatal(err)
-	}
+	finalizer := mustResponseCache(t, reopen(t, table, blobs).Responses(), reopen(t, table, blobs).ResponseFills(), func() time.Time { return next.ExpiresAt })
 	settled := false
 	completion := cache.FillCompletion{Outcome: cache.FillUnknown, CompletedAt: next.ExpiresAt}
 	if err := finalizer.CompleteAttempt(ctx, next, completion, nil, func(context.Context) error {
@@ -83,9 +71,7 @@ func TestCloudCacheFinalizationUnknownOutcomeDoesNotInvalidateSuccess(t *testing
 	}); err != nil || !settled {
 		t.Fatalf("unknown outcome: %v settled=%t", err, settled)
 	}
-	if hit := lookupResponse(t, r, entry.Key, next.ExpiresAt); hit == nil || hit.ID != entry.ID {
-		t.Fatal("unknown outcome displaced older success")
-	}
+	requireResponseHit(t, r, entry, next.ExpiresAt, "unknown outcome displaced older success")
 	mustAcquireFill(t, r.ResponseFills(), next, cache.FillAttemptFinished)
 	if err := finalizer.CompleteAttempt(ctx, next, completion, &entry, func(context.Context) error { return nil }); err == nil {
 		t.Fatal("accepted cache entry for unknown outcome")
@@ -97,25 +83,13 @@ func TestCloudCacheFinalizationUseRequiresCommittedConsumer(t *testing.T) {
 	ctx := context.Background()
 	child := publishEntryWithReplayChild(t, r, entry, origin)
 	use := replayUse(origin, child, entry, entry.CompletedAt.Add(time.Hour))
-	finalizer, err := durable.NewResponseCache(r.Responses(), r.ResponseFills(), func() time.Time { return use.CompletedAt })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := finalizer.RecordUse(ctx, entry, use); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("uncommitted consumer counted: %v", err)
-	}
-	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
-		t.Fatal(err)
-	}
+	finalizer := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return use.CompletedAt })
+	requireErrorIs(t, finalizer.RecordUse(ctx, entry, use), contracts.ErrNotFound, "uncommitted consumer counted")
+	mustPublishCheckpoint(t, r.Checkpoints(), child)
 	table.hook = failTableWrites("", "/cache/use/", nil, contracts.ErrOutcomeUnknown)
-	if err := finalizer.RecordUse(ctx, entry, use); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, finalizer.RecordUse(ctx, entry, use), contracts.ErrOutcomeUnknown, "")
 	table.hook = nil
-	finalizer, err = durable.NewResponseCache(reopen(t, table, blobs).Responses(), reopen(t, table, blobs).ResponseFills(), func() time.Time { return use.CompletedAt })
-	if err != nil {
-		t.Fatal(err)
-	}
+	finalizer = mustResponseCache(t, reopen(t, table, blobs).Responses(), reopen(t, table, blobs).ResponseFills(), func() time.Time { return use.CompletedAt })
 	if err := finalizer.RecordUse(ctx, entry, use); err != nil {
 		t.Fatalf("restart use: %v", err)
 	}
@@ -142,13 +116,8 @@ func TestCloudCacheLaggingClockUsesPublishedSuccess(t *testing.T) {
 	mustAcquireFill(t, r.ResponseFills(), waiter, cache.FillWait)
 	mustStartFill(t, r.ResponseFills(), origin, origin.AcquiredAt)
 	completion := cache.FillCompletion{Outcome: cache.FillPublished, EntryID: entry.ID, CompletedAt: entry.CompletedAt}
-	finalizer, err := durable.NewResponseCache(r.Responses(), r.ResponseFills(), func() time.Time { return completion.CompletedAt })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := finalizer.CompleteAttempt(ctx, origin, completion, &entry, func(context.Context) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
+	finalizer := mustResponseCache(t, r.Responses(), r.ResponseFills(), func() time.Time { return completion.CompletedAt })
+	mustNoError(t, finalizer.CompleteAttempt(ctx, origin, completion, &entry, func(context.Context) error { return nil }))
 	lag := 150 * time.Millisecond
 	fresh := origin
 	fresh.OperationID, fresh.Attempt = "new-operation", "new-attempt"
@@ -157,10 +126,7 @@ func TestCloudCacheLaggingClockUsesPublishedSuccess(t *testing.T) {
 	prepare := func(lease cache.FillLease, now time.Time) durable.CacheDisposition {
 		t.Helper()
 		opened := reopen(t, table, blobs)
-		c, err := durable.NewResponseCache(opened.Responses(), opened.ResponseFills(), func() time.Time { return now })
-		if err != nil {
-			t.Fatal(err)
-		}
+		c := mustResponseCache(t, opened.Responses(), opened.ResponseFills(), func() time.Time { return now })
 		decision, err := c.PrepareGenerate(ctx, lease, nil)
 		if err != nil {
 			t.Fatal(err)

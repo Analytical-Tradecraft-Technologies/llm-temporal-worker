@@ -14,10 +14,7 @@ func TestListWorkerRecordsFiltersPrefixAndKeep(t *testing.T) {
 		budgetWorkerLeaseFieldPrefix + "b":  "drop-b",
 		budgetWorkerRosterFieldPrefix + "a": "keep-roster",
 	}}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: "session-a"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustBudgetWorkerLeaseStore(t, fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: "session-a"})
 	identity := func(raw string) (string, error) { return raw, nil }
 	kept, err := listWorkerRecords(context.Background(), store, "generation-a", budgetWorkerLeaseFieldPrefix, "test records", identity, func(raw string) bool {
 		return strings.HasPrefix(raw, "keep")
@@ -26,9 +23,7 @@ func TestListWorkerRecordsFiltersPrefixAndKeep(t *testing.T) {
 		t.Fatalf("kept = %q, %v", kept, err)
 	}
 	failed := errors.New("decode failed")
-	if _, err := listWorkerRecords(context.Background(), store, "generation-a", budgetWorkerRosterFieldPrefix, "test records", func(string) (string, error) { return "", failed }, func(string) bool { return true }); !errors.Is(err, failed) {
-		t.Fatalf("decode error = %v", err)
-	}
+	requireErrorIs(t, errOf(listWorkerRecords(context.Background(), store, "generation-a", budgetWorkerRosterFieldPrefix, "test records", func(string) (string, error) { return "", failed }, func(string) bool { return true })), failed, "decode error =")
 	if _, err := listWorkerRecords(context.Background(), nil, "generation-a", budgetWorkerLeaseFieldPrefix, "test records", identity, func(string) bool { return true }); err == nil || err.Error() != "Redis budget worker lease store is nil" {
 		t.Fatalf("nil store error = %v", err)
 	}
@@ -37,17 +32,12 @@ func TestListWorkerRecordsFiltersPrefixAndKeep(t *testing.T) {
 func TestRegisteredAtKeepsExistingRosterOrFallback(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: "session-a", Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustBudgetWorkerLeaseStore(t, fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: "session-a", Clock: func() time.Time { return now }})
 	fallback := now.Add(time.Hour)
 	if got, err := store.registeredAt(context.Background(), fallback, "read roster"); err != nil || !got.Equal(fallback) {
 		t.Fatalf("missing roster = %v, %v; want fallback", got, err)
 	}
-	if _, err := store.Register(context.Background(), "generation-a", "", time.Minute); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(store.Register(context.Background(), "generation-a", "", time.Minute)))
 	if got, err := store.registeredAt(context.Background(), fallback, "read roster"); err != nil || !got.Equal(now) {
 		t.Fatalf("existing roster = %v, %v; want %v", got, err, now)
 	}

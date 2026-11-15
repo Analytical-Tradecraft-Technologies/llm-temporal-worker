@@ -75,10 +75,7 @@ func durableTestRequest(now time.Time) durable.ReserveRequest {
 
 func durableAcceptedRecord(t *testing.T, request durable.ReserveRequest, now time.Time) string {
 	t.Helper()
-	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
 	fingerprint, err := durableRequestFingerprint(request, reservations)
 	if err != nil {
 		t.Fatal(err)
@@ -128,10 +125,7 @@ func TestRedisBudgetMaterializerAcceptsAndReturnsJournalEvents(t *testing.T) {
 func TestRedisBudgetMaterializerDenialIsReplayable(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	request := durableTestRequest(now)
-	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
 	invoker := &durableMaterializerInvoker{result: []any{"existing", mustJSON(t, durableOperation{
 		Schema: "durable-budget/v1", OperationID: string(request.OperationID), GenerationID: string(request.GenerationID),
 		IncarnationID: "incarnation-1", Status: "denied", OccurredAt: now, Reservations: reservations,
@@ -152,9 +146,7 @@ func TestRedisBudgetMaterializerRejectsSnapshotMismatchBeforeRedis(t *testing.T)
 	now := time.Unix(1_700_000_000, 0).UTC()
 	request := durableTestRequest(now)
 	request.GenerationID = "different-generation"
-	if _, err := materializer.Accept(context.Background(), request); !errors.Is(err, ErrRedisBudgetGenerationMismatch) {
-		t.Fatalf("generation mismatch = %v", err)
-	}
+	requireErrorIs(t, errOf(materializer.Accept(context.Background(), request)), ErrRedisBudgetGenerationMismatch, "generation mismatch =")
 	if invoker.calls != 0 {
 		t.Fatalf("generation mismatch invoked Redis %d times", invoker.calls)
 	}
@@ -173,12 +165,8 @@ func TestRedisBudgetMaterializerReconcileDuplicateEventIsIdempotent(t *testing.T
 		ActualCostUSD: ptrUSD(pricing.MustUSD("0.005")), CostStatus: budget.CostExact, OccurredAt: now,
 	}
 	reconcile := durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-1", Events: []budget.CompletionEvent{event}}
-	if err := materializer.Reconcile(context.Background(), reconcile); err != nil {
-		t.Fatal(err)
-	}
-	if err := materializer.Reconcile(context.Background(), reconcile); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, materializer.Reconcile(context.Background(), reconcile))
+	mustNoError(t, materializer.Reconcile(context.Background(), reconcile))
 	if invoker.calls != 2 || invoker.args[0][0] != "durable_reconcile" {
 		t.Fatalf("reconcile invocations = %#v", invoker.args)
 	}
@@ -204,10 +192,7 @@ func TestRedisBudgetMaterializerRoundsSubsecondExpiryUp(t *testing.T) {
 	now := time.Unix(1_700_000_000, 100_000_000).UTC()
 	request := durableTestRequest(now)
 	request.ExpiresAt = now.Add(500 * time.Millisecond)
-	reservations, err := canonicalDurableReservations(request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reservations := mustCanonicalReservations(t, request.OperationID, request.GenerationID, request.Reservations, request.ExpiresAt, now)
 	if got, want := reservations[0].ExpiresMillis, request.ExpiresAt.UnixMilli(); got != want {
 		t.Fatalf("expiry milliseconds = %d, want %d", got, want)
 	}

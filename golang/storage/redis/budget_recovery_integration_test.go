@@ -10,9 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 	redisclient "github.com/redis/go-redis/v9"
 )
@@ -33,14 +31,9 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 				t.Helper()
 				keys := liveKeyOptions("budget-recovery")
 				cleanupLivePrefix(t, client, keys.Prefix)
-				initializer, err := NewRedisBudgetInitializer(client, keys, mode, AdmissionFunctionVersion)
-				if err != nil {
-					t.Fatal(err)
-				}
+				initializer := mustBudgetInitializer(t, client, keys, mode, AdmissionFunctionVersion)
 				receipt := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: "00000000-0000-4000-8000-000000000002", CreatedAt: time.Now().UTC()}
-				if err := initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}))
 				receipt.Ready = true
 				m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
 					Client: client, Mode: mode, Keys: keys, GenerationID: "recovery-gen", IncarnationID: "recovery-inc",
@@ -51,17 +44,10 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 				}
 				return &fixture{keys: keys, initializer: initializer, receipt: receipt, m: m, durable: map[string]*BudgetRecoveryOperation{}}
 			}
-			request := func(id, amount string) durable.ReserveRequest {
-				now := time.Now().UTC()
-				return durable.ReserveRequest{OperationID: durable.OperationID(id), GenerationID: "recovery-gen", Reservations: []admission.WindowReservation{{PolicyID: "tenant", WindowID: "hour", Bucket: now.Unix() / 60, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour), AmountUSD: pricing.MustUSD(amount), LimitUSD: pricing.MustUSD("1")}}}
-			}
+			request := func(id, amount string) durable.ReserveRequest { return liveMinuteRequest("recovery-gen", id, amount) }
 			settlement := func(r durable.ReserveResult, amount string) *durable.ReconcileRequest {
-				cost := pricing.MustUSD(amount)
-				result := &durable.ReconcileRequest{OperationID: r.OperationID, GenerationID: r.GenerationID, IncarnationID: r.IncarnationID}
-				for i, e := range r.Events {
-					result.Events = append(result.Events, budget.CompletionEvent{EventID: fmt.Sprintf("%s-complete-%d", r.OperationID, i), GenerationID: string(r.GenerationID), OperationID: string(r.OperationID), WindowID: e.WindowID, BucketStart: e.BucketStart, ReservationRevision: 2, Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: e.AmountUSD, AccountedIncreaseUSD: cost, ActualCostUSD: &cost, CostStatus: budget.CostExact, OccurredAt: time.Now().UTC()})
-				}
-				return result
+				result := liveSettlement(r, amount)
+				return &result
 			}
 			// accept, claim and settle in the order production saves them:
 			// the durable record precedes each Redis claim and settlement.
@@ -82,17 +68,13 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 			unclaimed := func(id string, f *fixture) { f.durable[id].Claimed = false }
 			claim := func(t *testing.T, f *fixture, r durable.ReserveResult) {
 				t.Helper()
-				if _, err := f.m.Claim(ctx, durable.ClaimRequest{OperationID: r.OperationID, GenerationID: r.GenerationID, IncarnationID: r.IncarnationID}); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(f.m.Claim(ctx, durable.ClaimRequest{OperationID: r.OperationID, GenerationID: r.GenerationID, IncarnationID: r.IncarnationID})))
 			}
 			settle := func(t *testing.T, f *fixture, r durable.ReserveResult, amount string) {
 				t.Helper()
 				s := settlement(r, amount)
 				f.durable[string(r.OperationID)].Settlement = s
-				if err := f.m.Reconcile(ctx, *s); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, f.m.Reconcile(ctx, *s))
 			}
 			// Spend 0.3 settled, 0.2 claimed and unsettled, 0.1 unclaimed.
 			populate := func(t *testing.T, f *fixture) map[string]durable.ReserveResult {
@@ -124,12 +106,8 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 						restored++
 					}
 				}
-				if _, err := f.initializer.ApplyRecoveryFloors(ctx, f.receipt, "token-a"); err != nil {
-					t.Fatal(err)
-				}
-				if err := f.initializer.CommitRecovery(ctx, f.receipt, time.Now()); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(f.initializer.ApplyRecoveryFloors(ctx, f.receipt, "token-a")))
+				mustNoError(t, f.initializer.CommitRecovery(ctx, f.receipt, time.Now()))
 				if err := f.initializer.Check(ctx, f.receipt); err != nil {
 					t.Fatalf("authority not ready after recovery: %v", err)
 				}
@@ -154,18 +132,12 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 			t.Run("complete loss restores spend, claims and settlement fences", func(t *testing.T) {
 				f := setup(t)
 				results := populate(t, f)
-				if err := deleteLivePrefix(ctx, client, f.keys.Prefix); err != nil {
-					t.Fatal(err)
-				}
-				if err := f.initializer.Check(ctx, f.receipt); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-					t.Fatalf("lost authority check = %v", err)
-				}
+				mustNoError(t, deleteLivePrefix(ctx, client, f.keys.Prefix))
+				requireErrorIs(t, f.initializer.Check(ctx, f.receipt), ErrBudgetAuthorityUnavailable, "lost authority check =")
 				if required, err := f.initializer.BeginRecovery(ctx, f.receipt, false); err != nil || !required {
 					t.Fatalf("begin = %v, %v", required, err)
 				}
-				if _, err := f.m.Accept(ctx, request("during", "0.01")); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-					t.Fatalf("partially restored state served admission: %v", err)
-				}
+				requireErrorIs(t, errOf(f.m.Accept(ctx, request("during", "0.01"))), ErrBudgetAuthorityUnavailable, "partially restored state served admission")
 				if restored := recoverAll(t, f, false); restored != 3 {
 					t.Fatalf("restored %d operations", restored)
 				}
@@ -173,9 +145,7 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 				if err := f.m.Reconcile(ctx, *f.durable["settled"].Settlement); err != nil {
 					t.Fatalf("settlement replay = %v", err)
 				}
-				if _, err := f.m.Claim(ctx, durable.ClaimRequest{OperationID: "claimed", GenerationID: "recovery-gen", IncarnationID: "recovery-inc"}); !errors.Is(err, durable.ErrAlreadyClaimed) {
-					t.Fatalf("restored claim reusable: %v", err)
-				}
+				requireErrorIs(t, errOf(f.m.Claim(ctx, durable.ClaimRequest{OperationID: "claimed", GenerationID: "recovery-gen", IncarnationID: "recovery-inc"})), durable.ErrAlreadyClaimed, "restored claim reusable")
 				if _, err := f.m.Claim(ctx, durable.ClaimRequest{OperationID: "open", GenerationID: "recovery-gen", IncarnationID: "recovery-inc"}); err != nil {
 					t.Fatalf("unclaimed reservation not restored: %v", err)
 				}
@@ -195,9 +165,7 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 			t.Run("marker-only loss and repeated recovery never double count", func(t *testing.T) {
 				f := setup(t)
 				populate(t, f)
-				if err := client.Del(ctx, f.initializer.keys.AuthorityKey()).Err(); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, client.Del(ctx, f.initializer.keys.AuthorityKey()).Err())
 				if restored := recoverAll(t, f, false); restored != 0 {
 					t.Fatalf("surviving records rewritten: %d", restored)
 				}
@@ -234,20 +202,14 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 			t.Run("lost bucket hash behind surviving operation records is raised", func(t *testing.T) {
 				f := setup(t)
 				populate(t, f)
-				if err := client.Del(ctx, f.m.space.durableBudgetKey("tenant", "hour")).Err(); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, client.Del(ctx, f.m.space.durableBudgetKey("tenant", "hour")).Err())
 				if fits, err := f.m.Accept(ctx, request("lost-hash-probe", "0.9")); err != nil || !fits.Accepted {
 					t.Fatalf("setup: lost hash should hide spend: %#v, %v", fits, err)
 				}
 				// The probe's own acceptance survives in the hash; recovery must
 				// still restore the 0.6 of durable spend beneath it.
-				if err := client.Del(ctx, f.m.space.durableBudgetKey("tenant", "hour"), f.m.space.durableBudgetOperationKey("recovery-gen", "lost-hash-probe")).Err(); err != nil {
-					t.Fatal(err)
-				}
-				if err := client.ZRemRangeByScore(ctx, f.m.space.durableBudgetExpiryKey("tenant", "hour"), "-inf", "+inf").Err(); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, client.Del(ctx, f.m.space.durableBudgetKey("tenant", "hour"), f.m.space.durableBudgetOperationKey("recovery-gen", "lost-hash-probe")).Err())
+				mustNoError(t, client.ZRemRangeByScore(ctx, f.m.space.durableBudgetExpiryKey("tenant", "hour"), "-inf", "+inf").Err())
 				restored := recoverAll(t, f, true)
 				if restored != 2 { // settled and open: their expiry members were re-added
 					t.Fatalf("repaired %d operations", restored)
@@ -275,28 +237,18 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 			t.Run("interrupted recovery resumes behind the fence", func(t *testing.T) {
 				f := setup(t)
 				populate(t, f)
-				if err := deleteLivePrefix(ctx, client, f.keys.Prefix); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := f.initializer.BeginRecovery(ctx, f.receipt, false); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, deleteLivePrefix(ctx, client, f.keys.Prefix))
+				mustNoError(t, errOf(f.initializer.BeginRecovery(ctx, f.receipt, false)))
 				if _, _, err := f.initializer.HoldRecoveryLease(ctx, f.receipt, "crashed", time.Second, `{"shard":3}`); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := f.initializer.RecoverOperation(ctx, f.receipt, "crashed", *f.durable["claimed"]); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(f.initializer.RecoverOperation(ctx, f.receipt, "crashed", *f.durable["claimed"])))
 				// The crashed process never commits. Its fence survives.
-				if err := f.initializer.Check(ctx, f.receipt); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-					t.Fatalf("interrupted recovery published readiness: %v", err)
-				}
+				requireErrorIs(t, f.initializer.Check(ctx, f.receipt), ErrBudgetAuthorityUnavailable, "interrupted recovery published readiness")
 				if _, _, err := f.initializer.HoldRecoveryLease(ctx, f.receipt, "successor", 5*time.Second, ""); !errors.Is(err, ErrBudgetRecoveryBusy) {
 					t.Fatalf("lease stolen from a live holder: %v", err)
 				}
-				if _, err := f.initializer.RecoverOperation(ctx, f.receipt, "successor", *f.durable["open"]); !errors.Is(err, ErrBudgetRecoveryBusy) {
-					t.Fatalf("non-holder merged: %v", err)
-				}
+				requireErrorIs(t, errOf(f.initializer.RecoverOperation(ctx, f.receipt, "successor", *f.durable["open"])), ErrBudgetRecoveryBusy, "non-holder merged")
 				time.Sleep(1100 * time.Millisecond)
 				if required, err := f.initializer.BeginRecovery(ctx, f.receipt, false); err != nil || !required {
 					t.Fatalf("resume = %v, %v", required, err)
@@ -305,9 +257,7 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 				if err != nil || progress != `{"shard":3}` {
 					t.Fatalf("progress = %q, %v", progress, err)
 				}
-				if err := f.initializer.ReleaseRecoveryLease(ctx, f.receipt, "successor"); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, f.initializer.ReleaseRecoveryLease(ctx, f.receipt, "successor"))
 				if restored := recoverAll(t, f, false); restored != 2 {
 					t.Fatalf("resume restored %d operations", restored)
 				}
@@ -320,9 +270,7 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 			t.Run("concurrent startups elect one recoverer", func(t *testing.T) {
 				f := setup(t)
 				populate(t, f)
-				if err := deleteLivePrefix(ctx, client, f.keys.Prefix); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, deleteLivePrefix(ctx, client, f.keys.Prefix))
 				var wg sync.WaitGroup
 				var mu sync.Mutex
 				holders := 0
@@ -373,18 +321,10 @@ func TestLiveRedisBudgetRecovery(t *testing.T) {
 				f := setup(t)
 				other := f.receipt
 				other.Epoch = "00000000-0000-4000-8000-000000000003"
-				if err := client.Set(ctx, f.initializer.keys.AuthorityKey(), "ready:"+other.Marker(), 0).Err(); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := f.initializer.BeginRecovery(ctx, f.receipt, true); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-					t.Fatalf("foreign marker = %v", err)
-				}
-				if err := client.Set(ctx, f.initializer.keys.AuthorityKey(), "preparing:"+f.receipt.Marker(), 0).Err(); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := f.initializer.BeginRecovery(ctx, f.receipt, false); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-					t.Fatalf("preparing marker = %v", err)
-				}
+				mustNoError(t, client.Set(ctx, f.initializer.keys.AuthorityKey(), "ready:"+other.Marker(), 0).Err())
+				requireErrorIs(t, errOf(f.initializer.BeginRecovery(ctx, f.receipt, true)), ErrBudgetAuthorityUnavailable, "foreign marker =")
+				mustNoError(t, client.Set(ctx, f.initializer.keys.AuthorityKey(), "preparing:"+f.receipt.Marker(), 0).Err())
+				requireErrorIs(t, errOf(f.initializer.BeginRecovery(ctx, f.receipt, false)), ErrBudgetAuthorityUnavailable, "preparing marker =")
 			})
 		})
 	}
@@ -417,12 +357,8 @@ func dumpLivePrefix(t *testing.T, client *redisclient.Client, prefix string) map
 func restoreLivePrefix(t *testing.T, client *redisclient.Client, prefix string, snapshot map[string]string) {
 	t.Helper()
 	ctx := context.Background()
-	if err := deleteLivePrefix(ctx, client, prefix); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, deleteLivePrefix(ctx, client, prefix))
 	for key, value := range snapshot {
-		if err := client.Restore(ctx, key, 0, value).Err(); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, client.Restore(ctx, key, 0, value).Err())
 	}
 }

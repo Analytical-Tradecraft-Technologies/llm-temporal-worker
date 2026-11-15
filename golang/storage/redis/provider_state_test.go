@@ -3,7 +3,6 @@ package redis
 import (
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -98,9 +97,7 @@ func TestProviderProjectionRejectsCorruptRecords(t *testing.T) {
 
 func TestProviderInventoryValidation(t *testing.T) {
 	snapshot := providerTestInventory(time.Now().UTC())
-	if err := validateInventorySnapshot(snapshot); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, validateInventorySnapshot(snapshot))
 	snapshot.InventoryDigest = [32]byte{1}
 	if err := validateInventorySnapshot(snapshot); err == nil {
 		t.Fatal("incorrect digest accepted")
@@ -155,9 +152,7 @@ func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
 	}
 	// A marker for a record the pinned view no longer holds restarts pagination.
 	options.AfterRouteID = store.routePosition(control.RouteStatus{RouteID: route, EndpointID: "removed"})
-	if _, err := store.pageRouteStatuses(records, options); !errors.Is(err, control.ErrProviderViewExpired) {
-		t.Fatalf("unknown marker error = %v", err)
-	}
+	requireErrorIs(t, errOf(store.pageRouteStatuses(records, options)), control.ErrProviderViewExpired, "unknown marker error =")
 	// A plain route position still skips every record of that route.
 	options.AfterRouteID = route
 	if page, err := store.pageRouteStatuses(records, options); err != nil || len(page.Routes) != 0 {

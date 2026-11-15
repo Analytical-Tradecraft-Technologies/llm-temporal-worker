@@ -112,26 +112,17 @@ func TestBudgetManifestValidateAgainstExpectedCatalog(t *testing.T) {
 		t.Fatalf("matching expectation rejected: %v", err)
 	}
 	expected.Members[0].WindowID = "missing-window"
-	if err := manifest.ValidateAgainst(expected); !errors.Is(err, ErrBudgetManifestInvalid) {
-		t.Fatalf("incomplete expected catalog error = %v", err)
-	}
+	requireErrorIs(t, manifest.ValidateAgainst(expected), ErrBudgetManifestInvalid, "incomplete expected catalog error =")
 }
 
 func TestMemberCatalogDigestIsOrderIndependentAndRejectsDuplicates(t *testing.T) {
 	manifest := testBudgetManifest(t)
-	first, err := MemberCatalogDigest(manifest.Members)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := MemberCatalogDigest([]BudgetManifestMember{manifest.Members[1], manifest.Members[0]})
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustCall(t, MemberCatalogDigest, manifest.Members)
+	second := mustCall(t, MemberCatalogDigest, []BudgetManifestMember{manifest.Members[1], manifest.Members[0]})
 	if first != second {
 		t.Fatalf("member order changed catalog digest: %s != %s", first, second)
 	}
-	_, err = MemberCatalogDigest([]BudgetManifestMember{manifest.Members[0], manifest.Members[0]})
-	if err == nil {
+	if _, err := MemberCatalogDigest([]BudgetManifestMember{manifest.Members[0], manifest.Members[0]}); err == nil {
 		t.Fatal("duplicate member catalog was accepted")
 	}
 }
@@ -176,10 +167,7 @@ func testBudgetManifest(t *testing.T) BudgetManifest {
 			BucketCount: 4, BucketWidth: 15 * time.Minute, BucketCatalogDigest: testDigest("buckets-b"),
 		},
 	}
-	catalog, err := MemberCatalogDigest(members)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCall(t, MemberCatalogDigest, members)
 	return BudgetManifest{
 		Schema: BudgetManifestSchema, GenerationID: "generation-1", IncarnationID: "redis-incarnation-1",
 		ConfigVersion: "config-v1", PriceVersion: "prices-v1", PolicyHash: policyHash, WindowHash: windowHash,

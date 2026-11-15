@@ -51,15 +51,11 @@ func TestLiveRedisModelCatalogPublishesOnlyNewerAndLeasesOneRefresher(t *testing
 	if acquired, err := store.AcquireRefresh(ctx, "worker-b", time.Minute); err != nil || acquired {
 		t.Fatalf("second lease = %v, %v", acquired, err)
 	}
-	if err := store.ReleaseRefresh(ctx, "worker-b"); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, store.ReleaseRefresh(ctx, "worker-b"))
 	if acquired, _ := store.AcquireRefresh(ctx, "worker-c", time.Minute); acquired {
 		t.Fatal("a non-owner released the refresh lease")
 	}
-	if err := store.ReleaseRefresh(ctx, "worker-a"); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, store.ReleaseRefresh(ctx, "worker-a"))
 	if acquired, err := store.AcquireRefresh(ctx, "worker-c", time.Minute); err != nil || !acquired {
 		t.Fatalf("lease after release = %v, %v", acquired, err)
 	}
