@@ -3,7 +3,6 @@
 package openaierror
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,17 +14,7 @@ import (
 
 // MapError classifies an error returned by the OpenAI SDK client.
 func MapError(err error, profileName string) *provider.Error {
-	if err == nil {
-		return nil
-	}
-	if mapped := provider.MapTransportError(err, profileName); mapped != nil {
-		return mapped
-	}
-	var apiErr *openai.Error
-	if errors.As(err, &apiErr) {
-		return MapAPIError(apiErr, profileName)
-	}
-	return provider.NewUnclassifiedDispatchError(err, profileName)
+	return provider.MapSDKError(err, profileName, MapAPIError)
 }
 
 // MapAPIError classifies an OpenAI HTTP error response.

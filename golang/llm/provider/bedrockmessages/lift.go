@@ -8,8 +8,12 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 )
+
+// contentStateBlocks are the response content blocks kept as opaque provider
+// state.
+var contentStateBlocks = []string{"thinking", "redacted_thinking"}
 
 func (profile Profile) liftResponse(call provider.Call, response *anthropic.Message, requestID string) (llm.Response, error) {
 	return profile.liftResponseWithTier(call, response, requestID, "")
@@ -27,25 +31,17 @@ func (profile Profile) liftResponseWithTier(call provider.Call, response *anthro
 		providerTier = headerTier
 	}
 	actual := profile.actualClass(providerTier)
-	output, states, hasToolCalls, hasRefusal, err := liftContent(response.Content)
+	output, states, hasToolCalls, err := anthropicwire.LiftContent(response.Content, "bedrock", contentStateBlocks)
 	if err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
-	if string(response.StopReason) == "refusal" || response.StopDetails.Category != "" {
-		hasRefusal = true
-	}
+	hasRefusal := string(response.StopReason) == "refusal" || response.StopDetails.Category != ""
 	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
 	if err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
-	if err := validateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-		mapped.Provider.ResponseID = response.ID
-		return llm.Response{}, mapped
+	if err := anthropicwire.ValidateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
+		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
 	return llm.Response{
 		APIVersion:   llm.APIVersion,
@@ -82,83 +78,6 @@ func liftDiagnostics(call provider.Call) []llm.Diagnostic {
 	}
 	return []llm.Diagnostic{{Code: "extensions_dropped", Severity: llm.DiagnosticWarning, Path: "/extensions",
 		Message: "Bedrock Messages has no extension allowlist; the request's extensions were not sent to the provider"}}
-}
-
-// validateFinalJSON enforces the caller's json_schema output locally. The
-// provider only saw a lowered schema, so constraints moved into descriptions
-// are checked here before the bytes enter Temporal history.
-func validateFinalJSON(call provider.Call, output []llm.Item, status llm.ResponseStatus, hasToolCalls, hasRefusal bool) error {
-	// Incomplete text is retained for callers and accounting, not validated
-	// as a promised complete JSON document.
-	if status != llm.ResponseStatusCompleted || hasToolCalls || hasRefusal || len(call.OutputSchema) == 0 {
-		return nil
-	}
-	return anthropicschema.Validate(call.OutputSchema, output)
-}
-
-func liftContent(blocks []anthropic.ContentBlockUnion) ([]llm.Item, []llm.ProviderState, bool, bool, error) {
-	output := make([]llm.Item, 0, len(blocks))
-	states := make([]llm.ProviderState, 0)
-	hasToolCalls, hasRefusal := false, false
-	for index, block := range blocks {
-		switch block.Type {
-		case "text":
-			if len(output) > 0 {
-				if message, ok := output[len(output)-1].(llm.Message); ok && message.Actor == llm.ActorModel {
-					message.Content = append(message.Content, llm.TextPart{Text: block.Text})
-					output[len(output)-1] = message
-					continue
-				}
-			}
-			output = append(output, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: block.Text}}})
-		case "thinking", "redacted_thinking":
-			raw, err := contentBlockRaw(block)
-			if err != nil {
-				return nil, nil, false, false, fmt.Errorf("content block %d: %w", index, err)
-			}
-			state := llm.ProviderState{Provider: "bedrock", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: raw}
-			states = append(states, state)
-			output = append(output, state)
-		case "tool_use":
-			if block.ID == "" || block.Name == "" {
-				return nil, nil, false, false, fmt.Errorf("content block %d tool_use is missing id or name", index)
-			}
-			arguments := append(json.RawMessage(nil), block.Input...)
-			if len(arguments) == 0 {
-				arguments = json.RawMessage(`{}`)
-			}
-			if !json.Valid(arguments) {
-				return nil, nil, false, false, fmt.Errorf("content block %d tool_use input is invalid JSON", index)
-			}
-			// encoding/json accepts duplicate keys but a normalized tool call
-			// does not, and arguments nested deeper than
-			// llm.MaxToolArgumentsDepth could not be saved. Reject both here as
-			// a classified invalid response.
-			if _, err := llm.CanonicalToolArguments(arguments); err != nil {
-				return nil, nil, false, false, fmt.Errorf("content block %d tool_use input is invalid JSON", index)
-			}
-			hasToolCalls = true
-			output = append(output, llm.ToolCall{ID: block.ID, Name: block.Name, Arguments: arguments})
-		default:
-			return nil, nil, false, false, fmt.Errorf("content block %d has unsupported type %q", index, block.Type)
-		}
-	}
-	return output, states, hasToolCalls, hasRefusal, nil
-}
-
-func contentBlockRaw(block anthropic.ContentBlockUnion) ([]byte, error) {
-	raw := []byte(block.RawJSON())
-	if len(raw) == 0 {
-		var err error
-		raw, err = json.Marshal(block)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if !json.Valid(raw) {
-		return nil, fmt.Errorf("provider state is not valid JSON")
-	}
-	return append([]byte(nil), raw...), nil
 }
 
 func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) (llm.ResponseStatus, error) {

@@ -23,7 +23,7 @@ current-layout reference.
 │   │   │   ├── contracttest/       Fixture manifest and coverage contract harness
 │   │   │   ├── internal/           Helpers shared by adapters, never imported outside provider
 │   │   │   │   ├── anthropicschema/  Output schemas for Claude structured outputs
-│   │   │   │   ├── anthropicwire/  Lowering shared by the two Messages adapters
+│   │   │   │   ├── anthropicwire/  Lowering and lifting shared by the two Messages adapters
 │   │   │   │   ├── awscredentials/ AWS credential failures as pre-dispatch auth errors
 │   │   │   │   ├── azurecredentials/ Azure credential failures as pre-dispatch auth errors
 │   │   │   │   ├── clientconfig/   Provider endpoint and URL configuration helpers
@@ -33,6 +33,7 @@ current-layout reference.
 │   │   │   │   ├── openaischema/   Output schemas for OpenAI strict structured outputs
 │   │   │   │   ├── openaiwire/     Lowering shared by the Chat and Responses adapters
 │   │   │   │   ├── schemaorder/    JSON Schema serialization in a deliberate order
+│   │   │   │   ├── schemawire/     JSON Schema helpers shared by the output-schema lowerings
 │   │   │   │   ├── streamdecode/   Shared SSE and event-stream decoding
 │   │   │   │   ├── streamtest/     Deterministic stream-fragmentation helpers
 │   │   │   │   ├── thinkingwire/   Manual extended-thinking cross-field rules

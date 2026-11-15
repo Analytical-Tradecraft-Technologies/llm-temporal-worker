@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemawire"
 	usageutil "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/usage"
 	llmschema "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/schema"
 )
@@ -164,18 +165,7 @@ func validationSchema(call provider.Call, wire json.RawMessage) json.RawMessage 
 }
 
 func firstModelText(output []llm.Item) (string, bool) {
-	for _, item := range output {
-		message, ok := item.(llm.Message)
-		if !ok || message.Actor != llm.ActorModel {
-			continue
-		}
-		for _, part := range message.Content {
-			if text, ok := part.(llm.TextPart); ok {
-				return text.Text, true
-			}
-		}
-	}
-	return "", false
+	return schemawire.FirstModelText(output)
 }
 
 func liftChoice(choice openai.ChatCompletionChoice) ([]llm.Item, bool, bool, error) {
@@ -296,8 +286,7 @@ func withLiftCause(cause string, err error) error {
 // details name the cause and the provider's finish reason when that is a
 // short token, so a rejected response is diagnosable without its content.
 func liftFailure(call provider.Call, requestID, responseID, finishReason string, err error) *provider.Error {
-	mapped := provider.NewInvalidResponseError(call, requestID, err.Error())
-	mapped.Provider.ResponseID = responseID
+	mapped := provider.NewInvalidResponseErrorWithID(call, requestID, responseID, err.Error())
 	cause := "response_invalid"
 	var tagged liftCauseError
 	if errors.As(err, &tagged) {

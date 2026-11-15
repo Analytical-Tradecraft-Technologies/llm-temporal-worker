@@ -10,11 +10,7 @@ import (
 // Bedrock middleware normalizes EventStream responses into Anthropic-shaped
 // SSE, so the same strict decoder applies after official SDK translation.
 func DecodeStream(reader io.Reader) ([]provider.Event, error) {
-	events, err := streamdecode.Parse(reader)
-	if err != nil {
-		return nil, err
-	}
-	return streamdecode.DecodeAnthropic(events)
+	return streamdecode.ParseAndDecode(reader, streamdecode.DecodeAnthropic)
 }
 
 func Decode(reader io.Reader) ([]provider.Event, error) { return DecodeStream(reader) }

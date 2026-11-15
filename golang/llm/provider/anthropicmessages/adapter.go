@@ -2,7 +2,6 @@ package anthropicmessages
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 )
@@ -24,18 +22,15 @@ type Adapter struct {
 }
 
 func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
-	if client == nil {
-		return nil, fmt.Errorf("anthropic messages: client is required")
-	}
-	if endpointID == "" {
-		return nil, fmt.Errorf("anthropic messages: endpoint ID is required")
+	if err := provider.RequireAdapterArgs("anthropic messages", client != nil, endpointID); err != nil {
+		return nil, err
 	}
 	validated, err := NewProfile(profile)
 	if err != nil {
 		return nil, err
 	}
-	if validated.ExpectedBaseURL != "" && client.baseURL != validated.ExpectedBaseURL {
-		return nil, fmt.Errorf("anthropic messages profile %q requires base URL %q, got %q", validated.ID, validated.ExpectedBaseURL, client.baseURL)
+	if err := provider.RequireExpectedBaseURL("anthropic messages", validated.ID, validated.ExpectedBaseURL, client.baseURL); err != nil {
+		return nil, err
 	}
 	return &Adapter{client: client, endpointID: endpointID, profile: validated}, nil
 }
@@ -82,21 +77,16 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if adapter == nil {
 		return provider.Call{}, provider.NewCompileError("adapter is nil")
 	}
-	if err := ctx.Err(); err != nil {
-		return provider.Call{}, provider.NewCompileContextError(err)
+	if err := provider.StartCompile(ctx, input.Query, "anthropic messages", provider.FamilyAnthropicMessages, adapter.endpointID); err != nil {
+		return provider.Call{}, err
 	}
-	if err := provider.ValidateCapabilityQuery(input.Query, "anthropic messages", provider.FamilyAnthropicMessages, adapter.endpointID); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	input.Metadata.WebSearch = input.Request.WebSearch
-	input.Metadata.WebFetch = input.Request.WebFetch
-	input.Metadata.CodeExecution = input.Request.CodeExecution
+	input.Metadata.RecordHostedTools(input.Request)
 	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, adapter.profile.ExpectedModel)
 	if err != nil {
 		return provider.Call{}, err
 	}
-	if continuation := normalized.Continuation; continuation != nil && continuation.Pinned && continuation.EndpointID != "" && continuation.EndpointID != adapter.endpointID {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("continuation endpoint %q is not pinned endpoint %q", continuation.EndpointID, adapter.endpointID))
+	if err := provider.RequirePinnedContinuation(normalized, adapter.endpointID); err != nil {
+		return provider.Call{}, err
 	}
 	providerTier, err := adapter.profile.providerTier(serviceClass)
 	if err != nil {
@@ -113,15 +103,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}
 	params, err := lowerRequestWithStrict(normalized, adapter.profile, providerTier, input.Strict)
 	if err != nil {
-		var unsupported *anthropicschema.UnsupportedError
-		if errors.As(err, &unsupported) {
-			return provider.Call{}, provider.NewUnsupportedFeatureError(provider.FeatureStructuredOutput, err.Error())
-		}
-		var strict *provider.Error
-		if errors.As(err, &strict) {
-			return provider.Call{}, strict
-		}
-		return provider.Call{}, provider.NewCompileError(err.Error())
+		return provider.Call{}, anthropicwire.LowerError(err)
 	}
 	metadata, err := provider.CompileMetadata(input.Metadata, normalized, set.Version, providerTier)
 	if err != nil {
@@ -143,10 +125,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if adapter == nil {
 		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
-	if err := ctx.Err(); err != nil {
-		return provider.Result{}, provider.NewDispatchContextError(err)
-	}
-	params, err := provider.DispatchParams[anthropic.MessageNewParams](call, provider.FamilyAnthropicMessages, adapter.endpointID)
+	params, err := provider.StartDispatch[anthropic.MessageNewParams](ctx, call, provider.FamilyAnthropicMessages, adapter.endpointID)
 	if err != nil {
 		return provider.Result{}, err
 	}
@@ -158,47 +137,28 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err != nil {
 		return provider.Result{}, provider.NewDispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
 	}
-	if observer == nil {
-		observer = provider.NopObserver{}
+	// An error raised before the probe, such as an AWS gateway credential
+	// failure while signing, means nothing reached the transport.
+	dispatch, err := provider.BeginDispatch(ctx, observer, provider.DispatchTarget{EndpointID: adapter.endpointID, Provider: adapter.Name(), MapError: mapError})
+	if err != nil {
+		return provider.Result{}, err
 	}
-	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
-	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
-	}
-	var rawResponse *http.Response
 	messages := adapter.client.messages
 	if messages == nil {
 		messages = &adapter.client.sdk.Messages
 	}
-	probe := &provider.DispatchProbe{}
-	response, panicked, err := provider.CallRecovered(func() (*anthropic.Message, error) {
-		requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
+	response, rawResponse, err := provider.SendHTTP(dispatch, call.OperationKey, func(probe *provider.DispatchProbe, raw **http.Response) (*anthropic.Message, error) {
+		requestOptions := []option.RequestOption{option.WithResponseInto(raw), option.WithMiddleware(probe.Middleware)}
 		if call.Metadata.ProviderTier == FastTier {
 			requestOptions = append(requestOptions, option.WithHeaderAdd("anthropic-beta", fastModeBeta))
 		}
 		for _, override := range overrides {
 			requestOptions = append(requestOptions, option.WithJSONSet(override.Path, override.Value))
 		}
-		return messages.New(callContext, params, requestOptions...)
+		return messages.New(dispatch.Context, params, requestOptions...)
 	})
-	if panicked != nil {
-		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
-	}
-	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
-		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
-	}
 	if err != nil {
-		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		// An error raised before the probe, such as an AWS gateway
-		// credential failure while signing, means nothing reached the
-		// transport.
-		if mapped := provider.ClassifyUnsentError(err); mapped != nil && !probe.Sent() {
-			mapped.SafeDetails = map[string]string{"provider": adapter.Name()}
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
+		return provider.Result{}, err
 	}
 	if response == nil {
 		return provider.Result{}, provider.NewInvalidResponseError(call, "", "provider returned an empty response")
@@ -214,13 +174,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if metadata.RequestID == "" {
 		metadata.RequestID = anthropicwire.ResponseRequestID(response)
 	}
-	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
-		mapped.Provider.ResponseID = response.ID
-		mapped.Provider.RequestID = metadata.RequestID
-		return provider.Result{}, mapped
+	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
+		return provider.Result{}, err
 	}
-	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Content)})
+	dispatch.LiftProgress(len(response.Content))
 	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err

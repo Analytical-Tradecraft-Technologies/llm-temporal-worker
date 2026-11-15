@@ -30,11 +30,8 @@ type Adapter struct {
 }
 
 func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
-	if client == nil {
-		return nil, fmt.Errorf("bedrock converse: client is required")
-	}
-	if endpointID == "" {
-		return nil, fmt.Errorf("bedrock converse: endpoint ID is required")
+	if err := provider.RequireAdapterArgs("bedrock converse", client != nil, endpointID); err != nil {
+		return nil, err
 	}
 	validated, err := NewProfile(profile)
 	if err != nil {
@@ -139,29 +136,19 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err != nil {
 		return provider.Result{}, err
 	}
-	if observer == nil {
-		observer = provider.NopObserver{}
-	}
-	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
-	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
+	dispatch, err := provider.BeginDispatch(ctx, observer, provider.DispatchTarget{EndpointID: adapter.endpointID, Provider: adapter.Name(), MapError: mapError})
+	if err != nil {
+		return provider.Result{}, err
 	}
 	stage := &dispatchStage{}
-	response, panicked, err := converseRecovered(callContext, adapter.client.converse, &params, stage)
+	response, panicked, err := converseRecovered(dispatch.Context, adapter.client.converse, &params, stage)
 	if panicked != nil {
 		return provider.Result{}, provider.WithEndpointID(stage.panicError(call, panicked), adapter.endpointID)
 	}
 	if err != nil {
-		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
 		// An error raised before the stage, such as an AWS credential
 		// failure while signing, means nothing reached the transport.
-		if mapped := provider.ClassifyUnsentError(err); mapped != nil && !stage.sent {
-			mapped.SafeDetails = map[string]string{"provider": adapter.Name()}
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
+		return provider.Result{}, dispatch.SDKError(err, stage.sent)
 	}
 	if response == nil {
 		return provider.Result{}, provider.NewInvalidResponseError(call, "", "provider returned an empty response")
@@ -171,10 +158,8 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if response.ServiceTier != nil {
 		metadata.ProviderTier = string(response.ServiceTier.Type)
 	}
-	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
-		mapped.Provider.RequestID = requestID
-		return provider.Result{}, mapped
+	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
+		return provider.Result{}, err
 	}
 	var rawToolUses []rawToolUse
 	if stage.body != nil {
@@ -186,7 +171,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if err != nil {
 		return provider.Result{}, err
 	}
-	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(lifted.Output)})
+	dispatch.LiftProgress(len(lifted.Output))
 	return provider.Result{Response: lifted}, nil
 }
 

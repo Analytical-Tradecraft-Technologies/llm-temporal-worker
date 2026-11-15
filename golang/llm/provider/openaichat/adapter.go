@@ -40,18 +40,15 @@ func NewOpenAIAdapter(client *Client, endpointID string, profile Profile) (*Mode
 }
 
 func New(client *Client, endpointID string, profile Profile) (*Adapter, error) {
-	if client == nil {
-		return nil, fmt.Errorf("openai chat: client is required")
-	}
-	if endpointID == "" {
-		return nil, fmt.Errorf("openai chat: endpoint ID is required")
+	if err := provider.RequireAdapterArgs("openai chat", client != nil, endpointID); err != nil {
+		return nil, err
 	}
 	validated, err := NewProfile(profile)
 	if err != nil {
 		return nil, err
 	}
-	if validated.ExpectedBaseURL != "" && client.baseURL != validated.ExpectedBaseURL {
-		return nil, fmt.Errorf("openai chat profile %q requires base URL %q, got %q", validated.ID, validated.ExpectedBaseURL, client.baseURL)
+	if err := provider.RequireExpectedBaseURL("openai chat", validated.ID, validated.ExpectedBaseURL, client.baseURL); err != nil {
+		return nil, err
 	}
 	return &Adapter{client: client, endpointID: endpointID, profile: validated}, nil
 }
@@ -124,15 +121,10 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if adapter == nil {
 		return provider.Call{}, provider.NewCompileError("adapter is nil")
 	}
-	if err := ctx.Err(); err != nil {
-		return provider.Call{}, provider.NewCompileContextError(err)
+	if err := provider.StartCompile(ctx, input.Query, "openai chat", provider.FamilyOpenAIChat, adapter.endpointID); err != nil {
+		return provider.Call{}, err
 	}
-	if err := provider.ValidateCapabilityQuery(input.Query, "openai chat", provider.FamilyOpenAIChat, adapter.endpointID); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
-	}
-	input.Metadata.WebSearch = input.Request.WebSearch
-	input.Metadata.WebFetch = input.Request.WebFetch
-	input.Metadata.CodeExecution = input.Request.CodeExecution
+	input.Metadata.RecordHostedTools(input.Request)
 	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, adapter.profile.ExpectedModel)
 	if err != nil {
 		return provider.Call{}, err
@@ -155,7 +147,7 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	}); err != nil {
 		return provider.Call{}, err
 	}
-	if input.Strict && adapter.profile.applicationInstructionRole() == "system" && mixedInstructionLevels(normalized.Instructions) {
+	if input.Strict && adapter.profile.applicationInstructionRole() == "system" && provider.MixedInstructionLevels(normalized.Instructions) {
 		return provider.Call{}, provider.NewStrictPortabilityError("instruction hierarchy cannot be preserved when application instructions also use the system role in strict portability mode")
 	}
 	if callID, reserved := provider.ReservedToolResultPrefix(normalized.Input); input.Strict && reserved {
@@ -189,53 +181,31 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if adapter == nil {
 		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
-	if err := ctx.Err(); err != nil {
-		return provider.Result{}, provider.NewDispatchContextError(err)
-	}
-	params, err := provider.DispatchParams[openai.ChatCompletionNewParams](call, provider.FamilyOpenAIChat, adapter.endpointID)
+	params, err := provider.StartDispatch[openai.ChatCompletionNewParams](ctx, call, provider.FamilyOpenAIChat, adapter.endpointID)
 	if err != nil {
 		return provider.Result{}, err
 	}
 	// Encode the ordered schemas before the possible-write boundary, so a
 	// failure here is a definite non-dispatch.
-	ordered, err := schemaOrderOptions(params)
+	ordered, err := openaiwire.SchemaOrderOptions(params, false)
 	if err != nil {
 		return provider.Result{}, provider.NewDispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
 	}
-	if observer == nil {
-		observer = provider.NopObserver{}
-	}
-	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
-	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
-	}
-	var rawResponse *http.Response
-	requestOptions := adapter.client.options()
-	requestOptions = append(requestOptions, option.WithResponseInto(&rawResponse))
-	probe := &provider.DispatchProbe{}
-	requestOptions = append(requestOptions, option.WithMiddleware(probe.Middleware))
-	requestOptions = append(requestOptions, ordered...)
-	response, panicked, err := provider.CallRecovered(func() (*openai.ChatCompletion, error) {
-		return adapter.client.sdk.Chat.Completions.New(callContext, params, requestOptions...)
-	})
-	if panicked != nil {
-		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
-	}
-	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
-		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
-	}
+	// Nothing reached the transport when the error came before the probe, or
+	// from a credential middleware the SDK runs inside the probe but before it
+	// sends the request (#1495).
+	dispatch, err := provider.BeginDispatch(ctx, observer, provider.DispatchTarget{EndpointID: adapter.endpointID, Provider: adapter.Name(), CredentialUnsent: true, MapError: mapError})
 	if err != nil {
-		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		// Nothing reached the transport when the error came before the
-		// probe, or from a credential middleware the SDK runs inside the
-		// probe but before it sends the request (#1495).
-		if mapped := provider.ClassifyUnsentError(err); mapped != nil && (!probe.Sent() || errors.Is(err, provider.ErrProviderCredentials)) {
-			mapped.SafeDetails = map[string]string{"provider": adapter.Name()}
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		return provider.Result{}, provider.WithEndpointID(mapError(err, adapter.Name()), adapter.endpointID)
+		return provider.Result{}, err
+	}
+	response, rawResponse, err := provider.SendHTTP(dispatch, call.OperationKey, func(probe *provider.DispatchProbe, raw **http.Response) (*openai.ChatCompletion, error) {
+		requestOptions := adapter.client.options()
+		requestOptions = append(requestOptions, option.WithResponseInto(raw), option.WithMiddleware(probe.Middleware))
+		requestOptions = append(requestOptions, ordered...)
+		return adapter.client.sdk.Chat.Completions.New(dispatch.Context, params, requestOptions...)
+	})
+	if err != nil {
+		return provider.Result{}, err
 	}
 	if response == nil {
 		return provider.Result{}, liftFailure(call, "", "", "", withLiftCause("response_empty", errors.New("provider returned an empty response")))
@@ -245,13 +215,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		metadata.Status = rawResponse.StatusCode
 		metadata.RequestID = rawResponse.Header.Get("x-request-id")
 	}
-	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
-		mapped.Provider.ResponseID = response.ID
-		mapped.Provider.RequestID = metadata.RequestID
-		return provider.Result{}, mapped
+	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
+		return provider.Result{}, err
 	}
-	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Choices)})
+	dispatch.LiftProgress(len(response.Choices))
 	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err
@@ -260,45 +227,5 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 }
 
 func requiredFeatures(request llm.Request) []provider.Feature {
-	features := []provider.Feature{provider.FeatureText, provider.FeatureUsage}
-	for _, instruction := range request.Instructions {
-		for _, part := range instruction.Content {
-			features = append(features, openaiwire.PartFeature(part))
-		}
-	}
-	for _, item := range request.Input {
-		switch value := item.(type) {
-		case llm.Message:
-			for _, part := range value.Content {
-				features = append(features, openaiwire.PartFeature(part))
-			}
-		case llm.ToolCall, llm.ToolResult:
-			features = append(features, provider.FeatureToolCall)
-		}
-	}
-	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
-		features = append(features, provider.FeatureToolCall)
-	}
-	if request.Output != nil && request.Output.Format.Kind != "" && request.Output.Format.Kind != llm.OutputKindText {
-		features = append(features, provider.FeatureStructuredOutput)
-	}
-	if request.Reasoning != nil {
-		features = append(features, provider.FeatureReasoning)
-	}
-	if request.Continuation != nil {
-		features = append(features, provider.FeatureContinuation)
-	}
-	return provider.UniqueFeatures(features)
-}
-
-func mixedInstructionLevels(instructions []llm.Instruction) bool {
-	application, policy := false, false
-	for _, instruction := range instructions {
-		if instruction.Level == llm.InstructionLevelPolicy {
-			policy = true
-		} else {
-			application = true
-		}
-	}
-	return application && policy
+	return provider.RequestFeatures(request, openaiwire.PartFeature, nil, provider.StructuredOutputKind)
 }

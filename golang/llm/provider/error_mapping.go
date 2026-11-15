@@ -33,6 +33,27 @@ func MapTransportError(err error, profileName string) *Error {
 	return nil
 }
 
+// MapSDKError classifies an error an HTTP provider SDK returned: the
+// transport failures MapTransportError recognizes, then an SDK API error of
+// type *E by mapAPI, and otherwise an unclassified dispatch failure. It
+// returns nil for a nil err.
+func MapSDKError[E any, PE interface {
+	*E
+	error
+}](err error, profileName string, mapAPI func(PE, string) *Error) *Error {
+	if err == nil {
+		return nil
+	}
+	if mapped := MapTransportError(err, profileName); mapped != nil {
+		return mapped
+	}
+	var apiErr PE
+	if errors.As(err, &apiErr) {
+		return mapAPI(apiErr, profileName)
+	}
+	return NewUnclassifiedDispatchError(err, profileName)
+}
+
 // NewUnclassifiedDispatchError is the fallback for a dispatch failure that
 // carried no recognizable provider response. The request may have been sent,
 // so dispatch is ambiguous.

@@ -81,26 +81,8 @@ func NewProfile(profile Profile) (Profile, error) {
 }
 
 func (profile Profile) validate() error {
-	if profile.ID == "" {
-		return fmt.Errorf("bedrock converse profile ID is required")
-	}
-	if profile.ExpectedBaseURL != "" {
-		if _, err := clientconfig.BaseURL(profile.ExpectedBaseURL); err != nil {
-			return fmt.Errorf("bedrock converse profile %q expected base URL: %w", profile.ID, err)
-		}
-	}
-	if len(profile.ExpectedModel) > 256 {
-		return fmt.Errorf("bedrock converse profile %q expected model is too long", profile.ID)
-	}
-	version := profile.CapabilityVersion
-	if version == "" {
-		version = profile.Capabilities.Version
-	}
-	if version == "" {
-		return fmt.Errorf("bedrock converse profile %q capability version is required", profile.ID)
-	}
-	if profile.Capabilities.Version != "" && profile.Capabilities.Version != version {
-		return fmt.Errorf("bedrock converse profile %q capability versions conflict", profile.ID)
+	if err := provider.ValidateProfileIdentity("bedrock converse", profile.ID, profile.ExpectedBaseURL, profile.ExpectedModel, profile.CapabilityVersion, profile.Capabilities); err != nil {
+		return err
 	}
 	supported := 0
 	for _, class := range llm.ServiceClasses() {
@@ -172,14 +154,7 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 // than a guess or a failure: the response is already paid for, and the raw
 // label is kept in the service facts for audit.
 func (profile Profile) actualClass(tier string) *llm.ServiceClass {
-	class, ok := profile.ActualServiceClasses[tier]
-	if tier == "" {
-		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
-	}
-	if !ok {
-		return nil
-	}
-	return &class
+	return provider.ActualServiceClass(profile.ActualServiceClasses, profile.MissingActualServiceClass, tier)
 }
 
 func validServiceTier(value string) bool {

@@ -116,26 +116,8 @@ func DefaultProfile(id string) Profile {
 func NewDefaultProfile(id string) (Profile, error) { return NewProfile(DefaultProfile(id)) }
 
 func (profile Profile) validate() error {
-	if profile.ID == "" {
-		return fmt.Errorf("anthropic messages profile ID is required")
-	}
-	if profile.ExpectedBaseURL != "" {
-		if _, err := clientconfig.BaseURL(profile.ExpectedBaseURL); err != nil {
-			return fmt.Errorf("anthropic messages profile %q expected base URL: %w", profile.ID, err)
-		}
-	}
-	if profile.ExpectedModel != "" && len(profile.ExpectedModel) > 256 {
-		return fmt.Errorf("anthropic messages profile %q expected model is too long", profile.ID)
-	}
-	version := profile.CapabilityVersion
-	if version == "" {
-		version = profile.Capabilities.Version
-	}
-	if version == "" {
-		return fmt.Errorf("anthropic messages profile %q capability version is required", profile.ID)
-	}
-	if profile.Capabilities.Version != "" && profile.Capabilities.Version != version {
-		return fmt.Errorf("anthropic messages profile %q capability versions conflict", profile.ID)
+	if err := provider.ValidateProfileIdentity("anthropic messages", profile.ID, profile.ExpectedBaseURL, profile.ExpectedModel, profile.CapabilityVersion, profile.Capabilities); err != nil {
+		return err
 	}
 	for _, class := range llm.ServiceClasses() {
 		value, ok := profile.ServiceTiers[class]
@@ -149,16 +131,8 @@ func (profile Profile) validate() error {
 	if err := provider.ValidateProfileFeatures("anthropic messages", profile.ID, profile.Capabilities.Features); err != nil {
 		return err
 	}
-	if profile.MissingActualServiceClass != "" && !profile.MissingActualServiceClass.Valid() {
-		return fmt.Errorf("anthropic messages profile %q missing actual service class %q is invalid", profile.ID, profile.MissingActualServiceClass)
-	}
-	for providerTier, class := range profile.ActualServiceClasses {
-		if !validProviderTier(providerTier) {
-			return fmt.Errorf("anthropic messages profile %q actual provider tier %q is invalid", profile.ID, providerTier)
-		}
-		if !class.Valid() {
-			return fmt.Errorf("anthropic messages profile %q actual provider tier %q maps to invalid class %q", profile.ID, providerTier, class)
-		}
+	if err := provider.ValidateActualServiceClasses("anthropic messages", profile.ID, profile.ActualServiceClasses, profile.MissingActualServiceClass, validProviderTier); err != nil {
+		return err
 	}
 	// Two allowed fields sharing one effective wire field would let map
 	// iteration pick the provider value, so the same request could lower
@@ -213,23 +187,11 @@ func requestOwnedWireField(wire string) bool {
 }
 
 func (profile Profile) capabilityVersion() string {
-	if profile.CapabilityVersion != "" {
-		return profile.CapabilityVersion
-	}
-	return profile.Capabilities.Version
+	return provider.ProfileCapabilityVersion(profile.CapabilityVersion, profile.Capabilities)
 }
 
 func (profile Profile) capabilities(ctx context.Context, query provider.CapabilityQuery, endpointID string) (provider.CapabilitySet, error) {
-	if err := ctx.Err(); err != nil {
-		return provider.CapabilitySet{}, err
-	}
-	if err := provider.ValidateCapabilityQuery(query, fmt.Sprintf("anthropic messages profile %q", profile.ID), provider.FamilyAnthropicMessages, endpointID); err != nil {
-		return provider.CapabilitySet{}, err
-	}
-	set := profile.Capabilities.Clone()
-	set.Version = profile.capabilityVersion()
-	set.Features[provider.FeatureStreaming] = provider.UnsupportedStreaming(set.Features[provider.FeatureStreaming])
-	return set, nil
+	return provider.OneShotProfileCapabilities(ctx, query, fmt.Sprintf("anthropic messages profile %q", profile.ID), provider.FamilyAnthropicMessages, endpointID, profile.Capabilities, profile.capabilityVersion())
 }
 
 func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
@@ -252,14 +214,7 @@ func (profile Profile) providerTier(class llm.ServiceClass) (string, error) {
 // failure, because the response is already paid for, and the raw label is
 // kept in the service facts for audit.
 func (profile Profile) actualClass(providerTier string) *llm.ServiceClass {
-	class, ok := profile.ActualServiceClasses[providerTier]
-	if providerTier == "" {
-		class, ok = profile.MissingActualServiceClass, profile.MissingActualServiceClass != ""
-	}
-	if !ok {
-		return nil
-	}
-	return &class
+	return provider.ActualServiceClass(profile.ActualServiceClasses, profile.MissingActualServiceClass, providerTier)
 }
 
 func validProviderTier(value string) bool { return value != "" && len(value) <= 128 }

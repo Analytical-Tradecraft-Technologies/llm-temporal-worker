@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -106,4 +107,109 @@ func (set CapabilitySet) Clone() CapabilitySet {
 	}
 	set.Features = features
 	return set
+}
+
+// StartCompile checks the caller context and that the capability query, when
+// it names a family or endpoint, names this adapter's. label prefixes a query
+// mismatch, as in "openai chat".
+func StartCompile(ctx context.Context, query CapabilityQuery, label string, family Family, endpointID string) error {
+	if err := ctx.Err(); err != nil {
+		return NewCompileContextError(err)
+	}
+	if err := ValidateCapabilityQuery(query, label, family, endpointID); err != nil {
+		return NewCompileError(err.Error())
+	}
+	return nil
+}
+
+// RecordHostedTools copies the hosted tools request enables into the call
+// metadata.
+func (metadata *CallMetadata) RecordHostedTools(request llm.Request) {
+	metadata.WebSearch = request.WebSearch
+	metadata.WebFetch = request.WebFetch
+	metadata.CodeExecution = request.CodeExecution
+}
+
+// HostedToolFlag names the first provider-hosted tool the request asks for,
+// or returns "" when it asks for none.
+func HostedToolFlag(request llm.Request) string {
+	switch {
+	case request.WebSearch:
+		return "web_search"
+	case request.WebFetch:
+		return "web_fetch"
+	case request.CodeExecution:
+		return "code_execution"
+	}
+	return ""
+}
+
+// RequirePinnedContinuation rejects a continuation pinned to an endpoint
+// other than endpointID: a stored response exists only on the endpoint that
+// created it (#1667).
+func RequirePinnedContinuation(request llm.Request, endpointID string) error {
+	if continuation := request.Continuation; continuation != nil && continuation.Pinned && continuation.EndpointID != "" && continuation.EndpointID != endpointID {
+		return NewCompileError(fmt.Sprintf("continuation endpoint %q is not pinned endpoint %q", continuation.EndpointID, endpointID))
+	}
+	return nil
+}
+
+// MixedInstructionLevels reports whether instructions mix application and
+// policy levels, which an endpoint with a single system prompt or role cannot
+// keep apart.
+func MixedInstructionLevels(instructions []llm.Instruction) bool {
+	application, policy := false, false
+	for _, instruction := range instructions {
+		if instruction.Level == llm.InstructionLevelPolicy {
+			policy = true
+		} else {
+			application = true
+		}
+	}
+	return application && policy
+}
+
+// StructuredOutputKind reports whether an output format kind other than text
+// asks for structured output.
+func StructuredOutputKind(kind llm.OutputKind) bool {
+	return kind != "" && kind != llm.OutputKindText
+}
+
+// RequestFeatures lists the capabilities a request needs, in first-use order:
+// text and usage; partFeature of every instruction and message part; tool
+// calls for tool items, tools or a tool policy; stateFeatures for a provider
+// state input item; structured output when structured reports the output
+// format kind needs it; reasoning; and continuation.
+func RequestFeatures(request llm.Request, partFeature func(llm.Part) Feature, stateFeatures []Feature, structured func(llm.OutputKind) bool) []Feature {
+	features := []Feature{FeatureText, FeatureUsage}
+	for _, instruction := range request.Instructions {
+		for _, part := range instruction.Content {
+			features = append(features, partFeature(part))
+		}
+	}
+	for _, item := range request.Input {
+		switch value := item.(type) {
+		case llm.Message:
+			for _, part := range value.Content {
+				features = append(features, partFeature(part))
+			}
+		case llm.ToolCall, llm.ToolResult:
+			features = append(features, FeatureToolCall)
+		case llm.ProviderState:
+			features = append(features, stateFeatures...)
+		}
+	}
+	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
+		features = append(features, FeatureToolCall)
+	}
+	if request.Output != nil && structured(request.Output.Format.Kind) {
+		features = append(features, FeatureStructuredOutput)
+	}
+	if request.Reasoning != nil {
+		features = append(features, FeatureReasoning)
+	}
+	if request.Continuation != nil {
+		features = append(features, FeatureContinuation)
+	}
+	return UniqueFeatures(features)
 }

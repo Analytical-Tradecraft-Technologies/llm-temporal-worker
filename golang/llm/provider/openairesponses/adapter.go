@@ -56,11 +56,8 @@ func NewOpenAIAdapter(client *Client, endpointID, capabilityVersion string, opti
 }
 
 func New(client *Client, endpointID, capabilityVersion string, options ...AdapterOption) (*Adapter, error) {
-	if client == nil {
-		return nil, fmt.Errorf("openai responses: client is required")
-	}
-	if endpointID == "" {
-		return nil, fmt.Errorf("openai responses: endpoint ID is required")
+	if err := provider.RequireAdapterArgs("openai responses", client != nil, endpointID); err != nil {
+		return nil, err
 	}
 	if capabilityVersion == "" {
 		capabilityVersion = defaultCapabilityVersion
@@ -156,26 +153,19 @@ func (adapter *Adapter) Compile(ctx context.Context, input provider.CompileInput
 	if adapter == nil {
 		return provider.Call{}, provider.NewCompileError("adapter is nil")
 	}
-	if err := ctx.Err(); err != nil {
-		return provider.Call{}, provider.NewCompileContextError(err)
-	}
-	if err := provider.ValidateCapabilityQuery(input.Query, "openai responses", provider.FamilyOpenAIResponses, adapter.endpointID); err != nil {
-		return provider.Call{}, provider.NewCompileError(err.Error())
+	if err := provider.StartCompile(ctx, input.Query, "openai responses", provider.FamilyOpenAIResponses, adapter.endpointID); err != nil {
+		return provider.Call{}, err
 	}
 	if (input.Request.WebSearch || input.Request.CodeExecution || input.Request.WebFetch) && !adapter.client.directOpenAI {
 		return provider.Call{}, provider.NewCompileError("hosted tools require the direct OpenAI Responses transport")
 	}
-	input.Metadata.WebSearch = input.Request.WebSearch
-	input.Metadata.WebFetch = input.Request.WebFetch
-	input.Metadata.CodeExecution = input.Request.CodeExecution
+	input.Metadata.RecordHostedTools(input.Request)
 	normalized, serviceClass, err := provider.NormalizeCompileRequest(input.Request, input.Query, "")
 	if err != nil {
 		return provider.Call{}, err
 	}
-	// A stored response exists only on the endpoint that created it, as on
-	// the Anthropic-family adapters (#1667).
-	if continuation := normalized.Continuation; continuation != nil && continuation.Pinned && continuation.EndpointID != "" && continuation.EndpointID != adapter.endpointID {
-		return provider.Call{}, provider.NewCompileError(fmt.Sprintf("continuation endpoint %q is not pinned endpoint %q", continuation.EndpointID, adapter.endpointID))
+	if err := provider.RequirePinnedContinuation(normalized, adapter.endpointID); err != nil {
+		return provider.Call{}, err
 	}
 	set, err := provider.CompileCapabilities(input.Capability, func() (provider.CapabilitySet, error) {
 		return adapter.capabilities(ctx, input.Query)
@@ -228,10 +218,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if adapter == nil {
 		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
-	if err := ctx.Err(); err != nil {
-		return provider.Result{}, provider.NewDispatchContextError(err)
-	}
-	params, err := provider.DispatchParams[responses.ResponseNewParams](call, provider.FamilyOpenAIResponses, adapter.endpointID)
+	params, err := provider.StartDispatch[responses.ResponseNewParams](ctx, call, provider.FamilyOpenAIResponses, adapter.endpointID)
 	if err != nil {
 		return provider.Result{}, err
 	}
@@ -241,42 +228,24 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	call.SDKParams = params
 	// Encode the ordered schemas before the possible-write boundary, so a
 	// failure here is a definite non-dispatch.
-	ordered, err := schemaOrderOptions(params)
+	ordered, err := openaiwire.SchemaOrderOptions(params, true)
 	if err != nil {
 		return provider.Result{}, provider.NewDispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
 	}
-	if observer == nil {
-		observer = provider.NopObserver{}
-	}
-	callContext, egressOutcome := provider.WithEgressOutcome(ctx)
-	if err := observer.BeforePossibleWrite(callContext); err != nil {
-		return provider.Result{}, provider.NewDispatchObserverError(err, provider.DispatchNotDispatched)
-	}
-	var rawResponse *http.Response
-	probe := &provider.DispatchProbe{}
-	requestOptions := []option.RequestOption{option.WithResponseInto(&rawResponse), option.WithMiddleware(probe.Middleware)}
-	requestOptions = append(requestOptions, ordered...)
-	response, panicked, err := provider.CallRecovered(func() (*responses.Response, error) {
-		return adapter.client.sdk.Responses.New(callContext, params, requestOptions...)
-	})
-	if panicked != nil {
-		return provider.Result{}, provider.WithEndpointID(probe.PanicError(call.OperationKey, panicked), adapter.endpointID)
-	}
-	if rawResponse != nil && provider.IsRedirectStatus(rawResponse.StatusCode) {
-		return provider.Result{}, provider.WithEndpointID(provider.NewRedirectResponseError(rawResponse.StatusCode), adapter.endpointID)
-	}
+	// Nothing reached the transport when the error came before the probe, or
+	// from the Azure token-credential middleware, which the SDK runs inside
+	// the probe but before it sends the request (#1495).
+	dispatch, err := provider.BeginDispatch(ctx, observer, provider.DispatchTarget{EndpointID: adapter.endpointID, Provider: adapter.Name(), CredentialUnsent: true, MapError: func(err error, _ string) *provider.Error { return mapError(err) }})
 	if err != nil {
-		if mapped := provider.ClassifyEgressOutcome(egressOutcome, err); mapped != nil {
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		// Nothing reached the transport when the error came before the
-		// probe, or from the Azure token-credential middleware, which the
-		// SDK runs inside the probe but before it sends the request (#1495).
-		if mapped := provider.ClassifyUnsentError(err); mapped != nil && (!probe.Sent() || errors.Is(err, provider.ErrProviderCredentials)) {
-			mapped.SafeDetails = map[string]string{"provider": adapter.Name()}
-			return provider.Result{}, provider.WithEndpointID(mapped, adapter.endpointID)
-		}
-		return provider.Result{}, provider.WithEndpointID(mapError(err), adapter.endpointID)
+		return provider.Result{}, err
+	}
+	response, rawResponse, err := provider.SendHTTP(dispatch, call.OperationKey, func(probe *provider.DispatchProbe, raw **http.Response) (*responses.Response, error) {
+		requestOptions := []option.RequestOption{option.WithResponseInto(raw), option.WithMiddleware(probe.Middleware)}
+		requestOptions = append(requestOptions, ordered...)
+		return adapter.client.sdk.Responses.New(dispatch.Context, params, requestOptions...)
+	})
+	if err != nil {
+		return provider.Result{}, err
 	}
 	// A custom transport or a future SDK implementation can return a nil
 	// response without an error. Treat that as an accepted malformed provider
@@ -289,13 +258,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 		metadata.Status = rawResponse.StatusCode
 		metadata.RequestID = rawResponse.Header.Get("x-request-id")
 	}
-	if err := observer.AfterResponseHeaders(callContext, metadata); err != nil {
-		mapped := provider.NewDispatchObserverError(err, provider.DispatchAccepted)
-		mapped.Provider.ResponseID = response.ID
-		mapped.Provider.RequestID = metadata.RequestID
-		return provider.Result{}, mapped
+	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
+		return provider.Result{}, err
 	}
-	observer.OnProgress(callContext, provider.Progress{Phase: string(provider.PhaseLift), OutputItems: len(response.Output)})
+	dispatch.LiftProgress(len(response.Output))
 	lifted, err := liftResponse(call, response, metadata.RequestID)
 	if err != nil {
 		return provider.Result{}, err
@@ -303,9 +269,7 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if adapter.exaAgent {
 		cost, costErr := exaAgentCost(response.RawJSON())
 		if costErr != nil {
-			mapped := provider.NewInvalidResponseError(call, metadata.RequestID, costErr.Error())
-			mapped.Provider.ResponseID = response.ID
-			return provider.Result{}, mapped
+			return provider.Result{}, provider.NewInvalidResponseErrorWithID(call, metadata.RequestID, response.ID, costErr.Error())
 		}
 		if cost != nil {
 			lifted.Cost = llm.Cost{ActualCostUSD: cost, Method: "exa_reported"}
@@ -315,33 +279,5 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 }
 
 func requiredFeatures(request llm.Request) []provider.Feature {
-	features := []provider.Feature{provider.FeatureText, provider.FeatureUsage}
-	for _, instruction := range request.Instructions {
-		for _, part := range instruction.Content {
-			features = append(features, openaiwire.PartFeature(part))
-		}
-	}
-	for _, item := range request.Input {
-		switch value := item.(type) {
-		case llm.Message:
-			for _, part := range value.Content {
-				features = append(features, openaiwire.PartFeature(part))
-			}
-		case llm.ToolCall, llm.ToolResult:
-			features = append(features, provider.FeatureToolCall)
-		}
-	}
-	if len(request.Tools) > 0 || request.ToolPolicy.Mode != "" {
-		features = append(features, provider.FeatureToolCall)
-	}
-	if request.Output != nil && request.Output.Format.Kind == llm.OutputKindJSONSchema {
-		features = append(features, provider.FeatureStructuredOutput)
-	}
-	if request.Reasoning != nil {
-		features = append(features, provider.FeatureReasoning)
-	}
-	if request.Continuation != nil {
-		features = append(features, provider.FeatureContinuation)
-	}
-	return provider.UniqueFeatures(features)
+	return provider.RequestFeatures(request, openaiwire.PartFeature, nil, func(kind llm.OutputKind) bool { return kind == llm.OutputKindJSONSchema })
 }
