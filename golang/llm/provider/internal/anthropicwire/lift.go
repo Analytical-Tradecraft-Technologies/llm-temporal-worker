@@ -97,9 +97,9 @@ func ValidateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 }
 
 // LiftMessage lifts the content of response as LiftContent does, derives its
-// status with liftStatus and checks the final JSON output. A failure is an
+// status as LiftStatus does and checks the final JSON output. A failure is an
 // invalid response carrying requestID and the response ID.
-func LiftMessage(call provider.Call, requestID string, response *anthropic.Message, stateProvider string, opaqueTypes []string, liftStatus func(anthropic.StopReason, bool, bool) (llm.ResponseStatus, error)) ([]llm.Item, []llm.ProviderState, llm.ResponseStatus, error) {
+func LiftMessage(call provider.Call, requestID string, response *anthropic.Message, stateProvider string, opaqueTypes []string, pauseTurnPauses bool) ([]llm.Item, []llm.ProviderState, llm.ResponseStatus, error) {
 	invalid := func(err error) ([]llm.Item, []llm.ProviderState, llm.ResponseStatus, error) {
 		return nil, nil, "", provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
 	}
@@ -108,7 +108,7 @@ func LiftMessage(call provider.Call, requestID string, response *anthropic.Messa
 		return invalid(err)
 	}
 	hasRefusal := string(response.StopReason) == "refusal" || response.StopDetails.Category != ""
-	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
+	status, err := LiftStatus(response.StopReason, hasToolCalls, hasRefusal, pauseTurnPauses)
 	if err != nil {
 		return invalid(err)
 	}
@@ -116,6 +116,38 @@ func LiftMessage(call provider.Call, requestID string, response *anthropic.Messa
 		return invalid(err)
 	}
 	return output, states, status, nil
+}
+
+// LiftStatus derives the response status from the stop reason. With
+// pauseTurnPauses, pause_turn reports a paused turn, as Anthropic's server
+// tools do; otherwise it ends the turn like end_turn.
+func LiftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal, pauseTurnPauses bool) (llm.ResponseStatus, error) {
+	if stopReason == anthropic.StopReasonPauseTurn && pauseTurnPauses {
+		return llm.ResponseStatusPaused, nil
+	}
+	switch stopReason {
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+		if hasRefusal {
+			return llm.ResponseStatusRefused, nil
+		}
+		if hasToolCalls {
+			return llm.ResponseStatusToolCalls, nil
+		}
+		return llm.ResponseStatusCompleted, nil
+	case anthropic.StopReasonToolUse:
+		if !hasToolCalls {
+			return "", fmt.Errorf("provider stop reason tool_use did not contain a tool call")
+		}
+		return llm.ResponseStatusToolCalls, nil
+	case anthropic.StopReasonMaxTokens, anthropic.StopReasonModelContextWindowExceeded:
+		// Context-window exhaustion is a length truncation: keep the partial
+		// output and usage rather than discarding a paid response.
+		return llm.ResponseStatusLength, nil
+	case anthropic.StopReasonRefusal:
+		return llm.ResponseStatusRefused, nil
+	default:
+		return "", fmt.Errorf("provider returned unknown stop reason %q", stopReason)
+	}
 }
 
 // Usage returns the token usage of response, with its raw usage facts.

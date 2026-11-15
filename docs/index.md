@@ -90,6 +90,7 @@ worker database; the service has no deployed SQL data. See the
 - [Adapter fixture matrix](testing/fixture-matrix.md)
 - [Architecture decisions](decisions/)
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
+- [Terminated workflow pending-recovery runbook](runbooks/terminated-workflow-pending-recovery.md)
 - [Fleet upgrade and rollback runbook](runbooks/fleet-upgrade-and-rollback.md)
 
 ## v1 completion gate

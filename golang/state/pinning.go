@@ -42,20 +42,22 @@ func CheckPinning(constraints Constraints, candidate Pinning) CompatibilityResul
 			constraints.Provider != candidate.Provider || constraints.EndpointID != candidate.EndpointID ||
 			constraints.AccountRegion != candidate.AccountRegion || constraints.Family != candidate.Family ||
 			constraints.ModelLineage != candidate.ModelLineage {
-			return CompatibilityResult{Decision: CompatibilityRejected, Diagnostics: []llm.Diagnostic{{Code: "continuation_pinned", Severity: llm.DiagnosticError, Message: "required provider continuation state has no matching route pin"}}}
+			return pinRejected("required provider continuation state has no matching route pin")
 		}
 		return CompatibilityResult{Decision: CompatibilityCompatible}
 	}
 	if sameLineage {
 		return CompatibilityResult{Decision: CompatibilityCompatible}
 	}
-	if constraints.RequiresOpaqueState {
-		return CompatibilityResult{Decision: CompatibilityRejected, Diagnostics: []llm.Diagnostic{{Code: "continuation_pinned", Severity: llm.DiagnosticError, Message: "provider continuation state is pinned to another lineage"}}}
-	}
 	if constraints.TranscriptComplete && constraints.Portability == llm.PortabilityBestEffort {
 		return CompatibilityResult{Decision: CompatibilityPortable, Diagnostics: []llm.Diagnostic{{Code: "provider_state_dropped", Severity: llm.DiagnosticWarning, Message: "optional provider state was not replayed on this lineage"}}}
 	}
-	return CompatibilityResult{Decision: CompatibilityRejected, Diagnostics: []llm.Diagnostic{{Code: "continuation_pinned", Severity: llm.DiagnosticError, Message: "continuation requires its original provider lineage"}}}
+	return pinRejected("continuation requires its original provider lineage")
+}
+
+// pinRejected rejects a candidate with one continuation_pinned error.
+func pinRejected(message string) CompatibilityResult {
+	return CompatibilityResult{Decision: CompatibilityRejected, Diagnostics: []llm.Diagnostic{{Code: "continuation_pinned", Severity: llm.DiagnosticError, Message: message}}}
 }
 
 func equalNonEmpty(a, b string) bool {

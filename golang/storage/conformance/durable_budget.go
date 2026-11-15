@@ -77,6 +77,12 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				_, err := m.(durable.BudgetLeaser).Claim(ctx, durable.ClaimRequest{OperationID: result.OperationID, GenerationID: "rolling-gen", IncarnationID: "rolling-inc"})
 				return err
 			}
+			mustClaim := func(result durable.ReserveResult) {
+				t.Helper()
+				if err := claim(result); err != nil {
+					t.Fatal(err)
+				}
+			}
 			// completion builds one event per window of result at revision
 			// (the reservation's own revision plus step). Unknown-cost kinds
 			// carry a reason code; the others carry the exact cost.
@@ -197,9 +203,7 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				// gives its capacity back; a claimed one keeps holding it.
 				unused := lease("unused", "0.40")
 				started := lease("started", "0.60")
-				if err := claim(started); err != nil {
-					t.Fatal(err)
-				}
+				mustClaim(started)
 				advance(1100 * time.Millisecond)
 				if err := claim(unused); !errorsIs(err, durable.ErrLeaseExpired) {
 					t.Fatalf("claim after the deadline = %v, want ErrLeaseExpired", err)
@@ -209,9 +213,7 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 			case "finalize-unknown":
 				// Unknown cost is charged at the full reservation, once.
 				first := accept("unknown", true, reservation(0, "0.60"))
-				if err := claim(first); err != nil {
-					t.Fatal(err)
-				}
+				mustClaim(first)
 				unknown := settle(first, budget.JournalFinalizeUnknown, "0.60")
 				reconcile(unknown)
 				reconcile(unknown)
@@ -222,9 +224,7 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				// A replayed settlement neither refunds nor charges twice, and a
 				// batch naming one event twice is refused.
 				first := accept("settled", true, reservation(0, "0.80"))
-				if err := claim(first); err != nil {
-					t.Fatal(err)
-				}
+				mustClaim(first)
 				completed := settle(first, budget.JournalFinalizeExact, "0.30")
 				duplicate := completed
 				duplicate.Events = []budget.CompletionEvent{completed.Events[0], completed.Events[0]}
@@ -240,9 +240,7 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				// An unclaimed lease may be released, once; a claimed one may
 				// not use the release path.
 				started := accept("started", true, reservation(0, "0.40"))
-				if err := claim(started); err != nil {
-					t.Fatal(err)
-				}
+				mustClaim(started)
 				unused := accept("unused", true, reservation(0, "0.60"))
 				accept("held", false, reservation(0, "0.01"))
 				if err := m.Reconcile(ctx, settle(started, budget.JournalRelease, "0")); err == nil {
@@ -276,9 +274,7 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 				// retain_ambiguous holds the whole reservation without charging
 				// it; only resolve_unknown_exact may settle it afterwards.
 				first := accept("ambiguous", true, reservation(0, "0.60"))
-				if err := claim(first); err != nil {
-					t.Fatal(err)
-				}
+				mustClaim(first)
 				retain := completion(first, budget.JournalRetainAmbiguous, 1, false, "0")
 				reconcile(retain)
 				reconcile(retain)
@@ -299,9 +295,7 @@ func RunDurableRollingBudget(t *testing.T, newMaterializer func(*testing.T) (dur
 					t.Fatalf("settle before claim = %v, want ErrClaimRequired", err)
 				}
 				accept("still-held", false, reservation(0, "0.41"))
-				if err := claim(first); err != nil {
-					t.Fatal(err)
-				}
+				mustClaim(first)
 				reconcile(settle(first, budget.JournalFinalizeExact, "0.30"))
 				accept("remainder", true, reservation(0, "0.70"))
 				accept("full", false, reservation(0, "0.01"))

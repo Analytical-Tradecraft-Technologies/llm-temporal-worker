@@ -89,10 +89,7 @@ func (options *ProviderStatusListOptions) Normalize() error {
 	if !options.SnapshotHorizon.IsZero() {
 		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
 	}
-	if err := normalizePageLimit(&options.Limit, DefaultProviderStatusPageSize, MaxProviderStatusPageSize, "provider status"); err != nil {
-		return err
-	}
-	return nil
+	return normalizePageLimit(&options.Limit, DefaultProviderStatusPageSize, MaxProviderStatusPageSize, "provider status")
 }
 
 const (
@@ -255,10 +252,7 @@ func (options *CreditStatusListOptions) Normalize() error {
 	if !options.SnapshotHorizon.IsZero() {
 		options.SnapshotHorizon = options.SnapshotHorizon.UTC()
 	}
-	if err := normalizePageLimit(&options.Limit, DefaultCreditStatusPageSize, MaxCreditStatusPageSize, "credit status"); err != nil {
-		return err
-	}
-	return nil
+	return normalizePageLimit(&options.Limit, DefaultCreditStatusPageSize, MaxCreditStatusPageSize, "credit status")
 }
 
 // normalizePageLimit defaults an unset page size and rejects one outside

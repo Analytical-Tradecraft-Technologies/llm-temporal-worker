@@ -288,6 +288,12 @@ func (engine *Engine) shieldedBeat(ctx context.Context, progress Progress) error
 	return engine.beat(beatCtx, progress)
 }
 
+// heartbeatFailed is the failure of a progress heartbeat sent while the
+// provider dispatch is at the given certainty.
+func heartbeatFailed(dispatch provider.DispatchCertainty, err error) *provider.Error {
+	return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, dispatch, provider.RetrySameOperation, "progress heartbeat failed", err)
+}
+
 func (engine *Engine) beat(ctx context.Context, progress Progress) error {
 	heartbeat := heartbeatFromContext(ctx)
 	if heartbeat == nil {
@@ -297,7 +303,7 @@ func (engine *Engine) beat(ctx context.Context, progress Progress) error {
 		return nil
 	}
 	if err := heartbeat.Beat(ctx, progress); err != nil {
-		return engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchNotDispatched, provider.RetrySameOperation, "progress heartbeat failed", err)
+		return heartbeatFailed(provider.DispatchNotDispatched, err)
 	}
 	return nil
 }

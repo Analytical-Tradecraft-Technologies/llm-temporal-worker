@@ -78,8 +78,5 @@ func unmarshalBounded(data []byte, value any, limits PayloadLimits) error {
 	if len(data) > limits.inlineBytes() {
 		return fmt.Errorf("v1 payload is %d bytes; limit is %d", len(data), limits.inlineBytes())
 	}
-	if err := json.Unmarshal(data, value); err != nil {
-		return err
-	}
-	return nil
+	return json.Unmarshal(data, value)
 }

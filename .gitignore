@@ -48,3 +48,12 @@ _build/
 
 # Local runtime secrets such as the compose continuation HMAC key.
 golang/.local/
+
+# Binaries that `go build ./tools/...` writes into golang/
+/golang/deploymentpolicy
+/golang/modelsyncdefaults
+/golang/mutationverify
+/golang/ocimerge
+/golang/releaseverify
+/golang/sourceverify
+/golang/supplychainverify

@@ -9,12 +9,10 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/thinkingwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/toolcallid"
 )
 
@@ -123,15 +121,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 	if err := anthropicwire.ValidateModelSampling(request.Model, target); err != nil {
 		return anthropic.MessageNewParams{}, err
 	}
-	if err := thinkingwire.Validate(target, "Bedrock Messages"); err != nil {
-		return anthropic.MessageNewParams{}, err
-	}
-	params, encoded, err := provider.DecodeWireParams[anthropic.MessageNewParams](target, "bedrock messages")
-	if err != nil {
-		return anthropic.MessageNewParams{}, err
-	}
-	param.SetJSON(encoded, &params)
-	return params, nil
+	return wire.Params(target)
 }
 
 func lowerItem(item llm.Item) (map[string]any, error) {

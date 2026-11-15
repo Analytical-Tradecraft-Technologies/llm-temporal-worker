@@ -471,10 +471,7 @@ func verifyWorkload(overlay string, deployment, serviceAccount, configMap map[st
 	if err := verifyWorkerContainer(container); err != nil {
 		return err
 	}
-	if err := verifyWritableMounts(container, podSpec); err != nil {
-		return err
-	}
-	return nil
+	return verifyWritableMounts(container, podSpec)
 }
 
 // verifyReplicaSpread requires a deployment of more than one replica to
@@ -692,10 +689,7 @@ func verifyWorkerContainer(container map[string]any) error {
 	if err := verifyProbe(container, "livenessProbe", "/health/live"); err != nil {
 		return err
 	}
-	if err := verifyProbe(container, "readinessProbe", "/health/ready"); err != nil {
-		return err
-	}
-	return nil
+	return verifyProbe(container, "readinessProbe", "/health/ready")
 }
 
 func rejectContainerSecurityOverrides(securityContext map[string]any) error {
@@ -877,23 +871,7 @@ func boolValue(value any) (bool, bool) {
 
 func positiveInteger(value any) bool {
 	switch number := value.(type) {
-	case int:
-		return number > 0
-	case int8:
-		return number > 0
-	case int16:
-		return number > 0
-	case int32:
-		return number > 0
-	case int64:
-		return number > 0
 	case uint:
-		return number > 0
-	case uint8:
-		return number > 0
-	case uint16:
-		return number > 0
-	case uint32:
 		return number > 0
 	case uint64:
 		return number > 0
@@ -901,40 +879,18 @@ func positiveInteger(value any) bool {
 		return number > 0 && math.Trunc(float64(number)) == float64(number)
 	case float64:
 		return number > 0 && math.Trunc(number) == number
-	default:
-		return false
 	}
+	// The remaining integer kinds all fit in int64. The cases above keep
+	// positive values beyond the int64 range positive.
+	number, ok := integerValue(value)
+	return ok && number > 0
 }
 
+// integerEqual reports whether value is a whole number equal to expected.
+// Callers compare against small positive constants.
 func integerEqual(value any, expected int) bool {
-	switch number := value.(type) {
-	case int:
-		return number == expected
-	case int8:
-		return int(number) == expected
-	case int16:
-		return int(number) == expected
-	case int32:
-		return int(number) == expected
-	case int64:
-		return number == int64(expected)
-	case uint:
-		return number == uint(expected)
-	case uint8:
-		return int(number) == expected
-	case uint16:
-		return int(number) == expected
-	case uint32:
-		return number == uint32(expected)
-	case uint64:
-		return number == uint64(expected)
-	case float32:
-		return math.Trunc(float64(number)) == float64(number) && int(number) == expected
-	case float64:
-		return math.Trunc(number) == number && int(number) == expected
-	default:
-		return false
-	}
+	number, ok := integerValue(value)
+	return ok && number == int64(expected)
 }
 
 func integerValue(value any) (int64, bool) {

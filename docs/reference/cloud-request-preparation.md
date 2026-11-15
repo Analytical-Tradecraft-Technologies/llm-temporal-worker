@@ -254,6 +254,8 @@ plan, and provider reconstruction validates the saved binding again.
 Retiring an unknown attempt does not release or reuse its charged reservation.
 The previous child remains independently discoverable even after the root
 returns a later success. Eventual recovery can still record its actual result
-and settlement without replacing the active child. A background recovery or
-cleanup service is deferred. These primitives do not themselves run retries or
-activate the production workflow.
+and settlement without replacing the active child. The operator
+[`pending-recover`](cli.md#pending-recover) command settles such a superseded
+attempt that was left unsettled, at its full reservation; there is no
+background recovery or cleanup service. These primitives do not themselves run
+retries or activate the production workflow.

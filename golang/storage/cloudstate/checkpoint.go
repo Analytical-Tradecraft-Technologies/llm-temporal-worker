@@ -129,14 +129,10 @@ func (s *checkpointStore) readPointer(ctx context.Context, key kv.KeyValueKey) (
 }
 
 func (s *checkpointStore) createPointer(ctx context.Context, key kv.KeyValueKey, pointer checkpointPointer) error {
-	data, _ := json.Marshal(pointer)
-	_, err := s.repository.table.Create(ctx, kv.KeyValueItem{PartitionKey: key.PartitionKey, SortKey: key.SortKey, Fields: kv.KeyValueDocument{"checkpoint": kv.Bytes(data)}})
-	if err == nil {
-		return nil
-	}
+	_, err := s.repository.table.Create(ctx, jsonItem(key, "checkpoint", pointer))
 	// An uncertain mutation stays uncertain. A later identical retry can
 	// reconcile it, but must not generate new checkpoint IDs or timestamps.
-	if errors.Is(err, contracts.ErrOutcomeUnknown) || !errors.Is(err, contracts.ErrAlreadyExists) {
+	if !definitely(err, contracts.ErrAlreadyExists) {
 		return err
 	}
 	existing, err := s.readPointer(ctx, key)

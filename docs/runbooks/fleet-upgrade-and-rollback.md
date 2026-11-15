@@ -231,8 +231,9 @@ not fail with `configuration` (checklist item 4). Otherwise skip to step 5.
 
 3. The drain is complete when that count is `0` and the task-queue backlog is
    empty. Do not terminate workflows to get there: a terminated request with a
-   paid attempt is then recoverable only through the pending-request index or
-   `generation-recover` ([CLI reference](../reference/cli.md#generation-recover)).
+   paid attempt is then recoverable only through the pending-request index
+   ([terminated workflow recovery](terminated-workflow-pending-recovery.md))
+   or `generation-recover` ([CLI reference](../reference/cli.md#generation-recover)).
 
 ### 5. Roll the workers
 

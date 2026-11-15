@@ -64,10 +64,7 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 		sleep = sleepWithContext
 	}
 	if initialDelay := minPollDelay(options.InitialDelay, maxInterval); initialDelay > 0 {
-		if err := sleep(ctx, initialDelay); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return provider.Result{}, pollStoppedError(err)
-			}
+		if err := pollSleep(ctx, sleep, initialDelay); err != nil {
 			return provider.Result{}, err
 		}
 	}
@@ -110,14 +107,21 @@ func PollProviderOperation(ctx context.Context, adapter provider.ResumableAdapte
 			observer.OnProgress(ctx, provider.Progress{Phase: string(provider.PhasePoll), OutputItems: poll})
 		}
 		delay := minPollDelay(result.NextPollAfter, maxInterval)
-		if err := sleep(ctx, delay); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return provider.Result{}, pollStoppedError(err)
-			}
+		if err := pollSleep(ctx, sleep, delay); err != nil {
 			return provider.Result{}, err
 		}
 	}
 	return provider.Result{}, provider.NewError(provider.CodeInternal, provider.PhasePoll, provider.DispatchAccepted, provider.RetrySameOperation, "provider polling loop exhausted")
+}
+
+// pollSleep waits for delay. A canceled or expired context stops polling with
+// pollStoppedError; any other sleep error is returned as it is.
+func pollSleep(ctx context.Context, sleep func(context.Context, time.Duration) error, delay time.Duration) error {
+	err := sleep(ctx, delay)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return pollStoppedError(err)
+	}
+	return err
 }
 
 func minPollDelay(delay, maximum time.Duration) time.Duration {

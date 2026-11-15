@@ -173,11 +173,7 @@ func (policy *CachePolicyV1) UnmarshalJSON(data []byte) error {
 	if err := decodePresentField(fields, "variant", &result.Variant, decodeInt32); err != nil {
 		return err
 	}
-	if err := result.validate(); err != nil {
-		return err
-	}
-	*policy = result
-	return nil
+	return storeValid(policy, result, result.validate())
 }
 
 func (policy CachePolicyV1) MarshalJSON() ([]byte, error) {
@@ -816,11 +812,7 @@ func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
 	if err := validateGenerateRequestV1MediaURLs(result); err != nil {
 		return err
 	}
-	if err := validateGenerateRequestV1Content(result); err != nil {
-		return err
-	}
-	*request = result
-	return nil
+	return storeValid(request, result, validateGenerateRequestV1Content(result))
 }
 
 type CheckpointMetadata struct {
@@ -964,11 +956,7 @@ func (cost *CostV1) UnmarshalJSON(data []byte) error {
 	if reader.err != nil {
 		return reader.err
 	}
-	if err := result.validate(); err != nil {
-		return err
-	}
-	*cost = result
-	return nil
+	return storeValid(cost, result, result.validate())
 }
 
 func validateCacheDisposition(value string) bool {
@@ -1734,11 +1722,7 @@ func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
 		}
 		responseValue.NextCursor = &value
 	}
-	if err := responseValue.validate(); err != nil {
-		return err
-	}
-	*response = responseValue
-	return nil
+	return storeValid(response, responseValue, responseValue.validate())
 }
 
 func (response QueryResponseV1) validate() error {
