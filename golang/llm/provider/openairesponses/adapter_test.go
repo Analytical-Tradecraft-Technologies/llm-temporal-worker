@@ -4,18 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestCompileUsesAdapterCapabilitiesAndMetadata(t *testing.T) {
@@ -99,7 +97,7 @@ func TestInvokeRunsOneRequestAndLiftsResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer := &recordingObserver{}
+	observer := &adaptertest.Observer{}
 	result, err := adapter.Invoke(context.Background(), call, observer)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +108,7 @@ func TestInvokeRunsOneRequestAndLiftsResponse(t *testing.T) {
 	if result.Response.OperationKey != "op-invoke" || result.Response.Provider.ResponseID != "resp-1" {
 		t.Fatalf("response = %#v", result.Response)
 	}
-	if observer.before != 1 || observer.headers != 1 || observer.progress != 1 || observer.metadata.RequestID != "req-invoke" {
+	if observer.Before != 1 || observer.Headers != 1 || observer.Progress != 1 || observer.Metadata.RequestID != "req-invoke" {
 		t.Fatalf("observer = %#v", observer)
 	}
 }
@@ -125,7 +123,7 @@ func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	observer := &recordingObserver{}
+	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) {
@@ -137,7 +135,7 @@ func TestInvokeRejectsNullResponseWithoutPanicking(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("HTTP calls = %d, want one", calls)
 	}
-	if observer.before != 1 || observer.headers != 0 || observer.progress != 0 {
+	if observer.Before != 1 || observer.Headers != 0 || observer.Progress != 0 {
 		t.Fatalf("observer = %#v, want pre-write only", observer)
 	}
 }
@@ -273,18 +271,7 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 		BaseURL: "https://provider.example/v1",
 		APIKey:  "test-key",
 		HTTPClient: &http.Client{
-			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				calls++
-				return &http.Response{
-					StatusCode: http.StatusTemporaryRedirect,
-					Header: http.Header{
-						"Content-Type": []string{"application/json"},
-						"Location":     []string{"https://redirect.example/continuation-secret"},
-					},
-					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"redirect"}}`)),
-					Request: request,
-				}, nil
-			}),
+			Transport: adaptertest.RedirectTransport(&calls, `{"error":{"message":"redirect"}}`),
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				redirects++
 				return http.ErrUseLastResponse
@@ -294,29 +281,14 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := New(client, "openai-prod", "cap-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-redirect", Model: "gpt-contract"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingObserver{}
+	adapter, call := compileOpenAIProdCall(t, client, "op-redirect")
+	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) {
-		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
-	}
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
-	}
+	mapped := adaptertest.AmbiguousRedirect(t, err)
 	if calls != 1 || redirects != 1 {
 		t.Fatalf("transport/redirect calls = %d/%d, want 1/1", calls, redirects)
 	}
-	if observer.before != 1 || observer.headers != 0 {
+	if observer.Before != 1 || observer.Headers != 0 {
 		t.Fatalf("observer = %#v, want one pre-write mark and no headers", observer)
 	}
 	encoded, marshalErr := json.Marshal(mapped)
@@ -329,93 +301,47 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 }
 
 func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
-	deadline := newPreDialDeadlineContext()
-	transport := &preDialDeadlineTransport{started: make(chan struct{})}
+	transport := adaptertest.NewPreDialDeadlineTransport()
 	client, err := NewClient(ClientConfig{
-		BaseURL: "https://provider.example/v1",
-		APIKey:  "test-key",
-		HTTPClient: &http.Client{
-			Transport: transport,
-		},
+		BaseURL:    "https://provider.example/v1",
+		APIKey:     "test-key",
+		HTTPClient: &http.Client{Transport: transport},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter, call := compileOpenAIProdCall(t, client, "op-pre-dial-deadline")
+	assertCallerDeadlineBeforeDial(t, transport, adapter, call)
+}
+
+// compileOpenAIProdCall builds the "openai-prod" adapter over client and
+// compiles an empty gpt-contract request under operationKey.
+func compileOpenAIProdCall(t *testing.T, client *Client, operationKey string) (*Adapter, provider.Call) {
+	t.Helper()
 	adapter, err := New(client, "openai-prod", "cap-test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-pre-dial-deadline", Model: "gpt-contract"},
-	})
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: operationKey, Model: "gpt-contract"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer := &recordingObserver{}
-	result := make(chan error, 1)
-	go func() {
-		_, invokeErr := adapter.Invoke(deadline, call, observer)
-		result <- invokeErr
-	}()
-	select {
-	case <-transport.started:
-	case <-time.After(time.Second):
-		t.Fatal("provider transport was not reached")
-	}
-	deadline.expire()
-	var invokeErr error
-	select {
-	case invokeErr = <-result:
-	case <-time.After(time.Second):
-		t.Fatal("Invoke() did not return after the pre-dial deadline")
-	}
-	var mapped *provider.Error
-	if !errors.As(invokeErr, &mapped) {
-		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
-	}
-	if got, want := mapped.Code, provider.CodeDeadlineExceeded; got != want {
-		t.Fatalf("error code = %q, want %q", got, want)
-	}
-	if got, want := mapped.Phase, provider.PhaseDispatch; got != want {
-		t.Fatalf("error phase = %q, want %q", got, want)
-	}
-	if got, want := mapped.Dispatch, provider.DispatchNotDispatched; got != want {
-		t.Fatalf("dispatch certainty = %q, want %q", got, want)
-	}
-	if got, want := mapped.Retry, provider.RetryNever; got != want {
-		t.Fatalf("retry disposition = %q, want %q", got, want)
-	}
-	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
-		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
-	}
-	if transport.calls != 1 || transport.bodyReads != 0 {
-		t.Fatalf("pre-dial transport calls/body reads = %d/%d, want 1/0", transport.calls, transport.bodyReads)
-	}
-	if observer.before != 1 || observer.headers != 0 {
+	return adapter, call
+}
+
+// assertCallerDeadlineBeforeDial checks that a caller deadline expiring
+// before transport dials stays a never-retried pre-dispatch failure after
+// exactly one pre-write mark and no headers.
+func assertCallerDeadlineBeforeDial(t *testing.T, transport *adaptertest.PreDialDeadlineTransport, adapter *Adapter, call provider.Call) {
+	t.Helper()
+	observer := &adaptertest.Observer{}
+	adaptertest.CallerDeadlineBeforeDial(t, transport, func(ctx context.Context) error {
+		_, err := adapter.Invoke(ctx, call, observer)
+		return err
+	})
+	if observer.Before != 1 || observer.Headers != 0 {
 		t.Fatalf("observer = %#v, want exactly one pre-write mark and no headers", observer)
 	}
-}
-
-type recordingObserver struct {
-	before   int
-	headers  int
-	progress int
-	metadata provider.ResponseMetadata
-}
-
-func (observer *recordingObserver) BeforePossibleWrite(context.Context) error {
-	observer.before++
-	return nil
-}
-
-func (observer *recordingObserver) AfterResponseHeaders(_ context.Context, metadata provider.ResponseMetadata) error {
-	observer.headers++
-	observer.metadata = metadata
-	return nil
-}
-
-func (observer *recordingObserver) OnProgress(context.Context, provider.Progress) {
-	observer.progress++
 }
 
 func newFixtureAdapter(t *testing.T, body []byte) *Adapter {
@@ -431,12 +357,7 @@ func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *A
 			if onCall != nil {
 				onCall()
 			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req-invoke"}},
-				Body:       io.NopCloser(strings.NewReader(string(body))),
-				Request:    request,
-			}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, string(body), "X-Request-Id", "req-invoke"), nil
 		})},
 	})
 	if err != nil {
@@ -453,69 +374,7 @@ func newFixtureAdapterWithTransport(t *testing.T, body []byte, onCall func()) *A
 // field, as an endpoint that lists all of them would.
 var allowSupportedExtensions = WithAllowedExtensionFields("include", "store", "truncation")
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
-}
-
-type preDialDeadlineContext struct {
-	done chan struct{}
-	once sync.Once
-}
-
-func newPreDialDeadlineContext() *preDialDeadlineContext {
-	return &preDialDeadlineContext{done: make(chan struct{})}
-}
-
-func (ctx *preDialDeadlineContext) Deadline() (time.Time, bool) {
-	return time.Now().Add(time.Hour), true
-}
-
-func (ctx *preDialDeadlineContext) Done() <-chan struct{} { return ctx.done }
-
-func (ctx *preDialDeadlineContext) Err() error {
-	select {
-	case <-ctx.done:
-		return context.DeadlineExceeded
-	default:
-		return nil
-	}
-}
-
-func (*preDialDeadlineContext) Value(any) any { return nil }
-
-func (ctx *preDialDeadlineContext) expire() {
-	ctx.once.Do(func() { close(ctx.done) })
-}
-
-type preDialDeadlineTransport struct {
-	started   chan struct{}
-	once      sync.Once
-	calls     int
-	bodyReads int
-}
-
-func (transport *preDialDeadlineTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	transport.calls++
-	if request.Body != nil {
-		request.Body = &countingReadCloser{ReadCloser: request.Body, reads: &transport.bodyReads}
-	}
-	transport.once.Do(func() { close(transport.started) })
-	<-request.Context().Done()
-	provider.RecordPreDispatchContext(request.Context(), request.Context().Err())
-	return nil, request.Context().Err()
-}
-
-type countingReadCloser struct {
-	io.ReadCloser
-	reads *int
-}
-
-func (reader *countingReadCloser) Read(data []byte) (int, error) {
-	*reader.reads++
-	return reader.ReadCloser.Read(data)
-}
+type roundTripFunc = adaptertest.RoundTripFunc
 
 // A continuation pinned to another endpoint, or whose first Responses state
 // is not a stored-response ID, fails at compile instead of after admission

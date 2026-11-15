@@ -14,19 +14,7 @@ func TestDecodeChatAssemblesTextToolAndUsage(t *testing.T) {
 		{Data: []byte(`{"choices":[{"index":1,"delta":{"tool_calls":[{"id":"call-1","index":0,"function":{"name":"lookup","arguments":"{\"q\":\"sydney\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`)},
 		{Data: []byte("[DONE]")},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assembler := provider.NewAssembler("chat-operation")
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			t.Fatalf("assemble %T: %v", event, err)
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := assembleDecoded(t, "chat-operation", events, err)
 	if response.Usage.InputTokens != 2 || response.Usage.OutputTokens != 3 {
 		t.Fatalf("usage = %#v", response.Usage)
 	}
@@ -58,19 +46,7 @@ func TestDecodeAnthropicPreservesPartialUsageToolAndReasoning(t *testing.T) {
 		{Event: "message_delta", Data: []byte(`{"usage":{"output_tokens":2}}`)},
 		{Event: "message_stop", Data: []byte(`{}`)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assembler := provider.NewAssembler("anthropic-operation")
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			t.Fatalf("assemble %T: %v", event, err)
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := assembleDecoded(t, "anthropic-operation", events, err)
 	if response.Usage.InputTokens != 4 || response.Usage.OutputTokens != 2 || len(response.Output) != 3 {
 		t.Fatalf("response facts = %#v", response)
 	}
@@ -98,19 +74,7 @@ func TestDecodeResponsesRejectsInvalidOrderAndCompletes(t *testing.T) {
 		{Event: "response.output_item.done", Data: []byte(`{"output_index":0}`)},
 		{Event: "response.completed", Data: []byte(`{"type":"response.completed"}`)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assembler := provider.NewAssembler("responses-operation")
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			t.Fatalf("assemble %T: %v", event, err)
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := assembleDecoded(t, "responses-operation", events, err)
 	if len(response.Output) != 1 {
 		t.Fatalf("output length = %d, want 1", len(response.Output))
 	}
@@ -127,19 +91,7 @@ func TestDecodeResponsesAssemblesToolCall(t *testing.T) {
 		{Event: "response.output_item.done", Data: []byte(`{"output_index":0}`)},
 		{Event: "response.completed", Data: []byte(`{"type":"response.completed"}`)},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assembler := provider.NewAssembler("responses-tool-operation")
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			t.Fatalf("assemble %T: %v", event, err)
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := assembleDecoded(t, "responses-tool-operation", events, err)
 	if len(response.Output) != 1 {
 		t.Fatalf("output length = %d, want 1", len(response.Output))
 	}
@@ -264,4 +216,24 @@ func TestDecodersRejectSequencesTheAssemblerWouldReject(t *testing.T) {
 			}
 		})
 	}
+}
+
+// assembleDecoded checks that decoding succeeded and assembles its events
+// into the response for operationKey.
+func assembleDecoded(t *testing.T, operationKey string, events []provider.Event, err error) llm.Response {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembler := provider.NewAssembler(operationKey)
+	for _, event := range events {
+		if err := assembler.Add(event); err != nil {
+			t.Fatalf("assemble %T: %v", event, err)
+		}
+	}
+	response, err := assembler.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
 }

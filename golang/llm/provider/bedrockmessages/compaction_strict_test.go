@@ -3,21 +3,11 @@ package bedrockmessages
 import (
 	"testing"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestCompactionRequestCompilesInStrictModeWithApplicationInstructions(t *testing.T) {
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
-	source := llm.Request{OperationKey: "generate", Model: "claude-test", Input: input, Instructions: []llm.Instruction{
-		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "You are a helpful assistant"},
-	}}
-	request, err := compaction.PrepareRequest(source, "generate/compact", input, compaction.DefaultPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	request = compaction.FlattenSummarizerInstructions(request)
-	if _, err := lowerRequestWithStrict(request, DefaultProfile("bedrock"), true); err != nil {
+	if _, err := lowerRequestWithStrict(adaptertest.StrictCompactionRequest(t), DefaultProfile("bedrock"), true); err != nil {
 		t.Fatalf("strict compaction request lowering error = %v", err)
 	}
 }

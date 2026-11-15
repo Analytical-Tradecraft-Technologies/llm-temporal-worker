@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // A priority request is Anthropic fast mode: standard capacity at fast speed,
@@ -37,7 +37,7 @@ func TestPriorityInvokesFastMode(t *testing.T) {
 				if err := json.Unmarshal(encoded, &body); err != nil {
 					t.Error(err)
 				}
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"msg-fast","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-contract","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1,` + tc.usage + `}}`)), Request: request}, nil
+				return adaptertest.JSONResponse(request, 200, `{"id":"msg-fast","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-contract","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1,`+tc.usage+`}}`), nil
 			})}})
 			if err != nil {
 				t.Fatal(err)

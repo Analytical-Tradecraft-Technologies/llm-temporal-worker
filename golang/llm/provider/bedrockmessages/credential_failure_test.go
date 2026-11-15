@@ -8,8 +8,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // statusCredentialError is a credential-chain failure that carries the STS or
@@ -31,31 +31,14 @@ func TestBedrockCredentialFailureIsPreDispatch(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			calls := 0
-			client, err := NewClient(context.Background(), ClientConfig{
-				BaseURL: "http://127.0.0.1",
-				HTTPClient: &http.Client{Transport: bedrockRoundTrip(func(*http.Request) (*http.Response, error) {
-					calls++
-					return nil, errors.New("transport must not be reached")
-				})},
-				AWSConfig: aws.Config{Region: "us-east-1", Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
-					return aws.Credentials{}, credentialErr
-				})},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, "http://127.0.0.1"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: llm.Request{OperationKey: "bedrock-credentials", Model: "claude-contract"},
-				Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"}, Strict: true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = adapter.Invoke(context.Background(), call, nil)
+			client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: adaptertest.RoundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, errors.New("transport must not be reached")
+			})}, aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+				return aws.Credentials{}, credentialErr
+			}))
+			adapter, call := compileBedrockProdCall(t, client, "http://127.0.0.1", "bedrock-credentials")
+			_, err := adapter.Invoke(context.Background(), call, nil)
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || calls != 0 {
 				t.Fatalf("Invoke() error = %#v, transport calls = %d, want a classified error and no transport call", err, calls)

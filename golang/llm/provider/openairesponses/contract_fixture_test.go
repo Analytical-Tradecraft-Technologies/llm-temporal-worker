@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -261,35 +261,8 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 		t.Run(profile.id, func(t *testing.T) {
 			wire := readContractFixture(t, profile.id, "stream.decoder.events")
 			metadata := loadContractFixtureMetadata(t, profile.id)
-			want, err := DecodeStream(bytes.NewReader(wire))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for split := 1; split < len(wire); split++ {
-				got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
-				if err != nil {
-					t.Fatalf("split %d: %v", split, err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
-				}
-			}
-			for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 17, 11)} {
-				got, err := DecodeStream(streamtest.NewChunkReader(chunks))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
-				}
-			}
-			assembler := provider.NewAssembler("fixture-stream")
-			for _, event := range want {
-				if err := assembler.Add(event); err != nil {
-					t.Fatal(err)
-				}
-			}
-			assembled, err := assembler.Result()
+			want := streamtest.FragmentationInvariant(t, wire, 17, 11, DecodeStream)
+			assembled, err := streamtest.Assemble("fixture-stream", want)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -299,30 +272,12 @@ func TestResponsesDecoderFixturesRemainFragmentationInvariant(t *testing.T) {
 			}
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "stream.decoder.semantic.json")
 			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readContractFixture(t, profile.id, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
-				return assembleResponsesFixtureStream(events, "fixture-stream")
+				return streamtest.AssembleJSON(events, "fixture-stream", DecodeStream)
 			}, metadata.GeneratedFieldExemptions); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
-}
-
-func assembleResponsesFixtureStream(wire []byte, operationKey string) ([]byte, error) {
-	events, err := DecodeStream(bytes.NewReader(wire))
-	if err != nil {
-		return nil, err
-	}
-	assembler := provider.NewAssembler(operationKey)
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			return nil, err
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(response)
 }
 
 func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
@@ -337,12 +292,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
 			got = request
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{profile.requestID}},
-				Body:       io.NopCloser(bytes.NewReader(responseBody)),
-				Request:    request,
-			}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 		})},
 	})
 	if err != nil {
@@ -400,12 +350,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			got = request
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{profile.requestID}},
-				Body:       io.NopCloser(bytes.NewReader(responseBody)),
-				Request:    request,
-			}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 		})},
 	})
 	if err != nil {

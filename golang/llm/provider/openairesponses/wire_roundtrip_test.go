@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
@@ -50,12 +51,7 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 			return nil, readErr
 		}
 		captured = body
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req-wire-audit"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"resp-audit","object":"response","status":"completed","model":"gpt-audit","output":[]}`)),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"resp-audit","object":"response","status":"completed","model":"gpt-audit","output":[]}`, "X-Request-Id", "req-wire-audit"), nil
 	})}, options...)
 	if err != nil {
 		t.Fatal(err)
@@ -113,12 +109,7 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	return intended
 }
 
-type wireAuditCase struct {
-	name    string
-	request llm.Request
-}
-
-func wireAuditCases() []wireAuditCase {
+func wireAuditCases() []contract.WireAuditCase {
 	maxTokens := 256
 	zeroTokens := 0
 	temperature := 0.25
@@ -129,24 +120,16 @@ func wireAuditCases() []wireAuditCase {
 	withOutputSchema.OutputSchema = json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}}}`)
 	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"},"score":{"type":"number"}},"required":["answer"],"additionalProperties":false}`)
 	reasoningState := llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: reasoningStateMediaType, Opaque: json.RawMessage(`{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought"}],"encrypted_content":"opaque-bytes"}`)}
-	cases := []wireAuditCase{
-		{name: "minimal", request: llm.Request{Input: contract.WireAuditUserText("hello")}},
-		{name: "instructions", request: llm.Request{
+	cases := []contract.WireAuditCase{
+		{Name: "instructions", Request: llm.Request{
 			Instructions: []llm.Instruction{
 				{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"},
 				{Level: llm.InstructionLevelApplication, Kind: llm.InstructionKindParts, Content: []llm.Part{llm.TextPart{Text: "developer"}, llm.JSONPart{Value: json.RawMessage(`{"rule":1}`)}}},
 			},
 			Input: contract.WireAuditUserText("hello"),
 		}},
-		{name: "tool policy none without tools", request: llm.Request{Input: contract.WireAuditUserText("hello"), ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}},
-		{name: "tools default policy", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: tools}},
-		{name: "tools auto parallel", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: tools, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceAuto, Parallel: true}}},
-		{name: "tools none", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: tools, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}},
-		{name: "tools required", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: tools, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceRequired}}},
-		{name: "tools named", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: tools, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "search"}}},
-		{name: "tools named parallel", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: tools, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true}}},
-		{name: "tool output schema and bare tool", request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: []llm.Tool{withOutputSchema, {Name: "bare", InputSchema: json.RawMessage(`{"type":"object"}`)}}}},
-		{name: "tool history", request: llm.Request{
+		{Name: "tool output schema and bare tool", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: []llm.Tool{withOutputSchema, {Name: "bare", InputSchema: json.RawMessage(`{"type":"object"}`)}}}},
+		{Name: "tool history", Request: llm.Request{
 			Input: []llm.Item{
 				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find sydney"}}},
 				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}, llm.JSONPart{Value: json.RawMessage(`{"step":1}`)}}},
@@ -160,39 +143,24 @@ func wireAuditCases() []wireAuditCase {
 			},
 			Tools: tools,
 		}},
-		{name: "max tokens", request: llm.Request{Input: contract.WireAuditUserText("hello"), Output: &llm.OutputSpec{MaxTokens: &maxTokens}}},
-		{name: "json object output", request: llm.Request{Input: contract.WireAuditUserText("reply in JSON"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSON}}}},
-		{name: "json schema strict", request: llm.Request{Input: contract.WireAuditUserText("hello"), Output: &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Description: "answer object", Strict: true, Schema: schema}}}},
-		{name: "json schema lenient", request: llm.Request{Input: contract.WireAuditUserText("hello"), Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Schema: schema}}}},
-		{name: "reasoning disabled", request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled}}},
-		{name: "reasoning provider default", request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeProviderDefault}}},
-		{name: "reasoning enabled", request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled}}},
-		{name: "reasoning adaptive summary none", request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortLow, Summary: llm.ReasoningSummaryNone}}},
-		{name: "image url", request: llm.Request{Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.TextPart{Text: "describe"},
-			llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png", Detail: "high"},
-			llm.ImagePart{URL: "https://example.test/other.png", MediaType: "image/png"},
-		}}}}},
-		{name: "image bytes", request: llm.Request{Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.ImagePart{Bytes: []byte{0x89, 'P', 'N', 'G'}, MediaType: "image/png", Detail: "low"},
-			llm.JSONPart{Value: json.RawMessage(`{"caption":true}`)},
-		}}}}},
-		{name: "documents", request: llm.Request{Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
+		{Name: "reasoning enabled", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled}}},
+		{Name: "reasoning adaptive summary none", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Effort: llm.ReasoningEffortLow, Summary: llm.ReasoningSummaryNone}}},
+		{Name: "documents", Request: llm.Request{Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
 			llm.DocumentPart{URL: "https://example.test/contract.pdf", MediaType: "application/pdf"},
 			llm.DocumentPart{URL: "https://example.test/titled.pdf", MediaType: "application/pdf", Title: "titled.pdf"},
 			llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "inline.pdf"},
 			llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf"},
 		}}}}},
-		{name: "sampling", request: llm.Request{Input: contract.WireAuditUserText("hello"), Sampling: &llm.SamplingSpec{Temperature: &temperature, TopP: &topP}}},
-		{name: "zero values", request: llm.Request{Input: contract.WireAuditUserText("hello"), Output: &llm.OutputSpec{MaxTokens: &zeroTokens}, Sampling: &llm.SamplingSpec{Temperature: &zero, TopP: &zero}}},
-		{name: "continuation handle", request: llm.Request{Input: contract.WireAuditUserText("hello"), Continuation: &llm.Continuation{Handle: "openai-responses:resp-prev"}}},
-		{name: "extensions", request: llm.Request{Input: contract.WireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
+		{Name: "sampling", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Sampling: &llm.SamplingSpec{Temperature: &temperature, TopP: &topP}}},
+		{Name: "zero values", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Output: &llm.OutputSpec{MaxTokens: &zeroTokens}, Sampling: &llm.SamplingSpec{Temperature: &zero, TopP: &zero}}},
+		{Name: "continuation handle", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Continuation: &llm.Continuation{Handle: "openai-responses:resp-prev"}}},
+		{Name: "extensions", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
 			"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content","message.output_text.logprobs"],"store":false,"truncation":"auto"}`),
 		}}},
-		{name: "stored extensions", request: llm.Request{Input: contract.WireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
+		{Name: "stored extensions", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Extensions: map[string]json.RawMessage{
 			"openai.responses": json.RawMessage(`{"include":[],"store":true,"truncation":"disabled"}`),
 		}}},
-		{name: "everything", request: llm.Request{
+		{Name: "everything", Request: llm.Request{
 			Instructions: []llm.Instruction{{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"}},
 			Input: []llm.Item{
 				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}, llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png", Detail: "high"}, llm.DocumentPart{Bytes: []byte("pdf"), MediaType: "application/pdf", Title: "contract.pdf"}}},
@@ -208,14 +176,15 @@ func wireAuditCases() []wireAuditCase {
 			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"include":["reasoning.encrypted_content"],"store":true}`)},
 		}},
 	}
+	cases = append(contract.WireAuditCommonCases(), cases...)
 	for _, effort := range []llm.ReasoningEffort{llm.ReasoningEffortMinimal, llm.ReasoningEffortLow, llm.ReasoningEffortMedium, llm.ReasoningEffortHigh, llm.ReasoningEffortExtraHigh, llm.ReasoningEffortMaximum} {
-		cases = append(cases, wireAuditCase{name: "reasoning effort " + string(effort), request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Effort: effort}}})
+		cases = append(cases, contract.WireAuditCase{Name: "reasoning effort " + string(effort), Request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Effort: effort}}})
 	}
 	for _, summary := range []llm.ReasoningSummary{llm.ReasoningSummaryAuto, llm.ReasoningSummaryConcise, llm.ReasoningSummaryDetailed} {
-		cases = append(cases, wireAuditCase{name: "reasoning summary " + string(summary), request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, Effort: llm.ReasoningEffortMedium, Summary: summary}}})
+		cases = append(cases, contract.WireAuditCase{Name: "reasoning summary " + string(summary), Request: llm.Request{Input: contract.WireAuditUserText("hello"), Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, Effort: llm.ReasoningEffortMedium, Summary: summary}}})
 	}
 	for _, class := range []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard, llm.ServiceClassPriority} {
-		cases = append(cases, wireAuditCase{name: "service class " + string(class), request: llm.Request{Input: contract.WireAuditUserText("hello"), ServiceClass: class}})
+		cases = append(cases, contract.WireAuditCase{Name: "service class " + string(class), Request: llm.Request{Input: contract.WireAuditUserText("hello"), ServiceClass: class}})
 	}
 	return cases
 }
@@ -227,8 +196,8 @@ func TestCapturedWireBodyMatchesLoweredRequestMap(t *testing.T) {
 	for _, profile := range wireAuditProfiles() {
 		t.Run(profile.id, func(t *testing.T) {
 			for _, test := range wireAuditCases() {
-				t.Run(test.name, func(t *testing.T) {
-					request := test.request
+				t.Run(test.Name, func(t *testing.T) {
+					request := test.Request
 					request.Model = "gpt-audit"
 					request.OperationKey = "wire-audit"
 					intended := intendedWireBody(t, profile, request)

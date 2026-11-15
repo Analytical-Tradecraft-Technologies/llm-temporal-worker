@@ -11,17 +11,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-func TestCanceledTransportRemainsAmbiguous(t *testing.T) {
-	mapped := mapError(context.Canceled)
-	if mapped.Code != provider.CodeCanceled || mapped.Dispatch != provider.DispatchAmbiguous {
-		t.Fatalf("cancellation classification = %#v", mapped)
-	}
-	before := provider.NewDispatchContextError(context.Canceled)
-	if before.Dispatch != provider.DispatchNotDispatched {
-		t.Fatal("preflight cancellation became ambiguous")
-	}
-}
-
 func TestInvokeCancellationAfterTransportConsumesRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

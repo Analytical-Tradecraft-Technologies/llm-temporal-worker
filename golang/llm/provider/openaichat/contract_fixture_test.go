@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -198,65 +198,20 @@ func TestChatContractFixturesKeepDecoderOutputFragmentationInvariant(t *testing.
 		t.Run(profile.id, func(t *testing.T) {
 			wire := readChatFixture(t, profile, "stream.decoder.events")
 			metadata := loadChatFixtureMetadata(t, profile)
-			want, err := DecodeStream(bytes.NewReader(wire))
-			if err != nil {
-				t.Fatal(err)
-			}
+			want := streamtest.FragmentationInvariant(t, wire, 17, 11, DecodeStream)
 			if len(want) == 0 {
 				t.Fatal("stream fixture decoded no events")
 			}
-			for split := 1; split < len(wire); split++ {
-				got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
-				if err != nil {
-					t.Fatalf("split %d: %v", split, err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
-				}
-			}
-			for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 17, 11)} {
-				got, err := DecodeStream(streamtest.NewChunkReader(chunks))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
-				}
-			}
-			assembler := provider.NewAssembler("fixture-stream")
-			for _, event := range want {
-				if err := assembler.Add(event); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if _, err := assembler.Result(); err != nil {
+			if _, err := streamtest.Assemble("fixture-stream", want); err != nil {
 				t.Fatal(err)
 			}
 			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, readChatFixture(t, profile, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
-				return assembleChatFixtureStream(events, "fixture-"+profile.id+"-stream")
+				return streamtest.AssembleJSON(events, "fixture-"+profile.id+"-stream", DecodeStream)
 			}, metadata.GeneratedFieldExemptions); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
-}
-
-func assembleChatFixtureStream(wire []byte, operationKey string) ([]byte, error) {
-	events, err := DecodeStream(bytes.NewReader(wire))
-	if err != nil {
-		return nil, err
-	}
-	assembler := provider.NewAssembler(operationKey)
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			return nil, err
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(response)
 }
 
 func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
@@ -267,12 +222,7 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 			var got *http.Request
 			client := newChatFixtureClient(t, profile, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 				got = request
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{profile.requestID}},
-					Body:       io.NopCloser(bytes.NewReader(responseBody)),
-					Request:    request,
-				}, nil
+				return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", profile.requestID), nil
 			}))
 			adapter, err := New(client, profile.endpoint, profile.profile)
 			if err != nil {

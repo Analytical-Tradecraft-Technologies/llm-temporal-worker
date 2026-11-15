@@ -6,11 +6,11 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // The provider requires response_format.json_schema.name and restricts it to
@@ -25,12 +25,7 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 		APIKey:  "test-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			wire, _ = io.ReadAll(request.Body)
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req-name"}},
-				Body:       io.NopCloser(strings.NewReader(responseBody)),
-				Request:    request,
-			}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Request-Id", "req-name"), nil
 		})},
 	})
 	if err != nil {

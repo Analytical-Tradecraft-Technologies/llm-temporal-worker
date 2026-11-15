@@ -12,47 +12,16 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 	var got *http.Request
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"exa-req-1"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"exa-generation-1","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"costDollars":{"total":"0.00000123"},"results":[{"url":"https://example.com/source","title":"Source"}]}`)),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"exa-generation-1","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"costDollars":{"total":"0.00000123"},"results":[{"url":"https://example.com/source","title":"Source"}]}`, "X-Request-Id", "exa-req-1"), nil
 	})
-	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := NewExaProfile(ExaProfileConfig{
-		ID:                        "exa-chat",
-		CapabilityVersion:         "exa/v1",
-		BaseURL:                   exaBaseURL,
-		Capabilities:              profileTestCapabilities("exa/v1"),
-		ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
-		ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
-		MissingActualServiceClass: llm.ServiceClassStandard,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "exa-a", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "exa-op", Model: "exa"}, Query: provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := invokeExa(t, newExaTestAdapter(t, transport), llm.Request{OperationKey: "exa-op", Model: "exa"}, true)
 	if got.Header.Get("x-api-key") != "exa-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("exa auth headers = %#v", got.Header)
 	}
@@ -107,33 +76,7 @@ func TestExaLiftsCitationsFromSelectedMessage(t *testing.T) {
 
 func assertExaCitationLifted(t *testing.T, body string) {
 	t.Helper()
-	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-	})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := NewExaProfile(ExaProfileConfig{
-		ID: "exa-chat", CapabilityVersion: "exa/v1", BaseURL: exaBaseURL, Capabilities: profileTestCapabilities("exa/v1"),
-		ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
-		ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
-		MissingActualServiceClass: llm.ServiceClassStandard,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "exa-a", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "exa-op", Model: "exa"}, Query: provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := invokeExa(t, newExaTestAdapter(t, exaBody(body)), llm.Request{OperationKey: "exa-op", Model: "exa"}, true)
 	if len(result.Response.Output) != 2 {
 		t.Fatalf("exa output = %#v", result.Response.Output)
 	}
@@ -160,21 +103,7 @@ func mustMarshal(t *testing.T, value any) string {
 // Completions wire form, so the follow-up must compile without them.
 func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 	body := `{"id":"exa-generation-4","model":"exa","service_tier":"standard","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer","citations":[{"url":"https://example.com/message-source","title":"Message source"},{"url":"https://example.com/second-source"}]}}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`
-	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-	})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := NewExaAdapter(client, "exa-a", ExaProfileConfig{
-		ID: "exa-chat", CapabilityVersion: "exa/v1", BaseURL: exaBaseURL, Capabilities: profileTestCapabilities("exa/v1"),
-		ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
-		ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
-		MissingActualServiceClass: llm.ServiceClassStandard,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter := newExaTestAdapter(t, exaBody(body))
 	query := provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}
 	human := func(text string) llm.Message {
 		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
@@ -261,4 +190,51 @@ func TestExaCitationLoneSurrogateIsSanitizedInOutput(t *testing.T) {
 	if strings.Contains(encoded, `\ud83d`) || !strings.Contains(encoded, `"title":"Emoji cut \ufffd"`) {
 		t.Fatalf("sanitized citation = %s", encoded)
 	}
+}
+
+// exaTestConfig is the "exa-chat" profile the Exa tests use: standard
+// service only, which Exa reports by omitting the tier.
+func exaTestConfig() ExaProfileConfig {
+	return ExaProfileConfig{
+		ID: "exa-chat", CapabilityVersion: "exa/v1", BaseURL: exaBaseURL, Capabilities: profileTestCapabilities("exa/v1"),
+		ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
+		ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
+		MissingActualServiceClass: llm.ServiceClassStandard,
+	}
+}
+
+// exaBody answers every request with the JSON body.
+func exaBody(body string) http.RoundTripper {
+	return roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return adaptertest.JSONResponse(request, http.StatusOK, body), nil
+	})
+}
+
+// newExaTestAdapter builds the "exa-a" adapter with the test profile over a
+// client sending through transport.
+func newExaTestAdapter(t *testing.T, transport http.RoundTripper) *Adapter {
+	t.Helper()
+	client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: transport}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewExaAdapter(client, "exa-a", exaTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+// invokeExa compiles request on adapter and invokes it.
+func invokeExa(t *testing.T, adapter *Adapter, request llm.Request, strict bool) provider.Result {
+	t.Helper()
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}, Strict: strict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

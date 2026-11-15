@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -157,10 +156,7 @@ func TestBedrockContractStreamFixturesRemainFragmentationInvariant(t *testing.T)
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			wire := mustReadBedrockFixture(t, fixture.name)
-			want, err := DecodeStream(bytes.NewReader(wire))
-			if err != nil {
-				t.Fatal(err)
-			}
+			want := streamtest.FragmentationInvariant(t, wire, 41, 11, DecodeStream)
 			toolFragments := 0
 			for _, event := range want {
 				if _, ok := event.(provider.ToolArgumentsDelta); ok {
@@ -170,26 +166,8 @@ func TestBedrockContractStreamFixturesRemainFragmentationInvariant(t *testing.T)
 			if toolFragments != fixture.wantToolFragments {
 				t.Fatalf("tool argument fragments = %d, want %d", toolFragments, fixture.wantToolFragments)
 			}
-			for split := 1; split < len(wire); split++ {
-				got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
-				if err != nil {
-					t.Fatalf("split %d: %v", split, err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
-				}
-			}
-			for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 41, 11)} {
-				got, err := DecodeStream(streamtest.NewChunkReader(chunks))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
-				}
-			}
 			if err := contracttest.VerifyStreamAssemblyEquivalent(wire, mustReadBedrockFixture(t, fixture.semantic), func(events []byte) ([]byte, error) {
-				return assembleBedrockFixtureStream(events, fixture.operationKey)
+				return streamtest.AssembleJSON(events, fixture.operationKey, DecodeStream)
 			}, metadata.GeneratedFieldExemptions); err != nil {
 				t.Fatal(err)
 			}
@@ -474,24 +452,6 @@ func assertBedrockContinuationCompatibility(t *testing.T, adapter *Adapter) {
 		}
 		assertBedrockProviderError(t, providerErr, expected)
 	}
-}
-
-func assembleBedrockFixtureStream(wire []byte, operationKey string) ([]byte, error) {
-	events, err := DecodeStream(bytes.NewReader(wire))
-	if err != nil {
-		return nil, err
-	}
-	assembler := provider.NewAssembler(operationKey)
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			return nil, err
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(response)
 }
 
 type fixtureProviderError struct {

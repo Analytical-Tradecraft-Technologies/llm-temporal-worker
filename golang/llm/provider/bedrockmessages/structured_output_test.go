@@ -9,11 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 const constrainedOutputSchema = `{"type":"object","properties":{"name":{"type":"string","minLength":3},"age":{"type":"integer","minimum":0},"tags":{"type":"array","items":{"type":"string"},"maxItems":2}},"required":["name"]}`
@@ -30,17 +28,10 @@ func recordingBedrockAdapter(t *testing.T, text string, wire *[]byte) *Adapter {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewClient(context.Background(), ClientConfig{
-		BaseURL: "http://127.0.0.1",
-		HTTPClient: &http.Client{Transport: bedrockRoundTrip(func(request *http.Request) (*http.Response, error) {
-			*wire, _ = io.ReadAll(request.Body)
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Requestid": []string{"bedrock-structured"}}, Body: io.NopCloser(strings.NewReader(string(body))), Request: request}, nil
-		})},
-		AWSConfig: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", "")},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: adaptertest.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		*wire, _ = io.ReadAll(request.Body)
+		return adaptertest.JSONResponse(request, http.StatusOK, string(body), "X-Amzn-Requestid", "bedrock-structured"), nil
+	})}, nil)
 	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, "http://127.0.0.1"))
 	if err != nil {
 		t.Fatal(err)

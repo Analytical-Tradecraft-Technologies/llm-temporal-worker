@@ -1,49 +1,18 @@
 package openaichat
 
 import (
-	"context"
 	"errors"
-	"io"
-	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
+// invokeOpenRouterWithBody invokes an empty request on an OpenRouter
+// endpoint whose response is body.
 func invokeOpenRouterWithBody(t *testing.T, body string) error {
 	t.Helper()
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"or-req-1"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
-	})
-	client, err := NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "or-key", HTTPClient: &http.Client{Transport: transport}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := NewOpenRouterProfile(OpenRouterProfileConfig{
-		ID: "openrouter-errors", CapabilityVersion: "openrouter/v1", BaseURL: openRouterBaseURL, Model: "router-model",
-		Capabilities:              profileTestCapabilities("openrouter/v1"),
-		ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
-		ActualServiceClasses:      map[string]llm.ServiceClass{"default": llm.ServiceClassStandard, "standard": llm.ServiceClassStandard},
-		MissingActualServiceClass: llm.ServiceClassStandard,
-		ProviderOrder:             []string{"ProviderA"},
-		RequireParameters:         true,
-		Upstreams:                 allModelsUpstreams{"ProviderA"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openrouter-a", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{OperationKey: "or-op", Model: "router-model"}, Query: provider.CapabilityQuery{EndpointID: "openrouter-a", Family: provider.FamilyOpenAIChat, Model: "router-model"}, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	return err
+	return invokeOpenRouterRequest(t, llm.Request{OperationKey: "or-op", Model: "router-model"}, body)
 }
 
 func TestOpenRouterMapsBodyLevelErrorsThroughTheStatusTable(t *testing.T) {

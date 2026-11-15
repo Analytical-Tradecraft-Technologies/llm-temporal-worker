@@ -15,6 +15,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
@@ -33,7 +34,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 			if err != nil {
 				t.Errorf("read request body: %v", err)
 			}
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"aws-req-1"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "Request-Id", "aws-req-1"), nil
 		})},
 		AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true},
 	})
@@ -147,7 +148,7 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 		BaseURL: "http://127.0.0.1/aws-contract",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			calls++
-			return &http.Response{StatusCode: http.StatusUnauthorized, Header: http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"aws-auth-1"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+			return adaptertest.JSONResponse(request, http.StatusUnauthorized, body, "Request-Id", "aws-auth-1"), nil
 		})},
 		AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true},
 	})

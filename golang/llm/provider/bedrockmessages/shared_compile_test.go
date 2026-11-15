@@ -29,43 +29,7 @@ func compileShared(t *testing.T, request llm.Request, strict bool) (provider.Cal
 	})
 }
 
-func TestCompileRejectsIncompatibleManualThinkingCombinations(t *testing.T) {
-	messagestest.ManualThinkingCombinations(t, compileShared)
-}
-
-func TestCompileRejectsSamplingTheModelRefuses(t *testing.T) {
-	messagestest.SamplingTheModelRefuses(t, compileShared)
-}
-
-func TestCompileKeepsSamplingTheModelAccepts(t *testing.T) {
-	messagestest.SamplingTheModelAccepts(t, compileShared)
-}
-
-func TestCompileSendsExtraHighEffortToModelsThatAcceptIt(t *testing.T) {
-	messagestest.ExtraHighEffortByModel(t, compileShared)
-}
-
-func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
-	messagestest.SkipsReplayedEmptyModelMessage(t, compileShared)
-}
-
-func TestCompileSkipsReplayedReferenceAnnotations(t *testing.T) {
-	messagestest.SkipsReplayedReferenceAnnotations(t, compileShared)
-}
-
-func TestCompileModelessReasoningNeverEnablesThinking(t *testing.T) {
-	messagestest.ModelessReasoningNeverEnablesThinking(t, compileShared)
-}
-
-func TestCompileReasoningSummaryMapsToThinkingDisplay(t *testing.T) {
-	messagestest.ReasoningSummaryMapsToThinkingDisplay(t, compileShared)
-}
-
-func TestCompileExtraHighReturnsUnsupportedCapability(t *testing.T) {
-	messagestest.ExtraHighReturnsUnsupportedCapability(t, compileShared)
-}
-
-func TestCompileDisabledReasoningIgnoresEffort(t *testing.T) {
-	messagestest.DisabledReasoningIgnoresEffort(t, compileShared)
+func TestCompileSharedWithTheOtherMessagesFamily(t *testing.T) {
+	messagestest.CompileTests(t, compileShared)
 }
 func intPtr(value int) *int { return &value }

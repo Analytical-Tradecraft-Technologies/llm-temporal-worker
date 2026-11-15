@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 const exaAgentResponse = `{"id":"run_1","object":"response","created_at":1,"status":"completed","model":"exa-agent",
@@ -22,8 +23,7 @@ func exaAgentAdapter(t *testing.T, captured **http.Request, body *[]byte) *Adapt
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		*captured = request
 		*body, _ = io.ReadAll(request.Body)
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
-			Body: io.NopCloser(strings.NewReader(exaAgentResponse)), Request: request}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, exaAgentResponse), nil
 	})
 	client, err := NewExaClient(ExaClientConfig{BaseURL: "https://api.exa.ai", APIKey: "exa-key", HTTPClient: &http.Client{Transport: transport}})
 	if err != nil {

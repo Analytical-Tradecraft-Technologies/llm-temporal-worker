@@ -2,12 +2,11 @@ package anthropicmessages
 
 import (
 	"context"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 )
@@ -25,7 +24,7 @@ func TestLargeNonStreamingRequestReachesTransport(t *testing.T) {
 				if timeout > 0 && time.Until(deadline) > timeout {
 					t.Error("request exceeds configured timeout")
 				}
-				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"msg-local","type":"message","role":"assistant","content":[],"model":"claude-contract","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)), Request: request}, nil
+				return adaptertest.JSONResponse(request, 200, `{"id":"msg-local","type":"message","role":"assistant","content":[],"model":"claude-contract","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`), nil
 			})}
 			var client *Client
 			var err error

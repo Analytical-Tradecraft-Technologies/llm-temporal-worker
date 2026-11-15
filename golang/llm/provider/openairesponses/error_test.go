@@ -8,11 +8,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
@@ -38,27 +38,10 @@ func TestMapAPIErrorProducesSafeCommonFacts(t *testing.T) {
 	}
 }
 
-func TestMapAPIErrorMapsRetryAfterDelay(t *testing.T) {
-	mapped := mapAPIError(&openai.Error{
-		StatusCode: http.StatusTooManyRequests,
-		Response:   &http.Response{Header: http.Header{"Retry-After": []string{"2"}}},
+func TestMapAPIErrorClassifiesCommonHTTPStatuses(t *testing.T) {
+	adaptertest.HTTPStatuses(t, func(status int, response *http.Response) *provider.Error {
+		return mapAPIError(&openai.Error{StatusCode: status, Response: response})
 	})
-	if got, want := mapped.RetryAfter, 2*time.Second; got != want {
-		t.Fatalf("retry after = %s, want %s", got, want)
-	}
-	if got, want := mapped.SafeDetails["retry_after"], "2"; got != want {
-		t.Fatalf("safe retry after = %q, want %q", got, want)
-	}
-}
-
-func TestMapAPIErrorTreatsRedirectResponseAsAmbiguous(t *testing.T) {
-	mapped := mapAPIError(&openai.Error{
-		StatusCode: http.StatusTemporaryRedirect,
-		Response:   &http.Response{Header: http.Header{"Location": []string{"https://redirect.example/secret"}}},
-	})
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
-	}
 }
 
 func TestMapErrorClassifiesContextAndTransportFailures(t *testing.T) {
@@ -77,24 +60,8 @@ func TestMapErrorClassifiesContextAndTransportFailures(t *testing.T) {
 	}
 }
 
-func TestMapErrorClassifiesEgressDenialBeforeDispatch(t *testing.T) {
-	mapped := mapError(provider.ErrProviderEgressDenied)
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("mapped = %#v", mapped)
-	}
-	if !errors.Is(mapped, provider.ErrProviderEgressDenied) {
-		t.Fatal("mapped error did not preserve the egress marker")
-	}
-}
-
-func TestMapErrorClassifiesCertifiedPreDispatchAvailability(t *testing.T) {
-	mapped := mapError(provider.ErrProviderPreDispatch)
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
-		t.Fatalf("mapped = %#v", mapped)
-	}
-	if !errors.Is(mapped, provider.ErrProviderPreDispatch) {
-		t.Fatal("mapped error did not preserve the pre-dispatch marker")
-	}
+func TestMapErrorClassifiesProviderNeutralFailures(t *testing.T) {
+	adaptertest.ProviderNeutralFailures(t, mapError, provider.NewDispatchContextError)
 }
 
 func TestMapErrorRedactsTransportCause(t *testing.T) {
@@ -111,36 +78,6 @@ func TestMapErrorRedactsTransportCause(t *testing.T) {
 	}
 	if !errors.Is(mapped, transportCause) {
 		t.Fatal("mapped error did not preserve the local diagnostic cause")
-	}
-}
-
-func TestGatewayTimeoutsRemainAmbiguous(t *testing.T) {
-	for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
-		mapped := mapAPIError(&openai.Error{StatusCode: status})
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
-			t.Fatalf("status %d became a rejection: %#v", status, mapped)
-		}
-	}
-}
-
-func TestServerErrorsRemainRejected(t *testing.T) {
-	for _, status := range []int{500, 502, 503, 529} {
-		mapped := mapAPIError(&openai.Error{StatusCode: status})
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
-			t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
-		}
-	}
-}
-
-// An account out of credit is an operator-side route failure: it must not
-// surface as the caller's invalid_argument, which route health ignores.
-func TestPaymentRequiredIsARouteLevelDenial(t *testing.T) {
-	mapped := mapAPIError(&openai.Error{StatusCode: http.StatusPaymentRequired})
-	if mapped.Code != provider.CodePermissionDenied || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetryNever {
-		t.Fatalf("402 = %#v, want a rejected permission denial", mapped)
-	}
-	if got, want := mapped.SafeDetails["status"], "402"; got != want {
-		t.Fatalf("safe status = %q, want %q", got, want)
 	}
 }
 

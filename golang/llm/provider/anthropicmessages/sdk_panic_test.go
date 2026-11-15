@@ -2,21 +2,14 @@ package anthropicmessages
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
 )
-
-// panickingBody panics when the SDK decodes the response, as an SDK
-// deserializer meeting an unknown union member does.
-type panickingBody struct{}
-
-func (panickingBody) Read([]byte) (int, error) { panic("slice bounds out of range") }
-func (panickingBody) Close() error             { return nil }
 
 func invokeWithPanickingResponse(t *testing.T, client *Client, baseURL, endpointID string) error {
 	t.Helper()
@@ -39,9 +32,7 @@ func invokeWithPanickingResponse(t *testing.T, client *Client, baseURL, endpoint
 }
 
 func panickingTransport() *http.Client {
-	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: panickingBody{}, Request: request}, nil
-	})}
+	return &http.Client{Transport: adaptertest.PanickingTransport(http.StatusOK)}
 }
 
 func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
@@ -50,10 +41,7 @@ func TestInvokeRecoversAnSDKPanicWhileDecodingTheResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = invokeWithPanickingResponse(t, client, "http://127.0.0.1/contract", "anthropic-prod")
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever || mapped.Code != provider.CodeProviderInvalidResponse || mapped.OperationID != "op-panic" {
-		t.Fatalf("Invoke() error = %#v, want an accepted, never-retried invalid response", err)
-	}
+	adaptertest.RecoveredDecodePanic(t, err, "op-panic")
 }
 
 func TestInvokeRecoversAnSDKPanicInTheAWSGatewayClient(t *testing.T) {
@@ -66,8 +54,5 @@ func TestInvokeRecoversAnSDKPanicInTheAWSGatewayClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = invokeWithPanickingResponse(t, client, "http://127.0.0.1/aws-contract", "anthropic-aws")
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAccepted || mapped.Retry != provider.RetryNever || mapped.Code != provider.CodeProviderInvalidResponse || mapped.OperationID != "op-panic" {
-		t.Fatalf("Invoke() error = %#v, want an accepted, never-retried invalid response", err)
-	}
+	adaptertest.RecoveredDecodePanic(t, err, "op-panic")
 }

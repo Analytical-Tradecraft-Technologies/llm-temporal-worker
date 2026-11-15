@@ -22,6 +22,7 @@ current-layout reference.
 │   │   ├── provider/               Adapter interfaces and provider-neutral calls
 │   │   │   ├── contracttest/       Fixture manifest and coverage contract harness
 │   │   │   ├── internal/           Helpers shared by adapters, never imported outside provider
+│   │   │   │   ├── adaptertest/    Transport fakes and checks shared by adapter tests
 │   │   │   │   ├── anthropicschema/  Output schemas for Claude structured outputs
 │   │   │   │   ├── anthropicwire/  Lowering shared by the two Messages adapters
 │   │   │   │   ├── awscredentials/ AWS credential failures as pre-dispatch auth errors

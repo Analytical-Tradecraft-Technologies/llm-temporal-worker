@@ -3,23 +3,12 @@ package bedrockconverse
 import (
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
 func TestCompactionRequestCompilesInStrictModeWithApplicationInstructions(t *testing.T) {
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
-	source := llm.Request{OperationKey: "generate", Model: "claude-test", Input: input, Instructions: []llm.Instruction{
-		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "You are a helpful assistant"},
-	}}
-	request, err := compaction.PrepareRequest(source, "generate/compact", input, compaction.DefaultPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	request = compaction.FlattenSummarizerInstructions(request)
-	if _, err := lowerRequest(request, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true); err != nil {
+	if _, err := lowerRequest(adaptertest.StrictCompactionRequest(t), DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true); err != nil {
 		t.Fatalf("strict compaction request lowering error = %v", err)
 	}
 }

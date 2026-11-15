@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // A response rejected while lifting names a closed cause and the provider's
@@ -60,7 +60,7 @@ func TestOpenRouterLiftFailuresNameTheirCause(t *testing.T) {
 func invokeOpenRouterRequest(t *testing.T, request llm.Request, body string) error {
 	t.Helper()
 	transport := roundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: httpRequest}, nil
+		return adaptertest.JSONResponse(httpRequest, http.StatusOK, body), nil
 	})
 	client, err := NewOpenRouterClient(OpenRouterClientConfig{BaseURL: openRouterBaseURL, APIKey: "or-key", HTTPClient: &http.Client{Transport: transport}})
 	if err != nil {

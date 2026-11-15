@@ -1,16 +1,11 @@
 package openaichat
 
 import (
-	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
 // Exa always appends citations to its answer. A compaction summary from Exa
@@ -23,38 +18,12 @@ func TestExaCompactionSummaryIgnoresCitations(t *testing.T) {
 		for finish, want := range map[string]string{"stop": "the summary", "length": ""} {
 			t.Run(fmt.Sprintf("strict=%v/%s", strict, finish), func(t *testing.T) {
 				payload := fmt.Sprintf(body, finish)
-				client, err := NewExaClient(ExaClientConfig{BaseURL: exaBaseURL, APIKey: "exa-key", HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(payload)), Request: request}, nil
-				})}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				profile, err := NewExaProfile(ExaProfileConfig{
-					ID: "exa-chat", CapabilityVersion: "exa/v1", BaseURL: exaBaseURL, Capabilities: profileTestCapabilities("exa/v1"),
-					ServiceTiers:              map[llm.ServiceClass]string{llm.ServiceClassEconomy: "", llm.ServiceClassStandard: "standard", llm.ServiceClassPriority: ""},
-					ActualServiceClasses:      map[string]llm.ServiceClass{"standard": llm.ServiceClassStandard},
-					MissingActualServiceClass: llm.ServiceClassStandard,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				adapter, err := New(client, "exa-a", profile)
-				if err != nil {
-					t.Fatal(err)
-				}
 				input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "a long conversation"}}}}
 				request, err := compaction.PrepareRequest(llm.Request{OperationKey: "exa-op", Model: "exa", Input: input}, "exa-op/compact", input, compaction.DefaultPolicy())
 				if err != nil {
 					t.Fatal(err)
 				}
-				call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}, Strict: strict})
-				if err != nil {
-					t.Fatal(err)
-				}
-				result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-				if err != nil {
-					t.Fatal(err)
-				}
+				result := invokeExa(t, newExaTestAdapter(t, exaBody(payload)), request, strict)
 				if len(result.Response.Output) != 3 {
 					t.Fatalf("exa output = %#v, want message and two references", result.Response.Output)
 				}
