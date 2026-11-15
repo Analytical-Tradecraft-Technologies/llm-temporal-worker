@@ -71,10 +71,9 @@ func (f *boundedCloudFixture) acquiredForSaveFaults(t *testing.T) (llm.Execution
 	f.restart(t)
 	f.runtime.execution.saveBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	return ref, budgets
 }
@@ -182,8 +181,7 @@ func TestCloudProviderOutcomeSavePersistentFailureStaysUnknown(t *testing.T) {
 	}
 	ctx := context.Background()
 	_, err := f.runtime.GenerateStepV1(ctx, f.request)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+	if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 		t.Fatalf("exhausted outcome save = %#v, want retryable state_unavailable", err)
 	}
 	if want := len(f.runtime.execution.saveBackoff) + 1; fault.fired != want {
@@ -246,8 +244,7 @@ func TestCloudProviderOutcomeSaveConflictAfterRetryIsVerifiedByReload(t *testing
 				}
 			} else {
 				// A conflict is success only when the durable record is this result.
-				var mapped *provider.Error
-				if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+				if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 					t.Fatalf("unverified conflict = %#v, want retryable state_unavailable", err)
 				}
 				if saved := f.savedExecution(t, ref); saved.Execution.Stage != cloudstate.ExecutionSubmitting || budgets.reconciles.Load() != 0 {
@@ -298,9 +295,7 @@ func TestCloudProviderRefusedMarkerSaveSettlesWithoutDispatch(t *testing.T) {
 				dispatched.Add(1)
 				return executionResponse(call).Result, nil
 			}
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if !v.Retryable || dispatched.Load() != 0 || fault.fired+lost.lost != attempts {
 				t.Fatalf("result=%+v dispatched=%d marker failures=%d", v, dispatched.Load(), fault.fired+lost.lost)
 			}
@@ -317,12 +312,7 @@ func TestCloudProviderRefusedMarkerSaveSettlesWithoutDispatch(t *testing.T) {
 			// The workflow's short retry delay replaces the 15-minute recovery wait.
 			f.runtime.execution.store = lost.CloudProviderExecutionStore
 			f.now = f.now.Add(2 * time.Second)
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			f.acquireGenerateComplete(t, ctx, ref)
 			if dispatched.Load() != 1 {
 				t.Fatalf("dispatched %d times", dispatched.Load())
 			}

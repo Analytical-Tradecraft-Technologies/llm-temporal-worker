@@ -43,46 +43,64 @@ func hierarchyAWSConfig() aws.Config {
 	return aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", "")}
 }
 
+// anthropicMessagesAdapter is a real anthropicmessages adapter for endpoint "endpoint" at capability
+// profile/v1 that sends through httpClient.
+func anthropicMessagesAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
+	client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://127.0.0.1", APIKey: "test-key", HTTPClient: httpClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := anthropicmessages.DefaultProfile("endpoint")
+	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
+	adapter, err := anthropicmessages.New(client, "endpoint", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+// bedrockMessagesAdapter is a real bedrockmessages adapter for endpoint "endpoint" at capability
+// profile/v1 that sends through httpClient.
+func bedrockMessagesAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
+	client, err := bedrockmessages.NewClient(context.Background(), bedrockmessages.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: httpClient, AWSConfig: hierarchyAWSConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := bedrockmessages.DefaultProfile("endpoint")
+	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
+	adapter, err := bedrockmessages.New(client, "endpoint", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
+// bedrockConverseAdapter is a real bedrockconverse adapter for endpoint "endpoint" at capability
+// profile/v1 that sends through httpClient.
+func bedrockConverseAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
+	client, err := bedrockconverse.NewClient(context.Background(), bedrockconverse.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: httpClient, AWSConfig: hierarchyAWSConfig()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := bedrockconverse.DefaultProfile("endpoint")
+	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
+	adapter, err := bedrockconverse.New(client, "endpoint", profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return adapter
+}
+
 func hierarchyRoutes() []hierarchyRoute {
 	return []hierarchyRoute{
 		{name: "anthropic_messages", family: provider.FamilyAnthropicMessages, tier: "standard_only", adapter: func(t *testing.T) provider.Adapter {
-			client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://127.0.0.1", APIKey: "test-key", HTTPClient: hierarchyHTTPClient()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			profile := anthropicmessages.DefaultProfile("endpoint")
-			profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
-			adapter, err := anthropicmessages.New(client, "endpoint", profile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return adapter
+			return anthropicMessagesAdapter(t, hierarchyHTTPClient())
 		}},
 		{name: "bedrock_anthropic_messages", family: provider.FamilyBedrockMessages, tier: "default", adapter: func(t *testing.T) provider.Adapter {
-			client, err := bedrockmessages.NewClient(context.Background(), bedrockmessages.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: hierarchyHTTPClient(), AWSConfig: hierarchyAWSConfig()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			profile := bedrockmessages.DefaultProfile("endpoint")
-			profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
-			adapter, err := bedrockmessages.New(client, "endpoint", profile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return adapter
+			return bedrockMessagesAdapter(t, hierarchyHTTPClient())
 		}},
 		{name: "bedrock_converse", family: provider.FamilyBedrockConverse, tier: "default", adapter: func(t *testing.T) provider.Adapter {
-			client, err := bedrockconverse.NewClient(context.Background(), bedrockconverse.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: hierarchyHTTPClient(), AWSConfig: hierarchyAWSConfig()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			profile := bedrockconverse.DefaultProfile("endpoint")
-			profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
-			adapter, err := bedrockconverse.New(client, "endpoint", profile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return adapter
+			return bedrockConverseAdapter(t, hierarchyHTTPClient())
 		}},
 		{name: "azure_chat", family: provider.FamilyOpenAIChat, tier: "default", adapter: func(t *testing.T) provider.Adapter {
 			client, err := openaichat.NewAzureClient(openaichat.AzureClientConfig{Endpoint: "https://127.0.0.1", APIVersion: "2025-01-01", APIKey: "test-key", HTTPClient: hierarchyHTTPClient()})
@@ -135,10 +153,7 @@ func TestCompactionWithApplicationInstructionsSurvivesBudgetPlanningAndRecovery(
 			f.cap.Adapters = engine.AdapterMap{"endpoint": route.adapter(t)}
 			_, _, _, _, replay, compact := planningFixture()
 			replay.State.Settings.Instructions = []llm.Instruction{hierarchyApplicationInstruction}
-			summary, err := PrepareCompactInput(context.Background(), compact, replay)
-			if err != nil {
-				t.Fatal(err)
-			}
+			summary := mustPrepareCompact(t, compact, replay)
 			summary.Request.Output.MaxTokens = preparationPointer(16)
 			planned, err := f.planning(t).Compact(context.Background(), summary, f.attempt)
 			if err != nil {
@@ -151,10 +166,7 @@ func TestCompactionWithApplicationInstructionsSurvivesBudgetPlanningAndRecovery(
 			if err != nil {
 				t.Fatal(err)
 			}
-			recovery, err := f.cap.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			recovery := mustProviderRecovery(t, f.cap)
 			recovered, err := recovery.Compact(context.Background(), summary, binding)
 			if err != nil {
 				t.Fatalf("ProviderRecovery.Compact: %#v", err)
@@ -206,17 +218,7 @@ func TestCloudExecutionRuntimeCompactionWithApplicationInstructions(t *testing.T
 			f.now = f.now.Add(time.Minute)
 			request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
 			ctx := context.Background()
-			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-			boundedState(t, v, err, llm.ExecutionBudgetRequired)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
-			f.restart(t)
-			v, err = f.runtime.CompactStepV1(ctx, request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			f.restart(t)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			v := f.runCompact(t, ctx, request, true)
 			if v.Compact == nil || f.submits.Load() != 2 {
 				t.Fatalf("compaction did not dispatch exactly once: submits=%d", f.submits.Load())
 			}

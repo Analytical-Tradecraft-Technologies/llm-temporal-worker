@@ -52,11 +52,7 @@ func cloudMetricTotal(t *testing.T, metrics *observability.Metrics, name string,
 // promises: budget admissions, provider attempts and latency, service class,
 // cost status and ambiguous dispatch (#988).
 func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := observability.WithMetrics(context.Background(), metrics)
+	metrics, ctx := cloudTestMetrics(t)
 	f := boundedCloud(t, false)
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
@@ -72,12 +68,7 @@ func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 		t.Fatal("operation states were not recorded on the cloud path")
 	}
 	// A lost paid response is ambiguous.
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("lost paid response")
-	}
+	f.adapter.invoke = invokeFailingAfterWrite(nil, errors.New("lost paid response"))
 	f.request.OperationKey = "ambiguous"
 	v, err = f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
@@ -96,15 +87,9 @@ func TestCloudRuntimeCountsAdmissionOncePerTurn(t *testing.T) {
 	}
 	ctx := observability.WithMetrics(context.Background(), metrics)
 	f := boundedCloud(t, false)
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
+	f.acquireGenerateComplete(t, ctx, ref)
 	if got := cloudMetricTotal(t, metrics, "llmtw_budget_admission_total", "outcome", "accepted"); got != 1 {
 		t.Fatalf("accepted admissions = %v, want 1", got)
 	}
@@ -154,16 +139,12 @@ func TestCloudMetricsCountTransitionsAndProviderAnswers(t *testing.T) {
 // Polls of provider-owned jobs and cache outcomes are counted on the cloud
 // path (#1217).
 func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := observability.WithMetrics(context.Background(), metrics)
+	metrics, ctx := cloudTestMetrics(t)
 	f := boundedCloud(t, true)
 	f.request.Cache = &llm.CachePolicyV1{}
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
 	v, err = f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
@@ -179,7 +160,7 @@ func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
 	f.request.OperationKey = "cached-repeat"
 	v, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	if err != nil || v.State != llm.ExecutionCompleted {
-		ref = llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+		ref = f.ref(v)
 		v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	}
 	boundedState(t, v, err, llm.ExecutionCompleted)
@@ -194,11 +175,7 @@ func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
 // A completed poll whose result fails validation counts as failed, not
 // completed.
 func TestCloudRuntimeCountsInvalidPollAsFailed(t *testing.T) {
-	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := observability.WithMetrics(context.Background(), metrics)
+	metrics, ctx := cloudTestMetrics(t)
 	f := boundedCloud(t, true)
 	f.adapter.poll = func(ctx context.Context, call provider.Call, id string, o provider.Observer) (provider.ResumableResult, error) {
 		v := executionResponse(call)
@@ -207,7 +184,7 @@ func TestCloudRuntimeCountsInvalidPollAsFailed(t *testing.T) {
 	}
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
 	if v, err = f.runtime.PollExecutionV1(ctx, ref); err == nil && v.State == llm.ExecutionProviderCompleted {
 		t.Fatal("invalid poll result completed")
@@ -236,4 +213,16 @@ func TestCloudRuntimeRecordsStepAndAttemptSpans(t *testing.T) {
 	if !names["llmtw.cloud.generate"] || !names["llmtw.provider_attempt"] {
 		t.Fatalf("spans = %v, want the generate step and the provider attempt", names)
 	}
+}
+
+// cloudTestMetrics returns a metrics registry for the bounded cloud fixture's
+// endpoint and outcomes and a context that records into it.
+func cloudTestMetrics(t *testing.T) (*observability.Metrics, context.Context) {
+	t.Helper()
+	metrics, err := observability.NewMetrics(observability.AllowedValues{Endpoints: []string{"endpoint"}, Outcomes: []string{"success", "failure", "accepted", "denied"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := observability.WithMetrics(context.Background(), metrics)
+	return metrics, ctx
 }

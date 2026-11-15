@@ -60,13 +60,7 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 	f.cap.ProviderStatusRecorder = shared
 	f.restart(t)
 	success := f.adapter.invoke
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "unavailable")
-	}
+	f.adapter.invoke = invokeFailingAfterWrite(&f.submits, unavailableRejection())
 	for i := 0; i < 3; i++ {
 		f.request.OperationKey = fmt.Sprintf("failure-%d", i)
 		result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
@@ -103,7 +97,7 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 		t.Fatal("successful probe did not close circuit")
 	}
 	before := shared.observations
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
+	ref := f.ref(result)
 	_, err = f.runtime.PollExecutionV1(context.Background(), ref)
 	if err != nil || shared.observations != before {
 		t.Fatal("replay duplicated health observation", err)
@@ -115,12 +109,7 @@ func TestCloudUnknownOutcomeDoesNotOpenCircuit(t *testing.T) {
 	shared := &sharedHealthFixture{}
 	f.cap.ProviderStatusRecorder = shared
 	f.restart(t)
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, errors.New("response lost")
-	}
+	f.adapter.invoke = invokeFailingAfterWrite(nil, errors.New("response lost"))
 	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
 	boundedState(t, result, err, llm.ExecutionPending)
 	if shared.observations != 0 {
@@ -144,7 +133,7 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: route.EndpointAccountHMAC, Provider: route.Provider, EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditOK, Billing: control.BillingOK}
 	f.now = f.now.Add(2 * time.Second)
 	f.restart(t)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
+	ref := f.ref(result)
 	result, err = f.runtime.PollExecutionV1(context.Background(), ref)
 	boundedState(t, result, err, llm.ExecutionProviderCompleted)
 	if f.submits.Load() != 1 || f.polls.Load() != 1 {

@@ -61,15 +61,8 @@ func newBudgetPlanningFixture(t testing.TB) *budgetPlanningFixture {
 		}
 		return 10, nil
 	}}
-	var err error
-	f.generate, err = PrepareGenerateInput(context.Background(), f.gen, durable.GenerateReplay{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.summary, err = PrepareCompactInput(context.Background(), f.compact, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.generate = mustPrepareGenerate(t, f.gen)
+	f.summary = mustPrepareCompact(t, f.compact, replay)
 	// Give both semantic requests the same small bound to assert the quote by
 	// hand. Preparation and the normal summarizer bounds are covered separately.
 	for _, request := range []*llm.Request{&f.generate.Request, f.summary.Request} {
@@ -114,16 +107,7 @@ func TestBudgetPlanningQuotesBothPhasesAndEveryMatchedWindow(t *testing.T) {
 	p := f.planning(t)
 	for _, compact := range []bool{false, true} {
 		t.Run(map[bool]string{false: "generate", true: "compact"}[compact], func(t *testing.T) {
-			var planned PlannedBudgetCall
-			var err error
-			if compact {
-				planned, err = p.Compact(context.Background(), f.summary, f.attempt)
-			} else {
-				planned, err = p.Generate(context.Background(), f.generate, f.attempt)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			planned := f.plan(t, p, compact)
 			if !planned.RequiresReservation() || planned.Estimate.CostUSD.Cmp(pricing.MustUSD("0.00006300015")) != 0 || planned.Estimate.MicroUSD != 65 ||
 				planned.Estimate.InputTokens != 10 || planned.Estimate.OutputTokens != 16 || planned.Quote.Entry.Version != "price/v1" ||
 				planned.Route.PriceVersion != "price/v1" || planned.Route.CacheIdentity != planned.Provider.CacheIdentity {
@@ -150,10 +134,7 @@ func TestBudgetPlanningQuotesBothPhasesAndEveryMatchedWindow(t *testing.T) {
 
 func TestBudgetPlanningCapturedPricesPoliciesAndEstimatorSurviveMutation(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
-	providers, err := f.cap.NewProviderPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	providers := mustProviderPlanning(t, f.cap)
 	// Mutate the source between provider and budget planner construction.
 	resolver := f.source.value.Prices.(*pricing.PriceResolver)
 	changed := f.entry
@@ -361,11 +342,8 @@ func TestBudgetPlanningRejectsUnsafeConfiguration(t *testing.T) {
 			case "ratio":
 				f.estimator.SafetyRatio = big.NewRat(-1, 1)
 			}
-			providers, err := f.cap.NewProviderPlanning(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = providers.NewBudgetPlanning(f.estimator, maxBuckets)
+			providers := mustProviderPlanning(t, f.cap)
+			_, err := providers.NewBudgetPlanning(f.estimator, maxBuckets)
 			assertBudgetPlanningError(t, err, provider.CodeConfiguration)
 		})
 	}
@@ -498,16 +476,7 @@ func TestBudgetPlanningQuotesReachAdmissionAndUncertainAcceptanceReplaysIdentica
 		t.Run(map[bool]string{false: "generate", true: "compact"}[compact], func(t *testing.T) {
 			f := newBudgetPlanningFixture(t)
 			p := f.planning(t)
-			var planned PlannedBudgetCall
-			var err error
-			if compact {
-				planned, err = p.Compact(context.Background(), f.summary, f.attempt)
-			} else {
-				planned, err = p.Generate(context.Background(), f.generate, f.attempt)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			planned := f.plan(t, p, compact)
 			admissionFixture := newBudgetAdmissionFixture(t)
 			admissionFixture.gen, admissionFixture.compact = f.gen, f.compact
 			admissionFixture.route, admissionFixture.plan, admissionFixture.now = planned.Route, planned.Reservation, f.attempt.QuotedAt
@@ -529,7 +498,7 @@ func TestBudgetPlanningQuotesReachAdmissionAndUncertainAcceptanceReplaysIdentica
 				}
 				return admissionFixture.helper.ReserveGenerate(context.Background(), f.gen, planned.Route)
 			}
-			_, err = reserve()
+			_, err := reserve()
 			assertBudgetAdmissionError(t, err, provider.CodeStateUnavailable, provider.DispatchNotDispatched, provider.RetrySameOperation)
 			// Crossing a bucket boundary cannot refresh the quote or lease.
 			admissionFixture.now = admissionFixture.now.Add(2 * time.Minute)
@@ -554,16 +523,8 @@ func TestBudgetPlanningQuotesReachAdmissionAndUncertainAcceptanceReplaysIdentica
 
 func TestBudgetPlanningPrefersLessTriedCandidates(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
-	model := f.source.value.Routes.Models["alias"]
-	alternate := model.Routes[0]
-	alternate.ID, alternate.EndpointID = "alternate", "alternate-endpoint"
-	model.Routes = append(model.Routes, alternate)
-	f.source.value.Routes.Models["alias"] = model
+	f.addFallbackRoute(t, "alternate", "alternate-endpoint")
 	f.cap.Adapters.(engine.AdapterMap)["alternate-endpoint"] = f.adapter
-	f.source.value.BudgetPolicies[0].Match.EndpointID = ""
-	entry := f.entry
-	entry.EndpointID = "alternate-endpoint"
-	f.prices(t, []pricing.Entry{f.entry, entry})
 	planning := f.planning(t)
 	first, err := planning.Generate(context.Background(), f.generate, f.attempt)
 	if err != nil {

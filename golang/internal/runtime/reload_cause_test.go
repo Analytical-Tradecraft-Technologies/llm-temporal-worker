@@ -79,11 +79,7 @@ func TestRuntimeReloadFailureLogNamesCauseAndFieldNeverValue(t *testing.T) {
 		return []byte("resolved"), nil
 	})}
 	data := string(runtimeConfig(t))
-	runtime, err := New(context.Background(), []byte(data), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), []byte(data), options)
 
 	tests := []struct {
 		name        string
@@ -163,11 +159,7 @@ func TestRuntimeReloadFailureLogNamesCatalogDigestMismatch(t *testing.T) {
 		}
 		return inner.Build(ctx, snapshot)
 	})
-	runtime, err := New(context.Background(), []byte(data), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), []byte(data), options)
 
 	pricesDigest := "aff38b31219810e9acc50d6b790a7b570e74fd84b2716a72c75435a7f9faecda"
 	wrongDigest := strings.Repeat("ab", 32)

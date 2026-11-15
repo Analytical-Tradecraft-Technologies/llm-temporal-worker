@@ -41,10 +41,8 @@ func TestCloudConcurrentFailureFinalization(t *testing.T) {
 				failure.RetryAfter = time.Second
 				return provider.Result{}, failure
 			}
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
+			ref := f.ref(v)
 			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
 			f.now = f.now.Add(time.Second)
 			// Force another acquisition to advance the root between this caller's
@@ -61,6 +59,7 @@ func TestCloudConcurrentFailureFinalization(t *testing.T) {
 				}
 			}
 			f.runtime.store = store
+			var err error
 			switch step {
 			case "acquire":
 				v, err = f.runtime.AcquireBudgetV1(ctx, ref)
@@ -74,8 +73,7 @@ func TestCloudConcurrentFailureFinalization(t *testing.T) {
 			if step == "acquire" {
 				boundedState(t, v, err, llm.ExecutionAcquired)
 			} else {
-				var mapped *provider.Error
-				if !errors.As(err, &mapped) || mapped.Code != provider.CodeOperationConflict || mapped.Retry != provider.RetryNever {
+				if !isProviderError(err, provider.CodeOperationConflict, provider.RetryNever) {
 					t.Fatal("non-acquisition step followed the new attempt", v, err)
 				}
 			}
@@ -108,7 +106,7 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 			}
 			ctx := context.Background()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+			ref := f.ref(v)
 			if async {
 				boundedState(t, v, err, llm.ExecutionPending)
 				f.now = f.now.Add(2 * time.Second)
@@ -221,12 +219,7 @@ func TestCloudPermanentFailureReplaysWithoutParentOrProvider(t *testing.T) {
 	}
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionFailed)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	ref, _, first := f.firstAttempt(t, ctx, v)
 	assertCloudStatus(t, f, first.ID, cloudstate.StatusFailed)
 	assertCloudStatus(t, f, first.RootID, cloudstate.StatusFailed)
 	f.now = f.now.Add(48 * time.Hour)

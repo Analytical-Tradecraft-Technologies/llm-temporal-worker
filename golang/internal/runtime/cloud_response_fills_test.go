@@ -3,19 +3,12 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
 
 type cloudFillTestStore struct{ calls int }
@@ -83,21 +76,7 @@ func TestCloudFillCapabilitiesRejectIncompleteAndDrainSnapshot(t *testing.T) {
 		if _, err := cloudResponseFills(repository); !errors.Is(err, ErrProductionFactoryInvalid) {
 			t.Fatal(err)
 		}
-		closed, built := false, false
-		factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-			Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
-				return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))), nil
-			}),
-			CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
-				return repository, nil
-			},
-			V1RuntimeBuilder: func(context.Context, *config.Snapshot, llm.Engine, app.ClientSet) (activity.V1Runtime, error) {
-				built = true
-				return &cloudInnerRuntime{}, nil
-			},
-		}}
-		clients := &productionClientSet{checkpointVerifier: verifier, close: func(context.Context) error { closed = true; return nil }}
-		if _, _, err := factory.attachV1Runtime(context.Background(), cloudSnapshot(t, "fill-test"), nil, clients); !errors.Is(err, ErrProductionFactoryInvalid) || !closed || built {
+		if closed, built, err := attachCloudRuntime(t, repository, verifier, "fill-test", 7); !errors.Is(err, ErrProductionFactoryInvalid) || !closed || built {
 			t.Fatalf("missing fill accepted: %v %t %t", err, closed, built)
 		}
 	}

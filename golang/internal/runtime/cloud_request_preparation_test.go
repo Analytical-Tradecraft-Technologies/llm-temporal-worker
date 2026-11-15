@@ -562,8 +562,7 @@ func TestCloudProjectDefaultSnapshotErrorsRemainRetryable(t *testing.T) {
 					t.Fatalf("lost cancellation: %v", err)
 				}
 			} else {
-				var mapped *provider.Error
-				if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+				if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 					t.Fatalf("transient failure became permanent: %v", err)
 				}
 			}

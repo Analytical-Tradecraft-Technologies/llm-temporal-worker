@@ -13,7 +13,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
 func rejectedSelection(t *testing.T, err error, code provider.Code, phase provider.Phase) map[string]string {
@@ -55,7 +54,7 @@ func TestCloudExecutionReportsUnsupportedCapabilityForRejectedRoutes(t *testing.
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			if err == nil {
 				boundedState(t, v, err, llm.ExecutionBudgetRequired)
-				_, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
+				_, err = f.runtime.AcquireBudgetV1(ctx, f.ref(v))
 			}
 			details := rejectedSelection(t, err, provider.CodeUnsupportedCapability, provider.PhaseCompile)
 			// No route offers the fixture's priority class, so it is served at
@@ -136,15 +135,9 @@ func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
 			if customPlanner != nil {
 				capabilities.Planner = customPlanner
 			}
-			planning, err := capabilities.NewProviderPlanning(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = planning.Generate(context.Background(), prepared)
+			planning := mustProviderPlanning(t, capabilities)
+			prepared := mustPrepareGenerate(t, request)
+			_, err := planning.Generate(context.Background(), prepared)
 			details := rejectedSelection(t, err, test.code, test.phase)
 			if len(details) != len(test.details) {
 				t.Fatalf("details = %v, want %v", details, test.details)

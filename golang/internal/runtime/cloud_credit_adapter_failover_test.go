@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -13,10 +12,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/bedrockmessages"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
 // creditDeniedHTTPClient answers every request with the given provider
@@ -31,30 +26,8 @@ func creditDeniedHTTPClient(requests *atomic.Int32, status int, body string) *ht
 	})}
 }
 
-func anthropicCreditAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
-	client, err := anthropicmessages.NewClient(anthropicmessages.ClientConfig{BaseURL: "https://127.0.0.1", APIKey: "test-key", HTTPClient: httpClient})
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := anthropicmessages.DefaultProfile("endpoint")
-	profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
-	adapter, err := anthropicmessages.New(client, "endpoint", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter
-}
-
 func responsesCreditAdapter(t *testing.T, httpClient *http.Client) provider.Adapter {
-	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: httpClient})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter
+	return responsesAdapter(t, httpClient)
 }
 
 // A 402 from the real Anthropic, Bedrock Messages and Responses adapters is a
@@ -73,22 +46,10 @@ func TestCloudAdapterCreditDenialHoldsRouteAndFailsOver(t *testing.T) {
 		status  int
 		body    string
 	}{
-		{name: "anthropic_messages", family: provider.FamilyAnthropicMessages, tier: "standard_only", status: http.StatusPaymentRequired, body: anthropicBody, adapter: anthropicCreditAdapter},
-		{name: "bedrock_anthropic_messages", family: provider.FamilyBedrockMessages, tier: "default", status: http.StatusPaymentRequired, body: anthropicBody, adapter: func(t *testing.T, httpClient *http.Client) provider.Adapter {
-			client, err := bedrockmessages.NewClient(context.Background(), bedrockmessages.ClientConfig{BaseURL: "https://127.0.0.1", HTTPClient: httpClient, AWSConfig: hierarchyAWSConfig()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			profile := bedrockmessages.DefaultProfile("endpoint")
-			profile.CapabilityVersion, profile.Capabilities.Version = "profile/v1", "profile/v1"
-			adapter, err := bedrockmessages.New(client, "endpoint", profile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return adapter
-		}},
+		{name: "anthropic_messages", family: provider.FamilyAnthropicMessages, tier: "standard_only", status: http.StatusPaymentRequired, body: anthropicBody, adapter: anthropicMessagesAdapter},
+		{name: "bedrock_anthropic_messages", family: provider.FamilyBedrockMessages, tier: "default", status: http.StatusPaymentRequired, body: anthropicBody, adapter: bedrockMessagesAdapter},
 		{name: "openai_responses", family: provider.FamilyOpenAIResponses, tier: "default", status: http.StatusPaymentRequired, body: `{"error":{"message":"credits used up"}}`, adapter: responsesCreditAdapter},
-		{name: "anthropic_messages_spend_cap", family: provider.FamilyAnthropicMessages, tier: "standard_only", status: http.StatusTooManyRequests, adapter: anthropicCreditAdapter,
+		{name: "anthropic_messages_spend_cap", family: provider.FamilyAnthropicMessages, tier: "standard_only", status: http.StatusTooManyRequests, adapter: anthropicMessagesAdapter,
 			body: `{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your API usage limits","details":{"error_code":"enforced_spend_limit_reached"}}}`},
 		{name: "openai_responses_credit_balance_exhausted", family: provider.FamilyOpenAIResponses, tier: "default", status: http.StatusTooManyRequests, adapter: responsesCreditAdapter,
 			body: `{"error":{"message":"credit balance exhausted","type":"insufficient_quota","code":"credit_balance_exhausted","param":null}}`},
@@ -97,15 +58,7 @@ func TestCloudAdapterCreditDenialHoldsRouteAndFailsOver(t *testing.T) {
 			route := hierarchyRoute{name: test.name, family: test.family, tier: test.tier}
 			f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
 				route.configure(b)
-				model := b.source.value.Routes.Models["alias"]
-				second := model.Routes[0]
-				second.ID, second.EndpointID = "alternate", "alternate-endpoint"
-				model.Routes = append(model.Routes, second)
-				b.source.value.Routes.Models["alias"] = model
-				b.source.value.BudgetPolicies[0].Match.EndpointID = ""
-				entry := b.entry
-				entry.EndpointID = "alternate-endpoint"
-				b.prices(t, []pricing.Entry{b.entry, entry})
+				b.addFallbackRoute(t, "alternate", "alternate-endpoint")
 			})
 			shared := &keyedHealthFixture{}
 			f.cap.ProviderRouteStatus, f.cap.ProviderStatusRecorder = shared, shared
@@ -113,9 +66,7 @@ func TestCloudAdapterCreditDenialHoldsRouteAndFailsOver(t *testing.T) {
 			f.cap.Adapters = engine.AdapterMap{"endpoint": test.adapter(t, creditDeniedHTTPClient(&requests, test.status, test.body)), "alternate-endpoint": f.adapter.executionSyncAdapter}
 			f.restart(t)
 
-			ctx := context.Background()
-			v, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			if !v.Retryable || v.ErrorCode != string(provider.CodePermissionDenied) {
 				t.Fatalf("%d = %+v, want a retryable permission_denied", test.status, v)
 			}
@@ -127,8 +78,8 @@ func TestCloudAdapterCreditDenialHoldsRouteAndFailsOver(t *testing.T) {
 					t.Fatalf("status = %+v, want the credit hold on the rejected route", status)
 				}
 			}
-			ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+			ref := f.ref(v)
+			v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 			boundedState(t, v, err, llm.ExecutionAcquired)
 			v, err = f.runtime.GenerateStepV1(ctx, f.request)
 			boundedState(t, v, err, llm.ExecutionProviderCompleted)

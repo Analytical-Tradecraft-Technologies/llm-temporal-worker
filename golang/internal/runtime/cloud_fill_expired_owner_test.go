@@ -15,12 +15,11 @@ func TestCloudCacheWaiterTakesOverExpiredOwnerWithinOwnLease(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	v := f.prepareGenerate(t, ctx)
 	waiter := f.request
 	waiter.OperationKey = "waiter"
 	f.now = f.now.Add(time.Minute)
-	v, err = f.runtime.GenerateStepV1(ctx, waiter)
+	v, err := f.runtime.GenerateStepV1(ctx, waiter)
 	boundedState(t, v, err, llm.ExecutionCacheWait)
 	// The owner is abandoned: its lease expires while the waiter's attempt
 	// still has time left on its own lease.
@@ -29,7 +28,5 @@ func TestCloudCacheWaiterTakesOverExpiredOwnerWithinOwnLease(t *testing.T) {
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: waiter.Context, Capability: v.Capability})
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 1 {
-		t.Fatalf("waiter after expired owner: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "waiter after expired owner", v, "miss_populated", 1)
 }

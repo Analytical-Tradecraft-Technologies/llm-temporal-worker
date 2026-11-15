@@ -19,7 +19,9 @@ type snapshotExecutionProbe struct {
 	release chan struct{}
 }
 
-func (p *snapshotExecutionProbe) PrepareExecutionV1(ctx context.Context, _ llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
+// call counts one runtime call and, when entered is set, signals entry and
+// holds the call until release or cancellation.
+func (p *snapshotExecutionProbe) call(ctx context.Context) (llm.ExecutionResultV1, error) {
 	p.calls.Add(1)
 	if p.entered != nil {
 		close(p.entered)
@@ -30,66 +32,25 @@ func (p *snapshotExecutionProbe) PrepareExecutionV1(ctx context.Context, _ llm.P
 		}
 	}
 	return llm.ExecutionResultV1{State: llm.ExecutionAcquired}, nil
+}
+
+func (p *snapshotExecutionProbe) PrepareExecutionV1(ctx context.Context, _ llm.PrepareExecutionV1) (llm.ExecutionResultV1, error) {
+	return p.call(ctx)
 }
 func (p *snapshotExecutionProbe) AcquireBudgetV1(ctx context.Context, _ llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	p.calls.Add(1)
-	if p.entered != nil {
-		close(p.entered)
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return llm.ExecutionResultV1{}, ctx.Err()
-		}
-	}
-	return llm.ExecutionResultV1{State: llm.ExecutionAcquired}, nil
+	return p.call(ctx)
 }
 func (p *snapshotExecutionProbe) GenerateStepV1(ctx context.Context, _ llm.GenerateRequestV1) (llm.ExecutionResultV1, error) {
-	p.calls.Add(1)
-	if p.entered != nil {
-		close(p.entered)
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return llm.ExecutionResultV1{}, ctx.Err()
-		}
-	}
-	return llm.ExecutionResultV1{State: llm.ExecutionAcquired}, nil
+	return p.call(ctx)
 }
 func (p *snapshotExecutionProbe) CompactStepV1(ctx context.Context, _ llm.CompactRequestV1) (llm.ExecutionResultV1, error) {
-	p.calls.Add(1)
-	if p.entered != nil {
-		close(p.entered)
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return llm.ExecutionResultV1{}, ctx.Err()
-		}
-	}
-	return llm.ExecutionResultV1{State: llm.ExecutionAcquired}, nil
+	return p.call(ctx)
 }
 func (p *snapshotExecutionProbe) PollExecutionV1(ctx context.Context, _ llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	p.calls.Add(1)
-	if p.entered != nil {
-		close(p.entered)
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return llm.ExecutionResultV1{}, ctx.Err()
-		}
-	}
-	return llm.ExecutionResultV1{State: llm.ExecutionAcquired}, nil
+	return p.call(ctx)
 }
 func (p *snapshotExecutionProbe) CompleteExecutionV1(ctx context.Context, _ llm.ExecutionReferenceV1) (llm.ExecutionResultV1, error) {
-	p.calls.Add(1)
-	if p.entered != nil {
-		close(p.entered)
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return llm.ExecutionResultV1{}, ctx.Err()
-		}
-	}
-	return llm.ExecutionResultV1{State: llm.ExecutionAcquired}, nil
+	return p.call(ctx)
 }
 
 func TestSnapshotExecutionLeaseSurvivesReload(t *testing.T) {

@@ -11,7 +11,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,10 +29,7 @@ import (
 
 func runtimeConfig(t *testing.T) []byte {
 	t.Helper()
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	value := string(data)
 	value = strings.Replace(value, "health_address: 0.0.0.0:8080", "health_address: 127.0.0.1:0", 1)
 	value = strings.Replace(value, "metrics_address: 0.0.0.0:9090", "metrics_address: 127.0.0.1:0", 1)
@@ -206,17 +202,7 @@ func TestRuntimeMetricsSurfaceMatchesListenerConfiguration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			controller := &testWorker{}
 			var closed atomic.Bool
-			runtime, err := New(context.Background(), test.configuration(t), testRuntimeOptions(t, controller, &closed))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := runtime.Start(); err != nil {
-				if strings.Contains(err.Error(), "operation not permitted") {
-					t.Skipf("sandbox does not permit loopback listeners: %v", err)
-				}
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+			runtime := newStartedRuntime(t, context.Background(), test.configuration(t), testRuntimeOptions(t, controller, &closed))
 
 			if got := runtime.MetricsServer != nil; got != test.wantMetricsServer {
 				t.Fatalf("metrics server presence = %v, want %v", got, test.wantMetricsServer)
@@ -256,17 +242,7 @@ func TestDevelopmentRuntimeAllowsFailClosedV1Runtime(t *testing.T) {
 	options := testRuntimeOptions(t, controller, &closed)
 	options.V1Runtime = nil
 	data := []byte(strings.Replace(string(runtimeConfig(t)), "environment: production", "environment: development", -1))
-	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newStartedRuntime(t, context.Background(), data, options)
 	if !controller.started.Load() || !runtime.Health.Ready() {
 		t.Fatalf("development runtime did not start: started=%v ready=%v", controller.started.Load(), runtime.Health.Ready())
 	}
@@ -275,11 +251,7 @@ func TestDevelopmentRuntimeAllowsFailClosedV1Runtime(t *testing.T) {
 func TestConcurrentRuntimeStartHasExactlyOneOwner(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
-	runtime, err := New(context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
 
 	const callers = 32
 	start := make(chan struct{})
@@ -339,11 +311,7 @@ func TestRuntimeStartCanRetryAfterInitialBindFailure(t *testing.T) {
 	)
 	controller := &testWorker{}
 	var closed atomic.Bool
-	runtime, err := New(context.Background(), []byte(data), testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), []byte(data), testRuntimeOptions(t, controller, &closed))
 
 	if err := runtime.Start(); err == nil || !strings.Contains(err.Error(), "listen for health server") {
 		t.Fatalf("Start() error = %v, want wrapped listen error", err)
@@ -434,19 +402,24 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	phases := make(map[string]struct{})
-	for _, family := range families {
-		if family.GetName() != "llmtw_activity_duration_seconds" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			for _, label := range metric.GetLabel() {
-				if label.GetName() == "phase" {
-					phases[label.GetValue()] = struct{}{}
+	// labelValues collects the values of label across the named family.
+	labelValues := func(name, label string) map[string]struct{} {
+		values := make(map[string]struct{})
+		for _, family := range families {
+			if family.GetName() != name {
+				continue
+			}
+			for _, metric := range family.GetMetric() {
+				for _, pair := range metric.GetLabel() {
+					if pair.GetName() == label {
+						values[pair.GetValue()] = struct{}{}
+					}
 				}
 			}
 		}
+		return values
 	}
+	phases := labelValues("llmtw_activity_duration_seconds", "phase")
 	if _, ok := phases["response_received"]; !ok {
 		t.Fatalf("activity metric phases = %v, want response_received", phases)
 	}
@@ -459,35 +432,11 @@ func TestMetricsAllowOneShotResponsePhaseButNotStreaming(t *testing.T) {
 	if _, ok := phases["other"]; !ok {
 		t.Fatalf("activity metric phases = %v, want disallowed streaming to map to other", phases)
 	}
-	methods := make(map[string]struct{})
-	for _, family := range families {
-		if family.GetName() != "llmtw_cost_usd_total" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			for _, label := range metric.GetLabel() {
-				if label.GetName() == "method" {
-					methods[label.GetValue()] = struct{}{}
-				}
-			}
-		}
-	}
+	methods := labelValues("llmtw_cost_usd_total", "method")
 	if _, ok := methods["catalog_usage"]; !ok {
 		t.Fatalf("cost metric methods = %v, want catalog_usage", methods)
 	}
-	providerModels := make(map[string]struct{})
-	for _, family := range families {
-		if family.GetName() != "llmtw_provider_attempt_total" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			for _, label := range metric.GetLabel() {
-				if label.GetName() == "model" {
-					providerModels[label.GetValue()] = struct{}{}
-				}
-			}
-		}
-	}
+	providerModels := labelValues("llmtw_provider_attempt_total", "model")
 	if _, ok := providerModels["provider-model"]; !ok {
 		t.Fatalf("provider metric models = %v, want provider-model", providerModels)
 	}
@@ -648,11 +597,7 @@ func TestRuntimeReloadDependencyFailureKeepsPriorSnapshot(t *testing.T) {
 		}), nil
 	})
 	options.DependencyProbes = []DependencyProbe{probe}
-	runtime, err := New(context.Background(), runtimeConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), runtimeConfig(t), options)
 	old := runtime.App.Current()
 	probe.healthy.Store(false)
 	if err := runtime.App.Reload(context.Background(), runtimeConfig(t)); !errors.Is(err, errRequiredDependencyUnavailable) {
@@ -676,17 +621,7 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 		return controller, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
-	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newStartedRuntime(t, context.Background(), runtimeMonitorConfig(t), options)
 	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
 		t.Fatalf("initial monitor state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
 	}
@@ -726,17 +661,7 @@ func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
 		return testEngine{}, clients, nil
 	})
 	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", -1))
-	runtime, err := New(context.Background(), configuration, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newStartedRuntime(t, context.Background(), configuration, options)
 	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
 		t.Fatalf("initial development runtime state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
 	}
@@ -827,17 +752,7 @@ func assertUnconfiguredV1ReloadNotReady(t *testing.T, probes []DependencyProbe) 
 	if probes != nil {
 		options.DependencyProbes = probes
 	}
-	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newStartedRuntime(t, context.Background(), runtimeMonitorConfig(t), options)
 	if !runtime.Health.Ready() || initial.starts.Load() != 1 {
 		t.Fatalf("initial runtime state ready=%v starts=%d", runtime.Health.Ready(), initial.starts.Load())
 	}
@@ -877,18 +792,9 @@ func TestRuntimeMonitorContinuesCheckingWhilePausedWorkerDrains(t *testing.T) {
 		return replacement, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
-	runtime, err := New(context.Background(), runtimeMonitorConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), runtimeMonitorConfig(t), options)
 	t.Cleanup(release)
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	if !runtime.Health.Ready() || first.starts.Load() != 1 {
 		t.Fatalf("initial monitor state ready=%v starts=%d", runtime.Health.Ready(), first.starts.Load())
 	}
@@ -1028,12 +934,7 @@ func TestRuntimeStartsAndShutsDownInOrder(t *testing.T) {
 	if runtime.Health.Ready() {
 		t.Fatal("runtime became ready before Start")
 	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	if !controller.started.Load() || !runtime.Health.Ready() {
 		t.Fatal("worker did not start or readiness did not transition")
 	}
@@ -1057,12 +958,7 @@ func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 	// Probe listeners are intentionally real sockets. Some restricted test
 	// sandboxes deny loopback binds; skip this lifecycle test there while the
 	// listener behavior remains covered by internal/httpserver tests.
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	if err := runtime.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -1162,17 +1058,7 @@ func TestRuntimeToleratesTransientDependencyProbeFailuresBeforePausing(t *testin
 		return controller, &testRegistry{}, nil
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
-	runtime, err := New(context.Background(), runtimeConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newStartedRuntime(t, context.Background(), runtimeConfig(t), options)
 	if !runtime.Health.Ready() || controller.starts.Load() != 1 {
 		t.Fatalf("initial state ready=%v starts=%d", runtime.Health.Ready(), controller.starts.Load())
 	}
@@ -1261,17 +1147,8 @@ func TestRuntimeDependencyPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(
 	}
 	options.DependencyProbes = []DependencyProbe{probe}
 	configuration := strings.Replace(string(runtimeMonitorConfig(t)), "graceful_stop_timeout: 30s", "graceful_stop_timeout: "+graceful.String(), 1)
-	runtime, err := New(context.Background(), []byte(configuration), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
+	runtime := newTestRuntime(t, context.Background(), []byte(configuration), options)
+	startTestRuntime(t, runtime)
 
 	probe.healthy.Store(false)
 	waitForRuntimeEvent(t, first.stopEntered, "dependency pause drain")

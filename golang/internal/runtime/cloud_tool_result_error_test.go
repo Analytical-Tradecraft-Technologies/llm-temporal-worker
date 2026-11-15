@@ -14,7 +14,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 )
 
@@ -28,8 +27,7 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 	model.Routes[0].Capabilities.Features[routing.FeatureToolCall] = routing.Capability{State: routing.CapabilityNative}
 	source.value.Routes.Models["alias"] = model
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		result := executionResponse(call).Result
@@ -41,7 +39,7 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 
 	var requests atomic.Int32
 	var body atomic.Value
-	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(r *http.Request) (*http.Response, error) {
+	adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(r *http.Request) (*http.Response, error) {
 		requests.Add(1)
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -52,14 +50,7 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 			`{"id":"resp-1","object":"response","created_at":1710000000,"model":"provider-model","status":"completed","service_tier":"default",` +
 				`"output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"recovered","annotations":[]}]}],` +
 				`"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15}}`))}, nil
-	})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	})})
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
 	handle := parent.Generate.Checkpoint.Handle
 	f.request.Parent = &handle
@@ -86,8 +77,7 @@ func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
 	model.Routes[0].Capabilities.Features[routing.FeatureToolCall] = routing.Capability{State: routing.CapabilityNative}
 	source.value.Routes.Models["alias"] = model
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		result := executionResponse(call).Result

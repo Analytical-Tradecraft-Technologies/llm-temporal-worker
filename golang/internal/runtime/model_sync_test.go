@@ -78,19 +78,11 @@ func modelSyncTestDocument() modelsync.Document {
 func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.T) {
 	value := modelSyncTestConfig()
 	loaded := modelSyncTestCatalogs(t)
-	syncRuntime, err := newModelSyncRuntime(value, loaded, catalog.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The optional direct endpoint has no credential, so only OpenRouter and
 	// the configured endpoint have adapters.
-	if err := syncRuntime.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
-		t.Fatal(err)
-	}
+	syncRuntime := enabledModelSync(t, value, loaded, "openrouter", "configured")
 	document := modelSyncTestDocument()
-	if err := syncRuntime.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	mustInstall(t, syncRuntime, &document)
 	snapshot, err := syncRuntime.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -122,9 +114,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	// A later fetch of the same content keeps the price version, which is
 	// derived from catalog content only (#1555).
 	document.FetchedAt = document.FetchedAt.Add(time.Hour)
-	if err := syncRuntime.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	mustInstall(t, syncRuntime, &document)
 	unchanged, _ := syncRuntime.Current(context.Background())
 	if sameQuote, err := unchanged.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
 		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()}); err != nil || sameQuote.Entry.Version != quote.Entry.Version {
@@ -134,9 +124,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	// captured snapshot is unchanged.
 	document.FetchedAt = document.FetchedAt.Add(time.Hour)
 	document.Models[1].Endpoints[0].Pricing.Prompt = "0.000001"
-	if err := syncRuntime.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	mustInstall(t, syncRuntime, &document)
 	refreshed, _ := syncRuntime.Current(context.Background())
 	newQuote, err := refreshed.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
 		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()})
@@ -151,17 +139,9 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 
 func TestModelSyncRoutesDirectEndpointFirstWhenEnabled(t *testing.T) {
 	value := modelSyncTestConfig()
-	syncRuntime, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syncRuntime.enable(map[string]provider.Adapter{"openrouter": nil, "openai-direct": nil, "configured": nil}); err != nil {
-		t.Fatal(err)
-	}
+	syncRuntime := enabledModelSync(t, value, modelSyncTestCatalogs(t), "openrouter", "openai-direct", "configured")
 	document := modelSyncTestDocument()
-	if err := syncRuntime.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	mustInstall(t, syncRuntime, &document)
 	snapshot, _ := syncRuntime.Current(context.Background())
 	routes := snapshot.Routes.Models["openai/gpt-5.4-mini"].Routes
 	if len(routes) != 2 || routes[0].EndpointID != "openai-direct" || routes[0].Model != "gpt-5.4-mini" || routes[1].EndpointID != "openrouter" {
@@ -191,17 +171,9 @@ func syncedEndpointDigest(t *testing.T, change func(*config.EndpointConfig)) [32
 		change(&endpoint)
 		value.Endpoints["openrouter"] = endpoint
 	}
-	syncRuntime, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syncRuntime.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
-		t.Fatal(err)
-	}
+	syncRuntime := enabledModelSync(t, value, modelSyncTestCatalogs(t), "openrouter", "configured")
 	document := modelSyncTestDocument()
-	if err := syncRuntime.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	mustInstall(t, syncRuntime, &document)
 	snapshot, _ := syncRuntime.Current(context.Background())
 	routes := snapshot.Routes.Models["openai/gpt-5.4-mini"].Routes
 	if len(routes) != 1 || routes[0].EndpointID != "openrouter" {
@@ -229,21 +201,13 @@ func TestModelSyncRoutesCarryTheEndpointDigest(t *testing.T) {
 
 func TestModelSyncPublishesAllowedUpstreamsForEveryOpenRouterModel(t *testing.T) {
 	value := modelSyncTestConfig()
-	syncRuntime, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syncRuntime.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
-		t.Fatal(err)
-	}
+	syncRuntime := enabledModelSync(t, value, modelSyncTestCatalogs(t), "openrouter", "configured")
 	// Before a Document is installed no endpoint has been checked.
 	if _, ok := syncRuntime.upstreams.OpenRouterUpstream("openai/gpt-5.4-mini"); ok {
 		t.Fatal("upstreams are allowed before any Document is installed")
 	}
 	document := modelSyncTestDocument()
-	if err := syncRuntime.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	mustInstall(t, syncRuntime, &document)
 	if upstream, ok := syncRuntime.upstreams.OpenRouterUpstream("openai/gpt-5.4-mini"); !ok || strings.Join(upstream.Tags, ",") != "azure,openai" {
 		t.Fatalf("synced model upstreams = %+v %v", upstream, ok)
 	}
@@ -257,16 +221,8 @@ func TestModelSyncPublishesAllowedUpstreamsForEveryOpenRouterModel(t *testing.T)
 	}
 
 	value.OpenRouterUpstream = &config.OpenRouterUpstreamConfig{Countries: "EU"}
-	europe, err := newModelSyncRuntime(value, modelSyncTestCatalogs(t), catalog.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := europe.enable(map[string]provider.Adapter{"openrouter": nil, "configured": nil}); err != nil {
-		t.Fatal(err)
-	}
-	if err := europe.install(&document); err != nil {
-		t.Fatal(err)
-	}
+	europe := enabledModelSync(t, value, modelSyncTestCatalogs(t), "openrouter", "configured")
+	mustInstall(t, europe, &document)
 	if _, ok := europe.upstreams.OpenRouterUpstream("openai/gpt-5.4-mini"); ok {
 		t.Fatal("a US provider is allowed under the EU list")
 	}
@@ -307,5 +263,31 @@ func TestEndpointRecoveryIdentityMatchesTheRecoveryReference(t *testing.T) {
 		if !strings.Contains(string(page), field) {
 			t.Fatalf("cloud-provider-recovery.md does not name %s", field)
 		}
+	}
+}
+
+// enabledModelSync builds a model sync runtime for value and loaded with
+// adapters for exactly the named endpoints.
+func enabledModelSync(t *testing.T, value config.Config, loaded loadedCatalogs, endpoints ...string) *modelSyncRuntime {
+	t.Helper()
+	syncRuntime, err := newModelSyncRuntime(value, loaded, catalog.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapters := map[string]provider.Adapter{}
+	for _, endpoint := range endpoints {
+		adapters[endpoint] = nil
+	}
+	if err := syncRuntime.enable(adapters); err != nil {
+		t.Fatal(err)
+	}
+	return syncRuntime
+}
+
+// mustInstall installs document into syncRuntime or fails the test.
+func mustInstall(t *testing.T, syncRuntime *modelSyncRuntime, document *modelsync.Document) {
+	t.Helper()
+	if err := syncRuntime.install(document); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -10,7 +10,6 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 )
 
 // A response that carries citations publishes them in the checkpoint
@@ -19,16 +18,9 @@ import (
 // instead of rejecting the only candidate as no_route.
 func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.T) {
 	f := boundedCloud(t, false)
-	client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+	compiler := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("unexpected HTTP request")
-	})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiler, err := openairesponses.New(client, "endpoint", "profile/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	})})
 	f.adapter.compile = func(input provider.CompileInput) (provider.Call, error) {
 		// The fixture adapter declares no features, so compile against the
 		// real adapter's own capability set.
@@ -49,7 +41,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 			return provider.Result{}, err
 		}
 		v := executionResponse(call)
-		v.Result.Response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}
+		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
 		if cited {
 			v.Result.Response.Output = append(v.Result.Response.Output, reference)
 		}
@@ -80,15 +72,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 	f.now = f.now.Add(time.Minute)
 	ctx := context.Background()
 	compact := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: child.Generate.Checkpoint.Handle}
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.CompactStepV1(ctx, compact)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	v = boundedState(t, v, err, llm.ExecutionCompleted)
+	v := f.runCompact(t, ctx, compact, false)
 	if v.Compact == nil || f.submits.Load() != 3 {
 		t.Fatal("compaction did not summarise the cited transcript")
 	}

@@ -210,12 +210,7 @@ func TestRuntimeServesTheResponsesAPIOnlyWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("sandbox does not permit loopback listeners: %v", err)
-		}
-		t.Fatal(err)
-	}
+	startTestRuntime(t, runtime)
 	address := runtime.ResponsesServer.Addr()
 	// An unauthenticated poll proves the listener routes to the API handler.
 	if got := runtimeHealthStatus(t, address, "/v1/responses/resp_x"); got != http.StatusUnauthorized {

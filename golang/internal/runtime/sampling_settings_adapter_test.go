@@ -11,7 +11,6 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -20,16 +19,9 @@ import (
 func samplingSettingsRoutes() []hierarchyRoute {
 	routes := hierarchyRoutes()
 	return append(routes, hierarchyRoute{name: "openai_responses", family: provider.FamilyOpenAIResponses, tier: "default", adapter: func(t *testing.T) provider.Adapter {
-		client, err := openairesponses.NewClient(openairesponses.ClientConfig{BaseURL: "https://api.openai.com/v1/", APIKey: "test-key", HTTPClient: &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
+		adapter := responsesAdapter(t, &http.Client{Transport: planningTransportFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("unexpected network call")
-		})}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		adapter, err := openairesponses.New(client, "endpoint", "profile/v1")
-		if err != nil {
-			t.Fatal(err)
-		}
+		})})
 		return adapter
 	}})
 }

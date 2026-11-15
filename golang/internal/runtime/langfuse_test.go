@@ -45,7 +45,7 @@ func TestCloudLangfuseExportsFinalizedRequestOnce(t *testing.T) {
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	result := f.finish(t)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
+	ref := f.ref(result)
 	if err := f.runtime.ExportLangfuseV1(context.Background(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -108,17 +108,15 @@ func TestCloudLangfuseExportOmitsInlineMediaBytes(t *testing.T) {
 	media := []byte(strings.Repeat("inline-image-bytes", 256))
 	f.request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "what is this"}, llm.ImagePart{Bytes: media, MediaType: "image/png"}}}}
 	var payload string
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cap.Langfuse = langfuseTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		payload = string(b)
 		w.Write([]byte(`{}`))
 	}))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}); err != nil {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(result)); err != nil {
 		t.Fatal(err)
 	}
 	// The OTLP body nests content as JSON strings, so check the raw base64 run
@@ -140,34 +138,39 @@ func (s oversizedLangfuseCapture) SaveLangfuseCapture(ctx context.Context, scope
 }
 
 func TestCloudLangfuseOversizedCaptureFailsExportAsOversized(t *testing.T) {
-	f := boundedCloud(t, false)
-	calls := 0
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
-	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
-	f.cap.Requests = oversizedLangfuseCapture{f.repository}
-	f.restart(t)
-	result := f.finish(t)
-	err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability})
+	traced, err := exportThroughCapture(t, func(r *cloudstate.Repository) CloudRequestRepository { return oversizedLangfuseCapture{r} })
 	if !errors.Is(err, langfuse.ErrOversized) || errors.Is(err, langfuse.ErrExport) {
 		t.Fatalf("oversized capture not reported as oversized: %v", err)
 	}
-	if calls != 0 || f.submits.Load() != 1 {
+	if traced {
 		t.Fatal("oversized capture changed model execution or sent a trace")
 	}
+}
+
+// exportThroughCapture finishes one request whose Langfuse capture is saved
+// through capture, then exports it. traced reports that a trace was sent or
+// the model was not called exactly once.
+func exportThroughCapture(t *testing.T, capture func(*cloudstate.Repository) CloudRequestRepository) (traced bool, err error) {
+	t.Helper()
+	f := boundedCloud(t, false)
+	calls := 0
+	f.cap.Langfuse = langfuseTestClient(t, countLangfuseRequests(&calls))
+	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
+	f.cap.Requests = capture(f.repository)
+	f.restart(t)
+	result := f.finish(t)
+	err = f.runtime.ExportLangfuseV1(context.Background(), f.ref(result))
+	return calls != 0 || f.submits.Load() != 1, err
 }
 
 func TestCloudLangfuseDefaultOpenRouterExcludesContent(t *testing.T) {
 	f := boundedCloud(t, false)
 	calls := 0
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	f.cap.Langfuse = langfuseTestClient(t, countLangfuseRequests(&calls))
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat", Extensions: map[string]map[string]any{"openrouter": {}}}}
 	f.restart(t)
 	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}); err != nil {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(result)); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
@@ -180,7 +183,7 @@ func TestCloudLangfuseCacheHitHasTraceWithoutPaidGeneration(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	calls := 0
 	payloads := []string{}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cap.Langfuse = langfuseTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		var v any
 		json.NewDecoder(r.Body).Decode(&v)
@@ -188,18 +191,16 @@ func TestCloudLangfuseCacheHitHasTraceWithoutPaidGeneration(t *testing.T) {
 		payloads = append(payloads, string(b))
 		w.Write([]byte(`{}`))
 	}))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	first := f.finish(t)
-	f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: first.RequestID, Context: f.request.Context, Capability: first.Capability})
+	f.runtime.ExportLangfuseV1(context.Background(), f.ref(first))
 	f.request.OperationKey = "cache-client"
 	second := f.finish(t)
 	if second.Generate.Cache.Disposition != "hit" {
 		t.Fatal("fixture did not use cache", second.Generate.Cache)
 	}
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: second.RequestID, Context: f.request.Context, Capability: second.Capability}); err != nil {
+	if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(second)); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 || !strings.Contains(payloads[1], "hit") || strings.Contains(payloads[1], `"stringValue":"generation"`) {
@@ -210,21 +211,19 @@ func TestCloudLangfuseCacheHitHasTraceWithoutPaidGeneration(t *testing.T) {
 func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 	f := boundedCloud(t, false)
 	ops := []map[string]any{}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cap.Langfuse = langfuseTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var v map[string]any
 		json.NewDecoder(r.Body).Decode(&v)
 		ops = append(ops, v)
 		w.Write([]byte(`{}`))
 	}))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {Family: "openai_chat"}}
 	f.restart(t)
 	policy := json.RawMessage(`{"recent_turns":0}`)
 	f.request.SettingsPatch.CompactionPolicy.Set = &policy
 	export := func(v llm.ExecutionResultV1) {
 		t.Helper()
-		if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}); err != nil {
+		if err := f.runtime.ExportLangfuseV1(context.Background(), f.ref(v)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -240,18 +239,10 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 	}
 	compact := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: compact.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.CompactStepV1(ctx, compact)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v := f.runCompact(t, ctx, compact, false)
 	export(v)
 	compact.OperationKey = "cached-compact"
-	v, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &compact})
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	if v.Compact.Cache.Disposition != "hit" {
 		t.Fatal("compaction fixture missed cache")
@@ -295,15 +286,7 @@ func TestCloudLangfuseForksAndCompactionKeepSessionAndCaller(t *testing.T) {
 
 func TestCloudLangfuseDisabledFallbackDoesNotExportResponse(t *testing.T) {
 	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
-		model := b.source.value.Routes.Models["alias"]
-		second := model.Routes[0]
-		second.ID, second.EndpointID = "fallback-route", "fallback"
-		model.Routes = append(model.Routes, second)
-		b.source.value.Routes.Models["alias"] = model
-		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
-		entry := b.entry
-		entry.EndpointID = "fallback"
-		b.prices(t, []pricing.Entry{b.entry, entry})
+		b.addFallbackRoute(t, "fallback-route", "fallback")
 	})
 	success := f.adapter.invoke
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
@@ -314,19 +297,17 @@ func TestCloudLangfuseDisabledFallbackDoesNotExportResponse(t *testing.T) {
 	}
 	f.cap.Adapters = engine.AdapterMap{"endpoint": f.adapter.executionSyncAdapter, "fallback": f.adapter.executionSyncAdapter}
 	payload := ""
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cap.Langfuse = langfuseTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		payload = string(b)
 		w.Write([]byte(`{}`))
 	}))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	disabled := false
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}, "fallback": {Langfuse: &config.LangfuseEndpointConfig{Enabled: &disabled}}}
 	f.restart(t)
 	ctx := context.Background()
 	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	for n := 0; n < 10 && err == nil && v.State != llm.ExecutionCompleted; n++ {
 		switch v.State {
 		case llm.ExecutionBudgetRequired:
@@ -365,28 +346,17 @@ func TestCloudLangfuseSupersededPlanDoesNotExportDisabledRequest(t *testing.T) {
 	var planning *budgetPlanningFixture
 	f := boundedCloud(t, false, func(b *budgetPlanningFixture) {
 		planning = b
-		model := b.source.value.Routes.Models["alias"]
-		second := model.Routes[0]
-		second.ID, second.EndpointID = "fallback-route", "fallback"
-		model.Routes = append(model.Routes, second)
-		b.source.value.Routes.Models["alias"] = model
-		b.source.value.BudgetPolicies[0].Match.EndpointID = ""
-		entry := b.entry
-		entry.EndpointID = "fallback"
-		b.prices(t, []pricing.Entry{b.entry, entry})
+		b.addFallbackRoute(t, "fallback-route", "fallback")
 	})
 	f.cap.Adapters = engine.AdapterMap{"endpoint": f.adapter.executionSyncAdapter, "fallback": f.adapter.executionSyncAdapter}
 	calls := 0
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	f.cap.Langfuse = langfuseTestClient(t, countLangfuseRequests(&calls))
 	disabled := false
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}, "fallback": {Langfuse: &config.LangfuseEndpointConfig{Enabled: &disabled}}}
 	f.restart(t)
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	v := f.prepareGenerate(t, ctx)
+	ref := f.ref(v)
 	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
 	captures, err := f.repository.LoadLangfuseCaptures(ctx, scope, cloudstate.RequestID(v.RequestID))
 	planned := false
@@ -405,12 +375,7 @@ func TestCloudLangfuseSupersededPlanDoesNotExportDisabledRequest(t *testing.T) {
 	planning.prices(t, []pricing.Entry{entry})
 	f.restart(t)
 	f.now = f.now.Add(16 * time.Minute)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.acquireGenerateComplete(t, ctx, ref)
 	paid, last, err := f.repository.LangfusePaidAttempts(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil || len(paid) != 1 || paid[last].Plan.Route.EndpointID != "fallback" {
 		t.Fatal("fixture was not served only by the disabled endpoint", err)
@@ -429,19 +394,11 @@ func (s failedLangfuseCapture) SaveLangfuseCapture(context.Context, cloudstate.S
 	return errors.New("capture unavailable")
 }
 func TestCloudLangfuseCaptureFailurePreservesModelAndFailsExport(t *testing.T) {
-	f := boundedCloud(t, false)
-	calls := 0
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.Write([]byte(`{}`)) }))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
-	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
-	f.cap.Requests = failedLangfuseCapture{f.repository}
-	f.restart(t)
-	result := f.finish(t)
-	if err := f.runtime.ExportLangfuseV1(context.Background(), llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}); !errors.Is(err, langfuse.ErrExport) {
+	traced, err := exportThroughCapture(t, func(r *cloudstate.Repository) CloudRequestRepository { return failedLangfuseCapture{r} })
+	if !errors.Is(err, langfuse.ErrExport) {
 		t.Fatalf("capture loss silently acknowledged: %v", err)
 	}
-	if calls != 0 || f.submits.Load() != 1 {
+	if traced {
 		t.Fatal("capture failure changed model execution")
 	}
 }
@@ -450,9 +407,7 @@ func TestCloudLangfuseCaptureFailurePreservesModelAndFailsExport(t *testing.T) {
 // carrying only allow-listed keys (#1359).
 func TestCloudLangfuseCaptureFailureUsesConfiguredLogger(t *testing.T) {
 	f := boundedCloud(t, false)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	f.cap.Langfuse = langfuseTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
 	f.cap.Requests = failedLangfuseCapture{f.repository}
 	f.restart(t)
@@ -462,9 +417,8 @@ func TestCloudLangfuseCaptureFailureUsesConfiguredLogger(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := observability.WithLogger(context.Background(), logger)
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	v, err = f.runtime.AcquireBudgetV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
+	v := f.prepareGenerate(t, ctx)
+	v, err = f.runtime.AcquireBudgetV1(ctx, f.ref(v))
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
@@ -485,14 +439,12 @@ func TestCloudLangfuseNoWorkCompactionExportsOnlyRoot(t *testing.T) {
 	f := boundedCloud(t, false)
 	serverCalls := 0
 	payload := ""
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.cap.Langfuse = langfuseTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		serverCalls++
 		b, _ := io.ReadAll(r.Body)
 		payload = string(b)
 		w.Write([]byte(`{}`))
 	}))
-	defer server.Close()
-	f.cap.Langfuse, _ = langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
 	f.cap.LangfuseEndpoints = map[string]config.EndpointConfig{"endpoint": {}}
 	f.restart(t)
 	parent := f.finish(t)
@@ -539,4 +491,20 @@ func TestCloudLangfuseGenerationCaptureLogsAStateReadFailure(t *testing.T) {
 	if record["level"] != "WARN" || record["msg"] != "Langfuse generation capture failed" || record["request_id"] != "req_attempt" || record["cause"] != langfuseCaptureRead {
 		t.Fatalf("log record = %v", record)
 	}
+}
+
+// langfuseTestClient is a Langfuse client for a TLS test server running
+// handler; the server stops when the test ends.
+func langfuseTestClient(t *testing.T, handler http.HandlerFunc) *langfuse.Client {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	client, _ := langfuse.NewClient(server.URL, "public", "secret", server.Client(), 0)
+	return client
+}
+
+// countLangfuseRequests acknowledges every Langfuse request and counts it in
+// calls.
+func countLangfuseRequests(calls *int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { *calls++; w.Write([]byte(`{}`)) }
 }

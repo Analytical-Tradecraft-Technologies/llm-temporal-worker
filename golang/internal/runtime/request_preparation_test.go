@@ -214,10 +214,7 @@ func TestPrepareCompactInputUsesVersionedBoundedSummarizerAndRetainsToolFrontier
 		llm.ToolCall{ID: "pending", Name: "lookup", Arguments: json.RawMessage(`{}`)}}
 	parent.PendingToolCalls = []string{"pending"}
 	request.Policy = json.RawMessage(`{"target_tokens":1000,"summary_style":"concise"}`)
-	prepared, err := PrepareCompactInput(context.Background(), request, durable.CompactReplay{State: parent})
-	if err != nil {
-		t.Fatal(err)
-	}
+	prepared := mustPrepareCompact(t, request, durable.CompactReplay{State: parent})
 	if prepared.Request == nil || len(prepared.Selection.Prefix) != 3 || len(prepared.Selection.Retained) != 1 || prepared.Selection.Retained[0].(llm.ToolCall).ID != "pending" {
 		t.Fatalf("unsafe selection: %+v", prepared)
 	}

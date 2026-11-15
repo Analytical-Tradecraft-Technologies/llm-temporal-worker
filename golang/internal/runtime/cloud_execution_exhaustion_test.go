@@ -21,7 +21,7 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		result, err := f.runtime.GenerateStepV1(ctx, f.request)
 		boundedState(t, result, err, llm.ExecutionPending)
-		ref = llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
+		ref = f.ref(result)
 		attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(result.RequestID))
 		if err != nil {
 			t.Fatal(err)
@@ -74,22 +74,14 @@ func TestCloudExecutionExhaustionAfterRetryableRejection(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.options.MaxAttempts = 1
 	f.restart(t)
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
-			return provider.Result{}, err
-		}
-		return provider.Result{}, provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNextRoute, "unavailable")
-	}
-	ctx := context.Background()
-	result, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, result, err, llm.ExecutionFailed)
+	f.adapter.invoke = invokeFailingAfterWrite(&f.submits, unavailableRejection())
+	ctx, result := f.generateStep(t, llm.ExecutionFailed)
 	if !result.Retryable {
 		t.Fatal("fixture rejection not retryable")
 	}
 	f.now = f.now.Add(time.Minute)
-	ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
-	result, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	ref := f.ref(result)
+	result, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, result, err, llm.ExecutionFailed)
 	if result.Retryable {
 		t.Fatal("limit ignored")

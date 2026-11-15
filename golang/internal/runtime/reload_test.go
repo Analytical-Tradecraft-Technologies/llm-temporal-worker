@@ -21,17 +21,13 @@ func TestRuntimeReloadFileRejectsBadReplacementAndRecordsBoundedFailure(t *testi
 	options := testRuntimeOptions(t, controller, &closed)
 	var logs bytes.Buffer
 	options.LogOutput = &logs
-	runtime, err := New(context.Background(), runtimeConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), runtimeConfig(t), options)
 	old := runtime.App.Current()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("not-a-valid-config: true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	err = runtime.ReloadFile(context.Background(), path)
+	err := runtime.ReloadFile(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "reload configuration failed") {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -53,11 +49,7 @@ func TestRuntimeReloadFileRejectsProcessLifetimeReplacementAndRecordsBoundedFail
 	var logs bytes.Buffer
 	options.LogOutput = &logs
 	data := runtimeConfig(t)
-	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), data, options)
 	old := runtime.App.Current()
 	oldVersion := old.Config.ConfigVersion()
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -70,7 +62,7 @@ func TestRuntimeReloadFileRejectsProcessLifetimeReplacementAndRecordsBoundedFail
 		t.Fatal(err)
 	}
 
-	err = runtime.ReloadFile(context.Background(), path)
+	err := runtime.ReloadFile(context.Background(), path)
 	if err == nil || err.Error() != "reload configuration failed" {
 		t.Fatalf("reload error = %v, want sanitized rejection", err)
 	}
@@ -89,11 +81,7 @@ func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T
 	controller := &testWorker{}
 	var closed atomic.Bool
 	data := runtimeConfig(t)
-	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), data, testRuntimeOptions(t, controller, &closed))
 
 	old := runtime.App.Current()
 	lease, err := runtime.App.Acquire()
@@ -389,11 +377,7 @@ func TestRuntimeReloadFileLabelsIdentifiersIntroducedByTheReload(t *testing.T) {
 	var closed atomic.Bool
 	options := testRuntimeOptions(t, controller, &closed)
 	data := runtimeConfig(t)
-	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
+	runtime := newTestRuntime(t, context.Background(), data, options)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	replacement := strings.Replace(string(data), "model: gpt-example-2026-07-01", "model: gpt-replacement-2026-09-20", 1)
 	if replacement == string(data) {

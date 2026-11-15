@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
@@ -20,14 +19,8 @@ import (
 func recoveryFixture(t *testing.T) (V1RuntimeCapabilities, *planningSource, *planningAdapter, PreparedGenerateInput, PlannedProviderCall, ProviderRecoveryBinding) {
 	t.Helper()
 	capabilities, source, adapter, request, _, _ := planningFixture()
-	planning, err := capabilities.NewProviderPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	planning := mustProviderPlanning(t, capabilities)
+	prepared := mustPrepareGenerate(t, request)
 	planned, err := planning.Generate(context.Background(), prepared)
 	if err != nil {
 		t.Fatal(err)
@@ -55,39 +48,13 @@ func assertRecoveryError(t *testing.T, err error, code provider.Code, retry prov
 }
 
 func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testing.T) {
-	capabilities, _, _, request, replay, compact := planningFixture()
-	var httpCalls atomic.Int32
-	adapter := offlineResponsesAdapter(t, &httpCalls)
-	capabilities.Adapters = engine.AdapterMap{"endpoint": adapter}
-	planning, err := capabilities.NewProviderPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	generate, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	summary, err := PrepareCompactInput(context.Background(), compact, replay)
-	if err != nil {
-		t.Fatal(err)
-	}
+	phases := newOfflinePhases(t)
+	capabilities, generate, summary := phases.capabilities, phases.generate, phases.summary
 	capabilities.Planner = nil // Recovery requires no selection planner or pricer.
-	recovery, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery := mustProviderRecovery(t, capabilities)
 	for _, kind := range []string{"generate", "compact"} {
 		t.Run(kind, func(t *testing.T) {
-			var original PlannedProviderCall
-			var err error
-			if kind == "generate" {
-				original, err = planning.Generate(context.Background(), generate)
-			} else {
-				original, err = planning.Compact(context.Background(), summary)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			original := phases.plan(t, kind)
 			route, _ := original.Route("paid-operation", "generation")
 			binding, err := original.RecoveryBinding(route)
 			if err != nil {
@@ -127,7 +94,7 @@ func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testin
 			}
 		})
 	}
-	if httpCalls.Load() != 0 {
+	if phases.httpCalls.Load() != 0 {
 		t.Fatal("recovery performed HTTP requests")
 	}
 }
@@ -135,23 +102,13 @@ func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testin
 func TestProviderRecoveryDoesNotSelectNewRouteOrFallBack(t *testing.T) {
 	capabilities, source, first, request, _, _ := planningFixture()
 	second := &planningAdapter{version: first.version}
-	model := source.value.Routes.Models["alias"]
-	route := model.Routes[0]
-	route.ID, route.EndpointID = "second-route", "second-endpoint"
-	model.Routes = append(model.Routes, route)
-	source.value.Routes.Models["alias"] = model
+	source.appendAliasRoute("second-route", "second-endpoint")
 	capabilities.Adapters = engine.AdapterMap{"endpoint": first, "second-endpoint": second}
 	first.compile = func(provider.CompileInput) (provider.Call, error) {
 		return provider.Call{}, errors.New("sensitive unavailable compiler")
 	}
-	planning, err := capabilities.NewProviderPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	planning := mustProviderPlanning(t, capabilities)
+	prepared := mustPrepareGenerate(t, request)
 	original, err := planning.Generate(context.Background(), prepared)
 	if err != nil || original.Candidate.RouteID != "second-route" {
 		t.Fatalf("failed to select the original second route: %v", err)
@@ -171,10 +128,7 @@ func TestProviderRecoveryDoesNotSelectNewRouteOrFallBack(t *testing.T) {
 		}
 		return second, nil
 	})
-	recovery, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery := mustProviderRecovery(t, capabilities)
 	restored, err := recovery.Generate(context.Background(), prepared, binding)
 	if err != nil || restored.Candidate != original.Candidate || len(first.inputs) != 0 || len(second.inputs) != 1 {
 		t.Fatalf("recovery changed the selected route: %v", err)
@@ -211,12 +165,9 @@ func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T)
 				t.Fatal("invalid recovery reached adapter lookup")
 				return nil, nil
 			})
-			recovery, err := capabilities.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			recovery := mustProviderRecovery(t, capabilities)
 			mutate(&binding)
-			_, err = recovery.Generate(context.Background(), prepared, binding)
+			_, err := recovery.Generate(context.Background(), prepared, binding)
 			assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
 		})
 	}
@@ -237,12 +188,9 @@ func TestProviderRecoveryRejectsChangedBindingsBeforeAdapterLookup(t *testing.T)
 				t.Fatal("incompatible recovery reached adapter lookup")
 				return nil, nil
 			})
-			recovery, err := capabilities.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			recovery := mustProviderRecovery(t, capabilities)
 			mutate(&binding)
-			_, err = recovery.Generate(context.Background(), prepared, binding)
+			_, err := recovery.Generate(context.Background(), prepared, binding)
 			assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 		})
 	}
@@ -287,11 +235,8 @@ func TestProviderRecoveryRejectsChangedSemanticInputAndEligibility(t *testing.T)
 				t.Fatal("changed input/eligibility reached adapter lookup")
 				return nil, nil
 			})
-			recovery, err := capabilities.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = recovery.Generate(context.Background(), prepared, binding)
+			recovery := mustProviderRecovery(t, capabilities)
+			_, err := recovery.Generate(context.Background(), prepared, binding)
 			assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
 		})
 	}
@@ -303,11 +248,8 @@ func TestProviderRecoveryCapturesSnapshotAndHonorsHealthBlock(t *testing.T) {
 			capabilities, source, adapter, prepared, _, binding := recoveryFixture(t)
 			health := routing.RouteHealth{Enabled: name != "disabled", Open: name == "open", AuthOpen: name == "auth open"}
 			source.value.Health.Routes = map[string]routing.RouteHealth{"route": health}
-			recovery, err := capabilities.NewProviderRecovery(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = recovery.Generate(context.Background(), prepared, binding)
+			recovery := mustProviderRecovery(t, capabilities)
+			_, err := recovery.Generate(context.Background(), prepared, binding)
 			assertRecoveryError(t, err, provider.CodeNoRoute, provider.RetrySameOperation)
 			if len(adapter.inputs) != 0 {
 				t.Fatal("blocked route reached compilation")
@@ -315,10 +257,7 @@ func TestProviderRecoveryCapturesSnapshotAndHonorsHealthBlock(t *testing.T) {
 		})
 	}
 	capabilities, source, _, prepared, original, binding := recoveryFixture(t)
-	recovery, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery := mustProviderRecovery(t, capabilities)
 	source.value.ConfigDigest[0]++
 	source.value.ConfigEpoch = "new epoch"
 	source.value.Routes.Models["alias"].Routes[0].Model = "new-model"
@@ -328,10 +267,7 @@ func TestProviderRecoveryCapturesSnapshotAndHonorsHealthBlock(t *testing.T) {
 		t.Fatalf("captured recovery snapshot changed or was reread: %v", err)
 	}
 	capabilities.ConfigDigest = source.value.ConfigDigest
-	reloaded, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	reloaded := mustProviderRecovery(t, capabilities)
 	_, err = reloaded.Generate(context.Background(), prepared, binding)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 }
@@ -339,10 +275,7 @@ func TestProviderRecoveryCapturesSnapshotAndHonorsHealthBlock(t *testing.T) {
 func TestProviderRecoveryPreservesResolvedQuoteVersionWithoutPricing(t *testing.T) {
 	capabilities, source, _, request, _, _ := planningFixture()
 	source.value.Routes.Models["alias"].Routes[0].PriceVersion = ""
-	planning, err := capabilities.NewProviderPlanning(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	planning := mustProviderPlanning(t, capabilities)
 	prepared, _ := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
 	original, err := planning.Generate(context.Background(), prepared)
 	if err != nil {
@@ -354,10 +287,7 @@ func TestProviderRecoveryPreservesResolvedQuoteVersionWithoutPricing(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovery, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery := mustProviderRecovery(t, capabilities)
 	restored, err := recovery.Generate(context.Background(), prepared, binding)
 	if err != nil {
 		t.Fatal(err)
@@ -500,10 +430,7 @@ func TestProviderRecoveryRejectsMissingCapabilitiesNoWorkAndInvalidProjection(t 
 
 func TestProviderRecoveryConcurrentCallsUseIndependentCompilerInput(t *testing.T) {
 	capabilities, _, adapter, prepared, _, binding := recoveryFixture(t)
-	recovery, err := capabilities.NewProviderRecovery(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery := mustProviderRecovery(t, capabilities)
 	var group sync.WaitGroup
 	for range 20 {
 		group.Add(1)

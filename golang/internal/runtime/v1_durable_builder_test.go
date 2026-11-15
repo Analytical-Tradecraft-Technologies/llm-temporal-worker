@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -178,6 +176,14 @@ func TestDurableV1RuntimeBuilderReusesPreflightComposition(t *testing.T) {
 }
 
 func TestDurableV1RuntimeBuilderRequiresCompositionBeforePhaseFactories(t *testing.T) {
+	assertCompositionRejectedBeforePhases(t, nil, "durable composition factory is not configured")
+}
+
+// assertCompositionRejectedBeforePhases builds with composition as the
+// durable composition factory and requires an ErrDurableV1Composition
+// mentioning want before either phase factory runs.
+func assertCompositionRejectedBeforePhases(t *testing.T, composition func(context.Context, V1RuntimeCapabilities) (durable.Composition, error), want string) {
+	t.Helper()
 	generateCalled, compactCalled := false, false
 	capabilities := completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
@@ -189,62 +195,27 @@ func TestDurableV1RuntimeBuilderRequiresCompositionBeforePhaseFactories(t *testi
 			return validCompactPorts(), nil
 		},
 	)
-	capabilities.CompositionFactory = nil
-
+	capabilities.CompositionFactory = composition
 	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})
-	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "durable composition factory is not configured") {
-		t.Fatalf("builder error = %v, want missing-composition failure", err)
+	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("builder error = %v, want failure mentioning %q", err, want)
 	}
 	if generateCalled || compactCalled {
-		t.Fatalf("phase factories ran without a durable composition: generate=%t compact=%t", generateCalled, compactCalled)
+		t.Fatalf("phase factories ran before the composition was rejected: generate=%t compact=%t", generateCalled, compactCalled)
 	}
 }
 
 func TestDurableV1RuntimeBuilderRejectsCompositionFromDifferentConfigSnapshot(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
-
-	generateCalled, compactCalled := false, false
-	capabilities := completeDurableBuilderCapabilities(t,
-		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			generateCalled = true
-			return validBuilderGeneratePorts(nil), nil
-		},
-		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
-			compactCalled = true
-			return validCompactPorts(), nil
-		},
-	)
 	// The composition is locally valid, but its identity belongs to another
 	// configuration epoch. The builder must reject it before either phase
 	// factory can attach ports to the Activity.
-	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+	assertCompositionRejectedBeforePhases(t, func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
 		return validCapabilityComposition(), nil
-	}
-	_, err = NewDurableV1RuntimeBuilder()(context.Background(), snapshot, nil, &generateBuilderClientSet{capabilities: capabilities})
-	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "config digest") {
-		t.Fatalf("builder error = %v, want snapshot config-digest failure", err)
-	}
-	if generateCalled || compactCalled {
-		t.Fatalf("phase factories ran after snapshot identity mismatch: generate=%t compact=%t", generateCalled, compactCalled)
-	}
+	}, "config digest")
 }
 
 func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testing.T) {
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatalf("compile example config: %v", err)
-	}
+	snapshot := durableBuilderSnapshot(t)
 
 	capabilities := completeDurableBuilderCapabilities(t,
 		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
@@ -266,27 +237,9 @@ func TestDurableV1RuntimeBuilderAcceptsCompositionBoundToConfigSnapshot(t *testi
 }
 
 func TestDurableV1RuntimeBuilderFailsBeforePhaseFactoriesOnInvalidComposition(t *testing.T) {
-	generateCalled, compactCalled := false, false
-	capabilities := completeDurableBuilderCapabilities(t,
-		func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			generateCalled = true
-			return validBuilderGeneratePorts(nil), nil
-		},
-		func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
-			compactCalled = true
-			return validCompactPorts(), nil
-		},
-	)
-	capabilities.CompositionFactory = func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
+	assertCompositionRejectedBeforePhases(t, func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
 		return durable.Composition{}, nil
-	}
-	_, err := NewDurableV1RuntimeBuilder()(context.Background(), durableBuilderSnapshot(t), nil, &generateBuilderClientSet{capabilities: capabilities})
-	if err == nil || !errors.Is(err, ErrDurableV1Composition) || !strings.Contains(err.Error(), "validate durable composition") {
-		t.Fatalf("builder error = %v, want invalid-composition failure", err)
-	}
-	if generateCalled || compactCalled {
-		t.Fatalf("phase factories called after invalid composition: generate=%t compact=%t", generateCalled, compactCalled)
-	}
+	}, "validate durable composition")
 }
 
 func TestDurableV1RuntimeBuilderRequiresBothPhaseFactories(t *testing.T) {
@@ -363,7 +316,7 @@ func TestDurableV1RuntimeBuilderRequiresCapabilitySource(t *testing.T) {
 func TestNewProductionEngineFactoryInstallsCompleteBuilderWhenBothFactoriesExist(t *testing.T) {
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader: emptySnapshotLoader,
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
 		},
@@ -385,7 +338,7 @@ func TestNewProductionEngineFactoryInstallsCompleteBuilderWhenBothFactoriesExist
 func TestNewProductionEngineFactoryLeavesPhaseFactoriesUnconfiguredWithoutComposition(t *testing.T) {
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader: emptySnapshotLoader,
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
 		},
@@ -407,7 +360,7 @@ func TestNewProductionEngineFactoryPreservesExplicitBuilderWithoutComposition(t 
 	})
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:         secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader:   SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader:   emptySnapshotLoader,
 		V1RuntimeBuilder: customBuilder,
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
@@ -427,7 +380,7 @@ func TestNewProductionEngineFactoryPreservesExplicitBuilderWithoutComposition(t 
 func TestNewProductionEngineFactoryLeavesPartialPhaseCompositionUnconfigured(t *testing.T) {
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
 		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil }),
+		SnapshotLoader: emptySnapshotLoader,
 		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
 			return validBuilderGeneratePorts(nil), nil
 		},
@@ -560,15 +513,13 @@ func TestDurableBuilderBindsCloudIdentityToBothPhases(t *testing.T) {
 	}
 }
 
+// durableBuilderSnapshot compiles the repository example configuration.
 func durableBuilderSnapshot(t *testing.T) *config.Snapshot {
 	t.Helper()
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := exampleConfig(t)
 	snapshot, err := config.Compile(context.Background(), data, nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("compile example config: %v", err)
 	}
 	return snapshot
 }

@@ -167,15 +167,13 @@ func newProviderExecutionFixture(t *testing.T, kind string, async bool, configur
 	f.executor = &CloudProviderExecution{store: f.store, admission: f.helper, clock: func() time.Time { return f.now }}
 	f.adapter = &executionAsyncAdapter{executionSyncAdapter: &executionSyncAdapter{planningAdapter: &planningAdapter{version: "profile/v1"}}}
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := observer.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, observer); err != nil {
 			return provider.Result{}, err
 		}
 		return executionResponse(call).Result, nil
 	}
 	f.adapter.submit = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.ResumableResult, error) {
-		f.submits.Add(1)
-		if err := observer.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, observer); err != nil {
 			return provider.ResumableResult{}, err
 		}
 		return provider.ResumableResult{State: provider.ResumablePending, Dispatch: provider.DispatchAccepted, ProviderOperationID: "private-job", NextPollAfter: 2 * time.Second}, nil
@@ -343,8 +341,7 @@ func TestCloudProviderExecutionConcurrentObservationCanRetry(t *testing.T) {
 				return nil
 			}
 			_, err := f.resume(ctx)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateUnavailable || mapped.Retry != provider.RetrySameOperation {
+			if !isProviderError(err, provider.CodeStateUnavailable, provider.RetrySameOperation) {
 				t.Fatal("concurrent observation became a permanent request conflict", err)
 			}
 			f.store.after = nil
@@ -542,13 +539,7 @@ func TestCloudProviderExecutionPollFailurePreservesKnownJob(t *testing.T) {
 
 func TestCloudProviderExecutionUnknownSubmissionCanRecoverButNeverResubmit(t *testing.T) {
 	f := newProviderExecutionFixture(t, "generate", true)
-	f.adapter.submit = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.ResumableResult, error) {
-		f.submits.Add(1)
-		if err := observer.BeforePossibleWrite(ctx); err != nil {
-			return provider.ResumableResult{}, err
-		}
-		return provider.ResumableResult{}, errors.New("connection lost after accepting")
-	}
+	f.adapter.submit = submitFailingAfterWrite(&f.submits, errors.New("connection lost after accepting"))
 	var recoveries int
 	recovery := &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
 		recoveries++
@@ -571,8 +562,7 @@ func TestCloudProviderExecutionCanceledCallStillSavesPaidOutcome(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := observer.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, observer); err != nil {
 			return provider.Result{}, err
 		}
 		cancel()
@@ -761,12 +751,7 @@ func TestCloudProviderExecutionCertifiedPreDispatchReleasesBudget(t *testing.T) 
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newProviderExecutionFixture(t, "generate", false)
-			f.adapter.invoke = func(ctx context.Context, call provider.Call, observer provider.Observer) (provider.Result, error) {
-				if err := observer.BeforePossibleWrite(ctx); err != nil {
-					return provider.Result{}, err
-				}
-				return provider.Result{}, cause
-			}
+			f.adapter.invoke = invokeFailingAfterWrite(nil, cause)
 			result, err := f.submit(context.Background())
 			if err != nil {
 				t.Fatal(err)

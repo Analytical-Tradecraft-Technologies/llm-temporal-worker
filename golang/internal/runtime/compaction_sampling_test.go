@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"encoding/hex"
 	"reflect"
 	"testing"
@@ -18,10 +17,7 @@ func compactCacheDigest(t *testing.T, mutate func(*state.ModelState)) (llm.Reque
 	t.Helper()
 	_, replay, request := preparationFixture()
 	mutate(&replay.State.Settings)
-	prepared, err := PrepareCompactInput(context.Background(), request, durable.CompactReplay{State: replay.State})
-	if err != nil {
-		t.Fatal(err)
-	}
+	prepared := mustPrepareCompact(t, request, durable.CompactReplay{State: replay.State})
 	if prepared.Request == nil {
 		t.Fatal("fixture parent has nothing to compact")
 	}

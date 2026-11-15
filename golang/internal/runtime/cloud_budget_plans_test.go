@@ -54,16 +54,7 @@ func TestCloudBudgetPlansProjectBothActivitiesWithoutSDKObjects(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f := newBudgetPlanningFixture(t)
 			planning := f.planning(t)
-			var planned PlannedBudgetCall
-			var err error
-			if kind == "generate" {
-				planned, err = planning.Generate(context.Background(), f.generate, f.attempt)
-			} else {
-				planned, err = planning.Compact(context.Background(), f.summary, f.attempt)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			planned := f.plan(t, planning, kind != "generate")
 			plan, err := planned.BudgetPlan(kind)
 			if err != nil || plan.Kind != kind || plan.RequestDigest != planned.Provider.Call.Metadata.SchemaDigest || plan.ConfigDigest != f.cap.ConfigDigest ||
 				plan.Route != planned.Route || plan.RequestedClass != planned.Provider.Candidate.RequestedClass || plan.AttemptedClass != planned.Provider.Candidate.AttemptedClass ||

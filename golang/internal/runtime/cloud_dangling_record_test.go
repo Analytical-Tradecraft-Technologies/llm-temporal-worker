@@ -17,11 +17,9 @@ import (
 // created. The same operation key fails as corrupt and never dispatches again.
 func TestCloudLostRecordBlobIsCorruptNotANewOperation(t *testing.T) {
 	f := boundedCloud(t, false)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	ctx, v := f.generateStep(t, llm.ExecutionProviderCompleted)
+	ref := f.ref(v)
+	v, err := f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)
 	if f.submits.Load() != 1 {
 		t.Fatalf("submits=%d", f.submits.Load())
@@ -34,8 +32,7 @@ func TestCloudLostRecordBlobIsCorruptNotANewOperation(t *testing.T) {
 
 	requireCorrupt := func(name string, err error) {
 		t.Helper()
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateCorrupt || mapped.Retry != provider.RetryNever {
+		if !isProviderError(err, provider.CodeStateCorrupt, provider.RetryNever) {
 			t.Fatalf("%s after losing the record blob = %#v, want non-retryable state_corrupt", name, err)
 		}
 		var application *temporal.ApplicationError
@@ -70,8 +67,7 @@ func TestCloudLostParentCheckpointBlobIsCorruptNotRetried(t *testing.T) {
 
 	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
 	_, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeStateCorrupt || mapped.Retry != provider.RetryNever {
+	if !isProviderError(err, provider.CodeStateCorrupt, provider.RetryNever) {
 		t.Fatalf("replay of a lost parent checkpoint = %#v, want non-retryable state_corrupt", err)
 	}
 	var application *temporal.ApplicationError

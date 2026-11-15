@@ -32,8 +32,7 @@ func TestCloudExecutionRuntimeRenewsAttemptBeforeLeaseExpiry(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.request.Cache = &llm.CachePolicyV1{}
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	v := f.prepareGenerate(t, ctx)
 	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
 	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil {
@@ -46,11 +45,9 @@ func TestCloudExecutionRuntimeRenewsAttemptBeforeLeaseExpiry(t *testing.T) {
 	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
 		t.Fatalf("attempt not renewed before expiry: %+v, %v", next, err)
 	}
-	v, err = f.runtime.CompleteExecutionV1(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability})
+	v, err = f.runtime.CompleteExecutionV1(ctx, f.ref(v))
 	boundedState(t, v, err, llm.ExecutionCompleted)
-	if v.Generate.Cache.Disposition != "miss_populated" || f.submits.Load() != 1 {
-		t.Fatalf("renewed attempt: disposition=%s submits=%d", v.Generate.Cache.Disposition, f.submits.Load())
-	}
+	f.requireCacheOutcome(t, "renewed attempt", v, "miss_populated", 1)
 }
 
 // failingStartFills fails the fill start with a transient storage error
@@ -101,9 +98,7 @@ func checkUnclaimedFillStartRenews(t *testing.T, f *boundedCloudFixture, fills c
 	f.options.MaxAttempts = 1
 	f.request.Cache = &llm.CachePolicyV1{}
 	f.restart(t)
-	ctx := context.Background()
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	v = boundedState(t, v, err, llm.ExecutionFailed)
+	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) || v.RetryAfterSeconds != 0 || f.submits.Load() != 0 {
 		t.Fatalf("expired fill start result = %+v submits=%d", v, f.submits.Load())
 	}
@@ -118,7 +113,7 @@ func checkUnclaimedFillStartRenews(t *testing.T, f *boundedCloudFixture, fills c
 	}
 	f.cap.ResponseFills = fills
 	f.restart(t)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	ref := f.ref(v)
 	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
@@ -147,15 +142,14 @@ func TestCloudCachedStepAcrossLeaseExpiryStaysRetryable(t *testing.T) {
 				f := boundedCloud(t, false)
 				f.request.Cache = &llm.CachePolicyV1{}
 				ctx := context.Background()
-				v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-				boundedState(t, v, err, llm.ExecutionBudgetRequired)
-				ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+				v := f.prepareGenerate(t, ctx)
+				ref := f.ref(v)
 				f.now = f.now.Add(cache.MaxFillLease - before)
 				f.blobs.open = func(blob.BlobKey) error {
 					f.now = f.now.Add(latency)
 					return nil
 				}
-				v, err = f.runtime.GenerateStepV1(ctx, f.request)
+				v, err := f.runtime.GenerateStepV1(ctx, f.request)
 				f.blobs.open = nil
 				var mapped *provider.Error
 				switch {

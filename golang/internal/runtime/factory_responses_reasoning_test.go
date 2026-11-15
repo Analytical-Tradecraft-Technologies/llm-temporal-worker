@@ -21,10 +21,8 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 			return []byte("test-key"), nil
 		}),
-		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
-			return engine.Snapshot{}, nil
-		}),
-		HTTPClient: &http.Client{},
+		SnapshotLoader: emptySnapshotLoader,
+		HTTPClient:     &http.Client{},
 	})
 	if err != nil {
 		t.Fatalf("NewProductionEngineFactory() error = %v", err)
@@ -43,7 +41,7 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 	human := func(text string) llm.Message {
 		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
 	}
-	answer := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}
+	answer := modelMessage("answer")
 	reasoning := func(opaque string) llm.ProviderState {
 		return llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json", Opaque: []byte(opaque)}
 	}

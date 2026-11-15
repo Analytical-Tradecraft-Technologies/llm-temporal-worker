@@ -65,7 +65,7 @@ func TestCloudReferenceStepsRequireCapability(t *testing.T) {
 					t.Fatalf("%s capability: result=%+v error=%v, want unknown-request error %v", label, got, err, want)
 				}
 			}
-			got, err := step(llm.ExecutionReferenceV1{RequestID: root.RequestID, Context: f.request.Context, Capability: root.Capability})
+			got, err := step(f.ref(root))
 			if err != nil || got.State != llm.ExecutionCompleted || got.Generate == nil || got.Generate.Checkpoint.Handle != root.Generate.Checkpoint.Handle {
 				t.Fatalf("issued capability: result=%+v error=%v", got, err)
 			}
@@ -97,7 +97,7 @@ func TestBudgetWorkflowWithoutCapabilityFailsLikeUnknownRequest(t *testing.T) {
 	if err == nil || err.Error() != want.Error() || got.Generate != nil {
 		t.Fatalf("result=%+v error=%v, want unknown-request error %v", got, err, want)
 	}
-	got, err = run(llm.ExecutionReferenceV1{RequestID: root.RequestID, Context: f.request.Context, Capability: root.Capability})
+	got, err = run(f.ref(root))
 	if err != nil || got.State != llm.ExecutionCompleted || got.Capability != "" {
 		t.Fatalf("issued capability: result=%+v error=%v", got, err)
 	}

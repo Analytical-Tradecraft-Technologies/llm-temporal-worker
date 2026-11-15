@@ -90,7 +90,7 @@ func publicationFixture(t *testing.T) (*CheckpointPublication, *CheckpointReplay
 	decimal, _ := llm.NewDecimalV1("0.123456789012345678")
 	req := llm.GenerateRequestV1{OperationKey: "root", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}, Append: []llm.Item{preparationMessage("hello")}, SettingsPatch: llm.SettingsPatchV1{Model: llm.Patch[string]{Set: &model}, Temperature: llm.Patch[llm.DecimalV1]{Set: &decimal}}}
 	amount, _ := pricing.ParseUSD("0.00001")
-	result := llm.Response{OperationKey: req.OperationKey, OperationID: string(identity.OperationID), Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &amount, Method: "catalog_usage"}}
+	result := llm.Response{OperationKey: req.OperationKey, OperationID: string(identity.OperationID), Status: llm.ResponseStatusCompleted, Output: []llm.Item{modelMessage("answer")}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &amount, Method: "catalog_usage"}}
 	return p, replay, store, identity, req, result
 }
 func publishRoot(t *testing.T, p *CheckpointPublication, store *publicationStore, identity CheckpointPublicationIdentity, req llm.GenerateRequestV1, result llm.Response) (state.DurableCheckpoint, llm.GenerateResponseV1) {
@@ -188,10 +188,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			prepared, err := PrepareCompactInput(context.Background(), compact, base)
-			if err != nil {
-				t.Fatal(err)
-			}
+			prepared := mustPrepareCompact(t, compact, base)
 			id = nextPublication(id)
 			result.OperationKey = compact.OperationKey
 			result.OperationID = string(id.OperationID)
@@ -284,10 +281,7 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := PrepareCompactInput(context.Background(), compact, base)
-	if err != nil {
-		t.Fatal(err)
-	}
+	prepared := mustPrepareCompact(t, compact, base)
 	id = nextPublication(id)
 	result.OperationKey = compact.OperationKey
 	cp, response, err := p.Compact(context.Background(), id, compact, base, &result, llm.CacheDispositionV1{Disposition: "hit"}, origin)

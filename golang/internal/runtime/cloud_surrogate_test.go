@@ -16,8 +16,7 @@ import (
 func TestCloudGenerateSanitizesLoneSurrogatesInModelJSON(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		v := executionResponse(call)
@@ -42,8 +41,7 @@ func TestCloudGenerateSanitizesLoneSurrogatesInModelJSON(t *testing.T) {
 func TestCloudGenerateSanitizesLoneSurrogatesInProviderValues(t *testing.T) {
 	f := boundedCloud(t, false)
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		if err := o.BeforePossibleWrite(ctx); err != nil {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
 			return provider.Result{}, err
 		}
 		v := executionResponse(call)

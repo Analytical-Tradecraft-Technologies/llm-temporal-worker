@@ -28,10 +28,8 @@ func TestCloudExecutionConcurrentCompletionReplaysWinner(t *testing.T) {
 		t.Run(step, func(t *testing.T) {
 			f := boundedCloud(t, false)
 			f.request.Cache = &llm.CachePolicyV1{}
-			ctx := context.Background()
-			result, err := f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, result, err, llm.ExecutionProviderCompleted)
-			ref := llm.ExecutionReferenceV1{RequestID: result.RequestID, Context: f.request.Context, Capability: result.Capability}
+			ctx, result := f.generateStep(t, llm.ExecutionProviderCompleted)
+			ref := f.ref(result)
 			other := *f.runtime
 			var winner llm.ExecutionResultV1
 			store := &completeBeforeAttemptLoad{cloudExecutionStore: f.runtime.store}
@@ -41,6 +39,7 @@ func TestCloudExecutionConcurrentCompletionReplaysWinner(t *testing.T) {
 				boundedState(t, winner, err, llm.ExecutionCompleted)
 			}
 			f.runtime.store = store
+			var err error
 			switch step {
 			case "prepare":
 				result, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
