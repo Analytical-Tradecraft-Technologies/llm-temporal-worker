@@ -2,9 +2,9 @@ package schema_test
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -31,9 +31,7 @@ func TestV1RequestsRejectEmptyContent(t *testing.T) {
 				t.Fatalf("schema accepts %s", document)
 			}
 			var request llm.GenerateRequestV1
-			if err := json.Unmarshal(document, &request); err == nil || !strings.Contains(err.Error(), "must not be empty") {
-				t.Fatalf("Go codec error = %v, want a must-not-be-empty rejection", err)
-			}
+			testassert.ErrorContains(t, json.Unmarshal(document, &request), "must not be empty")
 		})
 	}
 

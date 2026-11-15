@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestVerifyAcceptsReviewedInventoryAndApprovedFinding(t *testing.T) {
@@ -169,9 +170,7 @@ func TestReadGoModRejectsToolWithoutVersionedModule(t *testing.T) {
 	t.Parallel()
 
 	_, err := readGoMod(strings.NewReader(`{"Tool":[{"Path":"example.test/tool/cmd/tool"}]}`))
-	if err == nil || !strings.Contains(err.Error(), "no versioned module requirement") {
-		t.Fatalf("readGoMod error = %v, want missing versioned module requirement", err)
-	}
+	testassert.ErrorContains(t, err, "no versioned module requirement")
 }
 
 func TestReadGoModRejectsReplacements(t *testing.T) {
@@ -235,9 +234,7 @@ func TestPullRequestVerificationOnlyRejectsIntroducedVulnerabilities(t *testing.
 		strings.NewReader(base+"\n"+`{"finding":{"osv":"GO-2099-0002"}}`),
 		julyNow,
 	)
-	if err == nil || !strings.Contains(err.Error(), "GO-2099-0002") {
-		t.Fatalf("new finding error = %v, want GO-2099-0002", err)
-	}
+	testassert.ErrorContains(t, err, "GO-2099-0002")
 }
 
 func TestPullRequestVerificationRejectsReachabilityEscalation(t *testing.T) {
@@ -253,9 +250,7 @@ func TestPullRequestVerificationRejectsReachabilityEscalation(t *testing.T) {
 		strings.NewReader(head),
 		julyNow,
 	)
-	if err == nil || !strings.Contains(err.Error(), "reachable") {
-		t.Fatalf("reachability escalation error = %v, want reachable", err)
-	}
+	testassert.ErrorContains(t, err, "reachable")
 }
 
 func TestTrustedModuleRootsAreVersionIndependentAndBoundaryAware(t *testing.T) {
@@ -431,9 +426,7 @@ func TestValidateBaselineRejectsSecurityContractDrift(t *testing.T) {
 			t.Parallel()
 			value := testBaseline()
 			test.mutate(&value)
-			if _, err := validateBaseline(value, julyNow); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateBaseline error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(validateBaseline(value, julyNow)), test.want)
 		})
 	}
 }
@@ -452,9 +445,7 @@ func TestValidateInventoryRejectsDuplicatesAndUntrustedRoots(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := validateInventory(testBaseline().TrustedModuleRoots, test.requirements); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateInventory error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, validateInventory(testBaseline().TrustedModuleRoots, test.requirements), test.want)
 		})
 	}
 }
@@ -474,9 +465,7 @@ func TestValidateComponentStatusRequiresPass(t *testing.T) {
 			t.Parallel()
 			status := passingComponents()
 			test.edit(&status)
-			if err := validateComponentStatus(status); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("validateComponentStatus error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, validateComponentStatus(status), test.want)
 		})
 	}
 }
@@ -671,9 +660,7 @@ func TestReleaseTagVerificationRejectsInvalidPolicyAndOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := verifyReleaseTag(test.baseline, strings.NewReader(test.output), octoberNow); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("verifyReleaseTag error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(verifyReleaseTag(test.baseline, strings.NewReader(test.output), octoberNow)), test.want)
 		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
@@ -143,9 +144,7 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := New(test.options); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("New() = %v, want error containing %q", err, test.want)
-			}
+			testassert.ErrorContains(t, testassert.Err(New(test.options)), test.want)
 		})
 	}
 
@@ -208,9 +207,7 @@ func TestPutRejectsInvalidRequestsBeforeS3(t *testing.T) {
 	}
 
 	var nilStore *Store
-	if _, err := nilStore.Put(context.Background(), blob.PutRequest{}); err == nil || !strings.Contains(err.Error(), "S3 blob store is nil") {
-		t.Fatalf("nil Store.Put() = %v, want nil-store diagnostic", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(nilStore.Put(context.Background(), blob.PutRequest{})), "S3 blob store is nil")
 }
 
 func TestPutClassifiesS3WriteFailures(t *testing.T) {
@@ -220,9 +217,7 @@ func TestPutClassifiesS3WriteFailures(t *testing.T) {
 	t.Run("provider failure is wrapped", func(t *testing.T) {
 		fake := &fakeS3{putErr: errors.New("provider unavailable")}
 		store := testStore(t, fake, now, 100)
-		if _, err := store.Put(context.Background(), request); err == nil || !strings.Contains(err.Error(), "put blob: provider unavailable") {
-			t.Fatalf("Put() = %v, want wrapped provider error", err)
-		}
+		testassert.ErrorContains(t, testassert.Err(store.Put(context.Background(), request)), "put blob: provider unavailable")
 	})
 
 	t.Run("precondition conflict without head support", func(t *testing.T) {
@@ -345,14 +340,10 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 	})
 
 	var nilStore *Store
-	if _, err := nilStore.Get(context.Background(), "tenant", blob.Ref{}); err == nil || !strings.Contains(err.Error(), "S3 blob store is nil") {
-		t.Fatalf("nil Store.Get() = %v, want nil-store diagnostic", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(nilStore.Get(context.Background(), "tenant", blob.Ref{})), "S3 blob store is nil")
 
 	store := testStore(t, &fakeS3{}, now, 100)
-	if _, err := store.Get(context.Background(), "tenant", blob.Ref{}); err == nil || !strings.Contains(err.Error(), "store and locator are required") {
-		t.Fatalf("invalid ref Get() = %v, want ref-validation diagnostic", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(store.Get(context.Background(), "tenant", blob.Ref{})), "store and locator are required")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := store.Get(ctx, "tenant", testRef(store, now, "tenant", payload)); !errors.Is(err, context.Canceled) {
@@ -363,15 +354,11 @@ func TestGetRejectsUntrustedS3Responses(t *testing.T) {
 func TestProbeBucketFailsClosedForUnsupportedAndUnavailableClients(t *testing.T) {
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	store := testStore(t, &apiOnlyS3{fake: &fakeS3{}}, now, 100)
-	if err := store.ProbeBucket(context.Background()); err == nil || !strings.Contains(err.Error(), "does not support bucket probes") {
-		t.Fatalf("ProbeBucket(unsupported) = %v, want capability diagnostic", err)
-	}
+	testassert.ErrorContains(t, store.ProbeBucket(context.Background()), "does not support bucket probes")
 
 	fake := &fakeS3{bucketHeadErr: errors.New("access denied")}
 	store = testStore(t, fake, now, 100)
-	if err := store.ProbeBucket(context.Background()); err == nil || !strings.Contains(err.Error(), "head S3 bucket: access denied") {
-		t.Fatalf("ProbeBucket(error) = %v, want wrapped provider error", err)
-	}
+	testassert.ErrorContains(t, store.ProbeBucket(context.Background()), "head S3 bucket: access denied")
 	if fake.bucketHeadCalls != 1 {
 		t.Fatalf("HeadBucket calls = %d, want 1", fake.bucketHeadCalls)
 	}
@@ -383,9 +370,7 @@ func TestProbeBucketFailsClosedForUnsupportedAndUnavailableClients(t *testing.T)
 	}
 
 	var nilStore *Store
-	if err := nilStore.ProbeBucket(context.Background()); err == nil || !strings.Contains(err.Error(), "S3 blob store is nil") {
-		t.Fatalf("nil Store.ProbeBucket() = %v, want nil-store diagnostic", err)
-	}
+	testassert.ErrorContains(t, nilStore.ProbeBucket(context.Background()), "S3 blob store is nil")
 }
 
 func TestStoreUsesContentAddressedConditionalS3Object(t *testing.T) {

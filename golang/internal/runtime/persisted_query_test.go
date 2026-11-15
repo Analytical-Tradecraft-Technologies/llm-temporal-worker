@@ -14,6 +14,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
@@ -378,9 +379,7 @@ func TestNewPersistedQueryServiceBuilderRequiresDeploymentSecurityInputs(t *test
 		{name: "cursor", options: PersistedQueryBuilderOptions{Authorize: authorize}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewPersistedQueryServiceBuilder(test.options); err == nil || !strings.Contains(err.Error(), test.name) {
-				t.Fatalf("NewPersistedQueryServiceBuilder() error = %v, want missing %s", err, test.name)
-			}
+			testassert.ErrorContains(t, testassert.Err(NewPersistedQueryServiceBuilder(test.options)), test.name)
 		})
 	}
 }

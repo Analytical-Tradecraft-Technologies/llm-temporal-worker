@@ -1,10 +1,10 @@
 package runtime
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/anthropicmessages"
@@ -37,9 +37,7 @@ func TestEndpointProfilesRejectExtensionNamespacesSharingAWireField(t *testing.T
 			if err := build(distinct); err != nil {
 				t.Fatalf("nonoverlapping extensions rejected: %v", err)
 			}
-			if err := build(colliding); err == nil || !strings.Contains(err.Error(), `both map to wire field "value"`) {
-				t.Fatalf("error = %v, want wire collision", err)
-			}
+			testassert.ErrorContains(t, build(colliding), `both map to wire field "value"`)
 		})
 	}
 }

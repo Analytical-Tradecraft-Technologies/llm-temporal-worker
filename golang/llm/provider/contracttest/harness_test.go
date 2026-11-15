@@ -2,6 +2,7 @@ package contracttest
 
 import (
 	"fmt"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,9 +131,7 @@ metadata: metadata.yaml
 			mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
 
 			_, err := ValidateRepository(root)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("service class error = %v, want %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 			if strings.Contains(err.Error(), secret) {
 				t.Fatalf("service class value leaked through error: %v", err)
 			}
@@ -273,9 +272,7 @@ generated_field_exemptions: []
 	mustWriteFile(t, filepath.Join(profileDir, "request.wire.json"), `{}`)
 
 	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "missing required case") {
-		t.Fatalf("enforced profile error = %v, want missing required case", err)
-	}
+	testassert.ErrorContains(t, err, "missing required case")
 }
 
 func TestValidateRepositoryRequiresDecoderFixturesWhenDeclared(t *testing.T) {
@@ -404,9 +401,7 @@ capability_facts:
 
 func TestReportRequireAllEnforcedRejectsBootstrapProfiles(t *testing.T) {
 	err := (Report{Bootstrap: []Profile{{ID: "example"}}}).RequireAllEnforced()
-	if err == nil || !strings.Contains(err.Error(), "example") {
-		t.Fatalf("RequireAllEnforced error = %v, want bootstrap profile name", err)
-	}
+	testassert.ErrorContains(t, err, "example")
 }
 
 func TestValidateRepositoryRejectsMalformedManifest(t *testing.T) {
@@ -415,9 +410,7 @@ func TestValidateRepositoryRejectsMalformedManifest(t *testing.T) {
 	mustWriteFile(t, filepath.Join(profileDir, "manifest.yaml"), "version: [\n")
 
 	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "manifest is not valid YAML") {
-		t.Fatalf("malformed manifest error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "manifest is not valid YAML")
 }
 
 func TestValidateRepositoryRejectsUnknownManifestFields(t *testing.T) {
@@ -439,9 +432,7 @@ cases:
 	mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
 
 	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "manifest is not valid YAML") {
-		t.Fatalf("unknown manifest field error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "manifest is not valid YAML")
 }
 
 func TestValidateRepositoryRejectsMissingDeclaredFixture(t *testing.T) {
@@ -505,9 +496,7 @@ func TestVerifyStreamAssemblyEquivalentRejectsDifferentResponse(t *testing.T) {
 		},
 		nil,
 	)
-	if err == nil || !strings.Contains(err.Error(), "stream assembly differs") {
-		t.Fatalf("stream equivalence error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "stream assembly differs")
 }
 
 func TestRepositoryManifestReportRequiresAllProfilesEnforced(t *testing.T) {
@@ -552,9 +541,7 @@ func TestRepositoryManifestReportRequiresAllProfilesEnforced(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("validate report error = %v, want %q", err, test.wantErr)
-			}
+			testassert.ErrorContains(t, err, test.wantErr)
 		})
 	}
 }

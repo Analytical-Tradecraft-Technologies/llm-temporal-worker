@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -92,9 +93,7 @@ func TestCompileServiceTierPolicy(t *testing.T) {
 			adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, profile)}
 			call, err := adaptertest.Compile(adapter, "anthropic-prod", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "tier-" + test.name, Model: "claude-contract", ServiceClass: test.class}, true)
 			if test.wantFailure != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantFailure) {
-					t.Fatalf("error = %v, want %q", err, test.wantFailure)
-				}
+				testassert.ErrorContains(t, err, test.wantFailure)
 				return
 			}
 			if err != nil {
@@ -110,22 +109,14 @@ func TestCompileServiceTierPolicy(t *testing.T) {
 func TestCompileRejectsUnsupportedMediaAndSampling(t *testing.T) {
 	adapter := &Adapter{endpointID: "anthropic-prod", profile: mustProfile(t, testProfile())}
 	_, err := lowerPart(llm.ImagePart{Blob: &llm.BlobRef{Digest: "sha256:blob", ByteLength: 5, MediaType: "image/png", Locator: "blob://blob-1"}})
-	if err == nil || !strings.Contains(err.Error(), "blob-backed") {
-		t.Fatalf("blob error = %v", err)
-	}
-	if _, err := lowerPart(llm.ImagePart{Bytes: []byte("image"), MediaType: "image/tiff"}); err == nil || !strings.Contains(err.Error(), "media type") {
-		t.Fatalf("image media type error = %v", err)
-	}
-	if _, err := lowerPart(llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png", Detail: "high"}); err == nil || !strings.Contains(err.Error(), "detail") {
-		t.Fatalf("image detail error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "blob-backed")
+	testassert.ErrorContains(t, testassert.Err(lowerPart(llm.ImagePart{Bytes: []byte("image"), MediaType: "image/tiff"})), "media type")
+	testassert.ErrorContains(t, testassert.Err(lowerPart(llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png", Detail: "high"})), "detail")
 	base := llm.Request{OperationKey: "sampling-rejection", Model: "claude-contract"}
 	seed := int64(1)
 	base.Sampling = &llm.SamplingSpec{Seed: &seed}
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{Request: base, Query: provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"}, Strict: true})
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("sampling error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "not supported")
 }
 
 func TestCompileMapsAdaptiveReasoningEffortToOutputConfig(t *testing.T) {

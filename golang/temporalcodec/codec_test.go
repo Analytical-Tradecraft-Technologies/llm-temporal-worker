@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/converter"
 )
@@ -100,9 +101,7 @@ func TestKeyRotationDecryptsWithAnyConfiguredKey(t *testing.T) {
 	if got := string(fresh.Metadata[MetadataKeyID]); got != "new" {
 		t.Fatalf("rotated codec encrypted with %q, want the primary key", got)
 	}
-	if _, err := decodeValue(before, fresh); err == nil || !strings.Contains(err.Error(), `"new" is not configured`) {
-		t.Fatalf("decode without the new key = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(decodeValue(before, fresh)), `"new" is not configured`)
 
 	retired := testCodec(t, primaryKey("new", 2))
 	if _, err := decodeValue(retired, written); err == nil {
@@ -202,15 +201,11 @@ func TestDecodeRejectsCiphertextAboveCeilingBeforeDecrypting(t *testing.T) {
 	if len(large.Data) <= MaxCiphertextBytes(limit) {
 		t.Fatal("fixture does not exceed the ceiling")
 	}
-	if _, err := bounded.Decode([]*commonpb.Payload{large}); err == nil || !strings.Contains(err.Error(), "limit is") {
-		t.Fatalf("Decode() of oversized ciphertext = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(bounded.Decode([]*commonpb.Payload{large})), "limit is")
 	// With a corrupted tag the error is still the size error, so the
 	// ceiling runs before authentication.
 	large.Data[len(large.Data)-1] ^= 1
-	if _, err := bounded.Decode([]*commonpb.Payload{large}); err == nil || !strings.Contains(err.Error(), "limit is") {
-		t.Fatalf("ceiling did not run before decryption: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(bounded.Decode([]*commonpb.Payload{large})), "limit is")
 	if _, err := NewAESGCMWithOptions(keys, Options{MaxPayloadBytes: -1}); err == nil {
 		t.Fatal("negative ceiling accepted")
 	}

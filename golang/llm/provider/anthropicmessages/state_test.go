@@ -8,6 +8,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -68,15 +69,11 @@ func TestContinuationRejectsWrongProfilePinning(t *testing.T) {
 	}}
 	adapter := &Adapter{endpointID: "anthropic-prod", profile: profile}
 	_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"}, Strict: true})
-	if err == nil || !strings.Contains(err.Error(), "continuation endpoint") {
-		t.Fatalf("wrong endpoint error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "continuation endpoint")
 	request.Continuation.EndpointID = "anthropic-prod"
 	request.Continuation.Model = "other-model"
 	_, err = adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"}, Strict: true})
-	if err == nil || !strings.Contains(err.Error(), "continuation model") {
-		t.Fatalf("wrong model error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "continuation model")
 }
 
 func jsonEqual(left, right any) bool {

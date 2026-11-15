@@ -2,11 +2,11 @@ package anthropicwire
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicschema"
@@ -49,9 +49,7 @@ func TestLiftContentKeepsBlockOrder(t *testing.T) {
 func TestValidateFinalJSONOnlyChecksCompletedText(t *testing.T) {
 	call := provider.Call{OutputSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`)}
 	invalid := []llm.Item{llm.ModelText(`{}`)}
-	if err := ValidateFinalJSON(call, invalid, llm.ResponseStatusCompleted, false, false); err == nil || !strings.Contains(err.Error(), "does not satisfy schema") {
-		t.Fatalf("ValidateFinalJSON(invalid) = %v", err)
-	}
+	testassert.ErrorContains(t, ValidateFinalJSON(call, invalid, llm.ResponseStatusCompleted, false, false), "does not satisfy schema")
 	if err := ValidateFinalJSON(call, invalid, llm.ResponseStatusLength, false, false); err != nil {
 		t.Fatalf("ValidateFinalJSON(truncated) = %v", err)
 	}

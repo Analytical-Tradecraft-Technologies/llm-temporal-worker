@@ -2,9 +2,9 @@ package secrets
 
 import (
 	"context"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -36,9 +36,7 @@ func TestReadSecretFileAcceptsProjectedVolumeSymlink(t *testing.T) {
 
 func TestReadSecretFileRejectsNonRegularTargets(t *testing.T) {
 	_, err := ReadSecretFile(context.Background(), t.TempDir(), 64)
-	if err == nil || !strings.Contains(err.Error(), "secret file must be regular") {
-		t.Fatalf("error = %v, want non-regular-file rejection", err)
-	}
+	testassert.ErrorContains(t, err, "secret file must be regular")
 }
 
 func TestReadSecretFileBoundsSymlinkTarget(t *testing.T) {
@@ -53,7 +51,5 @@ func TestReadSecretFileBoundsSymlinkTarget(t *testing.T) {
 	}
 
 	_, err := ReadSecretFile(context.Background(), path, 4)
-	if err == nil || !strings.Contains(err.Error(), "exceeds the configured size limit") {
-		t.Fatalf("error = %v, want size-limit rejection", err)
-	}
+	testassert.ErrorContains(t, err, "exceeds the configured size limit")
 }

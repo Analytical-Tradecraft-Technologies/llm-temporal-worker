@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"strings"
 	"testing"
 	"time"
@@ -57,9 +58,7 @@ func TestBudgetWindowIdentityValidation(t *testing.T) {
 				policyID = "acme"
 			}
 			_, err := ParseBudgetsJSON(budgetsJSONWithWindows(policyID, test.windows...))
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("ParseBudgetsJSON() error = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 	// Same geometry is fine once the windows are told apart, and the longest

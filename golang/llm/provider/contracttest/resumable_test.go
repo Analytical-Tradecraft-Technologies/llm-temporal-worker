@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -90,9 +91,7 @@ func TestValidateResumableSequenceRejectsUnsafeTransitions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateResumableSequence(tc.make())
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("ValidateResumableSequence() = %v, want %q", err, tc.want)
-			}
+			testassert.ErrorContains(t, err, tc.want)
 		})
 	}
 }

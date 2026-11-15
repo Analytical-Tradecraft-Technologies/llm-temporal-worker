@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -79,9 +80,7 @@ func TestOpenRouterRejectsCallerProviderOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = lowerRequest(llm.Request{Model: "model", Extensions: map[string]json.RawMessage{"openrouter": json.RawMessage(`{"provider_order":["Caller"]}`)}}, profile, "standard")
-	if err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("provider override error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "reserved")
 }
 
 func openRouterProviderBody(t *testing.T, profile Profile, model string, class llm.ServiceClass) map[string]any {

@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/catalog"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
@@ -37,9 +38,7 @@ func compiledPriceCatalog(t *testing.T, id, version string, entries []pricing.En
 
 func TestCatalogSnapshotLoaderRejectsMissingSnapshotAndCancellation(t *testing.T) {
 	loader := CatalogSnapshotLoader{}
-	if _, err := loader.Load(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "configuration snapshot is required") {
-		t.Fatalf("nil snapshot error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(loader.Load(context.Background(), nil)), "configuration snapshot is required")
 	_, err := loader.Load(context.Background(), &config.Snapshot{})
 	if err == nil {
 		t.Fatal("empty snapshot unexpectedly loaded")
@@ -249,9 +248,7 @@ func TestCompileRoutesEnforcesBedrockModelServiceClasses(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("compileRoutes() = %v, want error containing %q", err, test.wantErr)
-			}
+			testassert.ErrorContains(t, err, test.wantErr)
 		})
 	}
 }
@@ -363,17 +360,13 @@ func TestCompileRoutesKeepsAnthropicAWSAndBedrockCatalogStateSeparate(t *testing
 	profile := bundle.Capabilities["anthropic-aws-v1"]
 	profile.Family = provider.FamilyBedrockMessages
 	bundle.Capabilities["anthropic-aws-v1"] = profile
-	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "capability family") {
-		t.Fatalf("Bedrock capability profile accepted for Anthropic AWS route: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(compileRoutes(value, bundle, time.Now())), "capability family")
 
 	value, bundle = anthropicAWSRouteInputs(t)
 	entry := bundle.Pricing["prices"].Catalog.Entries[0]
 	entry.Family = string(provider.FamilyBedrockMessages)
 	bundle.Pricing["prices"] = compiledPriceCatalog(t, "prices", "prices-v1", []pricing.Entry{entry})
-	if _, err := compileRoutes(value, bundle, time.Now()); err == nil || !strings.Contains(err.Error(), "no price entry") {
-		t.Fatalf("Bedrock price entry accepted for Anthropic AWS route: %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(compileRoutes(value, bundle, time.Now())), "no price entry")
 }
 
 func anthropicAWSRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
@@ -472,9 +465,7 @@ func TestCompileRoutesRejectsBrokenReferencesAndIdentity(t *testing.T) {
 			value, bundle := testRouteInputs(t)
 			test.mutate(value, bundle)
 			_, err := compileRoutes(value, bundle, time.Now())
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("compileRoutes() = %v, want substring %q", err, test.want)
-			}
+			testassert.ErrorContains(t, err, test.want)
 		})
 	}
 }
@@ -492,9 +483,7 @@ func TestCompileBudgetPoliciesMapsAndValidatesWindows(t *testing.T) {
 	}
 
 	value.Limits.MaxBudgetBucketsPerWindow = 1
-	if _, err := compileBudgetPolicies(value); err == nil || !strings.Contains(err.Error(), "budget policy") {
-		t.Fatalf("unsafe budget policy error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(compileBudgetPolicies(value)), "budget policy")
 }
 
 func TestCompileBudgetPoliciesMaterializesExactLimitForLegacyAdmission(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
@@ -65,9 +66,7 @@ func TestCompileRejectsRequestOwnedExtensionFields(t *testing.T) {
 					Query:  provider.CapabilityQuery{EndpointID: "anthropic-test", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 					Strict: strict,
 				})
-				if err == nil || !strings.Contains(err.Error(), "cannot override") {
-					t.Fatalf("Compile() = %v, want request-owned rejection", err)
-				}
+				testassert.ErrorContains(t, err, "cannot override")
 				if call.SDKParams != nil {
 					t.Fatal("rejected extension produced dispatch parameters")
 				}

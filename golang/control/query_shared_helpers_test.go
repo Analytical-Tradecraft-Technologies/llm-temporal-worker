@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
@@ -46,9 +47,7 @@ func TestEncodeFilterPointerMatchesValue(t *testing.T) {
 	if _, err := encodeFilter((*CreditStatusQuery)(nil)); err == nil || err.Error() != "nil typed query filter" {
 		t.Fatalf("typed nil error = %v", err)
 	}
-	if _, err := encodeFilter(&ModelInventoryQuery{RefreshIfOlderThan: time.Millisecond}); err == nil || !strings.Contains(err.Error(), "refresh_if_older_than") {
-		t.Fatalf("invalid refresh error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(encodeFilter(&ModelInventoryQuery{RefreshIfOlderThan: time.Millisecond})), "refresh_if_older_than")
 	if _, err := encodeFilter(nil); err == nil || err.Error() != "unknown typed query filter" {
 		t.Fatalf("nil filter error = %v", err)
 	}

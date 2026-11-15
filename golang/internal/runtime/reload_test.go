@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 func TestRuntimeReloadFileRejectsBadReplacementAndRecordsBoundedFailure(t *testing.T) {
@@ -25,9 +26,7 @@ func TestRuntimeReloadFileRejectsBadReplacementAndRecordsBoundedFailure(t *testi
 	old := runtime.App.Current()
 	path := tempConfigFile(t, "not-a-valid-config: true\n")
 	err := runtime.ReloadFile(context.Background(), path)
-	if err == nil || !strings.Contains(err.Error(), "reload configuration failed") {
-		t.Fatalf("reload error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "reload configuration failed")
 	if runtime.App.Current() != old {
 		t.Fatal("bad replacement published a new runtime snapshot")
 	}

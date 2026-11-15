@@ -1,7 +1,7 @@
 package config
 
 import (
-	"strings"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"testing"
 )
 
@@ -33,15 +33,11 @@ func TestMemoryStateIsDevelopmentOnly(t *testing.T) {
 }
 
 func TestMemoryStateRequiresMemoryBlobStore(t *testing.T) {
-	if err := validateStateBlobComposition(StateKindMemory, "file"); err == nil || !strings.Contains(err.Error(), "blob_store.kind must be memory") {
-		t.Fatalf("memory state/blob mismatch error = %v", err)
-	}
+	testassert.ErrorContains(t, validateStateBlobComposition(StateKindMemory, "file"), "blob_store.kind must be memory")
 }
 
 func TestMemoryBlobStoreRequiresMemoryState(t *testing.T) {
-	if err := validateStateBlobComposition(StateKindRedis, "memory"); err == nil || !strings.Contains(err.Error(), "blob_store.kind memory requires state.kind memory") {
-		t.Fatalf("memory blob/state mismatch error = %v", err)
-	}
+	testassert.ErrorContains(t, validateStateBlobComposition(StateKindRedis, "memory"), "blob_store.kind memory requires state.kind memory")
 }
 
 func TestRedisOnlyStateIsDevelopmentOnly(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -30,9 +31,7 @@ func TestExplicitNoToolsNeverCompilesToAuto(t *testing.T) {
 	request := llm.Request{OperationKey: "test-operation", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Answer without tools")}, Tools: []llm.Tool{{Name: "lookup", InputSchema: []byte(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}
 	for _, strict := range []bool{false, true} {
 		_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
-		if err == nil || !strings.Contains(err.Error(), "none") {
-			t.Fatalf("explicit none must be rejected, got %v", err)
-		}
+		testassert.ErrorContains(t, err, "none")
 	}
 	request.Tools = nil
 	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: true}); err != nil {

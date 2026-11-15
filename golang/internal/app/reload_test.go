@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 )
 
 type fakeClients struct {
@@ -254,9 +255,7 @@ func TestReloadFileRejectsOversizedReplacementWithoutPublishingIt(t *testing.T) 
 		t.Fatal(err)
 	}
 	err := application.ReloadFile(context.Background(), path)
-	if err == nil || !strings.Contains(err.Error(), "exceeds safe size") {
-		t.Fatalf("reload error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "exceeds safe size")
 	if current := application.Current(); current == nil || current.Config.ConfigVersion() != before {
 		t.Fatal("oversized replacement changed the published snapshot")
 	}

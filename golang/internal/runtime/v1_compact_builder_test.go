@@ -10,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
@@ -58,9 +59,7 @@ func completeCompactCapabilities(factory CompactPortsFactory) V1RuntimeCapabilit
 
 func TestCompactV1RuntimeBuilderRequiresCompactFactory(t *testing.T) {
 	capabilities := completeCompactCapabilities(nil)
-	if err := capabilities.ValidateCompact(); err == nil || !strings.Contains(err.Error(), "ports factory") {
-		t.Fatalf("ValidateCompact() error = %v, want missing factory", err)
-	}
+	testassert.ErrorContains(t, capabilities.ValidateCompact(), "ports factory")
 }
 
 func TestCompactV1RuntimeBuilderConstructsCompactOnlyRuntime(t *testing.T) {

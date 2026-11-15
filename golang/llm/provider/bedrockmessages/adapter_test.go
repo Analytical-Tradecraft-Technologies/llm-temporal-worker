@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
@@ -69,17 +70,13 @@ func TestCompileRejectsPinnedAnthropicAWSContinuation(t *testing.T) {
 		Query:  provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
 		Strict: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "continuation endpoint") {
-		t.Fatalf("cross-family continuation error = %v", err)
-	}
+	testassert.ErrorContains(t, err, "continuation endpoint")
 }
 
 func TestProfileRejectsReservedCapacityAsPublicTier(t *testing.T) {
 	profile := DefaultProfile("bedrock-contract")
 	profile.ServiceTiers[llm.ServiceClassEconomy] = "reserved"
-	if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "invalid provider tier") {
-		t.Fatalf("reserved tier validation error = %v", err)
-	}
+	testassert.ErrorContains(t, testassert.Err(NewProfile(profile)), "invalid provider tier")
 }
 
 func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
