@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 )
 
 func TestResolveOCIManifestDescriptorRejectsCyclicOCIIndexChain(t *testing.T) {
@@ -278,22 +280,7 @@ func TestValidateRedactedLogArtifactRequiresRuntimeBoundaryEvents(t *testing.T) 
 
 func TestRunLayoutDigestSmoke(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config := []byte(`{"architecture":"arm64","os":"linux"}`)
-	layer := []byte("application layer")
-	configDigest := writeOCIBlob(t, root, config)
-	layerDigest := writeOCIBlob(t, root, layer)
-	manifestData, err := json.Marshal(ociManifestDocument{
-		SchemaVersion: 2,
-		Config:        ociDescriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + configDigest, Size: int64(len(config))},
-		Layers:        []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + layerDigest, Size: int64(len(layer))}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifestDigest := writeOCIBlob(t, root, manifestData)
+	manifestDigest, manifestData := writeOCILayoutManifest(t, root)
 	indexData, err := json.Marshal(ociIndexDocument{
 		SchemaVersion: 2,
 		Manifests:     []ociDescriptor{{MediaType: ociImageManifestMediaType, Digest: "sha256:" + manifestDigest, Size: int64(len(manifestData))}},
@@ -316,22 +303,7 @@ func TestRunLayoutDigestSmoke(t *testing.T) {
 
 func TestRunLayoutDigestRejectsDuplicateDescriptorMembers(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	config := []byte(`{"architecture":"arm64","os":"linux"}`)
-	layer := []byte("application layer")
-	configDigest := writeOCIBlob(t, root, config)
-	layerDigest := writeOCIBlob(t, root, layer)
-	manifestData, err := json.Marshal(ociManifestDocument{
-		SchemaVersion: 2,
-		Config:        ociDescriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + configDigest, Size: int64(len(config))},
-		Layers:        []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + layerDigest, Size: int64(len(layer))}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifestDigest := writeOCIBlob(t, root, manifestData)
+	manifestDigest, manifestData := writeOCILayoutManifest(t, root)
 	indexData := []byte(fmt.Sprintf(
 		`{"schemaVersion":2,"manifests":[{"mediaType":"%s","digest":"sha256:%s","digest":"sha256:%s","size":%d}]}`,
 		ociImageManifestMediaType,
@@ -344,7 +316,7 @@ func TestRunLayoutDigestRejectsDuplicateDescriptorMembers(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = run([]string{"layout-digest", "-layout", root}, &stdout)
+	err := run([]string{"layout-digest", "-layout", root}, &stdout)
 	if err == nil || !strings.Contains(err.Error(), "invalid or ambiguous JSON") {
 		t.Fatalf("layout-digest duplicate descriptor error = %v, want ambiguity rejection", err)
 	}
@@ -685,20 +657,10 @@ func TestReleaseEvidenceAcceptsPreTargetStatusBenchmarkV1Bundle(t *testing.T) {
 
 	// Simulate a retained schema-v1 benchmark summary from before target_status
 	// was introduced. The legacy schema branch must remain verify-compatible.
-	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
-	benchmarkData, err := os.ReadFile(benchmarkPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var benchmark map[string]any
-	if err := json.Unmarshal(benchmarkData, &benchmark); err != nil {
-		t.Fatal(err)
-	}
-	delete(benchmark, "target_status")
-	benchmark["benchmark"] = "BenchmarkGenerateMemoryAdmissionAndCompile"
-	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	rewriteBenchmarkSummary(t, artifactDir, func(benchmark map[string]any) {
+		delete(benchmark, "target_status")
+		benchmark["benchmark"] = "BenchmarkGenerateMemoryAdmissionAndCompile"
+	})
 
 	schemaPath := releaseEvidenceSchemaPath(t)
 	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err != nil {
@@ -728,20 +690,10 @@ func TestReleaseEvidenceAcceptsRetainedLegacyEngineBenchmarkOnly(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			artifactDir := newReleaseEvidenceArtifactDirectory(t)
 			subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
-			benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
-			benchmarkData, err := os.ReadFile(benchmarkPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var benchmark map[string]any
-			if err := json.Unmarshal(benchmarkData, &benchmark); err != nil {
-				t.Fatal(err)
-			}
-			benchmark["benchmark"] = test.name
-			if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			err = run(releaseEvidenceRecordArguments(releaseEvidenceSchemaPath(t), artifactDir, subjects), io.Discard)
+			rewriteBenchmarkSummary(t, artifactDir, func(benchmark map[string]any) {
+				benchmark["benchmark"] = test.name
+			})
+			err := run(releaseEvidenceRecordArguments(releaseEvidenceSchemaPath(t), artifactDir, subjects), io.Discard)
 			if (err == nil) != test.accepted {
 				t.Fatalf("record with benchmark %s: error = %v, want accepted %t", test.name, err, test.accepted)
 			}
@@ -753,19 +705,9 @@ func TestReleaseEvidenceRejectsCurrentBenchmarkAtTargetBoundary(t *testing.T) {
 	artifactDir := newReleaseEvidenceArtifactDirectory(t)
 	subjects := writeReleaseEvidenceArtifacts(t, artifactDir)
 
-	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
-	benchmarkData, err := os.ReadFile(benchmarkPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var benchmark map[string]any
-	if err := json.Unmarshal(benchmarkData, &benchmark); err != nil {
-		t.Fatal(err)
-	}
-	benchmark["p99_ms_per_op"] = 25.0
-	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	rewriteBenchmarkSummary(t, artifactDir, func(benchmark map[string]any) {
+		benchmark["p99_ms_per_op"] = 25.0
+	})
 
 	schemaPath := releaseEvidenceSchemaPath(t)
 	if err := run(releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects), io.Discard); err == nil || !strings.Contains(err.Error(), "p99_ms_per_op") {
@@ -1435,6 +1377,40 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// writeOCILayoutManifest writes an OCI layout marker and a one-layer image
+// manifest with its blobs under root, leaving index.json to the caller.
+// rewriteBenchmarkSummary lets mutate edit the benchmark summary artifact in
+// artifactDir and writes it back.
+func rewriteBenchmarkSummary(t *testing.T, artifactDir string, mutate func(map[string]any)) {
+	t.Helper()
+	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
+	benchmark := repotest.ReadJSONObject(t, benchmarkPath)
+	mutate(benchmark)
+	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeOCILayoutManifest(t *testing.T, root string) (string, []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := []byte(`{"architecture":"arm64","os":"linux"}`)
+	layer := []byte("application layer")
+	configDigest := writeOCIBlob(t, root, config)
+	layerDigest := writeOCIBlob(t, root, layer)
+	manifestData, err := json.Marshal(ociManifestDocument{
+		SchemaVersion: 2,
+		Config:        ociDescriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: "sha256:" + configDigest, Size: int64(len(config))},
+		Layers:        []ociDescriptor{{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: "sha256:" + layerDigest, Size: int64(len(layer))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeOCIBlob(t, root, manifestData), manifestData
 }
 
 func writeOCIBlob(t *testing.T, root string, data []byte) string {

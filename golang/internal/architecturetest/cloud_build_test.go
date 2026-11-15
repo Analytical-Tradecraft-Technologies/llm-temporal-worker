@@ -152,7 +152,7 @@ func TestWorkflowMergeQueueBuildsAndScansLikeMaster(t *testing.T) {
 // assembles the image index. It never pushes.
 func TestWorkflowBuildScannedImageScriptPolicy(t *testing.T) {
 	script := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "build-scanned-image.sh")
-	for _, want := range []string{
+	assertContainsEach(t, script, "build-scanned-image.sh does not retain %q",
 		"architectures=(amd64 arm64)",
 		`--builder "$BUILDX_BUILDER"`,
 		`--platform "linux/$arch"`,
@@ -163,11 +163,7 @@ func TestWorkflowBuildScannedImageScriptPolicy(t *testing.T) {
 		"config-digest",
 		".Metadata.ImageID == $id",
 		`"$work/ocimerge" merge -output "$output"`,
-	} {
-		if !strings.Contains(script, want) {
-			t.Fatalf("build-scanned-image.sh does not retain %q", want)
-		}
-	}
+	)
 	for _, forbidden := range []string{"--push", "oci-archive:", "linux/amd64,linux/arm64", "skopeo", "docker login"} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("build-scanned-image.sh contains %q", forbidden)
@@ -183,11 +179,7 @@ func TestWorkflowBuildScannedImageScriptScansBothPlatformsBeforeAssembling(t *te
 	indexDigest := "sha256:" + strings.Repeat("d", 64)
 	for _, scenario := range []string{"success", "finding-arm64", "unbound-scan", "build-failure"} {
 		t.Run(scenario, func(t *testing.T) {
-			dir := t.TempDir()
-			bin := filepath.Join(dir, "bin")
-			if err := os.Mkdir(bin, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			dir, bin := newFakeCommandDirectory(t)
 			log := filepath.Join(dir, "calls")
 			writeFakeCommand(t, bin, "docker", `
 printf 'docker %s\n' "$*" >> "$CALL_LOG"
@@ -301,11 +293,7 @@ func TestWorkflowMultiNodeBuilderMatchesBuildCloudShape(t *testing.T) {
 	}
 	for _, scenario := range []string{"success", "single-node", "checksum", "credentialed", "no-emulation", "no-fix-binary"} {
 		t.Run(scenario, func(t *testing.T) {
-			dir := t.TempDir()
-			bin := filepath.Join(dir, "bin")
-			if err := os.Mkdir(bin, 0o700); err != nil {
-				t.Fatal(err)
-			}
+			dir, bin := newFakeCommandDirectory(t)
 			binfmt := filepath.Join(dir, "binfmt_misc")
 			if err := os.Mkdir(binfmt, 0o700); err != nil {
 				t.Fatal(err)
@@ -397,11 +385,7 @@ func jobRunContains(job map[string]any, want string) bool {
 func TestWorkflowCloudHelperFailsClosedAndKeepsTokenOutOfEnvironmentFile(t *testing.T) {
 	for _, scenario := range []string{"success", "branch", "repository", "event", "missing-builder", "checksum", "cloud-unavailable"} {
 		t.Run(scenario, func(t *testing.T) {
-			dir := t.TempDir()
-			bin := filepath.Join(dir, "bin")
-			if err := os.Mkdir(bin, 0700); err != nil {
-				t.Fatal(err)
-			}
+			dir, bin := newFakeCommandDirectory(t)
 			log := filepath.Join(dir, "calls")
 			envFile := filepath.Join(dir, "github-env")
 			fake := func(name, body string) {

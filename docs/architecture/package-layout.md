@@ -91,6 +91,7 @@ current-layout reference.
 │   │   ├── netpolicy/              Destination-address policy for egress and media URLs
 │   │   ├── observability/          slog, metrics, and trace wiring
 │   │   ├── qualitytest/            Repository quality gates
+│   │   ├── repotest/               Checkout lookup and file reading for verification tests
 │   │   ├── responsesapi/           Optional OpenAI Responses API over Generate
 │   │   ├── runtime/                CLI process composition and Temporal client wiring
 │   │   └── secrets/                Environment/file secret resolution

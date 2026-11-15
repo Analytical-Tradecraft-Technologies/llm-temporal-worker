@@ -451,78 +451,52 @@ func activitiesEngineStreamingReferences(file *ast.File) []string {
 
 func activityReceiverAliases(body *ast.BlockStmt, receiver string) map[string]struct{} {
 	aliases := map[string]struct{}{receiver: {}}
-	for changed := true; changed; {
-		changed = false
-		ast.Inspect(body, func(node ast.Node) bool {
-			switch typed := node.(type) {
-			case *ast.AssignStmt:
-				for index, value := range typed.Rhs {
-					if index >= len(typed.Lhs) || !isActivityReceiverValue(value, aliases) {
-						continue
-					}
-					if identifier, ok := typed.Lhs[index].(*ast.Ident); ok && identifier.Name != "_" {
-						if _, exists := aliases[identifier.Name]; !exists {
-							aliases[identifier.Name] = struct{}{}
-							changed = true
-						}
-					}
-				}
-			case *ast.ValueSpec:
-				for index, value := range typed.Values {
-					if index >= len(typed.Names) || !isActivityReceiverValue(value, aliases) {
-						continue
-					}
-					identifier := typed.Names[index]
-					if identifier.Name != "_" {
-						if _, exists := aliases[identifier.Name]; !exists {
-							aliases[identifier.Name] = struct{}{}
-							changed = true
-						}
-					}
-				}
-			}
-			return true
-		})
-	}
+	collectAliases(body, aliases, func(value ast.Expr) bool { return isActivityReceiverValue(value, aliases) })
 	return aliases
 }
 
 func activityEngineAliases(body *ast.BlockStmt, receiverAliases map[string]struct{}) map[string]struct{} {
 	aliases := make(map[string]struct{})
+	collectAliases(body, aliases, func(value ast.Expr) bool { return isActivityEngineValue(value, receiverAliases, aliases) })
+	return aliases
+}
+
+// collectAliases adds to aliases every named variable in body assigned or
+// declared from a value isAlias accepts, repeating until no alias is added so
+// aliases of aliases are found too.
+func collectAliases(body *ast.BlockStmt, aliases map[string]struct{}, isAlias func(ast.Expr) bool) {
 	for changed := true; changed; {
 		changed = false
+		add := func(identifier *ast.Ident) {
+			if identifier.Name == "_" {
+				return
+			}
+			if _, exists := aliases[identifier.Name]; !exists {
+				aliases[identifier.Name] = struct{}{}
+				changed = true
+			}
+		}
 		ast.Inspect(body, func(node ast.Node) bool {
 			switch typed := node.(type) {
 			case *ast.AssignStmt:
 				for index, value := range typed.Rhs {
-					if index >= len(typed.Lhs) || !isActivityEngineValue(value, receiverAliases, aliases) {
+					if index >= len(typed.Lhs) || !isAlias(value) {
 						continue
 					}
-					if identifier, ok := typed.Lhs[index].(*ast.Ident); ok && identifier.Name != "_" {
-						if _, exists := aliases[identifier.Name]; !exists {
-							aliases[identifier.Name] = struct{}{}
-							changed = true
-						}
+					if identifier, ok := typed.Lhs[index].(*ast.Ident); ok {
+						add(identifier)
 					}
 				}
 			case *ast.ValueSpec:
 				for index, value := range typed.Values {
-					if index >= len(typed.Names) || !isActivityEngineValue(value, receiverAliases, aliases) {
-						continue
-					}
-					identifier := typed.Names[index]
-					if identifier.Name != "_" {
-						if _, exists := aliases[identifier.Name]; !exists {
-							aliases[identifier.Name] = struct{}{}
-							changed = true
-						}
+					if index < len(typed.Names) && isAlias(value) {
+						add(typed.Names[index])
 					}
 				}
 			}
 			return true
 		})
 	}
-	return aliases
 }
 
 func isActivityReceiverValue(expression ast.Expr, aliases map[string]struct{}) bool {

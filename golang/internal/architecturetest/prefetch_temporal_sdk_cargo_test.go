@@ -12,11 +12,7 @@ func TestWorkflowTemporalSDKCargoPrefetchVerifiesPinnedCommitAndFetchesLocked(t 
 	const (
 		expectedCommit = "ddaea320cd5a7817ad679dda6603aad59448c2ba"
 	)
-	tempDir := t.TempDir()
-	fakeBin := filepath.Join(tempDir, "bin")
-	if err := os.Mkdir(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	tempDir, fakeBin := newFakeCommandDirectory(t)
 	log := filepath.Join(tempDir, "calls.log")
 	opamRoot := filepath.Join(tempDir, "opam-root")
 	sourceRoot := filepath.Join(opamRoot, "5.2.0", ".opam-switch", "sources", "temporal-sdk")

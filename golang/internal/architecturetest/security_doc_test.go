@@ -17,15 +17,11 @@ func TestSecurityDocMatchesModelRouteRestrictions(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := strings.Join(strings.Fields(string(data)), " ")
-	for _, want := range []string{
+	expectContainsEach(t, doc, "security architecture document is missing %q",
 		"`allowed_tenants`",
 		"`data_regions` is recorded with the model but not enforced",
 		"There are no project or data-classification route restrictions.",
-	} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("security architecture document is missing %q", want)
-		}
-	}
+	)
 	for _, stale := range []string{
 		"allowed tenants/projects",
 		"A continuation cannot cross those restrictions.",

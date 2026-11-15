@@ -127,11 +127,7 @@ func runNativeCIHelper(t *testing.T, script, restoredSwitch string) string {
 
 func runNativeCIHelperWithBubblewrap(t *testing.T, script, restoredSwitch string, bubblewrapUsable, namespaceProbeUsable bool) (string, []byte, string, error) {
 	t.Helper()
-	tempDir := t.TempDir()
-	fakeBin := filepath.Join(tempDir, "bin")
-	if err := os.Mkdir(fakeBin, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	tempDir, fakeBin := newFakeCommandDirectory(t)
 	log := filepath.Join(tempDir, "calls.log")
 	writeFakeCommand(t, fakeBin, "curl", `
 printf 'curl\n' >> "$FAKE_LOG"
@@ -295,6 +291,18 @@ func workflowEnvironmentValue(contents, key string) string {
 		}
 	}
 	return ""
+}
+
+// newFakeCommandDirectory returns a fresh temporary directory and the empty
+// bin directory inside it that holds fake commands.
+func newFakeCommandDirectory(t *testing.T) (string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	bin := filepath.Join(directory, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return directory, bin
 }
 
 func writeFakeCommand(t *testing.T, directory, name, body string) {

@@ -28,11 +28,7 @@ func TestMetricsDoNotAcceptLegacyMoneyAmounts(t *testing.T) {
 			}
 		}
 	}
-	for _, required := range []string{"RecordExactCost(", "RecordCostStatus("} {
-		if !strings.Contains(engineSource, required) {
-			t.Errorf("engine/metrics.go does not record bounded exact-cost signal %q", required)
-		}
-	}
+	expectContainsEach(t, engineSource, "engine/metrics.go does not record bounded exact-cost signal %q", "RecordExactCost(", "RecordCostStatus(")
 }
 
 func readMetricsArchitectureSource(t *testing.T, relativePath string) string {

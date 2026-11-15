@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 )
 
@@ -140,11 +141,7 @@ func withoutConfigEnvironmentOverrides(t *testing.T) {
 func TestActivityRuntimeReferencesCurrentQueryContract(t *testing.T) {
 	root := repositoryRoot(t)
 	path := filepath.Join(root, "docs/reference/activity-runtime.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Join(strings.Fields(string(data)), " ")
+	text := readNormalizedText(t, path)
 	const queryLink = "[persisted query service](persisted-query-service.md)"
 	if !strings.Contains(text, queryLink) {
 		t.Fatalf("%s must link the current query service contract", path)
@@ -159,11 +156,7 @@ func TestActivityRuntimeReferencesCurrentQueryContract(t *testing.T) {
 
 func TestLiveProviderDocumentationSeparatesManualWorkflowFromRelease(t *testing.T) {
 	root := repositoryRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, "docs/testing/strategy.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Join(strings.Fields(string(data)), " ")
+	text := readNormalizedText(t, filepath.Join(root, "docs/testing/strategy.md"))
 	if !strings.Contains(text, "protected manual live-provider workflow") {
 		t.Fatal("live-provider documentation must name the protected manual live-provider workflow")
 	}
@@ -212,11 +205,7 @@ func TestReadinessDocumentationStatesRedisPrefixBoundary(t *testing.T) {
 		"docs/architecture/deployment-and-operations.md",
 	} {
 		t.Run(relative, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(root, relative))
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := strings.Join(strings.Fields(string(data)), " ")
+			text := readNormalizedText(t, filepath.Join(root, relative))
 			if !strings.Contains(text, "budget authority marker") ||
 				!strings.Contains(text, "budget-initialize") {
 				t.Fatalf("%s must state that production readiness verifies explicitly initialized budget authority", relative)
@@ -350,11 +339,7 @@ func TestV1DocumentationStatesFinalResponseBoundary(t *testing.T) {
 
 func TestProviderAdapterDocumentationListsBedrockConverseProfile(t *testing.T) {
 	root := repositoryRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, "docs/architecture/provider-adapters.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Join(strings.Fields(string(data)), " ")
+	text := readNormalizedText(t, filepath.Join(root, "docs/architecture/provider-adapters.md"))
 	for _, required := range []string{
 		"| Amazon Bedrock Converse | AWS SDK for Go v2 `bedrockruntime` | Converse |",
 		"One-shot `Converse` only; live token streaming is outside the Temporal v1 boundary",
@@ -365,28 +350,22 @@ func TestProviderAdapterDocumentationListsBedrockConverseProfile(t *testing.T) {
 	}
 }
 
-func repositoryRoot(t *testing.T) string {
+// readNormalizedText reads the file at path with every run of whitespace
+// collapsed to one space, so checks ignore Markdown line wrapping.
+func readNormalizedText(t *testing.T, path string) string {
 	t.Helper()
-	directory, err := os.Getwd()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("repository checkout root not found")
-		}
-		directory = parent
-	}
+	return strings.Join(strings.Fields(string(data)), " ")
 }
 
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(repositoryRoot(t), "golang")
-}
+// repositoryRoot and moduleRoot locate the checkout these tests verify.
+var (
+	repositoryRoot = repotest.RepositoryRoot
+	moduleRoot     = repotest.ModuleRoot
+)
 
 func TestDependencyBaselineDocumentsEveryVulnerabilityException(t *testing.T) {
 	baselineBytes, err := os.ReadFile(filepath.Join(moduleRoot(t), "tools", "supplychainverify", "baseline.json"))

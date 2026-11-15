@@ -2,6 +2,7 @@ package architecturetest
 
 import (
 	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -211,16 +212,12 @@ func TestWorkflowOCamlCacheIsolatedAndSandboxed(t *testing.T) {
 	}
 
 	opamSetup := readRepositoryFile(t, repositoryRoot(t), "scripts", "ci", "setup-opam.sh")
-	for _, want := range []string{
+	assertContainsEach(t, opamSetup, "native OPAM setup does not retain %q",
 		"GITHUB_PATH",
 		"opam switch list --short",
 		"opam switch set --yes",
 		"opam init --bare --no-setup --yes",
-	} {
-		if !strings.Contains(opamSetup, want) {
-			t.Fatalf("native OPAM setup does not retain %q", want)
-		}
-	}
+	)
 	if strings.Contains(opamSetup, "--disable-sandboxing") {
 		t.Fatal("native OPAM setup disables sandboxing")
 	}
@@ -324,39 +321,34 @@ func TestWorkflowOCamlSandboxUserNamespacesAreGuardedAndScoped(t *testing.T) {
 		if !(aptIndex < sysctlIndex && sysctlIndex < cacheIndex && cacheIndex < setupIndex) {
 			t.Fatalf("%s runs OCaml sandbox setup in wrong order: apt=%d sysctl=%d cache=%d setup=%d", workflow.name, aptIndex, sysctlIndex, cacheIndex, setupIndex)
 		}
-		for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
-			if jobName == "ocaml" || jobName == "ocaml-readme-install" {
-				continue
-			}
-			otherJob, ok := rawJob.(map[string]any)
-			if !ok {
-				continue
-			}
-			steps, _ := otherJob["steps"].([]any)
-			for _, rawStep := range steps {
-				step, ok := rawStep.(map[string]any)
-				if ok && step["name"] == stepName {
-					t.Fatalf("%s unexpectedly configures OCaml sandbox sysctls in job %q", workflow.name, jobName)
-				}
+		for _, jobName := range jobsWithStepNamed(t, workflow, stepName) {
+			if jobName != "ocaml" && jobName != "ocaml-readme-install" {
+				t.Fatalf("%s unexpectedly configures OCaml sandbox sysctls in job %q", workflow.name, jobName)
 			}
 		}
 	}
 
-	for _, workflow := range []workflowDocument{readWorkflow(t, "release.yml")} {
-		for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
-			job, ok := rawJob.(map[string]any)
-			if !ok {
-				continue
-			}
-			steps, _ := job["steps"].([]any)
-			for _, rawStep := range steps {
-				step, ok := rawStep.(map[string]any)
-				if ok && step["name"] == stepName {
-					t.Fatalf("manual %s workflow unexpectedly configures OCaml sandbox sysctls in job %q", workflow.name, jobName)
-				}
+	release := readWorkflow(t, "release.yml")
+	for _, jobName := range jobsWithStepNamed(t, release, stepName) {
+		t.Fatalf("manual %s workflow unexpectedly configures OCaml sandbox sysctls in job %q", release.name, jobName)
+	}
+}
+
+// jobsWithStepNamed returns the jobs of workflow with a mapping step named name.
+func jobsWithStepNamed(t *testing.T, workflow workflowDocument, name string) []string {
+	t.Helper()
+	var jobNames []string
+	for jobName, rawJob := range workflowMapping(t, workflow, "jobs") {
+		job, _ := rawJob.(map[string]any)
+		steps, _ := job["steps"].([]any)
+		for _, rawStep := range steps {
+			if step, ok := rawStep.(map[string]any); ok && step["name"] == name {
+				jobNames = append(jobNames, jobName)
+				break
 			}
 		}
 	}
+	return jobNames
 }
 
 func TestWorkflowContainerBuildContract(t *testing.T) {
@@ -951,11 +943,8 @@ func assertRequiredOfflineGates(t *testing.T, workflow workflowDocument) {
 func readWorkflow(t *testing.T, name string) workflowDocument {
 	t.Helper()
 	root := repositoryRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, ".github", "workflows", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parseWorkflow(t, name, string(data))
+	data := readRepositoryFile(t, root, ".github", "workflows", name)
+	return parseWorkflow(t, name, data)
 }
 
 func parseWorkflow(t *testing.T, name, raw string) workflowDocument {
@@ -1068,18 +1057,27 @@ func workflowJob(t *testing.T, workflow workflowDocument, name string) map[strin
 	return job
 }
 
-func assertJobUsesAction(t *testing.T, workflow workflowDocument, jobName, want string) {
+// jobStepMappings returns the mapping steps of a job, failing the test when the
+// job has no step sequence.
+func jobStepMappings(t *testing.T, workflow workflowDocument, jobName string) []map[string]any {
 	t.Helper()
 	job := workflowJob(t, workflow, jobName)
 	steps, ok := job["steps"].([]any)
 	if !ok {
 		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
 	}
+	mappings := make([]map[string]any, 0, len(steps))
 	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
-			continue
+		if step, ok := rawStep.(map[string]any); ok {
+			mappings = append(mappings, step)
 		}
+	}
+	return mappings
+}
+
+func assertJobUsesAction(t *testing.T, workflow workflowDocument, jobName, want string) {
+	t.Helper()
+	for _, step := range jobStepMappings(t, workflow, jobName) {
 		if actionName(step["uses"]) == want {
 			return
 		}
@@ -1096,16 +1094,7 @@ func assertJobHasRunCommand(t *testing.T, workflow workflowDocument, jobName, wa
 
 func assertJobRunContains(t *testing.T, workflow workflowDocument, jobName, want string) {
 	t.Helper()
-	job := workflowJob(t, workflow, jobName)
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
-	}
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, step := range jobStepMappings(t, workflow, jobName) {
 		if run, _ := step["run"].(string); strings.Contains(run, want) {
 			return
 		}
@@ -1115,135 +1104,80 @@ func assertJobRunContains(t *testing.T, workflow workflowDocument, jobName, want
 
 func assertJobRunPrecedesRunContains(t *testing.T, workflow workflowDocument, jobName, before, after string) {
 	t.Helper()
-	job := workflowJob(t, workflow, jobName)
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
-	}
-	seenBefore := false
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
+	assertJobStepPrecedesRun(t, workflow, jobName, before, after,
+		func(step map[string]any) bool { run, _ := step["run"].(string); return strings.Contains(run, before) },
+		func(run string) bool { return strings.Contains(run, after) },
+		fmt.Sprintf("does not run %q", after))
+}
+
+func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, action, input, want string) {
+	t.Helper()
+	assertJobStepInput(t, workflow, jobName, fmt.Sprintf("action %q", action), input, want,
+		func(step map[string]any) bool { return actionName(step["uses"]) == action },
+		fmt.Sprintf("does not use %q", action))
+}
+
+func assertJobNamedStepInput(t *testing.T, workflow workflowDocument, jobName, stepName, input, want string) {
+	t.Helper()
+	assertJobStepInput(t, workflow, jobName, fmt.Sprintf("step %q", stepName), input, want,
+		func(step map[string]any) bool { return step["name"] == stepName },
+		fmt.Sprintf("does not contain step %q", stepName))
+}
+
+// assertJobStepInput checks the input of the first step that matches; label
+// names that step in failures and missing completes "<workflow> job <name> ...".
+func assertJobStepInput(t *testing.T, workflow workflowDocument, jobName, label, input, want string, matches func(map[string]any) bool, missing string) {
+	t.Helper()
+	for _, step := range jobStepMappings(t, workflow, jobName) {
+		if !matches(step) {
 			continue
 		}
-		run, _ := step["run"].(string)
-		if strings.Contains(run, before) {
+		with, ok := step["with"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s job %q %s has no inputs", workflow.name, jobName, label)
+		}
+		if got, ok := with[input].(string); !ok || got != want {
+			t.Fatalf("%s job %q %s input %q = %#v, want %q", workflow.name, jobName, label, input, with[input], want)
+		}
+		return
+	}
+	t.Fatalf("%s job %q %s", workflow.name, jobName, missing)
+}
+
+func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, jobName, action, command string) {
+	t.Helper()
+	assertJobStepPrecedesRun(t, workflow, jobName, action, command,
+		func(step map[string]any) bool { return actionName(step["uses"]) == action },
+		func(run string) bool { return runHasCommandLine(run, command) },
+		fmt.Sprintf("does not run %q", command))
+}
+
+func assertJobActionPrecedesRunContains(t *testing.T, workflow workflowDocument, jobName, action, command string) {
+	t.Helper()
+	assertJobStepPrecedesRun(t, workflow, jobName, action, command,
+		func(step map[string]any) bool { return actionName(step["uses"]) == action },
+		func(run string) bool { return strings.Contains(run, command) },
+		fmt.Sprintf("does not run a command containing %q", command))
+}
+
+// assertJobStepPrecedesRun requires a step matching isBefore no later than the
+// first step whose run command matches isAfter; before and after name them in
+// failures and missing completes "<workflow> job <name> ..." when no run matches.
+func assertJobStepPrecedesRun(t *testing.T, workflow workflowDocument, jobName, before, after string, isBefore func(map[string]any) bool, isAfter func(string) bool, missing string) {
+	t.Helper()
+	seenBefore := false
+	for _, step := range jobStepMappings(t, workflow, jobName) {
+		if isBefore(step) {
 			seenBefore = true
 		}
-		if strings.Contains(run, after) {
+		if run, _ := step["run"].(string); isAfter(run) {
 			if !seenBefore {
 				t.Fatalf("%s job %q runs %q before %q", workflow.name, jobName, after, before)
 			}
 			return
 		}
 	}
-	t.Fatalf("%s job %q does not run %q", workflow.name, jobName, after)
-}
-
-func assertJobActionInput(t *testing.T, workflow workflowDocument, jobName, action, input, want string) {
-	t.Helper()
-	job := workflowJob(t, workflow, jobName)
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
-	}
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok || actionName(step["uses"]) != action {
-			continue
-		}
-		with, ok := step["with"].(map[string]any)
-		if !ok {
-			t.Fatalf("%s job %q action %q has no inputs", workflow.name, jobName, action)
-		}
-		if got, ok := with[input].(string); !ok || got != want {
-			t.Fatalf("%s job %q action %q input %q = %#v, want %q", workflow.name, jobName, action, input, with[input], want)
-		}
-		return
-	}
-	t.Fatalf("%s job %q does not use %q", workflow.name, jobName, action)
-}
-
-func assertJobNamedStepInput(t *testing.T, workflow workflowDocument, jobName, stepName, input, want string) {
-	t.Helper()
-	job := workflowJob(t, workflow, jobName)
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
-	}
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok || step["name"] != stepName {
-			continue
-		}
-		with, ok := step["with"].(map[string]any)
-		if !ok {
-			t.Fatalf("%s job %q step %q has no inputs", workflow.name, jobName, stepName)
-		}
-		if got, ok := with[input].(string); !ok || got != want {
-			t.Fatalf("%s job %q step %q input %q = %#v, want %q", workflow.name, jobName, stepName, input, with[input], want)
-		}
-		return
-	}
-	t.Fatalf("%s job %q does not contain step %q", workflow.name, jobName, stepName)
-}
-
-func assertJobActionPrecedesRunCommand(t *testing.T, workflow workflowDocument, jobName, action, command string) {
-	t.Helper()
-	job := workflowJob(t, workflow, jobName)
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
-	}
-	seenAction := false
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
-			continue
-		}
-		if actionName(step["uses"]) == action {
-			seenAction = true
-		}
-		run, _ := step["run"].(string)
-		for _, line := range strings.Split(run, "\n") {
-			if strings.TrimSpace(line) != command {
-				continue
-			}
-			if !seenAction {
-				t.Fatalf("%s job %q runs %q before %q", workflow.name, jobName, command, action)
-			}
-			return
-		}
-	}
-	t.Fatalf("%s job %q does not run %q", workflow.name, jobName, command)
-}
-
-func assertJobActionPrecedesRunContains(t *testing.T, workflow workflowDocument, jobName, action, command string) {
-	t.Helper()
-	job := workflowJob(t, workflow, jobName)
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		t.Fatalf("%s job %q has no steps", workflow.name, jobName)
-	}
-	seenAction := false
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
-			continue
-		}
-		if actionName(step["uses"]) == action {
-			seenAction = true
-		}
-		run, _ := step["run"].(string)
-		if !strings.Contains(run, command) {
-			continue
-		}
-		if !seenAction {
-			t.Fatalf("%s job %q runs %q before %q", workflow.name, jobName, command, action)
-		}
-		return
-	}
-	t.Fatalf("%s job %q does not run a command containing %q", workflow.name, jobName, command)
+	t.Fatalf("%s job %q %s", workflow.name, jobName, missing)
 }
 
 func assertJobReadOnlyPermissions(t *testing.T, workflowName, jobName string, job map[string]any) {
@@ -1255,73 +1189,97 @@ func assertJobReadOnlyPermissions(t *testing.T, workflowName, jobName string, jo
 }
 
 func jobHasRunCommand(job map[string]any, command string) bool {
-	steps, ok := job["steps"].([]any)
-	if !ok {
-		return false
-	}
-	for _, rawStep := range steps {
-		step, ok := rawStep.(map[string]any)
-		if !ok {
-			continue
-		}
-		run, ok := step["run"].(string)
-		if !ok {
-			continue
-		}
-		for _, line := range strings.Split(run, "\n") {
-			if strings.TrimSpace(line) == command {
-				return true
-			}
+	for run := range jobRunCommands(job) {
+		if runHasCommandLine(run, command) {
+			return true
 		}
 	}
 	return false
 }
 
-func releaseMakeInvocations(workflow workflowDocument) []releaseMakeInvocation {
-	jobs, ok := workflow.fields["jobs"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	var invocations []releaseMakeInvocation
-	for jobName, rawJob := range jobs {
-		job, ok := rawJob.(map[string]any)
-		if !ok {
-			continue
-		}
-		steps, ok := job["steps"].([]any)
-		if !ok {
-			continue
-		}
+// jobRunCommands yields the run command of each mapping step of job.
+func jobRunCommands(job map[string]any) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		steps, _ := job["steps"].([]any)
 		for _, rawStep := range steps {
 			step, ok := rawStep.(map[string]any)
 			if !ok {
 				continue
 			}
-			run, ok := step["run"].(string)
+			if run, ok := step["run"].(string); ok && !yield(run) {
+				return
+			}
+		}
+	}
+}
+
+// workflowRunCommands yields each job name with the run command of each of
+// that job's mapping steps.
+func workflowRunCommands(workflow workflowDocument) iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		jobs, _ := workflow.fields["jobs"].(map[string]any)
+		for jobName, rawJob := range jobs {
+			job, ok := rawJob.(map[string]any)
 			if !ok {
 				continue
 			}
-			for _, line := range shellLogicalLines(run) {
-				fields := strings.Fields(strings.TrimSpace(line))
-				for index, field := range fields {
-					if normalizeShellWord(field) != "make" {
-						continue
+			for run := range jobRunCommands(job) {
+				if !yield(jobName, run) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// runHasCommandLine reports whether a line of run, trimmed, is command.
+func runHasCommandLine(run, command string) bool {
+	for _, line := range strings.Split(run, "\n") {
+		if strings.TrimSpace(line) == command {
+			return true
+		}
+	}
+	return false
+}
+
+// makeInvocations yields each logical shell line of run that invokes make,
+// with the words after make up to the next command delimiter.
+func makeInvocations(run string) iter.Seq2[string, []string] {
+	return func(yield func(string, []string) bool) {
+		for _, line := range shellLogicalLines(run) {
+			fields := strings.Fields(strings.TrimSpace(line))
+			for index, field := range fields {
+				if normalizeShellWord(field) != "make" {
+					continue
+				}
+				arguments := fields[index+1:]
+				for end, candidate := range arguments {
+					if shellCommandDelimiter(candidate) {
+						arguments = arguments[:end]
+						break
 					}
-					for _, candidate := range fields[index+1:] {
-						target := normalizeMakeTarget(candidate)
-						if strings.HasPrefix(target, "release") {
-							invocations = append(invocations, releaseMakeInvocation{
-								workflow: workflow.name,
-								job:      jobName,
-								target:   target,
-								line:     strings.TrimSpace(line),
-							})
-							break
-						}
-						if shellCommandDelimiter(candidate) {
-							break
-						}
-					}
+				}
+				if !yield(strings.TrimSpace(line), arguments) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func releaseMakeInvocations(workflow workflowDocument) []releaseMakeInvocation {
+	var invocations []releaseMakeInvocation
+	for jobName, run := range workflowRunCommands(workflow) {
+		for line, arguments := range makeInvocations(run) {
+			for _, candidate := range arguments {
+				if target := normalizeMakeTarget(candidate); strings.HasPrefix(target, "release") {
+					invocations = append(invocations, releaseMakeInvocation{
+						workflow: workflow.name,
+						job:      jobName,
+						target:   target,
+						line:     line,
+					})
+					break
 				}
 			}
 		}
@@ -1484,42 +1442,14 @@ func validateReleaseMakeInvocationPolicy(workflows ...workflowDocument) error {
 }
 
 func validateNoDynamicMakeArguments(workflow workflowDocument) error {
-	jobs, ok := workflow.fields["jobs"].(map[string]any)
-	if !ok {
+	if _, ok := workflow.fields["jobs"].(map[string]any); !ok {
 		return fmt.Errorf("%s has no jobs mapping", workflow.name)
 	}
-	for jobName, rawJob := range jobs {
-		job, ok := rawJob.(map[string]any)
-		if !ok {
-			continue
-		}
-		steps, ok := job["steps"].([]any)
-		if !ok {
-			continue
-		}
-		for _, rawStep := range steps {
-			step, ok := rawStep.(map[string]any)
-			if !ok {
-				continue
-			}
-			run, ok := step["run"].(string)
-			if !ok {
-				continue
-			}
-			for _, line := range shellLogicalLines(run) {
-				fields := strings.Fields(strings.TrimSpace(line))
-				for index, field := range fields {
-					if normalizeShellWord(field) != "make" {
-						continue
-					}
-					for _, candidate := range fields[index+1:] {
-						if shellCommandDelimiter(candidate) {
-							break
-						}
-						if hasShellExpansion(candidate) {
-							return fmt.Errorf("%s job %q uses a dynamic Make argument", workflow.name, jobName)
-						}
-					}
+	for jobName, run := range workflowRunCommands(workflow) {
+		for _, arguments := range makeInvocations(run) {
+			for _, candidate := range arguments {
+				if hasShellExpansion(candidate) {
+					return fmt.Errorf("%s job %q uses a dynamic Make argument", workflow.name, jobName)
 				}
 			}
 		}
@@ -1574,33 +1504,9 @@ func shellCommandDelimiter(word string) bool {
 }
 
 func hasRunCommand(workflow workflowDocument, command string) bool {
-	jobs, ok := workflow.fields["jobs"].(map[string]any)
-	if !ok {
-		return false
-	}
-	for _, rawJob := range jobs {
-		job, ok := rawJob.(map[string]any)
-		if !ok {
-			continue
-		}
-		steps, ok := job["steps"].([]any)
-		if !ok {
-			continue
-		}
-		for _, rawStep := range steps {
-			step, ok := rawStep.(map[string]any)
-			if !ok {
-				continue
-			}
-			run, ok := step["run"].(string)
-			if !ok {
-				continue
-			}
-			for _, line := range strings.Split(run, "\n") {
-				if strings.TrimSpace(line) == command {
-					return true
-				}
-			}
+	for _, run := range workflowRunCommands(workflow) {
+		if runHasCommandLine(run, command) {
+			return true
 		}
 	}
 	return false

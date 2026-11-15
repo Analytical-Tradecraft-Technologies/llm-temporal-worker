@@ -22,11 +22,8 @@ func TestPackageLicenseMetadataMatchesRepositoryLicense(t *testing.T) {
 		filepath.Join("ocaml", "llm_temporal_worker", "llm-temporal-ocaml.opam"): `license: "Apache-2.0"`,
 		filepath.Join("golang", "Dockerfile"):                                    `org.opencontainers.image.licenses="Apache-2.0"`,
 	} {
-		data, err := os.ReadFile(filepath.Join(root, path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), want) {
+		data := readRepositoryFile(t, root, path)
+		if !strings.Contains(data, want) {
 			t.Errorf("%s does not declare %s", path, want)
 		}
 	}

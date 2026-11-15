@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 )
 
 const (
@@ -652,25 +654,8 @@ func writeTestFile(t *testing.T, root, relative string, data []byte) {
 	}
 }
 
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	directory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("repository root with .git not found")
-		}
-		directory = parent
-	}
-}
-
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(repositoryRoot(t), "golang")
-}
+// repositoryRoot and moduleRoot locate the checkout these tests verify.
+var (
+	repositoryRoot = repotest.RepositoryRoot
+	moduleRoot     = repotest.ModuleRoot
+)

@@ -25,18 +25,11 @@ const sloBindingArtifactName = "release-evidence"
 const sloBindingArtifactDigest = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 func TestSLOEvidenceMakeTargetIsOfflineAndFocused(t *testing.T) {
-	makefile, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := makeTarget(t, string(makefile), "slo-evidence-verify:\n", "\n\nintegration:")
-	for _, required := range []string{
+	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
+	target := makeTarget(t, makefile, "slo-evidence-verify:\n", "\n\nintegration:")
+	expectContainsEach(t, target, "slo-evidence-verify is missing %q",
 		"$(GO) test ./internal/architecturetest -run '^TestSLOEvidence' -count=1",
-	} {
-		if !strings.Contains(target, required) {
-			t.Errorf("slo-evidence-verify is missing %q", required)
-		}
-	}
+	)
 	for _, forbidden := range []string{
 		"LLMTW_LIVE_",
 		"LLMTW_REDIS_ADDR",
@@ -51,20 +44,7 @@ func TestSLOEvidenceMakeTargetIsOfflineAndFocused(t *testing.T) {
 
 func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testing.T) {
 	root := repositoryRoot(t)
-	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "candidate.json")
-	evidencePath := filepath.Join(directory, "slo-measurement.json")
-	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
-
-	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
-	if err != nil {
-		t.Fatalf("record SLO evidence: %v\n%s", err, output)
-	}
-	const prefix = "slo evidence recorded sha256="
-	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), prefix)
-	if digest == strings.TrimSpace(string(output)) || len(digest) != 64 {
-		t.Fatalf("record output = %q, want digest", output)
-	}
+	inputPath, evidencePath, digest := recordValidSLOEvidence(t, root, t.TempDir(), "slo-measurement.json")
 
 	raw, err := os.ReadFile(evidencePath)
 	if err != nil {
@@ -74,20 +54,12 @@ func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testin
 	if err := json.Unmarshal(raw, &record); err != nil {
 		t.Fatalf("decode SLO evidence: %v", err)
 	}
-	wantKeys := map[string]bool{
-		"schema_version": true, "kind": true, "status": true, "measured_at": true,
-		"source_revision": true, "deployment_id_sha256": true, "region": true,
-		"admission_compilation": true, "worker_error_rate": true, "redacted": true, "content_sha256": true,
-	}
-	if len(record) != len(wantKeys) {
-		t.Fatalf("record keys = %#v, want only %#v", record, wantKeys)
-	}
-	for key := range wantKeys {
-		if _, ok := record[key]; !ok {
-			t.Fatalf("record does not contain %q: %#v", key, record)
-		}
-	}
-	for _, forbidden := range []string{"prompt", "output", "endpoint", "credential", "api_key", "raw"} {
+	assertExactKeys(t, "record", record,
+		"schema_version", "kind", "status", "measured_at",
+		"source_revision", "deployment_id_sha256", "region",
+		"admission_compilation", "worker_error_rate", "redacted", "content_sha256",
+	)
+	for _, forbidden := range redactedEvidenceForbiddenFields {
 		if _, found := record[forbidden]; found {
 			t.Fatalf("record retains forbidden %q field: %#v", forbidden, record)
 		}
@@ -117,18 +89,10 @@ func TestSLOEvidenceRecordsAndVerifiesCanonicalRedactedPassMeasurement(t *testin
 func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T) {
 	root := repositoryRoot(t)
 	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "candidate.json")
-	evidencePath := filepath.Join(directory, "slo-measurement.json")
+	_, evidencePath, digest := recordValidSLOEvidence(t, root, directory, "slo-measurement.json")
 	bindingPath := filepath.Join(directory, "slo-binding.json")
-	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
-
-	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
-	if err != nil {
-		t.Fatalf("record SLO evidence: %v\n%s", err, output)
-	}
-	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), "slo evidence recorded sha256=")
 	args := sloBindingArguments(evidencePath, bindingPath, digest)
-	output, err = runSLOEvidence(root, append([]string{"bind"}, args...)...)
+	output, err := runSLOEvidence(root, append([]string{"bind"}, args...)...)
 	if err != nil {
 		t.Fatalf("bind SLO evidence: %v\n%s", err, output)
 	}
@@ -146,15 +110,7 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 	if err := json.Unmarshal(raw, &binding); err != nil {
 		t.Fatalf("decode SLO binding: %v", err)
 	}
-	wantKeys := map[string]bool{"schema_version": true, "kind": true, "status": true, "evidence": true, "release": true, "redacted": true, "content_sha256": true}
-	if len(binding) != len(wantKeys) {
-		t.Fatalf("binding keys = %#v, want only %#v", binding, wantKeys)
-	}
-	for key := range wantKeys {
-		if _, ok := binding[key]; !ok {
-			t.Fatalf("binding does not contain %q: %#v", key, binding)
-		}
-	}
+	assertExactKeys(t, "binding", binding, "schema_version", "kind", "status", "evidence", "release", "redacted", "content_sha256")
 	if got, want := binding["kind"], "slo_release_binding"; got != want {
 		t.Fatalf("binding kind = %#v, want %q", got, want)
 	}
@@ -182,11 +138,11 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 		t.Fatalf("binding content_sha256 = %#v, want %q", got, bindingDigest)
 	}
 	bindingSchema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-binding.schema.json", "urn:llmtw:slo-evidence-binding:v1")
-	if err := validateSLOEvidenceJSONSchema(bindingSchema, binding); err != nil {
+	if err := validateJSONSchema(bindingSchema, binding); err != nil {
 		t.Fatalf("binding schema rejects recorded binding: %v", err)
 	}
 	binding["api_key"] = "must-not-be-accepted"
-	if err := validateSLOEvidenceJSONSchema(bindingSchema, binding); err == nil {
+	if err := validateJSONSchema(bindingSchema, binding); err == nil {
 		t.Fatal("binding schema accepts unsafe unknown field")
 	}
 	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
@@ -219,14 +175,7 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 func TestSLOEvidenceBindingRejectsCrossRevisionAndUnsafeReleaseMetadata(t *testing.T) {
 	root := repositoryRoot(t)
 	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "candidate.json")
-	evidencePath := filepath.Join(directory, "slo-measurement.json")
-	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
-	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
-	if err != nil {
-		t.Fatalf("record SLO evidence: %v\n%s", err, output)
-	}
-	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), "slo evidence recorded sha256=")
+	_, evidencePath, digest := recordValidSLOEvidence(t, root, directory, "slo-measurement.json")
 	testCases := []struct {
 		name   string
 		mutate func([]string)
@@ -370,24 +319,9 @@ func TestSLOEvidenceRejectsDuplicateJSONKeys(t *testing.T) {
 
 func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *testing.T) {
 	root := repositoryRoot(t)
-	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "candidate.json")
-	evidencePath := filepath.Join(directory, "evidence.json")
-	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
-	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
-	if err != nil {
-		t.Fatalf("record SLO evidence: %v\n%s", err, output)
-	}
-	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), "slo evidence recorded sha256=")
+	_, evidencePath, digest := recordValidSLOEvidence(t, root, t.TempDir(), "evidence.json")
 
-	raw, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var record map[string]any
-	if err := json.Unmarshal(raw, &record); err != nil {
-		t.Fatal(err)
-	}
+	record := readJSONObject(t, evidencePath)
 	record["endpoint"] = "https://redis.internal.example"
 	tampered, err := json.Marshal(record)
 	if err != nil {
@@ -402,11 +336,11 @@ func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *test
 
 	schema := compileSLOEvidenceJSONSchema(t, root)
 	delete(record, "endpoint")
-	if err := validateSLOEvidenceJSONSchema(schema, record); err != nil {
+	if err := validateJSONSchema(schema, record); err != nil {
 		t.Fatalf("schema rejects recorded evidence: %v", err)
 	}
 	record["api_key"] = "must-not-be-accepted"
-	if err := validateSLOEvidenceJSONSchema(schema, record); err == nil {
+	if err := validateJSONSchema(schema, record); err == nil {
 		t.Fatal("schema accepts unsafe unknown field")
 	}
 }
@@ -415,11 +349,11 @@ func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
 	root := repositoryRoot(t)
 	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-candidate.schema.json", "urn:llmtw:slo-evidence-candidate:v1")
 	candidate := validSLOEvidenceCandidate()
-	if err := validateSLOEvidenceJSONSchema(schema, candidate); err != nil {
+	if err := validateJSONSchema(schema, candidate); err != nil {
 		t.Fatalf("candidate schema rejects recorder input: %v", err)
 	}
 	candidate["content_sha256"] = strings.Repeat("c", 64)
-	if err := validateSLOEvidenceJSONSchema(schema, candidate); err == nil {
+	if err := validateJSONSchema(schema, candidate); err == nil {
 		t.Fatal("candidate schema accepts recorder-owned persisted fields")
 	}
 }
@@ -474,11 +408,11 @@ func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
 		}
 	}
 	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-worker-error-summary.schema.json", "urn:llmtw:slo-worker-error-summary:v1")
-	if err := validateSLOEvidenceJSONSchema(schema, summary); err != nil {
+	if err := validateJSONSchema(schema, summary); err != nil {
 		t.Fatalf("summary schema rejects recorded output: %v", err)
 	}
 	summary["api_key"] = "must-not-be-accepted"
-	if err := validateSLOEvidenceJSONSchema(schema, summary); err == nil {
+	if err := validateJSONSchema(schema, summary); err == nil {
 		t.Fatal("summary schema accepts unsafe unknown field")
 	}
 	delete(summary, "api_key")
@@ -588,6 +522,25 @@ func validSLOEvidenceCandidate() map[string]any {
 	}
 }
 
+// recordValidSLOEvidence records the valid candidate as evidenceName under
+// directory and returns the candidate path, evidence path and content digest.
+func recordValidSLOEvidence(t *testing.T, root, directory, evidenceName string) (string, string, string) {
+	t.Helper()
+	inputPath := filepath.Join(directory, "candidate.json")
+	evidencePath := filepath.Join(directory, evidenceName)
+	writeSLOEvidenceCandidate(t, inputPath, validSLOEvidenceCandidate())
+	output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", evidencePath)
+	if err != nil {
+		t.Fatalf("record SLO evidence: %v\n%s", err, output)
+	}
+	const prefix = "slo evidence recorded sha256="
+	digest := strings.TrimPrefix(strings.TrimSpace(string(output)), prefix)
+	if digest == strings.TrimSpace(string(output)) || len(digest) != 64 {
+		t.Fatalf("record output = %q, want digest", output)
+	}
+	return inputPath, evidencePath, digest
+}
+
 func writeSLOEvidenceCandidate(t *testing.T, path string, candidate map[string]any) {
 	t.Helper()
 	data, err := json.Marshal(candidate)
@@ -611,35 +564,7 @@ func compileSLOEvidenceJSONSchema(t *testing.T, root string) *jsonschema.Schema 
 
 func compileSLOEvidenceJSONSchemaFile(t *testing.T, root, filename, resourceURL string) *jsonschema.Schema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "docs", "release", filename))
-	if err != nil {
-		t.Fatal(err)
-	}
-	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("decode SLO evidence schema: %v", err)
-	}
-	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource(resourceURL, document); err != nil {
-		t.Fatalf("add SLO evidence schema: %v", err)
-	}
-	schema, err := compiler.Compile(resourceURL)
-	if err != nil {
-		t.Fatalf("compile SLO evidence schema: %v", err)
-	}
-	return schema
-}
-
-func validateSLOEvidenceJSONSchema(schema *jsonschema.Schema, record map[string]any) error {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	return schema.Validate(instance)
+	return compileRepositoryJSONSchema(t, root, filepath.Join("docs", "release", filename), resourceURL)
 }
 
 // TestSLOEvidenceAcceptsAHealthyWorkerExport feeds the real exporter's scrape
@@ -666,14 +591,7 @@ func TestSLOEvidenceAcceptsAHealthyWorkerExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("worker error summary of a healthy export: %v\n%s", err, output)
 	}
-	raw, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var summary map[string]any
-	if err := json.Unmarshal(raw, &summary); err != nil {
-		t.Fatal(err)
-	}
+	summary := readJSONObject(t, outputPath)
 	if summary["completed_attempts"] != float64(1000) || summary["worker_failed_attempts"] != float64(0) {
 		t.Fatalf("summary = %#v, want 1000 completed and 0 worker failures", summary)
 	}

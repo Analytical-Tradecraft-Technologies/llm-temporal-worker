@@ -116,14 +116,7 @@ func TestV1TraceabilityCatalog(t *testing.T) {
 
 func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing.T) {
 	root := repositoryRoot(t)
-	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
-	if err != nil {
-		t.Fatalf("canonicalize catalog: %v", err)
-	}
-	var catalog v1TraceabilityCatalog
-	if err := json.Unmarshal(canonical, &catalog); err != nil {
-		t.Fatalf("decode catalog: %v", err)
-	}
+	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, root))
 	const id = "v1.contract.adapter-golden-strict"
 	var requirement *v1TraceabilityRequirement
 	for index := range catalog.Requirements {
@@ -146,14 +139,7 @@ func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing
 
 func TestV1TraceabilityCrossProtocolRequirementIncludesBedrockConverse(t *testing.T) {
 	root := repositoryRoot(t)
-	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
-	if err != nil {
-		t.Fatalf("canonicalize catalog: %v", err)
-	}
-	var catalog v1TraceabilityCatalog
-	if err := json.Unmarshal(canonical, &catalog); err != nil {
-		t.Fatalf("decode catalog: %v", err)
-	}
+	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, root))
 	const id = "v1.contract.cross-protocol"
 	var requirement *v1TraceabilityRequirement
 	for index := range catalog.Requirements {
@@ -186,14 +172,7 @@ func TestV1TraceabilityCrossProtocolRequirementIncludesBedrockConverse(t *testin
 
 func TestV1TraceabilitySLORequirements(t *testing.T) {
 	root := repositoryRoot(t)
-	canonical, err := llm.CanonicalJSON(readV1TraceabilityCatalog(t, root))
-	if err != nil {
-		t.Fatalf("canonicalize catalog: %v", err)
-	}
-	var catalog v1TraceabilityCatalog
-	if err := json.Unmarshal(canonical, &catalog); err != nil {
-		t.Fatalf("decode catalog: %v", err)
-	}
+	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, root))
 
 	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
 	for _, requirement := range catalog.Requirements {
@@ -291,14 +270,7 @@ func TestV1TraceabilitySLORequirements(t *testing.T) {
 func TestV1TraceabilityLiveProviderRequirements(t *testing.T) {
 	root := repositoryRoot(t)
 	raw := readV1TraceabilityCatalog(t, root)
-	canonical, err := llm.CanonicalJSON(raw)
-	if err != nil {
-		t.Fatalf("canonicalize catalog: %v", err)
-	}
-	var catalog v1TraceabilityCatalog
-	if err := json.Unmarshal(canonical, &catalog); err != nil {
-		t.Fatalf("decode catalog: %v", err)
-	}
+	catalog := decodeV1TraceabilityCatalog(t, raw)
 
 	requirements := make(map[string]v1TraceabilityRequirement, len(catalog.Requirements))
 	for _, requirement := range catalog.Requirements {
@@ -433,42 +405,12 @@ func TestV1TraceabilityCatalogRejectsBrokenStaticRecords(t *testing.T) {
 				requirements[1], requirements[2] = requirements[2], requirements[1]
 			},
 		},
-		{
-			name: "escaping source path",
-			mutate: func(t *testing.T, document map[string]any) {
-				catalogSource(t, requirementAt(t, document, 0))["path"] = "../outside.md"
-			},
-		},
-		{
-			name: "missing source heading",
-			mutate: func(t *testing.T, document map[string]any) {
-				catalogSource(t, requirementAt(t, document, 0))["anchor"] = "#not-a-heading"
-			},
-		},
-		{
-			name: "missing source quote",
-			mutate: func(t *testing.T, document map[string]any) {
-				catalogSource(t, requirementAt(t, document, 0))["quote"] = "This quote is not present in the checked-in source."
-			},
-		},
-		{
-			name: "missing implementation path",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["implementation_paths"] = []any{"missing/implementation.go"}
-			},
-		},
-		{
-			name: "non-repository implementation path",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["implementation_paths"] = []any{"/etc/passwd"}
-			},
-		},
-		{
-			name: "missing Make target",
-			mutate: func(t *testing.T, document map[string]any) {
-				catalogVerification(t, requirementAt(t, document, 0))["make_targets"] = []any{"not-a-make-target"}
-			},
-		},
+		{name: "escaping source path", mutate: setInFirstRequirement(catalogSource, "path", "../outside.md")},
+		{name: "missing source heading", mutate: setInFirstRequirement(catalogSource, "anchor", "#not-a-heading")},
+		{name: "missing source quote", mutate: setInFirstRequirement(catalogSource, "quote", "This quote is not present in the checked-in source.")},
+		{name: "missing implementation path", mutate: setInFirstRequirement(firstRequirementItself, "implementation_paths", []any{"missing/implementation.go"})},
+		{name: "non-repository implementation path", mutate: setInFirstRequirement(firstRequirementItself, "implementation_paths", []any{"/etc/passwd"})},
+		{name: "missing Make target", mutate: setInFirstRequirement(catalogVerification, "make_targets", []any{"not-a-make-target"})},
 		{
 			name: "missing workflow job",
 			mutate: func(t *testing.T, document map[string]any) {
@@ -478,42 +420,12 @@ func TestV1TraceabilityCatalogRejectsBrokenStaticRecords(t *testing.T) {
 				}}
 			},
 		},
-		{
-			name: "unsafe artifact reference",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["artifact"] = "release-artifacts/evidence.json"
-			},
-		},
-		{
-			name: "invalid evidence mode status combination",
-			mutate: func(t *testing.T, document map[string]any) {
-				catalogEvidence(t, requirementAt(t, document, 0))["status"] = "authorization_required"
-			},
-		},
-		{
-			name: "candidate field",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["candidate_sha"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-			},
-		},
-		{
-			name: "provider run field",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["provider_run_id"] = "opaque-run-id"
-			},
-		},
-		{
-			name: "publication field",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["publication_status"] = "published"
-			},
-		},
-		{
-			name: "result field",
-			mutate: func(t *testing.T, document map[string]any) {
-				requirementAt(t, document, 0)["result"] = "passed"
-			},
-		},
+		{name: "unsafe artifact reference", mutate: setInFirstRequirement(firstRequirementItself, "artifact", "release-artifacts/evidence.json")},
+		{name: "invalid evidence mode status combination", mutate: setInFirstRequirement(catalogEvidence, "status", "authorization_required")},
+		{name: "candidate field", mutate: setInFirstRequirement(firstRequirementItself, "candidate_sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		{name: "provider run field", mutate: setInFirstRequirement(firstRequirementItself, "provider_run_id", "opaque-run-id")},
+		{name: "publication field", mutate: setInFirstRequirement(firstRequirementItself, "publication_status", "published")},
+		{name: "result field", mutate: setInFirstRequirement(firstRequirementItself, "result", "passed")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := mutateV1TraceabilityCatalog(t, raw, test.mutate)
@@ -574,6 +486,21 @@ func readV1TraceabilityCatalog(t *testing.T, root string) []byte {
 	return data
 }
 
+// decodeV1TraceabilityCatalog decodes raw catalog bytes through the
+// duplicate-key-safe canonicalizer.
+func decodeV1TraceabilityCatalog(t *testing.T, raw []byte) v1TraceabilityCatalog {
+	t.Helper()
+	canonical, err := llm.CanonicalJSON(raw)
+	if err != nil {
+		t.Fatalf("canonicalize catalog: %v", err)
+	}
+	var catalog v1TraceabilityCatalog
+	if err := json.Unmarshal(canonical, &catalog); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+	return catalog
+}
+
 func mutateV1TraceabilityCatalog(t *testing.T, raw []byte, mutate func(t *testing.T, document map[string]any)) []byte {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -588,6 +515,18 @@ func mutateV1TraceabilityCatalog(t *testing.T, raw []byte, mutate func(t *testin
 		t.Fatalf("encode catalog mutation fixture: %v", err)
 	}
 	return data
+}
+
+// setInFirstRequirement returns a catalog mutation that sets key in the part
+// of the first requirement that part selects.
+func setInFirstRequirement(part func(*testing.T, map[string]any) map[string]any, key string, value any) func(*testing.T, map[string]any) {
+	return func(t *testing.T, document map[string]any) {
+		part(t, requirementAt(t, document, 0))[key] = value
+	}
+}
+
+func firstRequirementItself(_ *testing.T, requirement map[string]any) map[string]any {
+	return requirement
 }
 
 func catalogRequirements(t *testing.T, document map[string]any) []any {
@@ -612,31 +551,28 @@ func requirementAt(t *testing.T, document map[string]any, index int) map[string]
 	return requirement
 }
 
+func catalogObject(t *testing.T, requirement map[string]any, key string) map[string]any {
+	t.Helper()
+	object, ok := requirement[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", key, requirement[key])
+	}
+	return object
+}
+
 func catalogSource(t *testing.T, requirement map[string]any) map[string]any {
 	t.Helper()
-	source, ok := requirement["source"].(map[string]any)
-	if !ok {
-		t.Fatalf("source = %#v, want object", requirement["source"])
-	}
-	return source
+	return catalogObject(t, requirement, "source")
 }
 
 func catalogVerification(t *testing.T, requirement map[string]any) map[string]any {
 	t.Helper()
-	verification, ok := requirement["verification"].(map[string]any)
-	if !ok {
-		t.Fatalf("verification = %#v, want object", requirement["verification"])
-	}
-	return verification
+	return catalogObject(t, requirement, "verification")
 }
 
 func catalogEvidence(t *testing.T, requirement map[string]any) map[string]any {
 	t.Helper()
-	evidence, ok := requirement["evidence"].(map[string]any)
-	if !ok {
-		t.Fatalf("evidence = %#v, want object", requirement["evidence"])
-	}
-	return evidence
+	return catalogObject(t, requirement, "evidence")
 }
 
 func validateV1TraceabilityCatalog(root string, raw []byte) error {
