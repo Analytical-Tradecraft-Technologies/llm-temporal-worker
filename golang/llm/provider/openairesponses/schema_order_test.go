@@ -6,88 +6,62 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
+
+// sendSchemaRequest invokes a request with one "lookup" tool taking
+// toolSchema, and toolOutputSchema when it is set, and a strict
+// outputSchema, and returns the request body sent.
+func sendSchemaRequest(t *testing.T, toolSchema, toolOutputSchema, outputSchema string) []byte {
+	t.Helper()
+	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []byte
+	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			sent, _ = io.ReadAll(request.Body)
+			return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody)), nil
+		})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := New(client, "openai-prod", "cap-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := llm.Tool{Name: "lookup", InputSchema: json.RawMessage(toolSchema)}
+	if toolOutputSchema != "" {
+		tool.OutputSchema = json.RawMessage(toolOutputSchema)
+	}
+	call, err := adapter.Compile(context.Background(), provider.CompileInput{
+		Request: llm.Request{OperationKey: "op-order", Model: "gpt-contract",
+			Tools:  []llm.Tool{tool},
+			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(outputSchema)}}},
+		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The canned response does not satisfy the schema; only the request matters.
+	_, _ = adapter.Invoke(context.Background(), call, &adaptertest.Observer{})
+	return sent
+}
 
 // The output schema and tool parameters reach the provider with properties in
 // "required" order, not the alphabetical order the canonical request form and
 // the SDK's map encoding produce (#1096).
 func TestInvokeSendsSchemaPropertiesInRequiredOrder(t *testing.T) {
-	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sent []byte
-	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			sent, _ = io.ReadAll(request.Body)
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
-				Body: io.NopCloser(strings.NewReader(string(responseBody))), Request: request}, nil
-		})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openai-prod", "cap-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema := json.RawMessage(`{"type":"object","required":["reasoning","answer"],"properties":{"answer":{"type":"string"},"reasoning":{"type":"string"}},"additionalProperties":false}`)
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-order", Model: "gpt-contract",
-			Tools:  []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object","required":["zeta","alpha"],"properties":{"alpha":{"type":"string"},"zeta":{"type":"string"}}}`)}},
-			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
-		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The canned response does not satisfy the schema; only the request matters.
-	_, _ = adapter.Invoke(context.Background(), call, &recordingObserver{})
-	body := string(sent)
-	for _, pair := range [][2]string{{`"reasoning":`, `"answer":`}, {`"zeta":`, `"alpha":`}} {
-		first, second := strings.Index(body, pair[0]), strings.Index(body, pair[1])
-		if first < 0 || second < 0 || first > second {
-			t.Fatalf("request body does not list %s before %s:\n%s", pair[0], pair[1], body)
-		}
-	}
+	adaptertest.PropertiesInRequiredOrder(t, sendSchemaRequest(t, adaptertest.OutOfOrderToolSchema, "", adaptertest.OutOfOrderOutputSchema))
 }
 
 func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
-	responseBody, err := os.ReadFile("testdata/contracts/openai-responses/response.completed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var sent []byte
-	client, err := NewClient(ClientConfig{BaseURL: "https://127.0.0.1/contract", APIKey: "test-key",
-		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-			sent, _ = io.ReadAll(request.Body)
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
-				Body: io.NopCloser(strings.NewReader(string(responseBody))), Request: request}, nil
-		})}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "openai-prod", "cap-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema := json.RawMessage(`{"type":"object","required":["reasoning","answer"],"properties":{"answer":{"type":"number","const":0.100000000000000000001,"maximum":1.234567890123456789e+20},"reasoning":{"type":"integer","enum":[9007199254740993],"minimum":9007199254740993}},"additionalProperties":false}`)
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-order", Model: "gpt-contract",
-			Tools:  []llm.Tool{{Name: "lookup", OutputSchema: schema, InputSchema: json.RawMessage(`{"type":"object","required":["zeta","alpha"],"properties":{"alpha":{"type":"number","const":0.100000000000000000001,"maximum":1.234567890123456789e+20},"zeta":{"type":"integer","enum":[9007199254740993],"minimum":9007199254740993}}}`)}},
-			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
-		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The canned response does not satisfy the schema; only the request matters.
-	_, _ = adapter.Invoke(context.Background(), call, &recordingObserver{})
-	body := string(sent)
+	sent := sendSchemaRequest(t, adaptertest.ExactNumberToolSchema, adaptertest.ExactNumberOutputSchema, adaptertest.ExactNumberOutputSchema)
 	var requestBody struct {
 		Text struct {
 			Format struct {
@@ -105,21 +79,6 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 	if len(requestBody.Tools) != 1 {
 		t.Fatalf("tool schema missing: %s", sent)
 	}
-	schemas := []json.RawMessage{requestBody.Text.Format.Schema, requestBody.Tools[0].Parameters, requestBody.Tools[0].OutputSchema}
-	for _, raw := range schemas {
-		// A strict output schema carries bounds in its description note
-		// (#1353); the number must stay exact either way.
-		for _, literal := range [][2]string{{`"enum":[9007199254740993]`, ""}, {`"minimum":9007199254740993`, "minimum: 9007199254740993"}, {`"const":0.100000000000000000001`, ""}, {`"maximum":1.234567890123456789e+20`, "maximum: 1.234567890123456789e+20"}} {
-			if !strings.Contains(string(raw), literal[0]) && (literal[1] == "" || !strings.Contains(string(raw), literal[1])) {
-				t.Fatalf("schema constraint changed in transport (%s): %s", literal[0], raw)
-			}
-		}
-	}
-
-	for _, pair := range [][2]string{{`"reasoning":`, `"answer":`}, {`"zeta":`, `"alpha":`}} {
-		first, second := strings.Index(body, pair[0]), strings.Index(body, pair[1])
-		if first < 0 || second < 0 || first > second {
-			t.Fatalf("request body does not list %s before %s:\n%s", pair[0], pair[1], body)
-		}
-	}
+	adaptertest.ExactSchemaNumbers(t, requestBody.Text.Format.Schema, requestBody.Tools[0].Parameters, requestBody.Tools[0].OutputSchema)
+	adaptertest.PropertiesInRequiredOrder(t, sent)
 }

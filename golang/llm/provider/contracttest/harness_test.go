@@ -343,10 +343,25 @@ generated_field_exemptions: []
 	}
 }
 
-func TestValidateRepositoryRejectsEnforcedProfileWithoutStreamDecoderFact(t *testing.T) {
-	root := t.TempDir()
-	profileDir := testProfileDir(root)
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+func TestValidateRepositoryRejectsEnforcedProfileWithMissingCapabilityFacts(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		facts string
+	}{
+		{name: "missing stream decoder fact", facts: `  usage: unsupported
+  streaming: unsupported
+  strict_loss: unsupported
+  best_effort: unsupported
+  service_class: unsupported
+  continuation: unsupported
+`},
+		{name: "undeclared enforced capability", facts: `  streaming: unsupported
+`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			profileDir := testProfileDir(root)
+			mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
 id: example
 provider: example
 family: chat
@@ -370,7 +385,7 @@ cases:
     artifacts:
       wire: wire.json
 `)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), `profile: example
+			mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), `profile: example
 upstream_url: https://example.test/contracts
 upstream_date: "2026-07-14"
 sdk_version: example-sdk/v1
@@ -378,20 +393,12 @@ provenance: synthetic
 redactions:
   - credentials
 capability_facts:
-  usage: unsupported
-  streaming: unsupported
-  strict_loss: unsupported
-  best_effort: unsupported
-  service_class: unsupported
-  continuation: unsupported
-generated_field_exemptions: []
+`+test.facts+`generated_field_exemptions: []
 `)
-	mustWriteFile(t, filepath.Join(profileDir, "semantic.json"), `{}`)
-	mustWriteFile(t, filepath.Join(profileDir, "wire.json"), `{}`)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "missing enforced capability fact") {
-		t.Fatalf("missing stream decoder fact error = %v", err)
+			mustWriteFile(t, filepath.Join(profileDir, "semantic.json"), `{}`)
+			mustWriteFile(t, filepath.Join(profileDir, "wire.json"), `{}`)
+			requireRepositoryError(t, root, "missing enforced capability fact", test.name)
+		})
 	}
 }
 
@@ -399,53 +406,6 @@ func TestReportRequireAllEnforcedRejectsBootstrapProfiles(t *testing.T) {
 	err := (Report{Bootstrap: []Profile{{ID: "example"}}}).RequireAllEnforced()
 	if err == nil || !strings.Contains(err.Error(), "example") {
 		t.Fatalf("RequireAllEnforced error = %v, want bootstrap profile name", err)
-	}
-}
-
-func TestValidateRepositoryRejectsEnforcedProfileWithUndeclaredCapability(t *testing.T) {
-	root := t.TempDir()
-	profileDir := testProfileDir(root)
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
-id: example
-provider: example
-family: chat
-coverage: enforced
-metadata: metadata.yaml
-cases:
-  - id: semantic-request
-    artifacts:
-      semantic: semantic.json
-  - id: captured-wire-request
-    artifacts:
-      wire: wire.json
-  - id: response
-    artifacts:
-      semantic: semantic.json
-      wire: wire.json
-  - id: classified-error
-    artifacts:
-      wire: wire.json
-  - id: security-redaction
-    artifacts:
-      wire: wire.json
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), `profile: example
-upstream_url: https://example.test/contracts
-upstream_date: "2026-07-14"
-sdk_version: example-sdk/v1
-provenance: synthetic
-redactions:
-  - credentials
-capability_facts:
-  streaming: unsupported
-generated_field_exemptions: []
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "semantic.json"), `{}`)
-	mustWriteFile(t, filepath.Join(profileDir, "wire.json"), `{}`)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "missing enforced capability fact") {
-		t.Fatalf("undeclared enforced capability error = %v", err)
 	}
 }
 
@@ -486,102 +446,27 @@ cases:
 
 func TestValidateRepositoryRejectsMissingDeclaredFixture(t *testing.T) {
 	root := t.TempDir()
-	profileDir := testProfileDir(root)
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
-id: example
-provider: example
-family: chat
-coverage: bootstrap
-metadata: metadata.yaml
-cases:
-  - id: captured-wire-request
-    artifacts:
-      wire: missing.wire.json
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "references a missing fixture") {
-		t.Fatalf("missing fixture error = %v", err)
-	}
+	writeBootstrapProfile(t, root, "captured-wire-request", "wire", "missing.wire.json", validTestMetadata)
+	requireRepositoryError(t, root, "references a missing fixture", "missing fixture")
 }
 
 func TestValidateRepositoryRejectsCaseWithoutItsDocumentedArtifact(t *testing.T) {
 	root := t.TempDir()
-	profileDir := testProfileDir(root)
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
-id: example
-provider: example
-family: chat
-coverage: bootstrap
-metadata: metadata.yaml
-cases:
-  - id: semantic-request
-    artifacts:
-      wire: request.wire.json
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
-	mustWriteFile(t, filepath.Join(profileDir, "request.wire.json"), `{}`)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "documented semantic artifact") {
-		t.Fatalf("wrong case artifact error = %v", err)
-	}
+	writeBootstrapProfile(t, root, "semantic-request", "wire", "request.wire.json", validTestMetadata, "request.wire.json")
+	requireRepositoryError(t, root, "documented semantic artifact", "wrong case artifact")
 }
 
 func TestValidateRepositoryRejectsMissingSourceDate(t *testing.T) {
 	root := t.TempDir()
-	profileDir := testProfileDir(root)
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
-id: example
-provider: example
-family: chat
-coverage: bootstrap
-metadata: metadata.yaml
-cases:
-  - id: semantic-request
-    artifacts:
-      semantic: request.semantic.json
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), `profile: example
-upstream_url: https://example.test/contracts
-sdk_version: example-sdk/v1
-provenance: synthetic
-redactions:
-  - credentials
-capability_facts:
-  streaming: unsupported
-generated_field_exemptions: []
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "metadata upstream_date must be YYYY-MM-DD") {
-		t.Fatalf("missing source date error = %v", err)
-	}
+	writeBootstrapProfile(t, root, "semantic-request", "semantic", "request.semantic.json", strings.Replace(validTestMetadata, "upstream_date: \"2026-07-14\"\n", "", 1), "request.semantic.json")
+	requireRepositoryError(t, root, "metadata upstream_date must be YYYY-MM-DD", "missing source date")
 }
 
 func TestValidateRepositoryRejectsTraversalPathWithoutLeakingIt(t *testing.T) {
 	root := t.TempDir()
-	profileDir := testProfileDir(root)
 	traversal := "../../secret-fixture-name"
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
-id: example
-provider: example
-family: chat
-coverage: bootstrap
-metadata: metadata.yaml
-cases:
-  - id: captured-wire-request
-    artifacts:
-      wire: `+traversal+`
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "case has an invalid artifact path") {
-		t.Fatalf("traversal path error = %v", err)
-	}
+	writeBootstrapProfile(t, root, "captured-wire-request", "wire", traversal, validTestMetadata)
+	err := requireRepositoryError(t, root, "case has an invalid artifact path", "traversal path")
 	if strings.Contains(err.Error(), traversal) || strings.Contains(err.Error(), "secret-fixture-name") {
 		t.Fatalf("traversal input leaked through error: %v", err)
 	}
@@ -589,27 +474,10 @@ cases:
 
 func TestValidateRepositoryScansSharedContractFixturesWithoutLeakingBytes(t *testing.T) {
 	root := t.TempDir()
-	profileDir := testProfileDir(root)
-	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
-id: example
-provider: example
-family: chat
-coverage: bootstrap
-metadata: metadata.yaml
-cases:
-  - id: semantic-request
-    artifacts:
-      semantic: request.semantic.json
-`)
-	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), validTestMetadata)
-	mustWriteFile(t, filepath.Join(profileDir, "request.semantic.json"), `{}`)
+	profileDir := writeBootstrapProfile(t, root, "semantic-request", "semantic", "request.semantic.json", validTestMetadata, "request.semantic.json")
 	secret := "AKIA" + "1234567890ABCDEF"
 	mustWriteFile(t, filepath.Join(filepath.Dir(profileDir), "events.wire"), "token: "+secret)
-
-	_, err := ValidateRepository(root)
-	if err == nil || !strings.Contains(err.Error(), "events.wire") {
-		t.Fatalf("shared fixture scan error = %v", err)
-	}
+	err := requireRepositoryError(t, root, "events.wire", "shared fixture scan")
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("shared fixture bytes leaked through error: %v", err)
 	}
@@ -763,4 +631,39 @@ const validServiceClasses = `service_classes:
 
 func testProfileDir(root string) string {
 	return filepath.Join(root, "llm", "provider", "example", "testdata", "contracts", "example")
+}
+
+// writeBootstrapProfile writes a bootstrap profile under root whose one case
+// caseID declares its kind artifact at path, with metadata and an empty JSON
+// fixture for each of files, and returns the profile directory.
+func writeBootstrapProfile(t *testing.T, root, caseID, kind, path, metadata string, files ...string) string {
+	t.Helper()
+	profileDir := testProfileDir(root)
+	mustWriteManifestWithValidServiceClasses(t, filepath.Join(profileDir, "manifest.yaml"), `version: 1
+id: example
+provider: example
+family: chat
+coverage: bootstrap
+metadata: metadata.yaml
+cases:
+  - id: `+caseID+`
+    artifacts:
+      `+kind+`: `+path+`
+`)
+	mustWriteFile(t, filepath.Join(profileDir, "metadata.yaml"), metadata)
+	for _, file := range files {
+		mustWriteFile(t, filepath.Join(profileDir, file), `{}`)
+	}
+	return profileDir
+}
+
+// requireRepositoryError checks that validating root fails with an error
+// containing want, naming the failure what, and returns the error.
+func requireRepositoryError(t *testing.T, root, want, what string) error {
+	t.Helper()
+	_, err := ValidateRepository(root)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("%s error = %v, want %q", what, err, want)
+	}
+	return err
 }

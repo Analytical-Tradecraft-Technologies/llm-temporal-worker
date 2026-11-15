@@ -8,53 +8,28 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
-	profile := DefaultProfile("bedrock-no-stream")
-	if capability := profile.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Reason == "" {
-		t.Fatalf("default streaming capability = %#v, want unsupported with a reason", capability)
-	}
-
-	for _, state := range []provider.CapabilityState{provider.CapabilityNative, provider.CapabilityEmulated} {
-		t.Run(string(state), func(t *testing.T) {
-			profile := DefaultProfile("bedrock-no-stream")
-			profile.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: state}
-			if _, err := NewProfile(profile); err == nil || !strings.Contains(err.Error(), "OpenStream") {
-				t.Fatalf("NewProfile() error = %v, want an OpenStream capability error", err)
-			}
-		})
-	}
-
-	profile = DefaultProfile("bedrock-no-stream")
-	profile.Capabilities.Features[provider.FeatureStreaming] = provider.Capability{State: provider.CapabilityUnknown, Transform: "unverified-stream"}
-	validated, err := NewProfile(profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if capability := validated.Capabilities.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
-		t.Fatalf("validated streaming capability = %#v, want normalized unsupported capability", capability)
-	}
-	adapter := &Adapter{endpointID: validated.ID, profile: validated}
-	set, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: validated.ID, Family: provider.FamilyBedrockMessages})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if capability := set.Features[provider.FeatureStreaming]; capability.State != provider.CapabilityUnsupported || capability.Transform != "" {
-		t.Fatalf("reported streaming capability = %#v, want normalized unsupported capability", capability)
-	}
-	if _, ok := any((*Adapter)(nil)).(provider.StreamingAdapter); ok {
-		t.Fatal("adapter advertises streaming capability without an OpenStream implementation")
-	}
+	adaptertest.StreamingCapabilityCannotOutrunAdapterPort(t, (*Adapter)(nil), DefaultProfile("bedrock-no-stream").Capabilities, func(streaming provider.Capability) (provider.CapabilitySet, provider.CapabilitySet, error) {
+		profile := DefaultProfile("bedrock-no-stream")
+		profile.Capabilities.Features[provider.FeatureStreaming] = streaming
+		validated, err := NewProfile(profile)
+		if err != nil {
+			return provider.CapabilitySet{}, provider.CapabilitySet{}, err
+		}
+		adapter := &Adapter{endpointID: validated.ID, profile: validated}
+		reported, err := adapter.Capabilities(context.Background(), provider.CapabilityQuery{EndpointID: validated.ID, Family: provider.FamilyBedrockMessages})
+		return validated.Capabilities, reported, err
+	})
 }
 
 func TestCompileMapsOnlyTheThreePublicBedrockServiceClasses(t *testing.T) {
@@ -143,34 +118,16 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 	calls := 0
 	var requestBody []byte
 	var requestHeaders http.Header
-	client, err := NewClient(context.Background(), ClientConfig{
-		BaseURL: "http://127.0.0.1",
-		HTTPClient: &http.Client{Transport: bedrockRoundTrip(func(request *http.Request) (*http.Response, error) {
-			calls++
-			requestBody, _ = io.ReadAll(request.Body)
-			requestHeaders = request.Header.Clone()
-			if !strings.HasSuffix(request.URL.Path, "/model/claude-contract/invoke") {
-				t.Errorf("Bedrock request path = %q", request.URL.Path)
-			}
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Requestid": []string{"bedrock-req-1"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
-		})},
-		AWSConfig: aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", "")},
-	})
-	if err != nil {
-		t.Fatalf("invoke error: %#v", err)
-	}
-	profile := mustBedrockProfile(t, "http://127.0.0.1")
-	adapter, err := New(client, "bedrock-prod", profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "bedrock-once", Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"}, Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := newBedrockTestClient(t, "http://127.0.0.1", &http.Client{Transport: adaptertest.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		requestBody, _ = io.ReadAll(request.Body)
+		requestHeaders = request.Header.Clone()
+		if !strings.HasSuffix(request.URL.Path, "/model/claude-contract/invoke") {
+			t.Errorf("Bedrock request path = %q", request.URL.Path)
+		}
+		return adaptertest.JSONResponse(request, http.StatusOK, responseBody, "X-Amzn-Requestid", "bedrock-req-1"), nil
+	})}, nil)
+	adapter, call := compileBedrockProdCall(t, client, "http://127.0.0.1", "bedrock-once")
 	result, err := adapter.Invoke(context.Background(), call, nil)
 	if err != nil {
 		var providerErr *provider.Error
@@ -219,51 +176,13 @@ func TestBedrockCallSerializationDoesNotContainResolvedCredentials(t *testing.T)
 func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 	const baseURL = "https://bedrock-runtime.us-east-1.amazonaws.com"
 	var calls int
-	client, err := NewClient(context.Background(), ClientConfig{
-		BaseURL: baseURL,
-		HTTPClient: &http.Client{
-			Transport: bedrockRoundTrip(func(request *http.Request) (*http.Response, error) {
-				calls++
-				return &http.Response{
-					StatusCode: http.StatusTemporaryRedirect,
-					Header: http.Header{
-						"Content-Type": []string{"application/json"},
-						"Location":     []string{"https://redirect.example/continuation-secret"},
-					},
-					Body:    io.NopCloser(strings.NewReader(`{"error":{"type":"api_error","message":"redirect"}}`)),
-					Request: request,
-				}, nil
-			}),
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		AWSConfig: aws.Config{
-			Region:      "us-east-1",
-			Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", ""),
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, baseURL))
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "bedrock-redirect", Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) {
-		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
-	}
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
-	}
+	client := newBedrockTestClient(t, baseURL, &http.Client{
+		Transport:     adaptertest.RedirectTransport(&calls, `{"error":{"type":"api_error","message":"redirect"}}`),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}, nil)
+	adapter, call := compileBedrockProdCall(t, client, baseURL, "bedrock-redirect")
+	_, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
+	mapped := adaptertest.AmbiguousRedirect(t, err)
 	if calls != 1 {
 		t.Fatalf("provider calls = %d, want one without redirect follow", calls)
 	}
@@ -273,127 +192,48 @@ func TestInvokeRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 }
 
 func TestInvokePreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
-	deadline := newPreDialDeadlineContext()
-	transport := &preDialDeadlineTransport{started: make(chan struct{})}
 	const baseURL = "https://bedrock-runtime.us-east-1.amazonaws.com"
-	client, err := NewClient(context.Background(), ClientConfig{
-		BaseURL:    baseURL,
-		HTTPClient: &http.Client{Transport: transport},
-		AWSConfig: aws.Config{
-			Region:      "us-east-1",
-			Credentials: credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", ""),
-		},
+	transport := adaptertest.NewPreDialDeadlineTransport()
+	client := newBedrockTestClient(t, baseURL, &http.Client{Transport: transport}, nil)
+	adapter, call := compileBedrockProdCall(t, client, baseURL, "bedrock-pre-dial-deadline")
+	adaptertest.CallerDeadlineBeforeDial(t, transport, func(ctx context.Context) error {
+		_, err := adapter.Invoke(ctx, call, provider.NopObserver{})
+		return err
 	})
+}
+
+// newBedrockTestClient builds a us-east-1 client for baseURL over
+// httpClient, signing with static contract credentials unless creds is set.
+func newBedrockTestClient(t *testing.T, baseURL string, httpClient *http.Client, creds aws.CredentialsProvider) *Client {
+	t.Helper()
+	if creds == nil {
+		creds = credentials.NewStaticCredentialsProvider("contract-access", "contract-secret", "")
+	}
+	client, err := NewClient(context.Background(), ClientConfig{BaseURL: baseURL, HTTPClient: httpClient, AWSConfig: aws.Config{Region: "us-east-1", Credentials: creds}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return client
+}
+
+// compileBedrockProdCall builds the "bedrock-prod" adapter over client with
+// a contract profile expecting baseURL, and strictly compiles an empty
+// claude-contract request under operationKey.
+func compileBedrockProdCall(t *testing.T, client *Client, baseURL, operationKey string) (*Adapter, provider.Call) {
+	t.Helper()
 	adapter, err := New(client, "bedrock-prod", mustBedrockProfile(t, baseURL))
 	if err != nil {
 		t.Fatal(err)
 	}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "bedrock-pre-dial-deadline", Model: "claude-contract"},
+		Request: llm.Request{OperationKey: operationKey, Model: "claude-contract"},
 		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
 		Strict:  true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer := provider.NopObserver{}
-	result := make(chan error, 1)
-	go func() {
-		_, invokeErr := adapter.Invoke(deadline, call, observer)
-		result <- invokeErr
-	}()
-	select {
-	case <-transport.started:
-	case <-time.After(time.Second):
-		t.Fatal("provider transport was not reached")
-	}
-	deadline.expire()
-	var invokeErr error
-	select {
-	case invokeErr = <-result:
-	case <-time.After(time.Second):
-		t.Fatal("Invoke() did not return after the pre-dial deadline")
-	}
-	var mapped *provider.Error
-	if !errors.As(invokeErr, &mapped) {
-		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
-	}
-	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped error = %#v, want non-retryable pre-dispatch caller deadline", mapped)
-	}
-	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
-		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
-	}
-	if transport.calls != 1 || transport.bodyReads != 0 {
-		t.Fatalf("pre-dial transport calls/body reads = %d/%d, want 1/0", transport.calls, transport.bodyReads)
-	}
-}
-
-type bedrockRoundTrip func(*http.Request) (*http.Response, error)
-
-func (function bedrockRoundTrip) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
-}
-
-type preDialDeadlineContext struct {
-	done chan struct{}
-	once sync.Once
-}
-
-func newPreDialDeadlineContext() *preDialDeadlineContext {
-	return &preDialDeadlineContext{done: make(chan struct{})}
-}
-
-func (ctx *preDialDeadlineContext) Deadline() (time.Time, bool) {
-	return time.Now().Add(time.Hour), true
-}
-
-func (ctx *preDialDeadlineContext) Done() <-chan struct{} { return ctx.done }
-
-func (ctx *preDialDeadlineContext) Err() error {
-	select {
-	case <-ctx.done:
-		return context.DeadlineExceeded
-	default:
-		return nil
-	}
-}
-
-func (*preDialDeadlineContext) Value(any) any { return nil }
-
-func (ctx *preDialDeadlineContext) expire() {
-	ctx.once.Do(func() { close(ctx.done) })
-}
-
-type preDialDeadlineTransport struct {
-	started   chan struct{}
-	once      sync.Once
-	calls     int
-	bodyReads int
-}
-
-func (transport *preDialDeadlineTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	transport.calls++
-	if request.Body != nil {
-		request.Body = &countingReadCloser{ReadCloser: request.Body, reads: &transport.bodyReads}
-	}
-	transport.once.Do(func() { close(transport.started) })
-	<-request.Context().Done()
-	provider.RecordPreDispatchContext(request.Context(), request.Context().Err())
-	return nil, request.Context().Err()
-}
-
-type countingReadCloser struct {
-	io.ReadCloser
-	reads *int
-}
-
-func (reader *countingReadCloser) Read(data []byte) (int, error) {
-	(*reader.reads)++
-	return reader.ReadCloser.Read(data)
+	return adapter, call
 }
 
 func mustBedrockProfile(t *testing.T, baseURL string) Profile {

@@ -1,36 +1,15 @@
 package openairesponses
 
 import (
-	"bytes"
-	"os"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
 func FuzzDecodeStream(f *testing.F) {
-	fixture, err := os.ReadFile("testdata/contracts/events.wire")
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Add(fixture)
-	f.Add([]byte("event: response.completed\ndata: {}\n\n"))
-	f.Fuzz(func(t *testing.T, wire []byte) {
-		if len(wire) > 2<<20 {
-			return
-		}
-		events, err := DecodeStream(bytes.NewReader(wire))
-		if err != nil {
-			return
-		}
-		streamtest.AssertEventsAssemble(t, "openai-responses-fuzz", events)
-	})
+	streamtest.FuzzDecode(f, "testdata/contracts/events.wire", "openai-responses-fuzz", DecodeStream, "event: response.completed\ndata: {}\n\n")
 }
 
 func TestDecodedProviderTerminalErrorIsValidFuzzOutcome(t *testing.T) {
-	events, err := DecodeStream(bytes.NewReader([]byte("event: response.failed\ndata: {}\n\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	streamtest.AssertEventsAssemble(t, "openai-responses-fuzz", events)
+	streamtest.AssertDecodedAssembles(t, "openai-responses-fuzz", "event: response.failed\ndata: {}\n\n", DecodeStream)
 }

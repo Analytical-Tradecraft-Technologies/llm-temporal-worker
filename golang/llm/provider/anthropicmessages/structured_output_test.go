@@ -6,11 +6,11 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 const constrainedOutputSchema = `{"type":"object","properties":{"name":{"type":"string","minLength":3},"age":{"type":"integer","minimum":0},"tags":{"type":"array","items":{"type":"string"},"maxItems":2}},"required":["name"]}`
@@ -32,12 +32,7 @@ func structuredOutputAdapter(t *testing.T, text string, wire *[]byte) *Adapter {
 		APIKey:  "test-key",
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			*wire, _ = io.ReadAll(request.Body)
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"req-structured"}},
-				Body:       io.NopCloser(strings.NewReader(string(body))),
-				Request:    request,
-			}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, string(body), "Request-Id", "req-structured"), nil
 		})},
 	})
 	if err != nil {

@@ -2,10 +2,14 @@ package streamtest
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
 
@@ -95,4 +99,98 @@ func AssertEventsAssemble(t *testing.T, operationKey string, events []provider.E
 	if response.OperationKey != operationKey || !response.Status.Valid() {
 		t.Fatalf("assembled response is not semantic: %#v", response)
 	}
+}
+
+// Decode decodes a provider stream into events.
+type Decode func(io.Reader) ([]provider.Event, error)
+
+// FuzzDecode seeds f with the fixture at fixturePath and the extra seeds,
+// and checks that every stream of up to 2 MiB that decode accepts satisfies
+// AssertEventsAssemble for operationKey.
+func FuzzDecode(f *testing.F, fixturePath, operationKey string, decode Decode, seeds ...string) {
+	fixture, err := os.ReadFile(fixturePath)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(fixture)
+	for _, seed := range seeds {
+		f.Add([]byte(seed))
+	}
+	f.Fuzz(func(t *testing.T, wire []byte) {
+		if len(wire) > 2<<20 {
+			return
+		}
+		events, err := decode(bytes.NewReader(wire))
+		if err != nil {
+			return
+		}
+		AssertEventsAssemble(t, operationKey, events)
+	})
+}
+
+// FragmentationInvariant checks that decode returns the same events for
+// wire read whole, split at every point with an empty read at the split,
+// one byte at a time, and in chunks of up to maxChunk bytes from seed, and returns
+// those events.
+func FragmentationInvariant(t *testing.T, wire []byte, seed int64, maxChunk int, decode Decode) []provider.Event {
+	t.Helper()
+	want, err := decode(bytes.NewReader(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for split := 1; split < len(wire); split++ {
+		got, err := decode(NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
+		if err != nil {
+			t.Fatalf("split %d: %v", split, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
+		}
+	}
+	for _, chunks := range [][][]byte{Fragment(wire, 1), RandomFragment(wire, seed, maxChunk)} {
+		got, err := decode(NewChunkReader(chunks))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
+		}
+	}
+	return want
+}
+
+// Assemble assembles events into the response for operationKey.
+func Assemble(operationKey string, events []provider.Event) (llm.Response, error) {
+	assembler := provider.NewAssembler(operationKey)
+	for _, event := range events {
+		if err := assembler.Add(event); err != nil {
+			return llm.Response{}, err
+		}
+	}
+	return assembler.Result()
+}
+
+// AssembleJSON decodes wire and returns the JSON encoding of the response
+// its events assemble into for operationKey.
+func AssembleJSON(wire []byte, operationKey string, decode Decode) ([]byte, error) {
+	events, err := decode(bytes.NewReader(wire))
+	if err != nil {
+		return nil, err
+	}
+	response, err := Assemble(operationKey, events)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(response)
+}
+
+// AssertDecodedAssembles decodes wire and checks the events with
+// AssertEventsAssemble for operationKey.
+func AssertDecodedAssembles(t *testing.T, operationKey, wire string, decode Decode) {
+	t.Helper()
+	events, err := decode(strings.NewReader(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	AssertEventsAssemble(t, operationKey, events)
 }

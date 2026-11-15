@@ -102,3 +102,21 @@ func TestLowerSamplingAndReasoningMergesEffortIntoOutputConfig(t *testing.T) {
 		t.Fatalf("seed error = %v", err)
 	}
 }
+
+func TestLowerSamplingRejectsTemperatureOutsideTheProviderRange(t *testing.T) {
+	for _, family := range []Family{Anthropic, Bedrock} {
+		for _, value := range []float64{-0.1, 1.5} {
+			temperature := value
+			if err := family.LowerSampling(llm.SamplingSpec{Temperature: &temperature}, map[string]any{}); err == nil {
+				t.Fatalf("%s: temperature %v was accepted", family.Name, value)
+			}
+		}
+		for _, value := range []float64{0, 0.7, 1} {
+			temperature := value
+			target := map[string]any{}
+			if err := family.LowerSampling(llm.SamplingSpec{Temperature: &temperature}, target); err != nil || target["temperature"] != value {
+				t.Fatalf("%s: temperature %v = %v, %v; want it sent", family.Name, value, target["temperature"], err)
+			}
+		}
+	}
+}

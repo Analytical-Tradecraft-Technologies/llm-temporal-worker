@@ -3,15 +3,17 @@ package bedrockconverse
 import (
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestMapErrorMapsRetryAfterFromWrappedSmithyResponse(t *testing.T) {
@@ -67,22 +69,18 @@ func TestDefiniteConverseRejectionsRemainRejected(t *testing.T) {
 	}
 }
 
-func TestGatewayTimeoutsRemainAmbiguous(t *testing.T) {
-	for _, status := range []int{http.StatusGatewayTimeout, provider.StatusCloudflareTimeout} {
-		mapped := mapError(fmt.Errorf("wrapped: %w", &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: errors.New("provider body")}), "converse")
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetrySameOperation {
-			t.Fatalf("status %d became a rejection: %#v", status, mapped)
-		}
-	}
+func TestMapErrorClassifiesProviderNeutralFailures(t *testing.T) {
+	adaptertest.ProviderNeutralFailures(t, func(err error) *provider.Error { return mapError(err, "converse") }, dispatchContextError)
 }
 
-func TestServerErrorsRemainRejected(t *testing.T) {
-	for _, status := range []int{500, 502, 503, 529} {
-		mapped := mapError(fmt.Errorf("wrapped: %w", &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: errors.New("provider body")}), "converse")
-		if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchRejected || mapped.Retry != provider.RetrySameOperation {
-			t.Fatalf("status %d = %#v, want a retryable rejection", status, mapped)
+func TestMapErrorClassifiesCommonHTTPStatuses(t *testing.T) {
+	adaptertest.HTTPStatuses(t, func(status int, response *http.Response) *provider.Error {
+		if response == nil {
+			response = &http.Response{}
 		}
-	}
+		response.StatusCode = status
+		return mapError(fmt.Errorf("wrapped: %w", &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: response}, Err: errors.New("provider body")}), "converse")
+	})
 }
 
 func TestConversePaymentRequiredIsAccountDenial(t *testing.T) {

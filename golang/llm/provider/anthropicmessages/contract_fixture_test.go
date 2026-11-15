@@ -1,12 +1,10 @@
 package anthropicmessages
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -14,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -41,63 +40,18 @@ func TestAnthropicDirectContractFixturesCoverUsageClassesLossErrorsAndContinuati
 func TestAnthropicDirectContractFixtureDecoderIsFragmentationInvariant(t *testing.T) {
 	wire := anthropicDirectFixture.read(t, "stream.decoder.events")
 	metadata := anthropicDirectFixture.loadMetadata(t)
-	want, err := DecodeStream(bytes.NewReader(wire))
-	if err != nil {
-		t.Fatal(err)
-	}
+	want := streamtest.FragmentationInvariant(t, wire, 29, 11, DecodeStream)
 	if len(want) == 0 {
 		t.Fatal("stream fixture decoded no events")
 	}
-	for split := 1; split < len(wire); split++ {
-		got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
-		if err != nil {
-			t.Fatalf("split %d: %v", split, err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
-		}
-	}
-	for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 29, 11)} {
-		got, err := DecodeStream(streamtest.NewChunkReader(chunks))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
-		}
-	}
-	assembler := provider.NewAssembler("fixture-anthropic-direct-stream")
-	for _, event := range want {
-		if err := assembler.Add(event); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := assembler.Result(); err != nil {
+	if _, err := streamtest.Assemble("fixture-anthropic-direct-stream", want); err != nil {
 		t.Fatal(err)
 	}
 	if err := contracttest.VerifyStreamAssemblyEquivalent(wire, anthropicDirectFixture.read(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
-		return assembleAnthropicFixtureStream(events, "fixture-anthropic-direct-stream")
+		return streamtest.AssembleJSON(events, "fixture-anthropic-direct-stream", DecodeStream)
 	}, metadata.GeneratedFieldExemptions); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func assembleAnthropicFixtureStream(wire []byte, operationKey string) ([]byte, error) {
-	events, err := DecodeStream(bytes.NewReader(wire))
-	if err != nil {
-		return nil, err
-	}
-	assembler := provider.NewAssembler(operationKey)
-	for _, event := range events {
-		if err := assembler.Add(event); err != nil {
-			return nil, err
-		}
-	}
-	response, err := assembler.Result()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(response)
 }
 
 func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testing.T) {
@@ -106,12 +60,7 @@ func TestAnthropicDirectContractFixturesUseIndependentProfileTransport(t *testin
 	var got *http.Request
 	client := newAnthropicDirectFixtureClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"req-fixture"}},
-			Body:       io.NopCloser(bytes.NewReader(responseBody)),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "Request-Id", "req-fixture"), nil
 	}))
 	adapter, err := New(client, anthropicDirectFixtureEndpoint, anthropicDirectFixtureProfile(t))
 	if err != nil {

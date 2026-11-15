@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
@@ -68,41 +69,17 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 
 // Constraints moved out of the wire schema are still enforced by the lift.
 func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object","properties":{"code":{"type":"string","minLength":3}},"required":["code"],"additionalProperties":false}`)
-	call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
-			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
-		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for text, valid := range map[string]bool{`{"code":"abc"}`: true, `{"code":"ab"}`: false} {
-		output := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}
-		if err := validateFinalJSON(call, output, llm.ResponseStatusCompleted, false, false); (err == nil) != valid {
-			t.Fatalf("%s valid=%v: %v", text, valid, err)
+	adaptertest.StrictOutputValidation(t, func(t *testing.T, schema, text string) error {
+		call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
+			Request: llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
+				Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}},
+			Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-}
-
-// A number the schema validator cannot convert is an invalid response, not an
-// Activity panic after payment (#1522).
-func TestOutputWithAnUnboundedNumberFailsValidationWithoutPanicking(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object","properties":{"amount":{"type":"number","minimum":0}},"required":["amount"],"additionalProperties":false}`)
-	call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-number", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
-			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: schema}}},
-		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
+		return validateFinalJSON(call, []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}, llm.ResponseStatusCompleted, false, false)
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for text, valid := range map[string]bool{`{"amount":1e3}`: true, `{"amount":1e3000000}`: false, `{"amount":-1e3000000}`: false} {
-		output := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}
-		if err := validateFinalJSON(call, output, llm.ResponseStatusCompleted, false, false); (err == nil) != valid {
-			t.Fatalf("%s valid=%v: %v", text, valid, err)
-		}
-	}
 }
 
 func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {

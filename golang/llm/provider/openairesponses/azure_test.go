@@ -18,6 +18,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
@@ -25,12 +26,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 	var got *http.Request
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"azure-resp-1"}},
-			Body:       io.NopCloser(bytes.NewReader(responseBody)),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "X-Request-Id", "azure-resp-1"), nil
 	})
 	client, err := NewAzureClient(AzureClientConfig{
 		Endpoint:   "https://127.0.0.1",
@@ -109,12 +105,7 @@ func TestAzureResponsesTokenCredentialUsesBearerAndV1Path(t *testing.T) {
 		TokenCredential: credential,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 			got = request
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(bytes.NewReader(readContractFixture(t, "azure-responses", "response.completed.json"))),
-				Request:    request,
-			}, nil
+			return adaptertest.JSONResponse(request, http.StatusOK, string(readContractFixture(t, "azure-responses", "response.completed.json"))), nil
 		})},
 	})
 	if err != nil {
@@ -175,8 +166,7 @@ func TestAzureResponsesAdapterAliases(t *testing.T) {
 }
 
 func TestAzureResponsesPreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
-	deadline := newPreDialDeadlineContext()
-	transport := &preDialDeadlineTransport{started: make(chan struct{})}
+	transport := adaptertest.NewPreDialDeadlineTransport()
 	client, err := NewAzureClient(AzureClientConfig{
 		Endpoint:   "https://resource.openai.azure.com",
 		APIVersion: "v1",
@@ -186,49 +176,8 @@ func TestAzureResponsesPreDispatchCallerDeadlineStaysRetryNever(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "azure-pre-dial-deadline", Model: "gpt-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingObserver{}
-	result := make(chan error, 1)
-	go func() {
-		_, invokeErr := adapter.Invoke(deadline, call, observer)
-		result <- invokeErr
-	}()
-	select {
-	case <-transport.started:
-	case <-time.After(time.Second):
-		t.Fatal("Azure provider transport was not reached")
-	}
-	deadline.expire()
-	var invokeErr error
-	select {
-	case invokeErr = <-result:
-	case <-time.After(time.Second):
-		t.Fatal("Azure Invoke() did not return after the pre-dial deadline")
-	}
-	var mapped *provider.Error
-	if !errors.As(invokeErr, &mapped) {
-		t.Fatalf("Invoke() error = %T %v, want *provider.Error", invokeErr, invokeErr)
-	}
-	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped error = %#v, want non-retryable pre-dispatch caller deadline", mapped)
-	}
-	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, context.DeadlineExceeded) {
-		t.Fatalf("mapped error = %v, want certified pre-dispatch caller deadline", mapped)
-	}
-	if transport.calls != 1 || transport.bodyReads != 0 || observer.before != 1 || observer.headers != 0 {
-		t.Fatalf("transport/observer = calls=%d bodyReads=%d observer=%#v", transport.calls, transport.bodyReads, observer)
-	}
+	adapter, call := compileAzureCall(t, client, "azure-pre-dial-deadline")
+	assertCallerDeadlineBeforeDial(t, transport, adapter, call)
 }
 
 func TestAzureResponsesRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
@@ -238,51 +187,42 @@ func TestAzureResponsesRedirectResponseIsAmbiguousAndNotFollowed(t *testing.T) {
 		APIVersion: "v1",
 		APIKey:     "test-azure-key",
 		HTTPClient: &http.Client{
-			Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				calls++
-				return &http.Response{
-					StatusCode: http.StatusTemporaryRedirect,
-					Header: http.Header{
-						"Content-Type": []string{"application/json"},
-						"Location":     []string{"https://redirect.example/continuation-secret"},
-					},
-					Body:    io.NopCloser(strings.NewReader(`{"error":{"message":"redirect"}}`)),
-					Request: request,
-				}, nil
-			}),
+			Transport:     adaptertest.RedirectTransport(&calls, `{"error":{"message":"redirect"}}`),
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter, call := compileAzureCall(t, client, "azure-redirect")
+	observer := &adaptertest.Observer{}
+	_, err = adapter.Invoke(context.Background(), call, observer)
+	mapped := adaptertest.AmbiguousRedirect(t, err)
+	if calls != 1 || observer.Before != 1 || observer.Headers != 0 {
+		t.Fatalf("transport/observer = calls=%d observer=%#v, want one request, one pre-write mark, and no headers", calls, observer)
+	}
+	if mapped.SafeDetails["status"] != "307" || mapped.SafeDetails["endpoint"] != "azure-responses" {
+		t.Fatalf("safe details = %#v, want redirect status and endpoint only", mapped.SafeDetails)
+	}
+}
+
+// compileAzureCall builds the "azure-responses" adapter over client and
+// strictly compiles an empty gpt-contract request under operationKey.
+func compileAzureCall(t *testing.T, client *Client, operationKey string) (*Adapter, provider.Call) {
+	t.Helper()
 	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "azure-redirect", Model: "gpt-contract"},
+		Request: llm.Request{OperationKey: operationKey, Model: "gpt-contract"},
 		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 		Strict:  true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer := &recordingObserver{}
-	_, err = adapter.Invoke(context.Background(), call, observer)
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) {
-		t.Fatalf("Invoke() error = %T %v, want *provider.Error", err, err)
-	}
-	if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
-		t.Fatalf("mapped redirect = %#v, want ambiguous non-retriable provider-unavailable", mapped)
-	}
-	if calls != 1 || observer.before != 1 || observer.headers != 0 {
-		t.Fatalf("transport/observer = calls=%d observer=%#v, want one request, one pre-write mark, and no headers", calls, observer)
-	}
-	if mapped.SafeDetails["status"] != "307" || mapped.SafeDetails["endpoint"] != "azure-responses" {
-		t.Fatalf("safe details = %#v, want redirect status and endpoint only", mapped.SafeDetails)
-	}
+	return adapter, call
 }
 
 func TestAzureResponsesPathShimLeavesOtherRoutesUntouched(t *testing.T) {
@@ -335,12 +275,7 @@ func TestAzureResponsesAcceptsDocumentedEndpointForms(t *testing.T) {
 				var got *http.Request
 				httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 					got = request
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Header:     http.Header{"Content-Type": []string{"application/json"}},
-						Body:       io.NopCloser(bytes.NewReader(readContractFixture(t, "azure-responses", "response.completed.json"))),
-						Request:    request,
-					}, nil
+					return adaptertest.JSONResponse(request, http.StatusOK, string(readContractFixture(t, "azure-responses", "response.completed.json"))), nil
 				})}
 				var client *Client
 				var err error
@@ -382,26 +317,15 @@ func (credential failingAzureTokenCredential) GetToken(context.Context, policy.T
 	return azcore.AccessToken{}, credential.err
 }
 
-func invokeAzureTokenAdapter(t *testing.T, credential azcore.TokenCredential, transport roundTripFunc) (error, *recordingObserver) {
+func invokeAzureTokenAdapter(t *testing.T, credential azcore.TokenCredential, transport roundTripFunc) (error, *adaptertest.Observer) {
 	t.Helper()
 	client, err := NewAzureTokenClient(AzureTokenClientConfig{Endpoint: "https://resource.openai.azure.com", APIVersion: "v1",
 		TokenCredential: credential, HTTPClient: &http.Client{Transport: transport}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter, err := NewAzureAdapter(client, "azure-responses", "azure-responses/v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "azure-token", Model: "gpt-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "azure-responses", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	observer := &recordingObserver{}
+	adapter, call := compileAzureCall(t, client, "azure-token")
+	observer := &adaptertest.Observer{}
 	_, err = adapter.Invoke(context.Background(), call, observer)
 	return err, observer
 }
@@ -426,7 +350,7 @@ func TestAzureResponsesTokenCredentialFailureIsNotDispatched(t *testing.T) {
 	if !errors.Is(mapped, provider.ErrProviderPreDispatch) || !errors.Is(mapped, provider.ErrProviderCredentials) {
 		t.Fatalf("mapped error = %v, want certified pre-dispatch credential failure", mapped)
 	}
-	if sent != 0 || observer.before != 1 || observer.headers != 0 {
+	if sent != 0 || observer.Before != 1 || observer.Headers != 0 {
 		t.Fatalf("transport calls=%d observer=%#v", sent, observer)
 	}
 }

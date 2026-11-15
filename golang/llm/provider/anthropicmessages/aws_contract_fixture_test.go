@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -66,30 +66,9 @@ func TestAnthropicAWSContractFixturesCoverUsageClassesLossErrorsAndContinuation(
 func TestAnthropicAWSContractFixtureDecoderIsFragmentationInvariant(t *testing.T) {
 	wire := anthropicAWSFixture.read(t, "stream.decoder.events")
 	metadata := anthropicAWSFixture.loadMetadata(t)
-	want, err := DecodeStream(bytes.NewReader(wire))
-	if err != nil {
-		t.Fatal(err)
-	}
+	want := streamtest.FragmentationInvariant(t, wire, 31, 17, DecodeStream)
 	if len(want) == 0 {
 		t.Fatal("stream fixture decoded no events")
-	}
-	for split := 1; split < len(wire); split++ {
-		got, err := DecodeStream(streamtest.NewChunkReader([][]byte{wire[:split], {}, wire[split:]}))
-		if err != nil {
-			t.Fatalf("split %d: %v", split, err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
-		}
-	}
-	for _, chunks := range [][][]byte{streamtest.Fragment(wire, 1), streamtest.RandomFragment(wire, 31, 17)} {
-		got, err := DecodeStream(streamtest.NewChunkReader(chunks))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
-		}
 	}
 	var fragments []string
 	for _, event := range want {
@@ -100,17 +79,11 @@ func TestAnthropicAWSContractFixtureDecoderIsFragmentationInvariant(t *testing.T
 	if strings.Join(fragments, "") != `{"q":"sydney"}` {
 		t.Fatalf("tool argument fragments = %#v", fragments)
 	}
-	assembler := provider.NewAssembler("fixture-anthropic-aws-stream")
-	for _, event := range want {
-		if err := assembler.Add(event); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := assembler.Result(); err != nil {
+	if _, err := streamtest.Assemble("fixture-anthropic-aws-stream", want); err != nil {
 		t.Fatal(err)
 	}
 	if err := contracttest.VerifyStreamAssemblyEquivalent(wire, anthropicAWSFixture.read(t, "stream.decoder.semantic.json"), func(events []byte) ([]byte, error) {
-		return assembleAnthropicFixtureStream(events, "fixture-anthropic-aws-stream")
+		return streamtest.AssembleJSON(events, "fixture-anthropic-aws-stream", DecodeStream)
 	}, metadata.GeneratedFieldExemptions); err != nil {
 		t.Fatal(err)
 	}
@@ -122,12 +95,7 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 	var got *http.Request
 	client := newAnthropicAWSFixtureClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"req-anthropic-aws-fixture"}},
-			Body:       io.NopCloser(bytes.NewReader(responseBody)),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, string(responseBody), "Request-Id", "req-anthropic-aws-fixture"), nil
 	}))
 	adapter, err := New(client, anthropicAWSFixtureEndpoint, anthropicAWSFixtureProfile(t))
 	if err != nil {
@@ -205,12 +173,7 @@ func assertAnthropicAWSFixtureClassifiedError(t *testing.T) {
 	calls := 0
 	client := newAnthropicAWSFixtureClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
-		return &http.Response{
-			StatusCode: http.StatusUnauthorized,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "Request-Id": []string{"aws-auth-fixture"}},
-			Body:       io.NopCloser(bytes.NewReader(anthropicAWSFixture.read(t, "error.authentication.json"))),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusUnauthorized, string(anthropicAWSFixture.read(t, "error.authentication.json")), "Request-Id", "aws-auth-fixture"), nil
 	}))
 	adapter, err := New(client, anthropicAWSFixtureEndpoint, anthropicAWSFixtureProfile(t))
 	if err != nil {

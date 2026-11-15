@@ -2,25 +2,20 @@ package openaichat
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 	var got *http.Request
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		got = request
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"azure-req-1"}},
-			Body:       io.NopCloser(strings.NewReader(`{"id":"azure-chat-1","model":"deployment-a","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)),
-			Request:    request,
-		}, nil
+		return adaptertest.JSONResponse(request, http.StatusOK, `{"id":"azure-chat-1","model":"deployment-a","service_tier":"default","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`, "X-Request-Id", "azure-req-1"), nil
 	})
 	endpoint := "https://127.0.0.1"
 	client, err := NewAzureClient(AzureClientConfig{Endpoint: endpoint, APIVersion: "2025-01-01", APIKey: "test-azure-key", HTTPClient: &http.Client{Transport: transport}})

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 type cannedConverseTransport struct{ body string }
@@ -22,12 +22,7 @@ func (transport cannedConverseTransport) RoundTrip(request *http.Request) (*http
 		_, _ = io.Copy(io.Discard, request.Body)
 		_ = request.Body.Close()
 	}
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Amzn-Requestid": []string{"request-decode"}},
-		Body:       io.NopCloser(strings.NewReader(transport.body)),
-		Request:    request,
-	}, nil
+	return adaptertest.JSONResponse(request, http.StatusOK, transport.body, "X-Amzn-Requestid", "request-decode"), nil
 }
 
 // invokeCannedConverse pushes one HTTP response body through the real AWS SDK
