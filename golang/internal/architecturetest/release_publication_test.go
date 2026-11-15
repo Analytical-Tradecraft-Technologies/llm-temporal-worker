@@ -324,9 +324,7 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(evidence, content, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeReleaseArtifact(t, evidence, content)
 			result := runReleaseGuard(t, repository, "verify-evidence",
 				"--evidence", evidence,
 				"--tag-commit", commit,
@@ -437,9 +435,7 @@ func TestPublicEvidenceRunVerifierValidatesTrustedMasterMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			fixture := filepath.Join(t.TempDir(), "public-run.json")
-			if err := os.WriteFile(fixture, data, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeReleaseArtifact(t, fixture, data)
 
 			result := runPublicRunVerifier(t,
 				"validate",
@@ -472,9 +468,7 @@ func TestPublicEvidenceRunVerifierRejectsMalformedOrOversizedFixturesWithoutEcho
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := filepath.Join(t.TempDir(), "public-run.json")
-			if err := os.WriteFile(fixture, test.contents, 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeReleaseArtifact(t, fixture, test.contents)
 			result := runPublicRunVerifier(t,
 				"validate",
 				"--repository", repository,
@@ -1399,9 +1393,7 @@ func createGuardedReleaseTestRepository(t *testing.T) (string, string) {
 	runGuardGit(t, directory, "config", "user.email", "guard@example.test")
 	runGuardGit(t, directory, "config", "user.name", "Release Guard")
 	runGuardGit(t, directory, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(directory, "README.md"), []byte("guard test\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, filepath.Join(directory, "README.md"), []byte("guard test\n"))
 	runGuardGit(t, directory, "add", "README.md")
 	runGuardGit(t, directory, "commit", "-m", "guard fixture")
 	runGuardGit(t, directory, "branch", "-M", "master")
@@ -1410,9 +1402,7 @@ func createGuardedReleaseTestRepository(t *testing.T) (string, string) {
 	runGuardGit(t, directory, "tag", "v1.2.3")
 	runGuardGit(t, directory, "tag", "-a", "v2.3.4", "-m", "annotated guard fixture")
 	runGuardGit(t, directory, "checkout", "-b", "untrusted-release")
-	if err := os.WriteFile(filepath.Join(directory, "untrusted.txt"), []byte("not on protected master\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, filepath.Join(directory, "untrusted.txt"), []byte("not on protected master\n"))
 	runGuardGit(t, directory, "add", "untrusted.txt")
 	runGuardGit(t, directory, "commit", "-m", "untrusted release fixture")
 	runGuardGit(t, directory, "tag", "v3.4.5")

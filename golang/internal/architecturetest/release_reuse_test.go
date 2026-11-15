@@ -104,9 +104,7 @@ func TestReleaseEvidenceGateDiagnosticsReadGoTestJSON(t *testing.T) {
 {"Action":"output","Package":"example.com/demo","Test":"TestDemo","Output":"--- FAIL: TestDemo (0.00s)\n"}
 {"Action":"output","Package":"example.com/demo","Output":"FAIL\texample.com/demo\t0.12s\n"}
 `
-	if err := os.WriteFile(input, []byte(events), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, input, []byte(events))
 	output, err := exec.Command("python3", filepath.Join(repositoryRoot(t), "scripts/release/collect.py"), "gate-diagnostics", "--input", input).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v: %s", err, output)
@@ -138,9 +136,7 @@ func TestReleaseEvidenceFuzzReuseRequiresEverySuccessfulShard(t *testing.T) {
 				if scenario == "failed" && i == 2 {
 					status = "fail"
 				}
-				if err := os.WriteFile(filepath.Join(dir, name), []byte(`{"kind":"fuzz_summary","status":"`+status+`","redacted":true}`), 0600); err != nil {
-					t.Fatal(err)
-				}
+				writeReleaseArtifact(t, filepath.Join(dir, name), []byte(`{"kind":"fuzz_summary","status":"`+status+`","redacted":true}`))
 			}
 			dest := filepath.Join(dir, "combined.json")
 			output, err := exec.Command("python3", filepath.Join(repositoryRoot(t), "scripts/release/merge-fuzz.py"), dir, dest).CombinedOutput()

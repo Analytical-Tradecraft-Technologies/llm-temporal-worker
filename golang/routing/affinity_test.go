@@ -72,7 +72,7 @@ func TestPreferProviderCacheAffinityStaysWithinEligibleClass(t *testing.T) {
 	accountA := [32]byte{1}
 	accountB := [32]byte{2}
 	modelRevision := "revision-1"
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+	catalog := mustCompileLogicalCatalog(t, []Route{
 		{
 			ID: "priority-first", EndpointID: "ep-priority", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA,
 			Model: "model-priority", ModelLineage: "lineage-priority", ModelRevision: modelRevision, Classes: []llm.ServiceClass{llm.ServiceClassPriority}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassPriority: "priority"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true,
@@ -85,10 +85,7 @@ func TestPreferProviderCacheAffinityStaysWithinEligibleClass(t *testing.T) {
 			ID: "economy-first", EndpointID: "ep-economy", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA,
 			Model: "model-economy", ModelLineage: "lineage-economy", ModelRevision: modelRevision, Classes: []llm.ServiceClass{llm.ServiceClassEconomy}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassEconomy: "economy"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true,
 		},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
 	request := llm.Request{OperationKey: "affinity", Model: "logical", ServiceClass: llm.ServiceClassPriority, ServiceClassFallbacks: []llm.ServiceClass{llm.ServiceClassStandard, llm.ServiceClassEconomy}, Context: llm.RequestContext{Tenant: "tenant"}}
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog, Now: now, Affinity: &AffinityPreferences{Soft: ProviderCacheAffinitySet{affinityForRoute("economy-first", "ep-economy", "openai", "openai_responses", "us-east-1", accountA, "lineage-economy", modelRevision, now)}}})
@@ -154,13 +151,7 @@ func TestExpiredProviderCacheAffinityIsIgnored(t *testing.T) {
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
 	expired := now.Add(-time.Minute)
 	lastSuccess := now.Add(-2 * time.Minute)
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
-		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: account, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: account, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := twoAccountCatalog(t, account, account)
 	affinity := affinityForRoute("second", "ep-second", "openai", "openai_responses", "us-east-1", account, "lineage", "revision", lastSuccess)
 	affinity.ExpiresAt = &expired
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: llm.Request{OperationKey: "expired", Model: "logical", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant"}}, Catalog: catalog, Now: now, Affinity: &AffinityPreferences{Soft: ProviderCacheAffinitySet{affinity}}})
@@ -175,13 +166,9 @@ func TestExpiredProviderCacheAffinityIsIgnored(t *testing.T) {
 func TestUnpricedProviderCacheAffinityDoesNotMoveRoute(t *testing.T) {
 	account := [32]byte{6}
 	now := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
-		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: account, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: account, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: false},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := twoAccountRoutes(account, account)
+	routes[1].PriceAvailable = false
+	catalog := mustCompileLogicalCatalog(t, routes)
 	request := llm.Request{OperationKey: "unpriced-affinity", Model: "logical", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant"}}
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog, Now: now, Affinity: &AffinityPreferences{Soft: ProviderCacheAffinitySet{affinityForRoute("second", "ep-second", "openai", "openai_responses", "us-east-1", account, "lineage", "revision", now)}}})
 	if err != nil {
@@ -200,17 +187,17 @@ func affinityForRoute(routeID, endpoint, providerName, family, region string, ac
 	}
 }
 
-// twoAccountCatalog compiles one logical model with two standard-class
-// OpenAI Responses routes, "first" and "second", that differ only in their
-// endpoint and account.
+// twoAccountCatalog compiles one logical model from twoAccountRoutes.
 func twoAccountCatalog(t *testing.T, accountA, accountB [32]byte) Catalog {
 	t.Helper()
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+	return mustCompileLogicalCatalog(t, twoAccountRoutes(accountA, accountB))
+}
+
+// twoAccountRoutes returns two priced standard-class OpenAI Responses routes,
+// "first" and "second", that differ only in their endpoint and account.
+func twoAccountRoutes(accountA, accountB [32]byte) []Route {
+	return []Route{
 		{ID: "first", EndpointID: "ep-first", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountA, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
 		{ID: "second", EndpointID: "ep-second", Provider: "openai", Family: "openai_responses", Region: "us-east-1", AccountRegion: "us-east-1", EndpointAccountHMAC: accountB, Model: "model", ModelLineage: "lineage", ModelRevision: "revision", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-	}}})
-	if err != nil {
-		t.Fatal(err)
 	}
-	return catalog
 }
