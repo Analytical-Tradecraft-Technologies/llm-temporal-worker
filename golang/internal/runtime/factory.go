@@ -401,9 +401,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			}
 			closeClients := set.close
 			set.close = func(closeContext context.Context) error {
-				if closeContext == nil {
-					closeContext = context.Background()
-				}
+				closeContext = contextOrBackground(closeContext)
 				syncRuntime.stop(closeContext)
 				if closeClients == nil {
 					return nil
@@ -419,25 +417,28 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if err != nil {
 		return nil, nil, err
 	}
-	closeOwned := func() {
+	// closeAll releases every client built so far; fail calls it, so a
+	// failure releases exactly what was built before it.
+	closeAll := func() {
 		if redisOwned && redisClient != nil {
 			_ = redisClient.Close()
 		}
 	}
+	fail := func(err error) (llm.Engine, app.ClientSet, error) {
+		closeAll()
+		return nil, nil, err
+	}
 	keySecret, err := factory.redisKeySecret(ctx, value)
 	if err != nil {
-		closeOwned()
-		return nil, nil, err
+		return fail(err)
 	}
 	keyOptions, err := redisKeyOptions(value, keySecret)
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct Redis key namespace: %w", err)
+		return fail(fmt.Errorf("construct Redis key namespace: %w", err))
 	}
 	providerState, err := redisstore.NewProviderStateStore(redisstore.ProviderStateOptions{Client: redisClient, Keys: keyOptions, Clock: factory.options.Clock})
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct Redis provider state: %w", err)
+		return fail(fmt.Errorf("construct Redis provider state: %w", err))
 	}
 	var providerControl engine.ProviderStatusRecorder = providerState
 	queryRepos := QueryRepositories{}
@@ -447,15 +448,13 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		Targets: providerRefreshTargets(engineSnapshot.Routes, adapters),
 	})
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct provider refresher: %w", err)
+		return fail(fmt.Errorf("construct provider refresher: %w", err))
 	}
 	var queryService activity.QueryService
 	clock := factory.options.Clock
 	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{Client: redisClient, Mode: redisstore.AdmissionMode(value.State.Redis.AdmissionMode), FunctionVersion: value.State.Redis.AdmissionVersion, Keys: keyOptions, Clock: clock, MaxRecordBytes: value.Limits.RequestBytes})
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct Redis admission store: %w", err)
+		return fail(fmt.Errorf("construct Redis admission store: %w", err))
 	}
 	var generationPort redisstore.BudgetGenerationPort
 	streamEnabled := value.State.Redis.CoordinationStreamEnabled != nil && *value.State.Redis.CoordinationStreamEnabled
@@ -464,8 +463,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if needBudgetKeys {
 		budgetKeys, err = redisstore.NewBudgetKeySpace(keyOptions)
 		if err != nil {
-			closeOwned()
-			return nil, nil, fmt.Errorf("construct Redis budget key namespace: %w", err)
+			return fail(fmt.Errorf("construct Redis budget key namespace: %w", err))
 		}
 	}
 	var streamKey string
@@ -475,14 +473,12 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if factory.options.BudgetStatusReaderFactory != nil && config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		generationPort, err = redisstore.NewRedisBudgetGenerationPort(redisClient, budgetKeys)
 		if err != nil {
-			closeOwned()
-			return nil, nil, fmt.Errorf("construct Redis budget generation port: %w", err)
+			return fail(fmt.Errorf("construct Redis budget generation port: %w", err))
 		}
 	}
 	budgetStatusReader, err := composeBudgetStatusReader(ctx, snapshot, factory.options.Clock, value.State.Redis.AdmissionMode, redisClient, generationPort, budgetKeys, factory.options.BudgetStatusReaderFactory)
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct Redis budget status reader: %w", err)
+		return fail(fmt.Errorf("construct Redis budget status reader: %w", err))
 	}
 	// Attach the snapshot-owned Redis budget reader alongside provider state.
 	queryRepos.BudgetStatus = budgetStatusReader
@@ -494,26 +490,23 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		redisProbe, err = NewRedisDependencyProbe(redisClient, value.State.Redis)
 	}
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct Redis readiness probe: %w", err)
+		return fail(fmt.Errorf("construct Redis readiness probe: %w", err))
 	}
 	redisProbe = identifyDependencyProbe(DependencyRedis, redisProbe)
 	keyring, err := factory.continuationKeyring(ctx, value)
 	if err != nil {
-		closeOwned()
-		return nil, nil, err
+		return fail(err)
 	}
 	continuationStore, err := redisstore.NewContinuationStore(redisstore.ContinuationOptions{Client: redisClient, Keys: keyOptions, Keyring: keyring, Clock: clock, MaxBytes: value.Limits.RequestBytes, MaxDepth: value.Limits.ContinuationDepth})
 	if err != nil {
-		closeOwned()
-		return nil, nil, fmt.Errorf("construct Redis continuation store: %w", err)
+		return fail(fmt.Errorf("construct Redis continuation store: %w", err))
 	}
 	blobStore, blobCloser, err := factory.buildBlob(ctx, value)
 	if err != nil {
-		closeOwned()
-		return nil, nil, err
+		return fail(err)
 	}
-	closeAll := func() {
+	closeOwned := closeAll
+	closeAll = func() {
 		if blobCloser != nil {
 			_ = blobCloser.Close()
 		}
@@ -522,21 +515,18 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if factory.options.QueryServiceBuilder != nil {
 		queryService, err = factory.options.QueryServiceBuilder(ctx, snapshot, queryRepos)
 		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("construct query service: %w", err)
+			return fail(fmt.Errorf("construct query service: %w", err))
 		}
 	}
 	bucket, ok := blobStore.(interface {
 		ProbeBucket(context.Context) error
 	})
 	if !ok {
-		closeAll()
-		return nil, nil, fmt.Errorf("construct blob readiness probe: blob store does not support bucket probes")
+		return fail(fmt.Errorf("construct blob readiness probe: blob store does not support bucket probes"))
 	}
 	blobProbe, err := NewBlobDependencyProbe(bucket)
 	if err != nil {
-		closeAll()
-		return nil, nil, fmt.Errorf("construct blob readiness probe: %w", err)
+		return fail(fmt.Errorf("construct blob readiness probe: %w", err))
 	}
 	blobProbe = identifyDependencyProbe(DependencyBlobStore, blobProbe)
 	refResolver := factory.options.BlobRefResolver
@@ -550,19 +540,16 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			err = fmt.Errorf("unsupported blob store kind %q", value.BlobStore.Kind)
 		}
 		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("construct blob reference resolver: %w", err)
+			return fail(fmt.Errorf("construct blob reference resolver: %w", err))
 		}
 	}
 	results, err := NewBlobResultStore(blobStore, admissionStore, refResolver, clock)
 	if err != nil {
-		closeAll()
-		return nil, nil, err
+		return fail(err)
 	}
 	estimator, err := buildEstimator(value)
 	if err != nil {
-		closeAll()
-		return nil, nil, err
+		return fail(err)
 	}
 	planner := factory.planner(value)
 	adapterRegistry := engine.AdapterMap(adapters)
@@ -572,41 +559,35 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		Clock: clock, Estimator: estimator, MaxAttempts: value.Limits.RouteAttempts, FinalizationTimeout: time.Duration(value.Server.FinalizationTimeout), ProviderControl: providerControl,
 	})
 	if err != nil {
-		closeAll()
-		return nil, nil, fmt.Errorf("construct engine: %w", err)
+		return fail(fmt.Errorf("construct engine: %w", err))
 	}
 	var repository CloudRequestRepository
 	var initialization *budget.Initialization
 	if config.IsProductionEnvironment(value.Environment) && value.State.Kind == config.StateKindDurable {
 		repository, err = factory.buildCloudRequests(ctx, value.State.Requests)
 		if err != nil {
-			closeAll()
-			return nil, nil, err
+			return fail(err)
 		}
 		initializer, initErr := redisstore.NewRedisBudgetInitializer(redisClient, keyOptions, redisstore.AdmissionMode(value.State.Redis.AdmissionMode), value.State.Redis.AdmissionVersion)
 		if initErr != nil {
-			closeAll()
-			return nil, nil, initErr
+			return fail(initErr)
 		}
 		store, ok := repository.(budget.InitializationStore)
 		if !ok || isNilCapability(store) {
-			closeAll()
-			return nil, nil, ErrBudgetInitializationRequired
+			return fail(ErrBudgetInitializationRequired)
 		}
 		readContext, cancel := context.WithTimeout(ctx, time.Duration(value.Server.ReadinessProbeTimeout))
 		receipt, initErr := readBudgetInitialization(readContext, store, initializer.Identity())
 		cancel()
 		if initErr != nil || !receipt.Ready {
-			closeAll()
-			return nil, nil, ErrBudgetInitializationRequired
+			return fail(ErrBudgetInitializationRequired)
 		}
 		initialization = &receipt
 		redisProbe = withBudgetAuthorityProbe(redisProbe, initializer, receipt)
 	}
 	responseResults, err := responseResultIndex(value, repository, redisClient, keyOptions)
 	if err != nil {
-		closeAll()
-		return nil, nil, err
+		return fail(err)
 	}
 	probes := []DependencyProbe{redisProbe, blobProbe}
 	// Stable identities across configuration reloads: Redis is authoritative.
@@ -619,24 +600,20 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 		OperationKeyReuseHorizon:  time.Duration(value.State.Redis.OperationKeyReuseHorizon),
 	})
 	if err != nil {
-		closeAll()
-		return nil, nil, fmt.Errorf("construct Redis budgets: %w", err)
+		return fail(fmt.Errorf("construct Redis budgets: %w", err))
 	}
 	growthSampler, err := redisstore.NewBudgetGrowthSampler(redisClient, keyOptions, clock)
 	if err != nil {
-		closeAll()
-		return nil, nil, fmt.Errorf("construct Redis growth sampler: %w", err)
+		return fail(fmt.Errorf("construct Redis growth sampler: %w", err))
 	}
 	redisGrowth := &RedisGrowthMaintainer{sampler: growthSampler, providers: providerState, configDigest: snapshot.Digest(), retireAfter: redisstore.ProviderStateRetireAfter}
 	if syncRuntime != nil {
 		catalogStore, storeErr := redisstore.NewModelCatalogStore(redisClient, keyOptions)
 		if storeErr != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("construct Redis model catalog store: %w", storeErr)
+			return fail(fmt.Errorf("construct Redis model catalog store: %w", storeErr))
 		}
 		if err := factory.startModelSync(ctx, value, syncRuntime, catalogStore, adapters); err != nil {
-			closeAll()
-			return nil, nil, err
+			return fail(err)
 		}
 		stopSync := closeAll
 		closeAll = func() {
@@ -651,18 +628,15 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 	if value.Langfuse != nil {
 		public, err := factory.resolveSecret(ctx, value.Langfuse.PublicKey)
 		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("resolve Langfuse public key: %w", err)
+			return fail(fmt.Errorf("resolve Langfuse public key: %w", err))
 		}
 		secret, err := factory.resolveSecret(ctx, value.Langfuse.SecretKey)
 		if err != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("resolve Langfuse secret key: %w", err)
+			return fail(fmt.Errorf("resolve Langfuse secret key: %w", err))
 		}
 		langfuseClient, err = langfuse.NewClient(value.Langfuse.BaseURL, strings.TrimSpace(string(public)), strings.TrimSpace(string(secret)), nil, value.Langfuse.EffectiveMaxInFlight(value.Temporal.Worker.MaxConcurrentActivities))
 		if err != nil {
-			closeAll()
-			return nil, nil, err
+			return fail(err)
 		}
 	}
 	if langfuseClient != nil {
@@ -703,9 +677,7 @@ func (factory *ProductionEngineFactory) Build(ctx context.Context, snapshot *con
 			CompactPortsFactory:       factory.options.CompactPortsFactory,
 		},
 		close: func(closeContext context.Context) error {
-			if closeContext == nil {
-				closeContext = context.Background()
-			}
+			closeContext = contextOrBackground(closeContext)
 			closeAll()
 			return nil
 		},
@@ -1144,6 +1116,16 @@ func (factory *ProductionEngineFactory) startModelSync(ctx context.Context, valu
 	return nil
 }
 
+// providerEgressClient is the HTTP client for endpoint under its egress
+// policy, bounded by the configured provider response size.
+func (factory *ProductionEngineFactory) providerEgressClient(value config.Config, endpoint config.EndpointConfig) (*http.Client, error) {
+	providerResponseBytes := value.Limits.ProviderResponseBytes
+	if providerResponseBytes == 0 {
+		providerResponseBytes = config.DefaultProviderResponseBytes
+	}
+	return newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, providerResponseBytes)
+}
+
 func (factory *ProductionEngineFactory) buildAdapters(ctx context.Context, value config.Config, snapshot engine.Snapshot, syncRuntime *modelSyncRuntime) (map[string]provider.Adapter, error) {
 	ids := make([]string, 0, len(value.Endpoints))
 	for id := range value.Endpoints {
@@ -1182,11 +1164,7 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	if err != nil {
 		return nil, err
 	}
-	providerResponseBytes := value.Limits.ProviderResponseBytes
-	if providerResponseBytes == 0 {
-		providerResponseBytes = config.DefaultProviderResponseBytes
-	}
-	client, err := newProviderEgressHTTPClient(factory.options.HTTPClient, endpoint, factory.options.EgressResolver, factory.options.EgressDial, providerResponseBytes)
+	client, err := factory.providerEgressClient(value, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %q: provider egress policy: %w", endpointID, err)
 	}
@@ -1378,6 +1356,15 @@ func (factory *ProductionEngineFactory) buildAdapter(ctx context.Context, value 
 	}
 }
 
+// endpointProfile returns the profile a constructor built for endpointID, or
+// its error naming the endpoint.
+func endpointProfile[P any](endpointID string, value P, err error) (*P, error) {
+	if err != nil {
+		return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
+	}
+	return &value, nil
+}
+
 func endpointCapabilities(snapshot engine.Snapshot, endpointID string) (provider.CapabilitySet, error) {
 	found := provider.CapabilitySet{Features: make(map[provider.Feature]provider.Capability)}
 	for _, model := range snapshot.Routes.Models {
@@ -1488,10 +1475,7 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		copy := *supplied.Chat
 		if supplied.ChatDialect == "" || supplied.ChatDialect == ChatDialectGeneric {
 			value, err := openaichat.NewOpenAIProfile(copy)
-			if err != nil {
-				return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-			}
-			return &value, nil
+			return endpointProfile(endpointID, value, err)
 		}
 		return &copy, nil
 	}
@@ -1516,16 +1500,10 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 		// most expensive allowed upstream price.
 		value, err := openaichat.NewOpenRouterProfile(openaichat.OpenRouterProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ProviderOrder: order, SelectUpstream: selectUpstream, AllowFallbacks: false, RequireParameters: true,
 			Upstreams: upstreams, ZeroRetention: upstream.RequireZeroRetention, DenyPromptTraining: upstream.DenyPromptTraining})
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-		}
-		return &value, nil
+		return endpointProfile(endpointID, value, err)
 	case ChatDialectExa:
 		value, err := openaichat.NewExaProfile(openaichat.ExaProfileConfig{ID: endpointID, CapabilityVersion: capabilities.Version, BaseURL: endpoint.BaseURL, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual})
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-		}
-		return &value, nil
+		return endpointProfile(endpointID, value, err)
 	case ChatDialectGeneric:
 		// Only the direct OpenAI API is known to accept the developer role;
 		// generic compatible servers receive application instructions as system.
@@ -1534,10 +1512,7 @@ func (factory *ProductionEngineFactory) chatProfile(endpointID string, endpoint 
 			role = "developer"
 		}
 		value, err := openaichat.NewOpenAIProfile(openaichat.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: allowed, ExpectedBaseURL: endpoint.BaseURL, ApplicationInstructionRole: role})
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-		}
-		return &value, nil
+		return endpointProfile(endpointID, value, err)
 	default:
 		return nil, fmt.Errorf("endpoint %q: unsupported chat dialect %q", endpointID, dialect)
 	}
@@ -1580,10 +1555,7 @@ func (factory *ProductionEngineFactory) anthropicProfile(endpointID string, endp
 	actual := anthropicmessages.DefaultProfile(endpointID).ActualServiceClasses
 	priority := endpoint.ServiceClasses[llm.ServiceClassPriority]
 	value, err := anthropicmessages.NewProfile(anthropicmessages.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, AllowedExtensions: anthropicExtensionSpecs(endpoint), ExpectedBaseURL: endpoint.BaseURL, PriorityCapacity: priority.ProviderValue == "auto" || priority.RequiresCapability != ""})
-	if err != nil {
-		return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-	}
-	return &value, nil
+	return endpointProfile(endpointID, value, err)
 }
 
 func (factory *ProductionEngineFactory) bedrockProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile) (*bedrockmessages.Profile, error) {
@@ -1593,10 +1565,7 @@ func (factory *ProductionEngineFactory) bedrockProfile(endpointID string, endpoi
 	}
 	tiers, actual := endpointTiers(endpoint)
 	value, err := bedrockmessages.NewProfile(bedrockmessages.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ExpectedBaseURL: endpoint.BaseURL})
-	if err != nil {
-		return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-	}
-	return &value, nil
+	return endpointProfile(endpointID, value, err)
 }
 
 func (factory *ProductionEngineFactory) bedrockConverseProfile(endpointID string, endpoint config.EndpointConfig, capabilities provider.CapabilitySet, supplied EndpointProfile) (*bedrockconverse.Profile, error) {
@@ -1615,10 +1584,7 @@ func (factory *ProductionEngineFactory) bedrockConverseProfile(endpointID string
 	}
 	tiers, actual := endpointTiers(endpoint)
 	value, err := bedrockconverse.NewProfile(bedrockconverse.Profile{ID: endpointID, CapabilityVersion: capabilities.Version, Capabilities: capabilities, ServiceTiers: tiers, ActualServiceClasses: actual, ExpectedBaseURL: endpoint.BaseURL})
-	if err != nil {
-		return nil, fmt.Errorf("endpoint %q: %w", endpointID, err)
-	}
-	return &value, nil
+	return endpointProfile(endpointID, value, err)
 }
 
 func endpointTiers(endpoint config.EndpointConfig) (map[llm.ServiceClass]string, map[string]llm.ServiceClass) {

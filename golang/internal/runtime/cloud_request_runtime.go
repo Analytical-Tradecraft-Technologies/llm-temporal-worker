@@ -39,10 +39,7 @@ func (r *cloudRequestRuntime) GenerateV1(ctx context.Context, request llm.Genera
 	if err != nil {
 		return response, cloudRuntimeError(cloudstate.ErrInvalid, false)
 	}
-	index := int64(0)
-	if request.Cache != nil {
-		index = int64(request.Cache.Variant)
-	}
+	index := generateSampleIndex(request)
 	data, err := r.execute(ctx, request.Context, "generate", request.OperationKey, index, input, func(ctx context.Context) ([]byte, error) {
 		value, err := r.inner.GenerateV1(ctx, request)
 		if err != nil {

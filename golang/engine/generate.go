@@ -547,6 +547,12 @@ func sortReservations(values []admission.WindowReservation) {
 	}
 }
 
+// withOperationID sets the operation a failure belongs to and returns it.
+func withOperationID(failure *provider.Error, operationID string) *provider.Error {
+	failure.OperationID = operationID
+	return failure
+}
+
 func engineError(code provider.Code, phase provider.Phase, dispatch provider.DispatchCertainty, retry provider.RetryDisposition, message string, cause error) *provider.Error {
 	result := provider.NewError(code, phase, dispatch, retry, message)
 	result.Cause = cause
