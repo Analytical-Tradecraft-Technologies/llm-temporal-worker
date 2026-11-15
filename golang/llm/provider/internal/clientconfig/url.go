@@ -2,6 +2,7 @@ package clientconfig
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -47,4 +48,25 @@ func Secret(name, value string) error {
 		return fmt.Errorf("%s is required", name)
 	}
 	return nil
+}
+
+// KeyedClient validates the settings of a client that authenticates with an
+// API key: the base URL (which must equal exactBaseURL when that is set), the
+// key keyName names, and the HTTP client. It returns the validated base URL;
+// errors are prefixed with label, as in "openai chat".
+func KeyedClient(label, rawBaseURL, exactBaseURL, keyName, key string, httpClient *http.Client) (string, error) {
+	baseURL, err := BaseURL(rawBaseURL)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", label, err)
+	}
+	if exactBaseURL != "" && baseURL != exactBaseURL {
+		return "", fmt.Errorf("%s: base URL must be exactly %q", label, exactBaseURL)
+	}
+	if err := Secret(keyName, key); err != nil {
+		return "", fmt.Errorf("%s: %w", label, err)
+	}
+	if httpClient == nil {
+		return "", fmt.Errorf("%s: HTTP client is required", label)
+	}
+	return baseURL, nil
 }

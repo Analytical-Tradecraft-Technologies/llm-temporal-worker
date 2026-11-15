@@ -20,20 +20,12 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		return llm.Response{}, provider.NewInvalidResponseError(call, requestID, "provider returned an empty response")
 	}
 	actual := profile.actualClass(responseTier(response))
-	output, states, hasToolCalls, err := anthropicwire.LiftContent(response.Content, "anthropic", contentStateBlocks)
+	output, states, status, err := anthropicwire.LiftMessage(call, requestID, response, "anthropic", contentStateBlocks, liftStatus)
 	if err != nil {
-		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
-	}
-	hasRefusal := string(response.StopReason) == "refusal" || response.StopDetails.Category != ""
-	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
-	if err != nil {
-		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
-	}
-	if err := anthropicwire.ValidateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
+		return llm.Response{}, err
 	}
 
-	providerRaw := rawResponseFacts(response)
+	providerRaw := anthropicwire.RawResponseFacts(response)
 	var rawEnvelope map[string]json.RawMessage
 	if json.Unmarshal([]byte(response.RawJSON()), &rawEnvelope) == nil {
 		if raw := rawEnvelope["container"]; len(raw) > 0 {
@@ -54,14 +46,7 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		FinishReason: string(response.StopReason),
 		Raw:          providerRaw,
 	}
-	usage := llm.Usage{
-		InputTokens:      response.Usage.InputTokens,
-		OutputTokens:     response.Usage.OutputTokens,
-		ReasoningTokens:  response.Usage.OutputTokensDetails.ThinkingTokens,
-		CacheReadTokens:  response.Usage.CacheReadInputTokens,
-		CacheWriteTokens: response.Usage.CacheCreationInputTokens,
-		ProviderRaw:      rawUsageFacts(response),
-	}
+	usage := anthropicwire.Usage(response)
 	if usage.ProviderRaw == nil {
 		usage.ProviderRaw = make(map[string]json.RawMessage)
 	}
@@ -77,28 +62,16 @@ func (profile Profile) liftResponse(call provider.Call, response *anthropic.Mess
 		usage.ProviderRaw["web_search_calls"] = webSearchCallCount(response)
 	}
 	output = append(output, llm.WebSearchReferences([]byte(response.RawJSON()))...)
-	service := llm.ServiceFacts{
-		Requested:     call.ServiceClass,
-		Attempted:     call.ServiceClass,
-		Actual:        actual,
-		ProviderValue: responseTier(response),
-		FallbackIndex: 0,
-	}
 	result := llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
 		Output:       output,
-		Route: llm.RouteFacts{
-			EndpointID:     call.EndpointID,
-			APIFamily:      string(provider.FamilyAnthropicMessages),
-			RequestedModel: call.Model,
-			ResolvedModel:  string(response.Model),
-		},
-		Service:      service,
+		Route:        call.RouteFacts(provider.FamilyAnthropicMessages, string(response.Model)),
+		Service:      call.ServiceFacts(actual, responseTier(response)),
 		Usage:        usage,
 		Provider:     providerFacts,
-		Continuation: continuationForResponse(call, response, states),
+		Continuation: anthropicwire.Continuation(call, response, states, "anthropic-messages:"),
 	}
 	if _, err := llm.HostedToolCharge(usage, result.Route.ResolvedModel); err != nil {
 		result.Cost.Status = llm.CostStatusUnknown
@@ -208,54 +181,4 @@ func responseTier(response *anthropic.Message) string {
 		return FastTier
 	}
 	return string(response.Usage.ServiceTier)
-}
-
-func rawResponseFacts(response *anthropic.Message) map[string]json.RawMessage {
-	result := map[string]json.RawMessage{}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(response.RawJSON()), &fields); err != nil {
-		return result
-	}
-	for _, key := range []string{"stop_sequence", "container", "inference_geo", "stop_details"} {
-		if raw, ok := fields[key]; ok {
-			result[key] = append(json.RawMessage(nil), raw...)
-		}
-	}
-	return result
-}
-
-func rawUsageFacts(response *anthropic.Message) map[string]json.RawMessage {
-	result := map[string]json.RawMessage{}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(response.Usage.RawJSON()), &fields); err != nil {
-		// Constructed SDK responses do not carry RawJSON; retain the typed fields
-		// that are useful for reconciliation instead.
-		for key, value := range map[string]any{
-			"service_tier":                string(response.Usage.ServiceTier),
-			"cache_creation_input_tokens": response.Usage.CacheCreationInputTokens,
-			"cache_read_input_tokens":     response.Usage.CacheReadInputTokens,
-			"thinking_tokens":             response.Usage.OutputTokensDetails.ThinkingTokens,
-		} {
-			encoded, _ := json.Marshal(value)
-			result[key] = encoded
-		}
-		return result
-	}
-	for key, raw := range fields {
-		result[key] = append(json.RawMessage(nil), raw...)
-	}
-	return result
-}
-
-func continuationForResponse(call provider.Call, response *anthropic.Message, states []llm.ProviderState) *llm.Continuation {
-	if response.ID == "" || len(states) == 0 {
-		return nil
-	}
-	return &llm.Continuation{
-		Handle:         "anthropic-messages:" + response.ID,
-		EndpointID:     call.EndpointID,
-		Model:          string(response.Model),
-		Pinned:         true,
-		ProviderStates: append([]llm.ProviderState(nil), states...),
-	}
 }

@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 )
 
 // Adapter owns one official Anthropic SDK client configured with Bedrock's
@@ -119,73 +117,34 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if adapter == nil {
 		return provider.Result{}, provider.NewDispatchError("adapter is nil", provider.DispatchNotDispatched)
 	}
-	params, err := provider.StartDispatch[anthropic.MessageNewParams](ctx, call, provider.FamilyBedrockMessages, adapter.endpointID)
-	if err != nil {
-		return provider.Result{}, err
-	}
-	// Providers generate structured output in schema order; write the schemas
-	// with properties in "required" order instead of the SDK's sorted map
-	// encoding (#1096). Encoded before the possible-write boundary, so a
-	// failure here is a definite non-dispatch.
-	overrides, err := schemaorder.MessagesOverrides(params)
-	if err != nil {
-		return provider.Result{}, provider.NewDispatchError("schema property order could not be encoded", provider.DispatchNotDispatched)
-	}
-	// An error raised before the probe, such as an AWS credential failure
-	// while signing, means nothing reached the transport.
-	dispatch, err := provider.BeginDispatch(ctx, observer, provider.DispatchTarget{EndpointID: adapter.endpointID, Provider: adapter.Name(), MapError: mapError})
-	if err != nil {
-		return provider.Result{}, err
-	}
-	messages := adapter.client.messages
-	if messages == nil {
-		messages = &adapter.client.sdk.Messages
-	}
-	response, rawResponse, err := provider.SendHTTP(dispatch, call.OperationKey, func(probe *provider.DispatchProbe, raw **http.Response) (*anthropic.Message, error) {
-		// InvokeModel takes the requested tier as a header, not as an
-		// Anthropic body field. It is set before the Bedrock middleware signs
-		// the request.
-		options := []option.RequestOption{option.WithResponseInto(raw)}
-		if call.Metadata.ProviderTier != "" {
-			options = append(options, option.WithHeader(serviceTierHeader, call.Metadata.ProviderTier))
-		}
-		options = append(options, option.WithMiddleware(probe.Middleware))
-		for _, override := range overrides {
-			options = append(options, option.WithJSONSet(override.Path, override.Value))
-		}
-		return messages.New(dispatch.Context, params, options...)
+	dispatch, response, rawResponse, err := anthropicwire.SendMessage(ctx, call, observer, anthropicwire.MessagesCall{
+		Family:   provider.FamilyBedrockMessages,
+		Target:   provider.DispatchTarget{EndpointID: adapter.endpointID, Provider: adapter.Name(), MapError: mapError},
+		Messages: adapter.client.messages,
+		SDK:      &adapter.client.sdk,
+		Options: func(probe *provider.DispatchProbe) []option.RequestOption {
+			// InvokeModel takes the requested tier as a header, not as an
+			// Anthropic body field. It is set before the Bedrock middleware
+			// signs the request.
+			var options []option.RequestOption
+			if call.Metadata.ProviderTier != "" {
+				options = append(options, option.WithHeader(serviceTierHeader, call.Metadata.ProviderTier))
+			}
+			return append(options, option.WithMiddleware(probe.Middleware))
+		},
 	})
 	if err != nil {
 		return provider.Result{}, err
 	}
-	if response == nil {
-		return provider.Result{}, provider.NewInvalidResponseError(call, "", "provider returned an empty response")
-	}
-	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.Usage.ServiceTier)}
+	metadata := anthropicwire.ResponseMetadata(response, rawResponse, string(response.Usage.ServiceTier), "x-amzn-requestid", "x-amzn-request-id", "request-id", "x-request-id")
 	headerTier := ""
 	if rawResponse != nil {
-		metadata.Status = rawResponse.StatusCode
 		headerTier = rawResponse.Header.Get(serviceTierHeader)
 		if metadata.ProviderTier == "" {
 			metadata.ProviderTier = headerTier
 		}
-		for _, header := range []string{"x-amzn-requestid", "x-amzn-request-id", "request-id", "x-request-id"} {
-			metadata.RequestID = rawResponse.Header.Get(header)
-			if metadata.RequestID != "" {
-				break
-			}
-		}
 	}
-	if metadata.RequestID == "" {
-		metadata.RequestID = anthropicwire.ResponseRequestID(response)
-	}
-	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
-		return provider.Result{}, err
-	}
-	dispatch.LiftProgress(len(response.Content))
-	lifted, err := adapter.profile.liftResponseWithTier(call, response, metadata.RequestID, headerTier)
-	if err != nil {
-		return provider.Result{}, err
-	}
-	return provider.Result{Response: lifted}, nil
+	return dispatch.Lift(metadata, len(response.Content), func() (llm.Response, error) {
+		return adapter.profile.liftResponseWithTier(call, response, metadata.RequestID, headerTier)
+	})
 }

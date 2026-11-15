@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -308,8 +309,8 @@ func ValidReasoningModeV1(value ReasoningMode) bool {
 }
 
 func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
-	if patch.ServiceClass.Set != nil && !patch.ServiceClass.Set.Valid() {
-		return nil, fmt.Errorf("service_class: invalid value %q", *patch.ServiceClass.Set)
+	if err := checkSetEnum(patch.ServiceClass, "service_class", ServiceClass.Valid); err != nil {
+		return nil, err
 	}
 	if patch.ServiceClassFallbacks.Set != nil {
 		seen := make(map[ServiceClass]struct{}, len(*patch.ServiceClassFallbacks.Set))
@@ -323,42 +324,18 @@ func (patch SettingsPatchV1) MarshalJSON() ([]byte, error) {
 			seen[class] = struct{}{}
 		}
 	}
-	if patch.Portability.Set != nil && !patch.Portability.Set.Valid() {
-		return nil, fmt.Errorf("portability: invalid value %q", *patch.Portability.Set)
-	}
-	if patch.ReasoningEffort.Set != nil && !validReasoningEffort(*patch.ReasoningEffort.Set) {
-		return nil, fmt.Errorf("reasoning_effort: invalid value %q", *patch.ReasoningEffort.Set)
-	}
-	if patch.ReasoningSummary.Set != nil && !validReasoningSummary(*patch.ReasoningSummary.Set) {
-		return nil, fmt.Errorf("reasoning_summary: invalid value %q", *patch.ReasoningSummary.Set)
-	}
-	if patch.ReasoningMode.Set != nil && !ValidReasoningModeV1(*patch.ReasoningMode.Set) {
-		return nil, fmt.Errorf("reasoning_mode: invalid value %q", *patch.ReasoningMode.Set)
-	}
-	if patch.ReasoningTokenBudget.Set != nil {
-		if err := ValidateReasoningTokenBudgetV1(*patch.ReasoningTokenBudget.Set); err != nil {
-			return nil, err
-		}
-	}
-	if patch.TopP.Set != nil {
-		if err := ValidateTopPV1(*patch.TopP.Set); err != nil {
-			return nil, err
-		}
-	}
-	if patch.StopSequences.Set != nil {
-		if err := ValidateStopSequencesV1(*patch.StopSequences.Set); err != nil {
-			return nil, err
-		}
-	}
-	if patch.Seed.Set != nil {
-		if err := ValidateSeedV1(*patch.Seed.Set); err != nil {
-			return nil, err
-		}
-	}
-	if patch.CompactionPolicy.Set != nil {
-		if err := validateCompactionPolicyPatchV1(*patch.CompactionPolicy.Set); err != nil {
-			return nil, err
-		}
+	if err := firstError(
+		checkSetEnum(patch.Portability, "portability", PortabilityMode.Valid),
+		checkSetEnum(patch.ReasoningEffort, "reasoning_effort", validReasoningEffort),
+		checkSetEnum(patch.ReasoningSummary, "reasoning_summary", validReasoningSummary),
+		checkSetEnum(patch.ReasoningMode, "reasoning_mode", ValidReasoningModeV1),
+		checkSet(patch.ReasoningTokenBudget, ValidateReasoningTokenBudgetV1),
+		checkSet(patch.TopP, ValidateTopPV1),
+		checkSet(patch.StopSequences, ValidateStopSequencesV1),
+		checkSet(patch.Seed, ValidateSeedV1),
+		checkSet(patch.CompactionPolicy, validateCompactionPolicyPatchV1),
+	); err != nil {
+		return nil, err
 	}
 	if patch.Extensions.Set != nil {
 		if *patch.Extensions.Set == nil {
@@ -473,6 +450,44 @@ func decodePatchEnvelope(raw json.RawMessage, name string) (json.RawMessage, boo
 	return set, false, nil
 }
 
+// checkSet runs validate on the patch's set value, if any.
+func checkSet[T any](patch Patch[T], validate func(T) error) error {
+	if patch.Set == nil {
+		return nil
+	}
+	return validate(*patch.Set)
+}
+
+// checkSetEnum rejects a set value that valid refuses, naming the leaf.
+func checkSetEnum[T ~string](patch Patch[T], name string, valid func(T) bool) error {
+	if patch.Set != nil && !valid(*patch.Set) {
+		return fmt.Errorf("%s: invalid value %q", name, *patch.Set)
+	}
+	return nil
+}
+
+// decodeSetWith decodes a set value with decode, prefixing its error with the
+// leaf name.
+func decodeSetWith[T, V any](raw json.RawMessage, name string, decode func([]byte) (V, error)) (T, error) {
+	value, err := decode(raw)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("%s.set: %w", name, err)
+	}
+	return any(value).(T), nil
+}
+
+// decodeSetEnum decodes a set value that valid must accept; noun names the
+// value in the error.
+func decodeSetEnum[T, V any](raw json.RawMessage, name, noun string, valid func(V) bool) (T, error) {
+	var value V
+	if err := json.Unmarshal(raw, &value); err != nil || !valid(value) {
+		var zero T
+		return zero, fmt.Errorf("%s.set: %s is invalid", name, noun)
+	}
+	return any(value).(T), nil
+}
+
 // readPatch decodes the optional patch leaf name into target.
 func readPatch[T any](reader *fieldReader, name string, target *Patch[T]) {
 	readPresentField(reader, name, target, func(raw []byte) (Patch[T], error) {
@@ -494,23 +509,11 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 		}
 		return any(value).(T), nil
 	case []Instruction:
-		value, err := decodeInstructions(raw)
-		if err != nil {
-			return zero, fmt.Errorf("%s.set: %w", name, err)
-		}
-		return any(value).(T), nil
+		return decodeSetWith[T](raw, name, decodeInstructions)
 	case []Tool:
-		value, err := decodeTools(raw)
-		if err != nil {
-			return zero, fmt.Errorf("%s.set: %w", name, err)
-		}
-		return any(value).(T), nil
+		return decodeSetWith[T](raw, name, decodeTools)
 	case ToolPolicy:
-		value, err := decodeToolPolicyPatch(raw)
-		if err != nil {
-			return zero, fmt.Errorf("%s.set: %w", name, err)
-		}
-		return any(value).(T), nil
+		return decodeSetWith[T](raw, name, decodeToolPolicyPatch)
 	case OutputSpec:
 		value, err := decodeOutput(raw)
 		if err != nil {
@@ -518,11 +521,7 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 		}
 		return any(*value).(T), nil
 	case ServiceClass:
-		var value ServiceClass
-		if err := json.Unmarshal(raw, &value); err != nil || !value.Valid() {
-			return zero, fmt.Errorf("%s.set: service class is invalid", name)
-		}
-		return any(value).(T), nil
+		return decodeSetEnum[T](raw, name, "service class", ServiceClass.Valid)
 	case []ServiceClass:
 		var value []ServiceClass
 		if err := json.Unmarshal(raw, &value); err != nil || value == nil {
@@ -540,29 +539,13 @@ func decodePatchValue[T any](raw json.RawMessage, name string) (T, error) {
 		}
 		return any(value).(T), nil
 	case PortabilityMode:
-		var value PortabilityMode
-		if err := json.Unmarshal(raw, &value); err != nil || !value.Valid() {
-			return zero, fmt.Errorf("%s.set: portability mode is invalid", name)
-		}
-		return any(value).(T), nil
+		return decodeSetEnum[T](raw, name, "portability mode", PortabilityMode.Valid)
 	case ReasoningEffort:
-		var value ReasoningEffort
-		if err := json.Unmarshal(raw, &value); err != nil || !validReasoningEffort(value) {
-			return zero, fmt.Errorf("%s.set: reasoning effort is invalid", name)
-		}
-		return any(value).(T), nil
+		return decodeSetEnum[T](raw, name, "reasoning effort", validReasoningEffort)
 	case ReasoningSummary:
-		var value ReasoningSummary
-		if err := json.Unmarshal(raw, &value); err != nil || !validReasoningSummary(value) {
-			return zero, fmt.Errorf("%s.set: reasoning summary is invalid", name)
-		}
-		return any(value).(T), nil
+		return decodeSetEnum[T](raw, name, "reasoning summary", validReasoningSummary)
 	case ReasoningMode:
-		var value ReasoningMode
-		if err := json.Unmarshal(raw, &value); err != nil || !ValidReasoningModeV1(value) {
-			return zero, fmt.Errorf("%s.set: reasoning mode is invalid", name)
-		}
-		return any(value).(T), nil
+		return decodeSetEnum[T](raw, name, "reasoning mode", ValidReasoningModeV1)
 	case DecimalV1:
 		// Only top_p uses this path. Unlike temperature it has no legacy
 		// numeric spelling, so only the canonical decimal string is accepted.
@@ -805,11 +788,7 @@ func (request GenerateRequestV1) MarshalJSON() ([]byte, error) {
 }
 
 func (request *GenerateRequestV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache")
-	if err != nil {
-		return err
-	}
-	version, key, err := decodeContractHeader(fields, APIVersion)
+	fields, version, key, err := decodeContractObject(data, APIVersion, "api_version", "operation_key", "context", "parent", "append", "settings_patch", "cache")
 	if err != nil {
 		return err
 	}
@@ -1100,11 +1079,7 @@ func (response GenerateResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *GenerateResponseV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeClosedObject(data, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "service", "usage", "cost", "diagnostics")
-	if err != nil {
-		return err
-	}
-	version, key, err := decodeContractHeader(fields, APIVersion)
+	fields, version, key, err := decodeContractObject(data, APIVersion, "api_version", "operation_key", "operation_id", "status", "output", "checkpoint", "cache", "route", "service", "usage", "cost", "diagnostics")
 	if err != nil {
 		return err
 	}
@@ -1258,11 +1233,7 @@ func (request CompactRequestV1) MarshalJSON() ([]byte, error) {
 	return marshalObject(fields)
 }
 func (request *CompactRequestV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "parent", "policy", "model", "service_class", "cache")
-	if err != nil {
-		return err
-	}
-	version, key, err := decodeContractHeader(fields, CompactAPIVersion)
+	fields, version, key, err := decodeContractObject(data, CompactAPIVersion, "api_version", "operation_key", "context", "parent", "policy", "model", "service_class", "cache")
 	if err != nil {
 		return err
 	}
@@ -1386,11 +1357,7 @@ func (response CompactResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *CompactResponseV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeClosedObject(data, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "diagnostics")
-	if err != nil {
-		return err
-	}
-	version, key, err := decodeContractHeader(fields, CompactAPIVersion)
+	fields, version, key, err := decodeContractObject(data, CompactAPIVersion, "api_version", "operation_key", "operation_id", "status", "checkpoint", "cache", "provenance", "usage", "cost", "diagnostics")
 	if err != nil {
 		return err
 	}
@@ -1475,11 +1442,7 @@ func (request QueryRequestV1) MarshalJSON() ([]byte, error) {
 	return marshalObject(map[string]any{"api_version": QueryAPIVersion, "operation_key": request.OperationKey, "context": context, "kind": request.Kind, "query": json.RawMessage(request.Query)})
 }
 func (request *QueryRequestV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeClosedObject(data, "api_version", "operation_key", "context", "kind", "query")
-	if err != nil {
-		return err
-	}
-	version, key, err := decodeContractHeader(fields, QueryAPIVersion)
+	fields, version, key, err := decodeContractObject(data, QueryAPIVersion, "api_version", "operation_key", "context", "kind", "query")
 	if err != nil {
 		return err
 	}
@@ -1595,12 +1558,10 @@ func validateQueryEnum(raw json.RawMessage, field string, allowed ...string) err
 	if err != nil {
 		return fmt.Errorf("%s must be a string: %w", field, err)
 	}
-	for _, candidate := range allowed {
-		if value == candidate {
-			return nil
-		}
+	if !slices.Contains(allowed, value) {
+		return fmt.Errorf("%s %q is invalid", field, value)
 	}
-	return fmt.Errorf("%s %q is invalid", field, value)
+	return nil
 }
 
 func validateQueryEnumArray(raw json.RawMessage, field string, allowed ...string) error {
@@ -1617,14 +1578,7 @@ func validateQueryEnumArray(raw json.RawMessage, field string, allowed ...string
 			return fmt.Errorf("%s contains duplicate value %q", field, value)
 		}
 		seen[value] = struct{}{}
-		valid := false
-		for _, candidate := range allowed {
-			if value == candidate {
-				valid = true
-				break
-			}
-		}
-		if !valid {
+		if !slices.Contains(allowed, value) {
 			return fmt.Errorf("%s value %q is invalid", field, value)
 		}
 	}
@@ -1720,11 +1674,7 @@ func (response QueryResponseV1) MarshalJSON() ([]byte, error) {
 }
 
 func (response *QueryResponseV1) UnmarshalJSON(data []byte) error {
-	fields, err := decodeClosedObject(data, "api_version", "operation_key", "query_execution_id", "kind", "observed_at", "source", "freshness", "complete", "next_cursor", "result", "cost_status", "actual_cost_usd", "cost_method", "cost_unknown_reason_code")
-	if err != nil {
-		return err
-	}
-	version, key, err := decodeContractHeader(fields, QueryAPIVersion)
+	fields, version, key, err := decodeContractObject(data, QueryAPIVersion, "api_version", "operation_key", "query_execution_id", "kind", "observed_at", "source", "freshness", "complete", "next_cursor", "result", "cost_status", "actual_cost_usd", "cost_method", "cost_unknown_reason_code")
 	if err != nil {
 		return err
 	}
@@ -1904,19 +1854,23 @@ func (policy *CachePolicyV1) SampleIndex() int64 {
 	return int64(policy.Variant)
 }
 
-// decodeContractHeader reads the api_version and operation_key every v1
-// contract object starts with. A missing or different api_version is
-// reported as unsupported.
-func decodeContractHeader(fields map[string]json.RawMessage, apiVersion string) (string, string, error) {
+// decodeContractObject decodes a closed v1 contract object with the allowed
+// fields and reads the api_version, which must be apiVersion, and the
+// operation_key every v1 contract starts with.
+func decodeContractObject(data []byte, apiVersion string, allowed ...string) (map[string]json.RawMessage, string, string, error) {
+	fields, err := decodeClosedObject(data, allowed...)
+	if err != nil {
+		return nil, "", "", err
+	}
 	version, err := requiredString(fields, "api_version")
 	if err != nil || version != apiVersion {
-		return "", "", fmt.Errorf("api_version %q is unsupported", version)
+		return nil, "", "", fmt.Errorf("api_version %q is unsupported", version)
 	}
 	key, err := requiredString(fields, "operation_key")
 	if err != nil {
-		return "", "", err
+		return nil, "", "", err
 	}
-	return version, key, nil
+	return fields, version, key, nil
 }
 
 // decodeContractContext reads the required v1 context object.

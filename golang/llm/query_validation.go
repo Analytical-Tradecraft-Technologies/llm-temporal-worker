@@ -8,39 +8,31 @@ import (
 
 var regexpDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func decodeResultPage(data []byte, field string) ([]json.RawMessage, error) {
+// decodeResultPage decodes a result page whose only member is the row array
+// field into *rows, then validates each row.
+func decodeResultPage(data []byte, field string, rows *[]json.RawMessage, validate func(map[string]json.RawMessage) error) error {
 	fields, err := decodeClosedObject(data, field)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return requiredRawArray(fields, field)
+	values, err := requiredRawArray(fields, field)
+	if err != nil {
+		return err
+	}
+	*rows = values
+	return validateResultArray(values, field, validate)
 }
 
 func (page *ProviderStatusPage) UnmarshalJSON(data []byte) error {
-	values, err := decodeResultPage(data, "routes")
-	if err != nil {
-		return err
-	}
-	page.Routes = values
-	return validateResultArray(values, "routes", validateProviderRoute)
+	return decodeResultPage(data, "routes", &page.Routes, validateProviderRoute)
 }
 
 func (page *ModelInventoryPage) UnmarshalJSON(data []byte) error {
-	values, err := decodeResultPage(data, "models")
-	if err != nil {
-		return err
-	}
-	page.Models = values
-	return validateResultArray(values, "models", validateModelInventoryEntry)
+	return decodeResultPage(data, "models", &page.Models, validateModelInventoryEntry)
 }
 
 func (page *CreditStatusPage) UnmarshalJSON(data []byte) error {
-	values, err := decodeResultPage(data, "endpoints")
-	if err != nil {
-		return err
-	}
-	page.Endpoints = values
-	return validateResultArray(values, "endpoints", validateCreditStatusEntry)
+	return decodeResultPage(data, "endpoints", &page.Endpoints, validateCreditStatusEntry)
 }
 
 // BudgetStatus and SpendSummary contain required scalar/page members in

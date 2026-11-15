@@ -210,20 +210,10 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if response == nil {
 		return provider.Result{}, liftFailure(call, "", "", "", withLiftCause("response_empty", errors.New("provider returned an empty response")))
 	}
-	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
-	if rawResponse != nil {
-		metadata.Status = rawResponse.StatusCode
-		metadata.RequestID = rawResponse.Header.Get("x-request-id")
-	}
-	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
-		return provider.Result{}, err
-	}
-	dispatch.LiftProgress(len(response.Choices))
-	lifted, err := adapter.profile.liftResponse(call, response, metadata.RequestID)
-	if err != nil {
-		return provider.Result{}, err
-	}
-	return provider.Result{Response: lifted}, nil
+	metadata := provider.HTTPResponseMetadata(response.ID, string(response.ServiceTier), rawResponse, "x-request-id")
+	return dispatch.Lift(metadata, len(response.Choices), func() (llm.Response, error) {
+		return adapter.profile.liftResponse(call, response, metadata.RequestID)
+	})
 }
 
 func requiredFeatures(request llm.Request) []provider.Feature {
