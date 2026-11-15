@@ -1,11 +1,11 @@
 package bedrockmessages
 
 import (
-	"context"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
@@ -22,11 +22,7 @@ func compileShared(t *testing.T, request llm.Request, strict bool) (provider.Cal
 		t.Fatal(err)
 	}
 	adapter := &Adapter{endpointID: "bedrock-test", profile: validated}
-	return adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "bedrock-test", Family: provider.FamilyBedrockMessages, Model: request.Model},
-		Strict:  strict,
-	})
+	return adaptertest.Compile(adapter, "bedrock-test", provider.FamilyBedrockMessages, request, strict)
 }
 
 func TestCompileSharedWithTheOtherMessagesFamily(t *testing.T) {

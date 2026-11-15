@@ -169,17 +169,14 @@ printf 'cargo offline=%s home=%s %s\n' "${CARGO_NET_OFFLINE:-}" "${CARGO_HOME:-}
 	if err != nil {
 		t.Fatalf("README install failed: %v\n%s", err, output)
 	}
-	calls, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
+	calls := readText(t, log)
 	wantCalls := []string{
 		"opam offline= home=" + cargoHome + " pin add --yes --no-action --kind=git temporal-sdk git+https://github.com/Analytical-Tradecraft-Technologies/ocaml-temporal.git#ddaea320cd5a7817ad679dda6603aad59448c2ba",
 		"opam offline= home=" + cargoHome + " pin add --yes --no-action --kind=git llm-temporal-ocaml git+https://github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker.git#" + packageRef + " --subpath=ocaml/llm_temporal_worker",
 		"cargo offline= home=" + cargoHome + " fetch --locked --manifest-path " + filepath.Join(prefix, ".opam-switch", "sources", "temporal-sdk", "rust", "Cargo.toml"),
 		"opam offline=true home=" + cargoHome + " install --yes llm-temporal-ocaml",
 	}
-	if got, want := strings.TrimSpace(string(calls)), strings.Join(wantCalls, "\n"); got != want {
+	if got, want := strings.TrimSpace(calls), strings.Join(wantCalls, "\n"); got != want {
 		t.Fatalf("README install calls:\n%s\nwant:\n%s", got, want)
 	}
 
@@ -189,22 +186,16 @@ printf 'cargo offline=%s home=%s %s\n' "${CARGO_NET_OFFLINE:-}" "${CARGO_HOME:-}
 		if err == nil || !strings.Contains(string(output), "sandbox is not enabled") {
 			t.Fatalf("README install accepted a disabled opam sandbox: %v\n%s", err, output)
 		}
-		if _, statErr := os.Stat(failureLog); !os.IsNotExist(statErr) {
-			t.Fatal("README install ran commands without the opam sandbox")
-		}
+		assertPathAbsent(t, failureLog, "README install ran commands without the opam sandbox")
 	})
 
 	t.Run("rejects_populated_cargo_home", func(t *testing.T) {
-		if err := os.WriteFile(filepath.Join(cargoHome, "stale"), nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeFile(t, filepath.Join(cargoHome, "stale"), nil, 0o644)
 		failureLog := filepath.Join(tempDir, "populated.log")
 		output, err := run(failureLog, sandbox)
 		if err == nil || !strings.Contains(string(output), "must be empty") {
 			t.Fatalf("README install accepted a populated CARGO_HOME: %v\n%s", err, output)
 		}
-		if _, statErr := os.Stat(failureLog); !os.IsNotExist(statErr) {
-			t.Fatal("README install ran commands with a populated CARGO_HOME")
-		}
+		assertPathAbsent(t, failureLog, "README install ran commands with a populated CARGO_HOME")
 	})
 }

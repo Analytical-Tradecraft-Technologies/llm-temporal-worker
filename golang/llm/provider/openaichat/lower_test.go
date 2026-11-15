@@ -41,14 +41,7 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 		Sampling:   &llm.SamplingSpec{Temperature: &temperature, StopSequences: []string{"\n", "END"}},
 		Extensions: map[string]json.RawMessage{"chat.contract": json.RawMessage(`{"provider_hint":"pinned"}`)},
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "chat-prod", provider.FamilyOpenAIChat, request)
 	if call.Metadata.ProviderTier != "priority" || call.OperationKey != "op-lower" {
 		t.Fatalf("call metadata = %#v", call)
 	}
@@ -136,10 +129,7 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("strict=%t is_error=%t: %v", strict, isError, err)
 			}
-			encoded, err := json.Marshal(call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := contract.MarshalJSON(t, call.SDKParams)
 			want := `{"content":"upstream timed out","tool_call_id":"call-1","role":"tool"}`
 			if isError {
 				want = `{"content":"[is_error=true] The tool call failed; its output follows.\nupstream timed out","tool_call_id":"call-1","role":"tool"}`
@@ -181,12 +171,7 @@ func TestCompileOmitsToolControlsWithoutTools(t *testing.T) {
 				Input:      []llm.Item{llm.HumanText("Summarize this text")},
 				ToolPolicy: llm.ToolPolicy{Mode: mode, Parallel: parallel},
 			}
-			call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
-				Request: request, Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := adaptertest.CompileStrict(t, testAdapter(t), "chat-prod", provider.FamilyOpenAIChat, request)
 			wire := contract.JSONObject(t, call.SDKParams)
 			for _, key := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
 				if value, ok := wire[key]; ok {
@@ -202,7 +187,7 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 		ID: "refused", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault,
 		Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Refusal: "I can't help with that."}}},
 	}
-	lifted, err := testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &refused, "req")
+	lifted, err := liftStandard(&refused)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,10 +197,7 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replaying a lifted refusal: %v", err)
 	}
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, params)
 	var wire struct {
 		Messages []struct {
 			Role    string           `json:"role"`

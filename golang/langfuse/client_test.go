@@ -18,7 +18,7 @@ import (
 
 func TestExportCarriesCallerIdentityAndProvider(t *testing.T) {
 	var body string
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
 		if !ok || u != "public" || p != "secret" {
 			t.Error("missing project authentication")
@@ -33,12 +33,7 @@ func TestExportCarriesCallerIdentityAndProvider(t *testing.T) {
 		b, _ := json.Marshal(v)
 		body = string(b)
 		w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-	c, err := NewClient(server.URL, "public", "secret", server.Client(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 	now := time.Now()
 	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), Kind: "generate", StartedAt: now, EndedAt: now.Add(time.Second), Context: llm.RequestContext{Tenant: "tenant-a", Project: "project-a", Actor: "client-a", Tags: map[string]string{"application": "forecaster"}}, Generations: []Generation{{ID: strings.Repeat("3", 16), StartedAt: now, EndedAt: now.Add(time.Second), Model: "gpt-test", Provider: "openrouter", Endpoint: "router", Input: map[string]any{"prompt": "hello"}, Output: map[string]any{"answer": "world"}}}}
 	if err := c.Export(context.Background(), op); err != nil {
@@ -52,21 +47,17 @@ func TestExportCarriesCallerIdentityAndProvider(t *testing.T) {
 }
 
 func TestExportRejectsPartialSuccessAndNeverLeaksResponse(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"partialSuccess":{"rejectedSpans":"1","errorMessage":"private response"}}`))
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
-	err := c.Export(context.Background(), Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()})
+	})
+	err := c.Export(context.Background(), minimalOperation(time.Now()))
 	if !errors.Is(err, ErrRejected) || errors.Is(err, ErrExport) || strings.Contains(err.Error(), "private response") {
 		t.Fatalf("partial success must be a safe, permanent rejection: %v", err)
 	}
 }
 
 func TestExportAuthenticationRejectionIsPermanent(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) }))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
 	err := c.Export(context.Background(), Operation{})
 	if err != ErrRejected {
 		t.Fatalf("authentication failure must be permanent: %v", err)
@@ -76,19 +67,17 @@ func TestExportAuthenticationRejectionIsPermanent(t *testing.T) {
 func TestExportBreakerFailsFastThenProbes(t *testing.T) {
 	var calls atomic.Int32
 	var healthy atomic.Bool
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if !healthy.Load() {
 			w.WriteHeader(503)
 			return
 		}
 		w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
+	})
 	now := time.Unix(1000, 0)
 	c.now = func() time.Time { return now }
-	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: now, EndedAt: now}
+	op := minimalOperation(now)
 	for i := 0; i < breakerThreshold; i++ {
 		if err := c.Export(context.Background(), op); !errors.Is(err, ErrExport) || errors.Is(err, ErrUnavailable) {
 			t.Fatalf("attempt %d: want a delivery failure, got %v", i, err)
@@ -120,13 +109,11 @@ func TestExportBreakerFailsFastThenProbes(t *testing.T) {
 
 func TestExportLocalRejectionDoesNotResetBreaker(t *testing.T) {
 	var calls atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(503)
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
-	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	})
+	op := minimalOperation(time.Now())
 	oversized := op
 	oversized.Input = strings.Repeat("x", maxBody)
 	for i := 0; i < breakerThreshold-1; i++ {
@@ -150,14 +137,12 @@ func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
 			release := make(chan struct{})
 			var arrived sync.WaitGroup
 			arrived.Add(tc.want)
-			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c := newTestClient(t, tc.configured, func(w http.ResponseWriter, r *http.Request) {
 				arrived.Done()
 				<-release
 				w.Write([]byte(`{}`))
-			}))
-			defer server.Close()
-			c, _ := NewClient(server.URL, "public", "secret", server.Client(), tc.configured)
-			op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+			})
+			op := minimalOperation(time.Now())
 			results := make(chan error, tc.want)
 			for i := 0; i < tc.want; i++ {
 				go func() { results <- c.Export(context.Background(), op) }()
@@ -186,7 +171,7 @@ func TestExportLimitsRequestsWaitingOnLangfuse(t *testing.T) {
 func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
 	const limit, burst = 2, 5
 	var inFlight, peak, delivered atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, limit, func(w http.ResponseWriter, r *http.Request) {
 		n := inFlight.Add(1)
 		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
 		}
@@ -194,10 +179,8 @@ func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
 		inFlight.Add(-1)
 		delivered.Add(1)
 		w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), limit)
-	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	})
+	op := minimalOperation(time.Now())
 	var saturated atomic.Int32
 	results := make(chan error, burst)
 	for i := 0; i < burst; i++ {
@@ -234,7 +217,7 @@ func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
 // nor hide earlier failures from it (#1670).
 func TestExportBreakerCountsOnlyOutages(t *testing.T) {
 	var status atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		switch code := int(status.Load()); code {
 		case 0:
 			// The server notices a client disconnect only after the body is
@@ -247,10 +230,8 @@ func TestExportBreakerCountsOnlyOutages(t *testing.T) {
 		default:
 			w.WriteHeader(code)
 		}
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
-	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	})
+	op := minimalOperation(time.Now())
 	for _, code := range []int32{429, 408} {
 		status.Store(code)
 		for i := 0; i < breakerThreshold+1; i++ {
@@ -286,17 +267,15 @@ func TestExportBreakerCountsOnlyOutages(t *testing.T) {
 func TestExportClassifiesRedirectsAndPartialSuccess(t *testing.T) {
 	var body atomic.Value
 	var status atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		if code := int(status.Load()); code != 200 {
 			w.Header().Set("Location", "https://elsewhere.example/")
 			w.WriteHeader(code)
 			return
 		}
 		w.Write([]byte(body.Load().(string)))
-	}))
-	defer server.Close()
-	c, _ := NewClient(server.URL, "public", "secret", server.Client(), 0)
-	op := Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: time.Now(), EndedAt: time.Now()}
+	})
+	op := minimalOperation(time.Now())
 	for _, code := range []int32{301, 302, 307, 308} {
 		status.Store(code)
 		if err := c.Export(context.Background(), op); !errors.Is(err, ErrRedirected) || !errors.Is(err, ErrRejected) {
@@ -315,4 +294,22 @@ func TestExportClassifiesRedirectsAndPartialSuccess(t *testing.T) {
 			t.Fatalf("%s: got %v, want %v", response, err, want)
 		}
 	}
+}
+
+// newTestClient serves handler over TLS for the test's lifetime and returns a
+// client authenticated as the "public"/"secret" project.
+func newTestClient(t *testing.T, maxInFlight int, handler http.HandlerFunc) *Client {
+	t.Helper()
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	c, err := NewClient(server.URL, "public", "secret", server.Client(), maxInFlight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// minimalOperation is a valid operation with fixed IDs and no generations.
+func minimalOperation(at time.Time) Operation {
+	return Operation{TraceID: strings.Repeat("1", 32), SpanID: strings.Repeat("2", 16), StartedAt: at, EndedAt: at}
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/activity"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	sdkactivity "go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 	"testing"
 )
@@ -15,8 +14,7 @@ import (
 func TestPublicQueryWorkflow(t *testing.T) {
 	for _, mode := range []string{"success", "mismatch", "failure", "invalid"} {
 		t.Run(mode, func(t *testing.T) {
-			var suite testsuite.WorkflowTestSuite
-			env := suite.NewTestWorkflowEnvironment()
+			env := newWorkflowEnv()
 			var input llm.QueryRequestV1
 			workflowJSON(t, "query-provider-status", &input)
 			var response llm.QueryResponseV1
@@ -43,9 +41,7 @@ func TestPublicQueryWorkflow(t *testing.T) {
 				env.ExecuteWorkflow(QueryWorkflowName, input)
 			}
 			if mode == "success" {
-				if err := env.GetWorkflowError(); err != nil {
-					t.Fatal(err)
-				}
+				requireNoWorkflowError(t, env)
 				var got llm.QueryResponseV1
 				if err := env.GetWorkflowResult(&got); err != nil || got.OperationKey != input.OperationKey {
 					t.Fatalf("result=%#v error=%v", got, err)

@@ -1,11 +1,12 @@
 package openairesponses
 
 import (
-	"encoding/json"
+	"testing"
+
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/openai/openai-go/v3/responses"
-	"testing"
 )
 
 func TestHostedToolsSurviveSDKWire(t *testing.T) {
@@ -30,14 +31,8 @@ func TestHostedToolsSurviveSDKWire(t *testing.T) {
 	}
 }
 func TestHostedExecutionResultAndArtifact(t *testing.T) {
-	var response responses.Response
-	if err := json.Unmarshal([]byte(`{"id":"resp-code","object":"response","status":"completed","model":"gpt-test","output":[{"id":"ci-1","type":"code_interpreter_call","status":"completed","container_id":"cntr-1","code":"print(4)","outputs":[{"type":"logs","logs":"4"}]},{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"4","annotations":[{"type":"container_file_citation","container_id":"cntr-1","file_id":"file-1","filename":"result.csv","start_index":0,"end_index":1}]}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`), &response); err != nil {
-		t.Fatal(err)
-	}
-	got, err := liftResponse(provider.Call{OperationKey: "hosted", Model: "gpt-test", ServiceClass: llm.ServiceClassStandard, Metadata: provider.CallMetadata{CodeExecution: true}}, &response, "request")
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[responses.Response](t, []byte(`{"id":"resp-code","object":"response","status":"completed","model":"gpt-test","output":[{"id":"ci-1","type":"code_interpreter_call","status":"completed","container_id":"cntr-1","code":"print(4)","outputs":[{"type":"logs","logs":"4"}]},{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"4","annotations":[{"type":"container_file_citation","container_id":"cntr-1","file_id":"file-1","filename":"result.csv","start_index":0,"end_index":1}]}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`))
+	got := mustLift(t, provider.Call{OperationKey: "hosted", Model: "gpt-test", ServiceClass: llm.ServiceClassStandard, Metadata: provider.CallMetadata{CodeExecution: true}}, &response, "request")
 	if got.Status != llm.ResponseStatusCompleted || got.Cost.Status != llm.CostStatusUnknown {
 		t.Fatalf("result=%#v", got)
 	}

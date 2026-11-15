@@ -41,22 +41,54 @@ var (
 	moduleRoot     = repotest.ModuleRoot
 )
 
-// readMakefile returns the module Makefile that defines the Compose targets.
-func readMakefile(t *testing.T) string {
+// readModuleFile reads a file below the Go module root.
+func readModuleFile(t *testing.T, path ...string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
+	data, err := os.ReadFile(filepath.Join(append([]string{moduleRoot(t)}, path...)...))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	return data
+}
+
+// readMakefile returns the module Makefile that defines the Compose targets.
+func readMakefile(t *testing.T) string {
+	t.Helper()
+	return string(readModuleFile(t, "Makefile"))
+}
+
+// expectContainsEach reports each required value that text lacks, using
+// format with the missing value.
+func expectContainsEach(t *testing.T, text, format string, required ...string) {
+	t.Helper()
+	for _, value := range required {
+		if !strings.Contains(text, value) {
+			t.Errorf(format, value)
+		}
+	}
+}
+
+// dependencyCondition returns the condition service declares for dependency.
+// It fails with missing when service does not wait for dependency, and names
+// label when the dependency entry cannot be decoded.
+func dependencyCondition(t *testing.T, service composeService, dependency, label, missing string) string {
+	t.Helper()
+	node, ok := service.DependsOn[dependency]
+	if !ok {
+		t.Fatal(missing)
+	}
+	var condition struct {
+		Condition string `yaml:"condition"`
+	}
+	if err := node.Decode(&condition); err != nil {
+		t.Fatalf("decode %s dependency: %v", label, err)
+	}
+	return condition.Condition
 }
 
 func readCompose(t *testing.T) (composeDocument, []byte) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "compose.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := readModuleFile(t, "compose.yaml")
 	var document composeDocument
 	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&document); err != nil {
 		t.Fatalf("decode compose.yaml: %v", err)
@@ -128,22 +160,11 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 		t.Error("postgres must expose a healthcheck before Temporal starts")
 	}
 
-	temporal := document.Services["temporal"]
-	dependency, ok := temporal.DependsOn["postgres"]
-	if !ok {
-		t.Fatal("temporal does not wait for PostgreSQL health")
-	}
-	var condition struct {
-		Condition string `yaml:"condition"`
-	}
-	if err := dependency.Decode(&condition); err != nil {
-		t.Fatalf("decode PostgreSQL dependency: %v", err)
-	}
-	if condition.Condition != "service_healthy" {
-		t.Fatalf("temporal PostgreSQL condition = %q, want service_healthy", condition.Condition)
+	if condition := dependencyCondition(t, document.Services["temporal"], "postgres", "PostgreSQL", "temporal does not wait for PostgreSQL health"); condition != "service_healthy" {
+		t.Fatalf("temporal PostgreSQL condition = %q, want service_healthy", condition)
 	}
 
-	for _, required := range []string{
+	expectContainsEach(t, string(raw), "Compose fixture is missing PostgreSQL Temporal input %q",
 		"DB: postgres12",
 		"DB_PORT: \"5432\"",
 		"POSTGRES_USER: temporal",
@@ -152,11 +173,7 @@ func TestComposeTemporalUsesPinnedPostgresStorage(t *testing.T) {
 		"DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/docker.yaml",
 		"${LLMTW_POSTGRES_PASSWORD:-local-only}",
 		"temporal-postgres-data-v18:/var/lib/postgresql",
-	} {
-		if !strings.Contains(string(raw), required) {
-			t.Errorf("Compose fixture is missing PostgreSQL Temporal input %q", required)
-		}
-	}
+	)
 	if strings.Contains(string(raw), "DB: sqlite") {
 		t.Error("Temporal auto-setup must not use unsupported sqlite storage")
 	}
@@ -254,32 +271,17 @@ func TestWorkerComposeProvisionsAdmissionFunctionBeforeStart(t *testing.T) {
 	if _, ok := provisioner.DependsOn["redis"]; !ok {
 		t.Fatal("redis Function provisioner does not wait for Redis")
 	}
-	worker := document.Services["worker"]
-	dependency, ok := worker.DependsOn["redis-function-provisioner"]
-	if !ok {
-		t.Fatal("worker does not wait for Redis Function provisioning")
+	if condition := dependencyCondition(t, document.Services["worker"], "redis-function-provisioner", "provisioner", "worker does not wait for Redis Function provisioning"); condition != "service_completed_successfully" {
+		t.Fatalf("worker provisioner condition = %q, want service_completed_successfully", condition)
 	}
-	var condition struct {
-		Condition string `yaml:"condition"`
-	}
-	if err := dependency.Decode(&condition); err != nil {
-		t.Fatalf("decode provisioner dependency: %v", err)
-	}
-	if condition.Condition != "service_completed_successfully" {
-		t.Fatalf("worker provisioner condition = %q, want service_completed_successfully", condition.Condition)
-	}
-	for _, required := range []string{
+	expectContainsEach(t, string(raw), "Compose fixture is missing explicit Redis Function provisioning input %q",
 		"FUNCTION LOAD",
 		"./storage/redis/functions/admission.lua",
 		// The compiled Function names carry the Lua source digest, so the
 		// fixture must load the library this binary calls.
 		redisstore.AdmissionFunctionLibrary,
 		redisstore.AdmissionFunctionVersion,
-	} {
-		if !strings.Contains(string(raw), required) {
-			t.Errorf("Compose fixture is missing explicit Redis Function provisioning input %q", required)
-		}
-	}
+	)
 }
 
 func TestRedisFunctionProvisionerEscapesShellVariablesFromCompose(t *testing.T) {
@@ -307,16 +309,12 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 		t.Fatalf("Redis ACL wrapper must clear the image command, got kind=%d len=%d", redis.Command.Kind, len(redis.Command.Content))
 	}
 	aclScript := redis.Entrypoint.Content[2].Value
-	for _, required := range []string{
+	expectContainsEach(t, aclScript, "Redis ACL wrapper is missing %q",
 		"acl_file=\"$$(mktemp /tmp/llmtw-users.XXXXXX)\"",
 		"chmod 0600 \"$${acl_file}\"",
 		"chown redis \"$${acl_file}\"",
 		"exec /usr/local/bin/docker-entrypoint.sh redis-server",
-	} {
-		if !strings.Contains(aclScript, required) {
-			t.Errorf("Redis ACL wrapper is missing %q", required)
-		}
-	}
+	)
 	aclFileCreation := strings.Index(aclScript, "acl_file=\"$$(mktemp /tmp/llmtw-users.XXXXXX)\"")
 	aclMode := strings.Index(aclScript, "chmod 0600 \"$${acl_file}\"")
 	aclOwnership := strings.Index(aclScript, "chown redis \"$${acl_file}\"")
@@ -337,7 +335,7 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 			t.Errorf("Redis ACL wrapper must not retain or expose %q", forbidden)
 		}
 	}
-	for _, required := range []string{
+	expectContainsEach(t, string(raw), "Compose Redis ACL fixture is missing %q",
 		"REDIS_USERNAME: ${LLMTW_REDIS_USERNAME:-local}",
 		"REDIS_PASSWORD: ${LLMTW_REDIS_PASSWORD:-local-only}",
 		"REDIS_KEY_PREFIX: ${LLMTW_REDIS_KEY_PREFIX:-llmtw}",
@@ -350,11 +348,7 @@ func TestComposeRedisRequiresTheWorkerNamedACL(t *testing.T) {
 		"--save 60 1",
 		"redis-cli --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\" ping",
 		"redis-cli -h redis --user \"$${REDIS_USERNAME}\" --pass \"$${REDIS_PASSWORD}\"",
-	} {
-		if !strings.Contains(string(raw), required) {
-			t.Errorf("Compose Redis ACL fixture is missing %q", required)
-		}
-	}
+	)
 	if strings.Contains(string(raw), "--save \"60 1\"") {
 		t.Error("Redis save interval and change count must be separate command-line arguments")
 	}
@@ -386,26 +380,18 @@ func TestComposeRedisDeclaresNoEvictionAndPersistencePolicy(t *testing.T) {
 		t.Fatalf("Redis healthcheck mode = %q, want %q", got, want)
 	}
 	command := test.Content[1].Value
-	for _, required := range []string{
+	expectContainsEach(t, command, "Redis healthcheck is missing %q",
 		"CONFIG GET maxmemory-policy",
 		"= noeviction",
 		"CONFIG GET appendonly",
 		"= yes",
 		"CONFIG GET save",
-	} {
-		if !strings.Contains(command, required) {
-			t.Errorf("Redis healthcheck is missing %q", required)
-		}
-	}
-	for _, required := range []string{
+	)
+	expectContainsEach(t, string(raw), "Compose Redis command is missing explicit policy %q",
 		"--appendonly yes",
 		"--save 60 1",
 		"--maxmemory-policy noeviction",
-	} {
-		if !strings.Contains(string(raw), required) {
-			t.Errorf("Compose Redis command is missing explicit policy %q", required)
-		}
-	}
+	)
 }
 
 func TestComposeProvisionerShellScriptsAreSingleArguments(t *testing.T) {
@@ -430,29 +416,15 @@ func TestComposeWorkerUsesDurableFileBlobAndExactHealthEndpoints(t *testing.T) {
 	if _, ok := worker.DependsOn["blob-volume-provisioner"]; !ok {
 		t.Error("worker does not wait for file-blob volume provisioning")
 	}
-	for _, required := range []string{
+	expectContainsEach(t, string(raw), "Compose fixture is missing %q",
 		"blob-data:/var/lib/llmtw/blobs",
 		"/health/live",
 		"/health/ready",
 		"healthcheck",
-	} {
-		if !strings.Contains(string(raw), required) {
-			t.Errorf("Compose fixture is missing %q", required)
-		}
-	}
-	localConfig, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "local", "config.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, required := range []string{"kind: file", "root: /var/lib/llmtw/blobs"} {
-		if !strings.Contains(string(localConfig), required) {
-			t.Errorf("local configuration is missing %q", required)
-		}
-	}
-	deployment, err := os.ReadFile(filepath.Join(moduleRoot(t), "deploy", "kubernetes", "base", "deployment.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	)
+	localConfig := readModuleFile(t, "deploy", "local", "config.yaml")
+	expectContainsEach(t, string(localConfig), "local configuration is missing %q", "kind: file", "root: /var/lib/llmtw/blobs")
+	deployment := readModuleFile(t, "deploy", "kubernetes", "base", "deployment.yaml")
 	for _, endpoint := range []string{"/health/live", "/health/ready"} {
 		if !strings.Contains(string(raw), endpoint) || !strings.Contains(string(deployment), endpoint) {
 			t.Errorf("Compose and Kubernetes must both use %q", endpoint)
@@ -462,7 +434,7 @@ func TestComposeWorkerUsesDurableFileBlobAndExactHealthEndpoints(t *testing.T) {
 
 func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 	makefile := readMakefile(t)
-	for _, required := range []string{
+	expectContainsEach(t, makefile, "compose live integration target is missing %q",
 		"compose-live-integration:",
 		"LLMTW_COMPOSE_LIVE:-0",
 		"docker info",
@@ -498,11 +470,7 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"LLMTW_REDIS_USERNAME",
 		"LLMTW_REDIS_PASSWORD",
 		"LLMTW_REDIS_KEY_PREFIX",
-	} {
-		if !strings.Contains(makefile, required) {
-			t.Errorf("compose live integration target is missing %q", required)
-		}
-	}
+	)
 	for _, fixedPort := range []string{
 		"LLMTW_COMPOSE_TEMPORAL_PORT:-17233",
 		"LLMTW_COMPOSE_REDIS_PORT:-16380",
@@ -520,15 +488,11 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 
 func TestComposeLiveIntegrationMakesFileSecretReadableToNonrootWorker(t *testing.T) {
 	makefile := readMakefile(t)
-	for _, required := range []string{
+	expectContainsEach(t, makefile, "compose live integration target is missing %q",
 		`tmpdir="$$(mktemp -d`,
 		`umask 077;`,
 		"printf '%s' \"$$continuation_hmac\" > \"$$key\"; \\\n\tchmod 0444 \"$$key\"; \\",
-	} {
-		if !strings.Contains(makefile, required) {
-			t.Errorf("compose live integration target is missing %q", required)
-		}
-	}
+	)
 }
 
 func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing.T) {
@@ -539,7 +503,7 @@ func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing
 		t.Fatalf("compose live integration target is missing %q", marker)
 	}
 	diagnostics := makefile[start:]
-	for _, required := range []string{
+	expectContainsEach(t, diagnostics, "Temporal healthcheck diagnostics are missing %q",
 		"$$( $(COMPOSE) ps -q temporal 2>/dev/null || true )",
 		"docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}'",
 		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
@@ -547,11 +511,7 @@ func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing
 		"LLMTW_LOG_REDACT_MOCK_API_KEY=\"$$mock_api_key\"",
 		"LLMTW_LOG_REDACT_CONTINUATION_HMAC=\"$$continuation_hmac\"",
 		"sh ./scripts/redact-compose-logs.sh",
-	} {
-		if !strings.Contains(diagnostics, required) {
-			t.Errorf("Temporal healthcheck diagnostics are missing %q", required)
-		}
-	}
+	)
 }
 
 // The Makefile commands that run the two tagged Compose suites.
@@ -696,17 +656,13 @@ func TestComposeFailureLogRedactorRedactsEveryReachableSecret(t *testing.T) {
 
 func TestComposePublishedPortsDefaultToDockerAllocatedPorts(t *testing.T) {
 	_, raw := readCompose(t)
-	for _, required := range []string{
+	expectContainsEach(t, string(raw), "Compose fixture does not request a Docker-assigned host port for %q",
 		"${LLMTW_COMPOSE_TEMPORAL_PORT:-0}:7233",
 		"${LLMTW_COMPOSE_TEMPORAL_UI_PORT:-0}:8233",
 		"${LLMTW_COMPOSE_REDIS_PORT:-0}:6379",
 		"${LLMTW_COMPOSE_HEALTH_PORT:-0}:8080",
 		"${LLMTW_COMPOSE_METRICS_PORT:-0}:9090",
-	} {
-		if !strings.Contains(string(raw), required) {
-			t.Errorf("Compose fixture does not request a Docker-assigned host port for %q", required)
-		}
-	}
+	)
 }
 
 func TestCIExercisesAuthorizedComposeLiveGate(t *testing.T) {

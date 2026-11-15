@@ -1,26 +1,18 @@
 package anthropicmessages
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestContextWindowExceededLiftsAsLengthWithOutputAndUsage(t *testing.T) {
-	var response anthropic.Message
-	if err := json.Unmarshal(mustReadFixture(t, "response.completed.json"), &response); err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[anthropic.Message](t, mustReadFixture(t, "response.completed.json"))
 	response.StopReason = anthropic.StopReasonModelContextWindowExceeded
-	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := mustProfile(t, testProfile()).liftResponse(call, &response, "req-fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, mustProfile(t, testProfile()), liftCall("fixture-op", llm.ServiceClassStandard), &response, "req-fixture")
 	if lifted.Status != llm.ResponseStatusLength || len(lifted.Output) == 0 || lifted.Usage.InputTokens == 0 || lifted.Usage.OutputTokens == 0 {
 		t.Fatalf("lifted = status %q output %d usage %#v", lifted.Status, len(lifted.Output), lifted.Usage)
 	}

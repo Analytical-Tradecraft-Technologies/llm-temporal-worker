@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
@@ -30,11 +31,7 @@ func storagePolicyAdapter(t *testing.T, permitted bool, body []byte) *ModelListe
 func compileWire(t *testing.T, adapter *ModelListerAdapter, request llm.Request, strict bool) (provider.Call, map[string]any) {
 	t.Helper()
 	request.Model = "gpt-contract"
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: request.Model},
-		Strict:  strict,
-	})
+	call, err := adaptertest.Compile(adapter, "openai-prod", provider.FamilyOpenAIResponses, request, strict)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -66,10 +63,7 @@ func reasoningState(t *testing.T, id string, encrypted any) llm.ProviderState {
 	if encrypted != "absent" {
 		item["encrypted_content"] = encrypted
 	}
-	opaque, err := json.Marshal(item)
-	if err != nil {
-		t.Fatal(err)
-	}
+	opaque := contract.MarshalJSON(t, item)
 	return llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: reasoningStateMediaType, Opaque: opaque}
 }
 
@@ -117,20 +111,14 @@ func TestStorageDeniedRequestsEncryptedReasoning(t *testing.T) {
 }
 
 func TestStorageDeniedReplaysLiftedEncryptedReasoning(t *testing.T) {
-	var body map[string]any
-	if err := json.Unmarshal(readContractFixture(t, "openai-responses", "response.completed.json"), &body); err != nil {
-		t.Fatal(err)
-	}
+	body := contract.DecodeJSON[map[string]any](t, readContractFixture(t, "openai-responses", "response.completed.json"))
 	body["output"] = []any{
 		map[string]any{"id": "rs-1", "type": "reasoning", "status": "completed", "summary": []any{}, "encrypted_content": "sealed-reasoning"},
 		map[string]any{"id": "msg-1", "type": "message", "role": "assistant", "status": "completed", "content": []any{
 			map[string]any{"type": "output_text", "text": "hello", "annotations": []any{}, "logprobs": []any{}},
 		}},
 	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, body)
 	adapter := storagePolicyAdapter(t, false, encoded)
 	first := llm.Request{OperationKey: "first-turn", Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}, Input: []llm.Item{llm.HumanText("question")}}
 	call, _ := compileWire(t, adapter, first, true)

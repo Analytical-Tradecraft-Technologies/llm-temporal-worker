@@ -247,18 +247,10 @@ case "$1" in
 esac
 `)
 
-	runnerTemp := filepath.Join(tempDir, "runner-temp")
-	if err := os.Mkdir(runnerTemp, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	runnerTemp := makeDirectory(t, 0o755, tempDir, "runner-temp")
 	if restoredSwitch != "" {
-		opamRoot := filepath.Join(runnerTemp, "llmtw-opam-root")
-		if err := os.Mkdir(opamRoot, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(opamRoot, "config"), []byte("fake OPAM root\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		opamRoot := makeDirectory(t, 0o755, runnerTemp, "llmtw-opam-root")
+		writeFile(t, filepath.Join(opamRoot, "config"), []byte("fake OPAM root\n"), 0o644)
 	}
 	githubEnv := filepath.Join(tempDir, "github-env")
 	githubPath := filepath.Join(tempDir, "github-path")
@@ -298,10 +290,7 @@ func workflowEnvironmentValue(contents, key string) string {
 func newFakeCommandDirectory(t *testing.T) (string, string) {
 	t.Helper()
 	directory := t.TempDir()
-	bin := filepath.Join(directory, "bin")
-	if err := os.Mkdir(bin, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	bin := makeDirectory(t, 0o700, directory, "bin")
 	return directory, bin
 }
 
@@ -309,9 +298,7 @@ func writeFakeCommand(t *testing.T, directory, name, body string) {
 	t.Helper()
 	path := filepath.Join(directory, name)
 	contents := "#!/usr/bin/env bash\nset -euo pipefail\n" + strings.TrimSpace(body) + "\n"
-	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, path, []byte(contents), 0o755)
 }
 
 func assertFakeCommandFollowsChecksum(t *testing.T, calls, command string) {

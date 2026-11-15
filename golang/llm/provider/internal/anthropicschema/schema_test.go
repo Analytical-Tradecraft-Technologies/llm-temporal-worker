@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLowerMovesUnsupportedKeywordsIntoDescriptions(t *testing.T) {
@@ -28,10 +29,7 @@ func TestLowerMovesUnsupportedKeywordsIntoDescriptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(lowered)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, lowered)
 	want := `{"$defs":{"leaf":{"additionalProperties":false,"properties":{},"type":"object"}},"additionalProperties":false,"properties":{` +
 		`"age":{"description":"{exclusiveMaximum: 150, minimum: 0, multipleOf: 1}","type":"integer"},` +
 		`"kind":{"anyOf":[{"const":"a"},{"additionalProperties":false,"properties":{"b":{"description":"{maximum: 1.5}","type":"number"}},"type":"object"}]},` +

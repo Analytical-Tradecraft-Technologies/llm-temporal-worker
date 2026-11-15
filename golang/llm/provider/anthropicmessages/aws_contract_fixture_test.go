@@ -100,10 +100,7 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, anthropicAWSFixtureEndpoint, provider.FamilyAnthropicMessages, request)
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil {
 		t.Fatal("fixture transport was not called")
 	}

@@ -85,10 +85,7 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 		t.Fatal(err)
 	}
 	encoded := contract.MarshalJSON(t, requestMap)
-	var intended map[string]any
-	if err := json.Unmarshal(encoded, &intended); err != nil {
-		t.Fatal(err)
-	}
+	intended := contract.DecodeJSON[map[string]any](t, encoded)
 	return intended
 }
 

@@ -71,9 +71,7 @@ func TestReleaseEvidenceVerifierAcceptsCompleteRedactedBundle(t *testing.T) {
 	if !strings.Contains(string(output), "release evidence verified") {
 		t.Fatalf("release evidence verifier success output = %q", output)
 	}
-	if _, err := os.Stat(filepath.Join(bundle.directory, "image.oci.tar")); !os.IsNotExist(err) {
-		t.Fatalf("retained evidence bundle contains an OCI archive: %v", err)
-	}
+	assertPathAbsent(t, filepath.Join(bundle.directory, "image.oci.tar"), "retained evidence bundle contains an OCI archive")
 }
 
 func TestReleaseEvidenceLayoutDigestUsesTheOCIManifestDescriptor(t *testing.T) {
@@ -295,30 +293,21 @@ func TestReleaseEvidenceLayoutDigestRejectsUnsafeOrUnboundDirectoryEntries(t *te
 			name: "mismatched config blob",
 			mutate: func(t *testing.T, path string) {
 				t.Helper()
-				indexData, err := os.ReadFile(filepath.Join(path, "index.json"))
-				if err != nil {
-					t.Fatal(err)
-				}
 				var index struct {
 					Manifests []struct {
 						Digest string `json:"digest"`
 					} `json:"manifests"`
 				}
-				if err := json.Unmarshal(indexData, &index); err != nil || len(index.Manifests) != 1 {
-					t.Fatalf("cannot read test OCI index: %v", err)
-				}
-				manifestData, err := os.ReadFile(filepath.Join(path, "blobs", "sha256", strings.TrimPrefix(index.Manifests[0].Digest, "sha256:")))
-				if err != nil {
-					t.Fatal(err)
+				readJSONFile(t, filepath.Join(path, "index.json"), "test OCI index", &index)
+				if len(index.Manifests) != 1 {
+					t.Fatalf("cannot read test OCI index: %d manifests", len(index.Manifests))
 				}
 				var manifest struct {
 					Config struct {
 						Digest string `json:"digest"`
 					} `json:"config"`
 				}
-				if err := json.Unmarshal(manifestData, &manifest); err != nil {
-					t.Fatal(err)
-				}
+				readJSONFile(t, filepath.Join(path, "blobs", "sha256", strings.TrimPrefix(index.Manifests[0].Digest, "sha256:")), "test OCI manifest", &manifest)
 				writeReleaseArtifact(t, filepath.Join(path, "blobs", "sha256", strings.TrimPrefix(manifest.Config.Digest, "sha256:")), []byte("mismatched OCI config"))
 			},
 			failure: "does not match a retained payload",
@@ -357,10 +346,6 @@ func TestReleaseEvidenceCollectorBuildsFixtureManifestFromWhitespaceMetadata(t *
 	if err != nil {
 		t.Fatalf("fixture collector rejected ordinary whitespace-delimited metadata: %v\n%s", err, output)
 	}
-	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var manifest struct {
 		Kind     string `json:"kind"`
 		Status   string `json:"status"`
@@ -370,9 +355,7 @@ func TestReleaseEvidenceCollectorBuildsFixtureManifestFromWhitespaceMetadata(t *
 			UpstreamDate string `json:"upstream_date"`
 		} `json:"fixtures"`
 	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	readJSONFile(t, outputPath, "fixture manifest", &manifest)
 	if manifest.Kind != "fixture_manifest" || manifest.Status != "pass" || len(manifest.Fixtures) != 1 {
 		t.Fatalf("fixture collector manifest = %#v", manifest)
 	}
@@ -393,9 +376,7 @@ func TestReleaseEvidenceCollectorRejectsUnsafeProvenanceURLs(t *testing.T) {
 		output, err := runReleaseCollector(root, "fixture-manifest", "--root", fixtureRoot, "--output", outputPath)
 		assertCommandRejected(t, output, err, "fixture collector accepted basic-auth upstream URL", "userinfo", "fixture basic-auth")
 		assertOutputOmitsSentinel(t, output, sentinel, "fixture basic-auth")
-		if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-			t.Fatalf("fixture collector wrote evidence after rejecting unsafe URL: %v", err)
-		}
+		assertPathAbsent(t, outputPath, "fixture collector wrote evidence after rejecting unsafe URL")
 	})
 
 	t.Run("dependency basic auth", func(t *testing.T) {
@@ -408,9 +389,7 @@ func TestReleaseEvidenceCollectorRejectsUnsafeProvenanceURLs(t *testing.T) {
 		output, err := runReleaseCollector(root, "dependency-license", "--baseline", baselinePath, "--go-mod", goModPath, "--output", outputPath)
 		assertCommandRejected(t, output, err, "dependency collector accepted basic-auth source URL", "userinfo", "dependency basic-auth")
 		assertOutputOmitsSentinel(t, output, sentinel, "dependency basic-auth")
-		if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-			t.Fatalf("dependency collector wrote evidence after rejecting unsafe URL: %v", err)
-		}
+		assertPathAbsent(t, outputPath, "dependency collector wrote evidence after rejecting unsafe URL")
 	})
 }
 
@@ -487,9 +466,7 @@ func TestReleaseEvidenceCollectorEnforcesCanonicalProvenanceURLPolicy(t *testing
 				}
 				assertCommandRejected(t, output, err, fmt.Sprintf("collector accepted noncanonical %s URL %q", kind, test.url), "DNS hostname", fmt.Sprintf("noncanonical %s URL", kind))
 				assertOutputOmitsSentinel(t, output, sentinel, fmt.Sprintf("noncanonical %s URL", kind))
-				if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-					t.Fatalf("collector wrote %s evidence after rejecting URL: %v", kind, err)
-				}
+				assertPathAbsent(t, outputPath, fmt.Sprintf("collector wrote %s evidence after rejecting URL", kind))
 			})
 		}
 	}
@@ -512,13 +489,7 @@ func TestDependencyEvidenceUsesCurrentVersionsUnderTrustedRoots(t *testing.T) {
 	var evidence struct {
 		DirectModules []map[string]string `json:"direct_modules"`
 	}
-	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(data, &evidence); err != nil {
-		t.Fatal(err)
-	}
+	readJSONFile(t, outputPath, "dependency evidence", &evidence)
 	want := []map[string]string{{
 		"path": "example.com/publisher/module", "version": "v9.8.7", "license": "Apache-2.0", "source": "https://example.com/publisher",
 	}}
@@ -529,17 +500,13 @@ func TestDependencyEvidenceUsesCurrentVersionsUnderTrustedRoots(t *testing.T) {
 
 func TestReleaseEvidenceCollectorRejectsNonContainerTrivyReport(t *testing.T) {
 	root := repositoryRoot(t)
-	directory := t.TempDir()
-	inputPath := filepath.Join(directory, "scan.json")
-	outputPath := filepath.Join(directory, "image-scan.json")
+	inputPath, outputPath := tempFilePaths(t, "scan.json", "image-scan.json")
 	digest := "sha256:" + strings.Repeat("b", 64)
 	writeReleaseArtifact(t, inputPath, []byte(`{"SchemaVersion":2,"ArtifactType":"filesystem","ArtifactName":"image.oci","Results":[]}`))
 
 	output, err := runReleaseCollector(root, "annotate-scan", "--input", inputPath, "--output", outputPath, "--reference", "llm-temporal-worker@"+digest, "--digest", digest)
 	assertCommandRejected(t, output, err, "scan collector accepted a non-container Trivy report", "container-image", "non-container scan")
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("scan collector wrote evidence after rejecting non-container report: %v", err)
-	}
+	assertPathAbsent(t, outputPath, "scan collector wrote evidence after rejecting non-container report")
 }
 
 func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyOCIDirectoryName(t *testing.T) {
@@ -571,9 +538,7 @@ func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyOCIDirectoryName(t *tes
 				return
 			}
 			assertCommandRejected(t, output, err, "scan collector accepted unexpected temporary OCI directory basename", "temporary OCI directory", "unexpected OCI directory basename")
-			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-				t.Fatalf("scan collector wrote evidence after rejecting OCI directory basename: %v", err)
-			}
+			assertPathAbsent(t, outputPath, "scan collector wrote evidence after rejecting OCI directory basename")
 		})
 	}
 }
@@ -649,27 +614,20 @@ func TestReleaseEvidenceCollectorRedactsComposeLogsAndRequiresServiceBoundaries(
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			inputPath := filepath.Join(directory, "compose.log")
-			outputPath := filepath.Join(directory, "redacted-log.json")
+			inputPath, outputPath := tempFilePaths(t, "compose.log", "redacted-log.json")
 			writeReleaseArtifact(t, inputPath, []byte(test.input))
 			output, err := runReleaseCollector(root, "redacted-log", "--kind", test.kind, "--input", inputPath, "--output", outputPath)
 			if err != nil {
 				t.Fatalf("redacted-log collector rejected %s input: %v\n%s", test.name, err, output)
 			}
-			data, err := os.ReadFile(outputPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(data), sentinel) {
+			data := readText(t, outputPath)
+			if strings.Contains(data, sentinel) {
 				t.Fatalf("redacted-log artifact retained sentinel secret: %s", data)
 			}
 			var artifact struct {
 				EventCounts map[string]int `json:"event_counts"`
 			}
-			if err := json.Unmarshal(data, &artifact); err != nil {
-				t.Fatal(err)
-			}
+			decodeJSON(t, []byte(data), "redacted-log artifact", &artifact)
 			if artifact.EventCounts[test.event] != 1 || artifact.EventCounts["redacted_line"] != 1 {
 				t.Fatalf("redacted-log event counts = %#v", artifact.EventCounts)
 			}
@@ -689,15 +647,11 @@ func TestReleaseEvidenceCollectorRedactsComposeLogsAndRequiresServiceBoundaries(
 		{name: "combined Compose lacks Temporal", kind: "compose_log", input: "2026-07-15T00:00:00Z redis-1 | Ready to accept connections\n"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			directory := t.TempDir()
-			inputPath := filepath.Join(directory, "compose.log")
-			outputPath := filepath.Join(directory, "redacted-log.json")
+			inputPath, outputPath := tempFilePaths(t, "compose.log", "redacted-log.json")
 			writeReleaseArtifact(t, inputPath, []byte(test.input))
 			output, err := runReleaseCollector(root, "redacted-log", "--kind", test.kind, "--input", inputPath, "--output", outputPath)
 			assertCommandRejected(t, output, err, "redacted-log collector accepted missing service boundary", "runtime-boundary", "missing boundary")
-			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-				t.Fatalf("redacted-log collector wrote an artifact after rejecting input: %v", err)
-			}
+			assertPathAbsent(t, outputPath, "redacted-log collector wrote an artifact after rejecting input")
 		})
 	}
 }
@@ -705,12 +659,9 @@ func TestReleaseEvidenceCollectorRedactsComposeLogsAndRequiresServiceBoundaries(
 func TestReleaseEvidenceVerifierRejectsChangedArtifact(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle := writeReleaseEvidenceBundle(t, false)
-	if err := os.WriteFile(filepath.Join(bundle.directory, "test-summary.json"), []byte(`{"status":"changed"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, filepath.Join(bundle.directory, "test-summary.json"), []byte(`{"status":"changed"}`), 0o600)
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted changed artifact", "sha256", "changed artifact")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted changed artifact", "sha256", "changed artifact")
 }
 
 func TestReleaseEvidenceVerifierRejectsIncorrectByteLength(t *testing.T) {
@@ -722,8 +673,7 @@ func TestReleaseEvidenceVerifierRejectsIncorrectByteLength(t *testing.T) {
 	testSummary["bytes"] = testSummary["bytes"].(float64) + 1
 	writeReleaseEvidence(t, bundle.directory, evidence)
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted an incorrect byte length", "byte length", "incorrect byte length")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted an incorrect byte length", "byte length", "incorrect byte length")
 }
 
 func TestReleaseEvidenceVerifierRejectsUnsafeEvidenceRepository(t *testing.T) {
@@ -804,10 +754,7 @@ func TestReleaseEvidenceVerifierRejectsUnsafeArtifactProvenanceURLs(t *testing.T
 			artifactPath := filepath.Join(bundle.directory, releaseEvidenceArtifactPaths[test.artifact])
 			document := readJSONObject(t, artifactPath)
 			test.apply(t, document, "https://operator:"+sentinel+"@example.invalid/provenance")
-			data, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
+			data := marshalJSON(t, document)
 			replaceReleaseEvidenceArtifact(t, bundle, evidence, test.artifact, data)
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
@@ -841,10 +788,7 @@ func TestReleaseEvidenceVerifierEnforcesCanonicalProvenanceURLPolicy(t *testing.
 					} else {
 						document["direct_modules"].([]any)[0].(map[string]any)["source"] = test.url
 					}
-					data, err := json.Marshal(document)
-					if err != nil {
-						t.Fatal(err)
-					}
+					data := marshalJSON(t, document)
 					replaceReleaseEvidenceArtifact(t, bundle, evidence, artifact, data)
 				default:
 					t.Fatalf("unknown provenance target %q", target)
@@ -970,8 +914,7 @@ func TestReleaseEvidenceVerifierRejectsDuplicateJSONMembers(t *testing.T) {
 		ambiguous := append([]byte(`{"schema_version":1,`), bytes.TrimPrefix(data, []byte{'{'})...)
 		writeReleaseArtifact(t, path, ambiguous)
 
-		output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-		assertCommandRejected(t, output, err, "release evidence verifier accepted a duplicate evidence member", "invalid or ambiguous JSON", "duplicate evidence-member")
+		assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted a duplicate evidence member", "invalid or ambiguous JSON", "duplicate evidence-member")
 	})
 
 	for _, test := range []struct {
@@ -1078,8 +1021,7 @@ func TestReleaseEvidenceVerifierRejectsEscapingAndSymlinkedArtifacts(t *testing.
 			mutate.apply(t, bundle.directory, evidence)
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
-			output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-			assertCommandRejected(t, output, err, fmt.Sprintf("release evidence verifier accepted %s", mutate.name), "path", mutate.name)
+			assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, fmt.Sprintf("release evidence verifier accepted %s", mutate.name), "path", mutate.name)
 		})
 	}
 }
@@ -1096,16 +1038,14 @@ func TestReleaseEvidenceVerifierRejectsUnknownArtifact(t *testing.T) {
 	}
 	writeReleaseEvidence(t, bundle.directory, evidence)
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted an unknown artifact", "does not satisfy schema", "unknown artifact")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted an unknown artifact", "does not satisfy schema", "unknown artifact")
 }
 
 func TestReleaseEvidenceVerifierRejectsCriticalImageFinding(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle := writeReleaseEvidenceBundle(t, true)
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted critical image finding", "HIGH or CRITICAL", "critical image finding")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted critical image finding", "HIGH or CRITICAL", "critical image finding")
 }
 
 func TestReleaseEvidenceVerifierRejectsNonContainerTrivyReport(t *testing.T) {
@@ -1116,8 +1056,7 @@ func TestReleaseEvidenceVerifierRejectsNonContainerTrivyReport(t *testing.T) {
 	replaceReleaseEvidenceArtifact(t, bundle, evidence, "image_scan", []byte(scan))
 	writeReleaseEvidence(t, bundle.directory, evidence)
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted a non-container Trivy report", "container-image", "non-container Trivy report")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted a non-container Trivy report", "container-image", "non-container Trivy report")
 }
 
 func TestReleaseEvidenceVerifierRejectsUnnormalizedTemporaryTrivyOCIDirectoryName(t *testing.T) {
@@ -1128,8 +1067,7 @@ func TestReleaseEvidenceVerifierRejectsUnnormalizedTemporaryTrivyOCIDirectoryNam
 	replaceReleaseEvidenceArtifact(t, bundle, evidence, "image_scan", []byte(scan))
 	writeReleaseEvidence(t, bundle.directory, evidence)
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted a runner-temporary Trivy path", "normalized to the temporary OCI directory basename", "unnormalized temporary Trivy path")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted a runner-temporary Trivy path", "normalized to the temporary OCI directory basename", "unnormalized temporary Trivy path")
 }
 
 func TestReleaseEvidenceVerifierRejectsMutableAndStaleImageSubjects(t *testing.T) {
@@ -1196,8 +1134,7 @@ func TestReleaseEvidenceVerifierRejectsUnstructuredAndFailingSummaries(t *testin
 			artifact["sha256"] = sha256Hex(data)
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
-			output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-			assertCommandRejected(t, output, err, fmt.Sprintf("release evidence verifier accepted %s", mutate.name), "summary", mutate.name)
+			assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, fmt.Sprintf("release evidence verifier accepted %s", mutate.name), "summary", mutate.name)
 		})
 	}
 }
@@ -1235,45 +1172,41 @@ func TestReleaseEvidenceVerifierRejectsMissingServiceLogBoundaries(t *testing.T)
 			replaceReleaseEvidenceArtifact(t, bundle, evidence, test.artifact, []byte(test.contents))
 			writeReleaseEvidence(t, bundle.directory, evidence)
 
-			output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-			assertCommandRejected(t, output, err, fmt.Sprintf("release evidence verifier accepted a missing %s boundary", test.name), test.want, fmt.Sprintf("missing %s boundary", test.name))
+			assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, fmt.Sprintf("release evidence verifier accepted a missing %s boundary", test.name), test.want, fmt.Sprintf("missing %s boundary", test.name))
 		})
 	}
 }
 
 func TestReleaseEvidenceVerifierRejectsUnreferencedArtifactFile(t *testing.T) {
-	root := repositoryRoot(t)
-	bundle := writeReleaseEvidenceBundle(t, false)
-	sentinel := "api_key=orphaned-release-evidence-secret-0123456789"
-	writeReleaseArtifact(t, filepath.Join(bundle.directory, "orphan-secret.json"), []byte(sentinel))
-
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted an unreferenced artifact file", "unreferenced file", "unreferenced artifact")
-	assertOutputOmitsSentinel(t, output, sentinel, "unreferenced artifact")
+	assertVerifierRejectsUnreferencedFile(t, "orphan-secret.json", "api_key=orphaned-release-evidence-secret-0123456789", "an unreferenced artifact file", "unreferenced artifact")
 }
 
 func TestReleaseEvidenceVerifierRejectsResidualOCIArchive(t *testing.T) {
+	assertVerifierRejectsUnreferencedFile(t, "image.oci.tar", "api_key=residual-oci-archive-secret-0123456789", "a residual OCI archive", "residual OCI archive")
+}
+
+// assertVerifierRejectsUnreferencedFile adds name, holding sentinel, to a
+// valid bundle and requires the verifier to reject it as an unreferenced file
+// without disclosing sentinel; accepted and failure describe the file.
+func assertVerifierRejectsUnreferencedFile(t *testing.T, name, sentinel, accepted, failure string) {
+	t.Helper()
 	root := repositoryRoot(t)
 	bundle := writeReleaseEvidenceBundle(t, false)
-	sentinel := "api_key=residual-oci-archive-secret-0123456789"
-	writeReleaseArtifact(t, filepath.Join(bundle.directory, "image.oci.tar"), []byte(sentinel))
+	writeReleaseArtifact(t, filepath.Join(bundle.directory, name), []byte(sentinel))
 
 	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted a residual OCI archive", "unreferenced file", "residual OCI archive")
-	assertOutputOmitsSentinel(t, output, sentinel, "residual OCI archive")
+	assertCommandRejected(t, output, err, "release evidence verifier accepted "+accepted, "unreferenced file", failure)
+	assertOutputOmitsSentinel(t, output, sentinel, failure)
 }
 
 func TestReleaseEvidenceVerifierRejectsResidualOCILayoutDirectory(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle := writeReleaseEvidenceBundle(t, false)
 	layout := filepath.Join(bundle.directory, "image.oci")
-	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	makeDirectory(t, 0o700, layout, "blobs", "sha256")
 	writeReleaseArtifact(t, filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`))
 
-	output, err := runReleaseEvidenceVerifier(t, root, bundle.directory)
-	assertCommandRejected(t, output, err, "release evidence verifier accepted a residual OCI layout directory", "unreferenced directory", "residual OCI layout directory")
+	assertReleaseEvidenceVerifierRejects(t, root, bundle.directory, "release evidence verifier accepted a residual OCI layout directory", "unreferenced directory", "residual OCI layout directory")
 }
 
 func TestReleaseEvidenceVerifierScansEveryRetainedArtifact(t *testing.T) {
@@ -1303,9 +1236,7 @@ func TestReleaseEvidenceVerifierRejectsNoncanonicalEvidencePath(t *testing.T) {
 	bundle := writeReleaseEvidenceBundle(t, false)
 	directory := resolvedReleaseEvidenceDirectory(t, bundle.directory)
 	renamedPath := filepath.Join(directory, "nested", "evidence.json")
-	if err := os.Mkdir(filepath.Dir(renamedPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	makeDirectory(t, 0o700, filepath.Dir(renamedPath))
 	if err := os.Rename(filepath.Join(directory, "evidence.json"), renamedPath); err != nil {
 		t.Fatal(err)
 	}
@@ -1328,9 +1259,7 @@ func TestReleaseEvidenceRecorderRejectsUnreferencedArtifactFile(t *testing.T) {
 
 	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
 	assertCommandRejected(t, output, err, "release evidence recorder accepted an unreferenced artifact file", "unreferenced file", "unreferenced recorder")
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("recorder wrote evidence after unreferenced artifact rejection: %v", err)
-	}
+	assertPathAbsent(t, outputPath, "recorder wrote evidence after unreferenced artifact rejection")
 }
 
 func TestReleaseEvidenceRecorderRejectsImageLayoutArtifact(t *testing.T) {
@@ -1348,44 +1277,32 @@ func TestReleaseEvidenceRecorderRejectsImageLayoutArtifact(t *testing.T) {
 		"image.oci.tar",
 	)
 	assertCommandRejected(t, output, err, "release evidence recorder accepted a raw OCI archive artifact", "unknown artifact", "raw OCI archive recorder")
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("recorder wrote evidence after raw OCI archive rejection: %v", err)
-	}
+	assertPathAbsent(t, outputPath, "recorder wrote evidence after raw OCI archive rejection")
 }
 
 func TestReleaseEvidenceRecorderRejectsResidualOCILayoutDirectory(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle, directory := writeUnrecordedReleaseEvidenceBundle(t, false)
 	layout := filepath.Join(directory, "image.oci")
-	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	makeDirectory(t, 0o700, layout, "blobs", "sha256")
 	writeReleaseArtifact(t, filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`))
 	outputPath := filepath.Join(directory, "evidence.json")
 
 	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
 	assertCommandRejected(t, output, err, "release evidence recorder accepted a residual OCI layout directory", "unreferenced directory", "residual OCI layout directory recorder")
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("recorder wrote evidence after residual OCI layout rejection: %v", err)
-	}
+	assertPathAbsent(t, outputPath, "recorder wrote evidence after residual OCI layout rejection")
 }
 
 func TestReleaseEvidenceRecorderRejectsOutputArtifactCollision(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle, directory := writeUnrecordedReleaseEvidenceBundle(t, false)
 	outputPath := filepath.Join(directory, releaseEvidenceArtifactPaths["test_summary"])
-	before, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := readText(t, outputPath)
 
 	output, err := runReleaseEvidenceRecorder(root, directory, outputPath, bundle)
 	assertCommandRejected(t, output, err, "release evidence recorder accepted an output artifact collision", "must not overwrite required artifact", "output artifact collision")
-	after, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != string(before) {
+	after := readText(t, outputPath)
+	if after != before {
 		t.Fatal("recorder changed an input artifact after rejecting output collision")
 	}
 }
@@ -1410,10 +1327,7 @@ func TestReleaseEvidenceRecorderRejectsSymlinkedOutputParent(t *testing.T) {
 	root := repositoryRoot(t)
 	bundle := writeReleaseEvidenceBundle(t, false)
 	directory := resolvedReleaseEvidenceDirectory(t, bundle.directory)
-	outside := filepath.Join(filepath.Dir(directory), "outside-output")
-	if err := os.Mkdir(outside, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	outside := makeDirectory(t, 0o700, filepath.Dir(directory), "outside-output")
 	link := filepath.Join(directory, "escaped")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
@@ -1421,9 +1335,7 @@ func TestReleaseEvidenceRecorderRejectsSymlinkedOutputParent(t *testing.T) {
 
 	output, err := runReleaseEvidenceRecorder(root, directory, filepath.Join(link, "evidence.json"), bundle)
 	assertCommandRejected(t, output, err, "release evidence recorder accepted a symlinked output parent", "symlink", "symlinked output")
-	if _, err := os.Stat(filepath.Join(outside, "evidence.json")); !os.IsNotExist(err) {
-		t.Fatalf("recorder wrote evidence outside artifact directory: %v", err)
-	}
+	assertPathAbsent(t, filepath.Join(outside, "evidence.json"), "recorder wrote evidence outside artifact directory")
 }
 
 func TestReleaseEvidenceRecorderLeavesNoEvidenceOnValidationFailure(t *testing.T) {
@@ -1435,16 +1347,8 @@ func TestReleaseEvidenceRecorderLeavesNoEvidenceOnValidationFailure(t *testing.T
 	if err == nil {
 		t.Fatalf("release evidence recorder accepted a failing image scan:\n%s", output)
 	}
-	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-		t.Fatalf("recorder left final evidence after validation failure: %v", err)
-	}
-	temporary, err := filepath.Glob(outputPath + ".tmp-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(temporary) != 0 {
-		t.Fatalf("recorder left temporary evidence files: %v", temporary)
-	}
+	assertPathAbsent(t, outputPath, "recorder left final evidence after validation failure")
+	assertNoTemporaryEvidence(t, outputPath)
 }
 
 func TestReleaseEvidenceRecorderAtomicallyWritesVerifiedByteBoundRecord(t *testing.T) {
@@ -1473,30 +1377,16 @@ func TestReleaseEvidenceRecorderAtomicallyWritesVerifiedByteBoundRecord(t *testi
 			t.Fatalf("recorded artifact %q sha256 = %q", name, digest)
 		}
 	}
-	temporary, err := filepath.Glob(outputPath + ".tmp-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(temporary) != 0 {
-		t.Fatalf("recorder left temporary evidence files: %v", temporary)
-	}
+	assertNoTemporaryEvidence(t, outputPath)
 }
 
 func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 	root := repositoryRoot(t)
 	makefile := readRepositoryFile(t, moduleRoot(t), "Makefile")
-	if !strings.Contains(makefile, "release-verify:") {
-		t.Fatal("Makefile does not expose release-verify")
-	}
-	if strings.Contains(makefile, "RELEASE_EVIDENCE_FILE") {
-		t.Fatal("Makefile permits a noncanonical release-evidence record path")
-	}
-	if strings.Contains(makefile, "RELEASE_EVIDENCE_DIR") {
-		t.Fatal("Makefile permits a workflow-controlled release-evidence directory")
-	}
-	if !strings.Contains(makefile, `--artifact-dir "release-artifacts" --evidence "release-artifacts/evidence.json"`) {
-		t.Fatal("Makefile does not seal release verification to the canonical evidence bundle")
-	}
+	assertContains(t, makefile, "release-verify:", "Makefile does not expose release-verify")
+	assertOmits(t, makefile, "RELEASE_EVIDENCE_FILE", "Makefile permits a noncanonical release-evidence record path")
+	assertOmits(t, makefile, "RELEASE_EVIDENCE_DIR", "Makefile permits a workflow-controlled release-evidence directory")
+	assertContains(t, makefile, `--artifact-dir "release-artifacts" --evidence "release-artifacts/evidence.json"`, "Makefile does not seal release verification to the canonical evidence bundle")
 	for _, path := range []string{
 		filepath.Join("scripts", "release", "collect.sh"),
 		filepath.Join("scripts", "release", "collect.py"),
@@ -1513,9 +1403,7 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 	}
 
 	gitignore := readRepositoryFile(t, root, ".gitignore")
-	if !strings.Contains(gitignore, "release-artifacts/") {
-		t.Fatal(".gitignore does not exclude local release-artifacts/")
-	}
+	assertContains(t, gitignore, "release-artifacts/", ".gitignore does not exclude local release-artifacts/")
 
 	for _, path := range []string{
 		filepath.Join("scripts", "release", "collect.sh"),
@@ -1525,11 +1413,13 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 	} {
 		data := readRepositoryFile(t, root, path)
 		lower := strings.ToLower(data)
-		for _, forbidden := range []string{"docker push", "cosign sign", "gh release", "workflow_dispatch", "id-token: write"} {
-			if strings.Contains(lower, forbidden) {
-				t.Fatalf("%s contains publication or Task 24 control %q", path, forbidden)
-			}
-		}
+		assertOmitsEach(t, lower, path+" contains publication or Task 24 control %q",
+			"docker push",
+			"cosign sign",
+			"gh release",
+			"workflow_dispatch",
+			"id-token: write",
+		)
 	}
 	// Task 24 is separately documented below this heading. Keep the existing
 	// Task 23 runbook boundary nonpublishing while allowing that later,
@@ -1539,11 +1429,13 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 	if !found {
 		t.Fatal("release runbook does not separate the Task 23 and Task 24 boundaries")
 	}
-	for _, forbidden := range []string{"docker push", "cosign sign", "gh release", "workflow_dispatch", "id-token: write"} {
-		if strings.Contains(strings.ToLower(task23Runbook), forbidden) {
-			t.Fatalf("Task 23 runbook boundary contains publication or Task 24 control %q", forbidden)
-		}
-	}
+	assertOmitsEach(t, strings.ToLower(task23Runbook), "Task 23 runbook boundary contains publication or Task 24 control %q",
+		"docker push",
+		"cosign sign",
+		"gh release",
+		"workflow_dispatch",
+		"id-token: write",
+	)
 	artifactSchema := readRepositoryFile(t, root, "docs", "release", "artifact.schema.json")
 	evidenceSchema := readRepositoryFile(t, root, "docs", "release", "evidence.schema.json")
 	canonicalProvenanceReference := `"$ref": "#/$defs/provenance_url"`
@@ -1559,19 +1451,19 @@ func TestReleaseEvidenceEntrypointIsLocalAndNonPublishing(t *testing.T) {
 		}
 	}
 	assertContainsEach(t, artifactSchema, "release log schema is missing allowlisted summary field %q", "\"event_counts\"", "\"line_count\"", "\"input_bytes\"", "\"redaction_policy\"")
-	for _, forbidden := range []string{"\"content\"", "\"message\"", "\"text\"", "\"raw_log\"", "\"log_lines\""} {
-		if strings.Contains(artifactSchema, forbidden) {
-			t.Fatalf("release log schema permits raw log content field %q", forbidden)
-		}
-	}
+	assertOmitsEach(t, artifactSchema, "release log schema permits raw log content field %q",
+		"\"content\"",
+		"\"message\"",
+		"\"text\"",
+		"\"raw_log\"",
+		"\"log_lines\"",
+	)
 }
 
 func TestReleaseEvidenceCollectorRunsFuzzGateFromModuleRoot(t *testing.T) {
 	root := repositoryRoot(t)
 	collector := readRepositoryFile(t, root, "scripts", "release", "collect.sh")
-	if !strings.Contains(collector, `run_gate fuzz_summary bash -c "cd \"$module_root\" && bash \"$module_root/scripts/run-fuzz.sh\" smoke"`) {
-		t.Fatal("release evidence collector does not run the fuzz gate from the Go module root")
-	}
+	assertContains(t, collector, `run_gate fuzz_summary bash -c "cd \"$module_root\" && bash \"$module_root/scripts/run-fuzz.sh\" smoke"`, "release evidence collector does not run the fuzz gate from the Go module root")
 }
 
 func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T) {
@@ -1579,12 +1471,8 @@ func TestReleaseEvidenceCollectorRetainsMemoryBenchmarkMeasurement(t *testing.T)
 	collector := readRepositoryFile(t, root, "scripts", "release", "collect.sh")
 	// The gate must time the production v1 Activities path, never the
 	// legacy in-process engine that no production worker runs (#1497).
-	if !strings.Contains(collector, "go test ./internal/runtime -run '^$' -bench '^BenchmarkV1ActivitiesAdmissionMemory$'") {
-		t.Fatal("release evidence collector does not run the v1 Activities memory admission benchmark")
-	}
-	if strings.Contains(collector, "BenchmarkGenerateMemoryAdmissionAndCompile") {
-		t.Fatal("release evidence collector still runs the legacy engine benchmark")
-	}
+	assertContains(t, collector, "go test ./internal/runtime -run '^$' -bench '^BenchmarkV1ActivitiesAdmissionMemory$'", "release evidence collector does not run the v1 Activities memory admission benchmark")
+	assertOmits(t, collector, "BenchmarkGenerateMemoryAdmissionAndCompile", "release evidence collector still runs the legacy engine benchmark")
 	pythonCollector := readRepositoryFile(t, root, "scripts", "release", "collect.py")
 	assertContainsEach(t, pythonCollector, "benchmark collector is missing %q", "benchmark-summary", "p99_ms_per_op", "target_status", "measurement_only")
 	assertContainsEach(t, collector, "release evidence collector is missing optional worker SLO input %q", "--worker-error-metrics", "slo-evidence.py", "worker-error-summary.json")
@@ -1619,9 +1507,7 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 				if output, err := collect(); err == nil {
 					t.Fatalf("benchmark collector accepted %s:\n%s", accepted, output)
 				}
-				if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-					t.Fatalf("benchmark collector retained output %s: %v", retained, err)
-				}
+				assertPathAbsent(t, outputPath, "benchmark collector retained output "+retained)
 			}
 
 			if err := os.Remove(outputPath); err != nil {
@@ -1737,11 +1623,7 @@ func writeReleaseEvidenceBundle(t *testing.T, criticalFinding bool) releaseEvide
 		},
 		"artifacts": evidenceArtifacts,
 	}
-	data, err := json.Marshal(evidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeReleaseArtifact(t, filepath.Join(directory, "evidence.json"), data)
+	writeReleaseEvidence(t, directory, evidence)
 	return releaseEvidenceBundle{
 		directory:      directory,
 		imageReference: imageReference,
@@ -1883,9 +1765,7 @@ func releaseEvidenceImageLayoutEntries() ([]releaseEvidenceLayoutEntry, string, 
 // writeReleaseEvidenceLayoutEntries writes entries under the layout at path.
 func writeReleaseEvidenceLayoutEntries(t *testing.T, path string, entries []releaseEvidenceLayoutEntry) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	makeDirectory(t, 0o700, path, "blobs", "sha256")
 	for _, entry := range entries {
 		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
 	}
@@ -1894,9 +1774,13 @@ func writeReleaseEvidenceLayoutEntries(t *testing.T, path string, entries []rele
 // runReleaseCollector runs one scripts/release/collect.py subcommand from the
 // repository root and returns its combined output.
 func runReleaseCollector(root, subcommand string, arguments ...string) ([]byte, error) {
-	command := exec.Command("python3", append([]string{filepath.Join(root, "scripts", "release", "collect.py"), subcommand}, arguments...)...)
-	command.Dir = root
-	return command.CombinedOutput()
+	return runReleaseScript(root, "collect.py", append([]string{subcommand}, arguments...)...)
+}
+
+// runReleaseScript runs the named Python script under scripts/release from
+// the repository root and returns its combined output.
+func runReleaseScript(root, script string, arguments ...string) ([]byte, error) {
+	return combinedOutputIn(root, "python3", append([]string{filepath.Join(root, "scripts", "release", script)}, arguments...)...)
 }
 
 // writeReleaseEvidenceFixtureMetadata writes metadata as the metadata.yaml of
@@ -1904,20 +1788,36 @@ func runReleaseCollector(root, subcommand string, arguments ...string) ([]byte, 
 // profile directory.
 func writeReleaseEvidenceFixtureMetadata(t *testing.T, fixtureRoot, metadata string) string {
 	t.Helper()
-	fixtureDirectory := filepath.Join(fixtureRoot, "llm", "provider", "example", "testdata", "contracts", "example-profile")
-	if err := os.MkdirAll(fixtureDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	fixtureDirectory := makeDirectory(t, 0o700, fixtureRoot, "llm", "provider", "example", "testdata", "contracts", "example-profile")
 	writeReleaseArtifact(t, filepath.Join(fixtureDirectory, "metadata.yaml"), []byte(metadata))
 	return fixtureDirectory
+}
+
+// assertNoTemporaryEvidence fails if the recorder left temporary files beside
+// outputPath.
+func assertNoTemporaryEvidence(t *testing.T, outputPath string) {
+	t.Helper()
+	temporary, err := filepath.Glob(outputPath + ".tmp-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temporary) != 0 {
+		t.Fatalf("recorder left temporary evidence files: %v", temporary)
+	}
+}
+
+// assertReleaseEvidenceVerifierRejects runs the release evidence verifier on
+// directory and requires the rejection described by assertCommandRejected.
+func assertReleaseEvidenceVerifierRejects(t *testing.T, root, directory, accepted, want, failure string) {
+	t.Helper()
+	output, err := runReleaseEvidenceVerifier(t, root, directory)
+	assertCommandRejected(t, output, err, accepted, want, failure)
 }
 
 func runReleaseEvidenceVerifier(t *testing.T, root, directory string) ([]byte, error) {
 	t.Helper()
 	directory = resolvedReleaseEvidenceDirectory(t, directory)
-	command := exec.Command("bash", filepath.Join(root, "scripts", "release", "verify.sh"), "--artifact-dir", directory, "--evidence", filepath.Join(directory, "evidence.json"))
-	command.Dir = root
-	return command.CombinedOutput()
+	return combinedOutputIn(root, "bash", filepath.Join(root, "scripts", "release", "verify.sh"), "--artifact-dir", directory, "--evidence", filepath.Join(directory, "evidence.json"))
 }
 
 // assertReleaseEvidenceLayoutDigest requires the layout digest of the OCI
@@ -1934,9 +1834,7 @@ func assertReleaseEvidenceLayoutDigest(t *testing.T, root, path, want, layout, d
 }
 
 func runReleaseEvidenceLayoutDigest(root, path string) ([]byte, error) {
-	command := exec.Command("go", "run", "./tools/releaseverify", "layout-digest", "-layout", path)
-	command.Dir = filepath.Join(root, "golang")
-	return command.CombinedOutput()
+	return combinedOutputIn(filepath.Join(root, "golang"), "go", "run", "./tools/releaseverify", "layout-digest", "-layout", path)
 }
 
 func runReleaseEvidenceRecorder(root, directory, outputPath string, bundle releaseEvidenceBundle) ([]byte, error) {
@@ -1950,16 +1848,12 @@ func runReleaseEvidenceRecorderWithArtifactOverride(root, directory, outputPath 
 func runReleaseEvidenceRecorderWithAdditionalArtifact(root, directory, outputPath string, bundle releaseEvidenceBundle, name, path string) ([]byte, error) {
 	arguments := releaseEvidenceRecorderArguments(root, directory, outputPath, bundle, nil)
 	arguments = append(arguments, "-artifact", name+"="+path)
-	command := exec.Command("bash", arguments...)
-	command.Dir = root
-	return command.CombinedOutput()
+	return combinedOutputIn(root, "bash", arguments...)
 }
 
 func runReleaseEvidenceRecorderWithArtifactOverrides(root, directory, outputPath string, bundle releaseEvidenceBundle, overrides map[string]string) ([]byte, error) {
 	arguments := releaseEvidenceRecorderArguments(root, directory, outputPath, bundle, overrides)
-	command := exec.Command("bash", arguments...)
-	command.Dir = root
-	return command.CombinedOutput()
+	return combinedOutputIn(root, "bash", arguments...)
 }
 
 func releaseEvidenceRecorderArguments(root, directory, outputPath string, bundle releaseEvidenceBundle, overrides map[string]string) []string {
@@ -1995,11 +1889,7 @@ func rewriteReleaseEvidenceOCIIndex(t *testing.T, path string, mutate func(index
 		t.Fatalf("test OCI index manifest list = %#v", index["manifests"])
 	}
 	mutate(index, manifests)
-	updated, err := json.Marshal(index)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeReleaseArtifact(t, indexPath, updated)
+	writeJSONArtifact(t, indexPath, index)
 }
 
 func releaseEvidenceOCIIndexDescriptor(t *testing.T, manifests []any) map[string]any {
@@ -2013,9 +1903,23 @@ func releaseEvidenceOCIIndexDescriptor(t *testing.T, manifests []any) map[string
 
 func writeReleaseArtifact(t *testing.T, path string, data []byte) {
 	t.Helper()
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	writeFile(t, path, data, 0o600)
+}
+
+// marshalJSON encodes value as JSON, failing the test on error.
+func marshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+// writeJSONArtifact writes value as JSON to path with writeReleaseArtifact.
+func writeJSONArtifact(t *testing.T, path string, value any) {
+	t.Helper()
+	writeReleaseArtifact(t, path, marshalJSON(t, value))
 }
 
 func readReleaseEvidence(t *testing.T, directory string) map[string]any {
@@ -2030,14 +1934,8 @@ func readReleaseEvidenceJSONArtifact(t *testing.T, directory, name string) map[s
 
 func cloneReleaseEvidenceJSON(t *testing.T, document map[string]any) map[string]any {
 	t.Helper()
-	data, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var clone map[string]any
-	if err := json.Unmarshal(data, &clone); err != nil {
-		t.Fatal(err)
-	}
+	decodeJSON(t, marshalJSON(t, document), "release evidence clone", &clone)
 	return clone
 }
 
@@ -2074,11 +1972,7 @@ func validateJSONSchema(schema *jsonschema.Schema, document map[string]any) erro
 
 func writeReleaseEvidence(t *testing.T, directory string, evidence map[string]any) {
 	t.Helper()
-	data, err := json.Marshal(evidence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeReleaseArtifact(t, filepath.Join(directory, "evidence.json"), data)
+	writeJSONArtifact(t, filepath.Join(directory, "evidence.json"), evidence)
 }
 
 func replaceReleaseEvidenceArtifact(t *testing.T, bundle releaseEvidenceBundle, evidence map[string]any, name string, data []byte) {

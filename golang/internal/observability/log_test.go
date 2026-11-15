@@ -15,10 +15,7 @@ import (
 
 func TestLoggerDropsContentAndRawErrorsAndHashesTenant(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Level: "debug", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Format: "json", Level: "debug", Output: &output})
 	secret := "adversarial-secret-value"
 	logger.Info(context.Background(), "provider request accepted", slog.String("tenant", secret), slog.String("prompt", secret), slog.String("unknown", secret))
 	logger.Error(context.Background(), "provider failure", errors.New(secret), slog.String("operation_id", "op-1"))
@@ -35,10 +32,7 @@ func TestLoggerDropsContentAndRawErrorsAndHashesTenant(t *testing.T) {
 
 func TestLoggerRejectsUnsafeMessage(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Output: &output})
 	logger.Info(context.Background(), "prompt: hidden user content")
 	if strings.Contains(output.String(), "hidden user content") {
 		t.Fatalf("unsafe message leaked: %s", output.String())
@@ -54,10 +48,7 @@ func TestLoggerConfigurationAndAttributeBoundaries(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "text", Level: "warning", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Format: "text", Level: "warning", Output: &output})
 	if logger.Enabled(context.Background(), slog.LevelInfo) {
 		t.Fatal("warning logger enabled info records")
 	}
@@ -84,4 +75,13 @@ func TestLoggerConfigurationAndAttributeBoundaries(t *testing.T) {
 			t.Fatalf("unsafe or filtered log text %q was emitted: %s", forbidden, encoded)
 		}
 	}
+}
+
+func newLogger(t *testing.T, options observability.LogOptions) *observability.Logger {
+	t.Helper()
+	logger, err := observability.NewLogger(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return logger
 }
