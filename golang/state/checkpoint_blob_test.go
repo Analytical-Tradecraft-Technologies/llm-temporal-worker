@@ -3,7 +3,6 @@ package state
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -19,7 +18,7 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	codec := CheckpointBlobCodec{}
 	items := []llm.Item{
 		llm.HumanText("hello"),
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"x"}`)},
+		lookupCall("call-1", `{"q":"x"}`),
 	}
 	delta, err := codec.EncodeDelta(items)
 	if err != nil {
@@ -55,14 +54,7 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	}
 	snapshot := CheckpointSnapshot{Items: items, Settings: ModelState{Model: "gpt-test", ServiceClass: llm.ServiceClassStandard, Portability: llm.PortabilityStrict}, Depth: 1, Lineage: []Handle{"root", "child"}}
 	snapshot.Digest = snapshot.digest()
-	encodedSnapshot, err := codec.EncodeSnapshot(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotSnapshot, err := codec.DecodeSnapshot(encodedSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encodedSnapshot, gotSnapshot := mustRoundTripSnapshot(t, codec, snapshot)
 	if !reflect.DeepEqual(gotSnapshot.Items, snapshot.Items) || !reflect.DeepEqual(gotSnapshot.Settings, snapshot.Settings) || gotSnapshot.Depth != snapshot.Depth || !reflect.DeepEqual(gotSnapshot.Lineage, snapshot.Lineage) {
 		t.Fatalf("snapshot round trip = %#v; want %#v", gotSnapshot, snapshot)
 	}
@@ -202,38 +194,19 @@ func TestCheckpointBlobDecodersCheckNestedPayloadLimits(t *testing.T) {
 }
 
 func TestCheckpointSnapshotDecodeStillValidatesToolFrontier(t *testing.T) {
-	items, err := json.Marshal([]llm.Item{llm.ToolResult{CallID: "missing-call", Content: []llm.Part{llm.TextPart{Text: "result"}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(checkpointSnapshotPayload{
+	items := mustJSON(t, []llm.Item{llm.ToolResult{CallID: "missing-call", Content: []llm.Part{llm.TextPart{Text: "result"}}}})
+	payload := mustJSON(t, checkpointSnapshotPayload{
 		Items: items, Settings: settingsPatchToWire(SettingsPatch{Model: SetPatch("gpt-test")}), Depth: 1,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := json.Marshal(checkpointBlobEnvelope{Version: CheckpointBlobCodecVersion, Kind: CheckpointSnapshotBlob, Payload: payload})
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustJSON(t, checkpointBlobEnvelope{Version: CheckpointBlobCodecVersion, Kind: CheckpointSnapshotBlob, Payload: payload})
 	if _, err := (CheckpointBlobCodec{}).DecodeSnapshot(data); err == nil || !strings.Contains(err.Error(), "unmatched tool result") {
 		t.Fatalf("invalid tool frontier: %v", err)
 	}
 }
 
 func TestScopedBlobReaderBindsScopeAndReferenceMetadata(t *testing.T) {
-	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	data := []byte("checkpoint")
-	store := &testCheckpointBlobStore{tenant: "scope-a", data: append([]byte(nil), data...), ref: blob.Ref{Store: "test", Locator: "scope-a/blob-1", Digest: blob.Digest(data), ByteLength: int64(len(data)), MediaType: "application/json", ExpiresAt: now.Add(time.Hour)}}
-	ref := store.ref
-	digest := sha256.Sum256(data)
-	reader := ScopedBlobReader{Store: store, Now: func() time.Time { return now }, Resolve: func(_ context.Context, scope string, id BlobID) (blob.Ref, error) {
-		if scope != "scope-a" || id != "blob-1" {
-			return blob.Ref{}, blob.ErrTenantMismatch
-		}
-		return ref, nil
-	}}
-	checkpointRef := CheckpointBlobReference{ID: "blob-1", Digest: digest, ByteLength: int64(len(data)), MediaType: "application/json"}
+	reader, checkpointRef := newScopedBlobFixture("blob-1", data, data)
 	got, err := reader.Read(context.Background(), "scope-a", checkpointRef)
 	if err != nil || string(got) != string(data) {
 		t.Fatalf("Read() = %q, %v; want %q", got, err, data)
@@ -249,37 +222,47 @@ func TestScopedBlobReaderBindsScopeAndReferenceMetadata(t *testing.T) {
 }
 
 func TestScopedBlobReaderRejectsCorruptedPayload(t *testing.T) {
-	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	written := []byte("checkpoint")
 	corrupted := []byte("checkpoinT")
 	if len(written) != len(corrupted) {
 		t.Fatal("corruption fixture must preserve the published byte length")
 	}
-	digest := sha256.Sum256(written)
-	store := &testCheckpointBlobStore{
-		tenant: "scope-a",
-		data:   corrupted,
-		ref: blob.Ref{
-			Store: "test", Locator: "scope-a/blob-corrupt", Digest: blob.Digest(written),
-			ByteLength: int64(len(written)), MediaType: "application/json", ExpiresAt: now.Add(time.Hour),
-		},
-	}
-	reader := ScopedBlobReader{
-		Store: store,
-		Now:   func() time.Time { return now },
-		Resolve: func(_ context.Context, scope string, id BlobID) (blob.Ref, error) {
-			if scope != "scope-a" || id != "blob-corrupt" {
-				return blob.Ref{}, blob.ErrTenantMismatch
-			}
-			return store.ref, nil
-		},
-	}
-	reference := CheckpointBlobReference{
-		ID: "blob-corrupt", Digest: digest, ByteLength: int64(len(written)), MediaType: "application/json",
-	}
+	reader, reference := newScopedBlobFixture("blob-corrupt", written, corrupted)
 	if _, err := reader.Read(context.Background(), "scope-a", reference); err == nil || !strings.Contains(err.Error(), "digest or length mismatch") {
 		t.Fatalf("Read() = %v, want corrupted-payload digest error", err)
 	}
+}
+
+// newScopedBlobFixture returns a reader whose store holds stored as scope-a's
+// blob id, published with the digest and length of written, and the
+// checkpoint reference to that publication.
+func newScopedBlobFixture(id BlobID, written, stored []byte) (ScopedBlobReader, CheckpointBlobReference) {
+	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	store := &testCheckpointBlobStore{tenant: "scope-a", data: append([]byte(nil), stored...), ref: blob.Ref{
+		Store: "test", Locator: "scope-a/" + string(id), Digest: blob.Digest(written),
+		ByteLength: int64(len(written)), MediaType: "application/json", ExpiresAt: now.Add(time.Hour),
+	}}
+	reader := ScopedBlobReader{Store: store, Now: func() time.Time { return now }, Resolve: func(_ context.Context, scope string, got BlobID) (blob.Ref, error) {
+		if scope != "scope-a" || got != id {
+			return blob.Ref{}, blob.ErrTenantMismatch
+		}
+		return store.ref, nil
+	}}
+	return reader, CheckpointBlobReference{ID: id, Digest: sha256.Sum256(written), ByteLength: int64(len(written)), MediaType: "application/json"}
+}
+
+// mustRoundTripSnapshot encodes snapshot and decodes the result.
+func mustRoundTripSnapshot(t *testing.T, codec CheckpointBlobCodec, snapshot CheckpointSnapshot) ([]byte, CheckpointSnapshot) {
+	t.Helper()
+	encoded, err := codec.EncodeSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := codec.DecodeSnapshot(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded, decoded
 }
 
 type testCheckpointBlobStore struct {

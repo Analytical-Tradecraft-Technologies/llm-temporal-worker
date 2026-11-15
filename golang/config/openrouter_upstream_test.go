@@ -46,10 +46,7 @@ func TestOpenRouterUpstreamEnvironmentOverrides(t *testing.T) {
 	if got := loaded.OpenRouterUpstreamSettings(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("upstream settings = %+v, want %+v", got, want)
 	}
-	snapshot, err := config.Compile(t.Context(), exampleYAML(t), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := mustCompile(t, exampleYAML(t))
 	if !strings.Contains(string(snapshot.Canonical()), `"openrouter_upstream":{"countries":"Core2","deny_prompt_training":true,"require_native_precision":true}`) {
 		t.Fatalf("effective config omitted the upstream settings: %s", snapshot.Canonical())
 	}
@@ -65,16 +62,12 @@ func TestOpenRouterUpstreamRejectsInvalidValues(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			withoutOpenRouterUpstreamOverrides(t)
 			t.Setenv(name, value)
-			if _, err := config.Load(exampleYAML(t)); err == nil {
-				t.Fatalf("%s=%q accepted", name, value)
-			}
+			requireLoadRejected(t, exampleYAML(t), "%s=%q accepted", name, value)
 		})
 	}
 	withoutOpenRouterUpstreamOverrides(t)
 	t.Setenv(config.EnvOpenRouterCountries, "")
-	if _, err := config.Load(exampleYAML(t)); err == nil {
-		t.Fatal("an empty country list was accepted")
-	}
+	requireLoadRejected(t, exampleYAML(t), "an empty country list was accepted")
 }
 
 func TestOpenRouterProviderLocationsLayerTheConfigOverTheEnvironment(t *testing.T) {
@@ -100,14 +93,10 @@ func TestOpenRouterProviderLocationsRejectInvalidEntries(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			withoutOpenRouterUpstreamOverrides(t)
 			t.Setenv(config.EnvOpenRouterProviderLocations, value)
-			if _, err := config.Load(exampleYAML(t)); err == nil {
-				t.Fatalf("%s=%q accepted", config.EnvOpenRouterProviderLocations, value)
-			}
+			requireLoadRejected(t, exampleYAML(t), "%s=%q accepted", config.EnvOpenRouterProviderLocations, value)
 		})
 	}
 	withoutOpenRouterUpstreamOverrides(t)
 	data := append(exampleYAML(t), []byte("openrouter_upstream:\n  provider_locations:\n    xai: [Mars]\n")...)
-	if _, err := config.Load(data); err == nil {
-		t.Fatal("an invalid configured country was accepted")
-	}
+	requireLoadRejected(t, data, "an invalid configured country was accepted")
 }

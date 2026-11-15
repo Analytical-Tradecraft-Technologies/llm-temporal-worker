@@ -60,12 +60,9 @@ func TestEstimateCandidateChargesPerRequestInUSD(t *testing.T) {
 		Input:        []llm.Item{llm.HumanText("hello")},
 		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
 	}
-	estimate, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, pricing.Entry{
+	estimate := mustEstimateCandidate(t, Estimator{}, request, routing.Candidate{ID: "candidate"}, pricing.Entry{
 		Prices: pricing.UnitPrices{PerRequest: pricing.MustDecimalUSD("0.10")},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if estimate.CostUSD.String() != "0.100000000000000000" || estimate.MicroUSD != 100000 {
 		t.Fatalf("per-request estimate = %#v", estimate)
 	}
@@ -98,13 +95,13 @@ func TestEstimateCandidateUsesExactCandidateAwareTokenizer(t *testing.T) {
 	}
 	candidate := routing.Candidate{ID: "provider-b", Provider: "provider-b", Model: "model-b"}
 	called := false
-	estimate, err := (Estimator{Tokenizer: func(got llm.Request, gotCandidate routing.Candidate) (int64, error) {
+	estimate := mustEstimateCandidate(t, Estimator{Tokenizer: func(got llm.Request, gotCandidate routing.Candidate) (int64, error) {
 		called = true
 		if got.OperationKey != request.OperationKey || gotCandidate.ID != candidate.ID {
 			t.Fatalf("tokenizer inputs = %q/%q, want request/candidate", got.OperationKey, gotCandidate.ID)
 		}
 		return 17, nil
-	}}).EstimateCandidate(request, candidate, pricing.Entry{
+	}}, request, candidate, pricing.Entry{
 		Version: "prices-tokenizer",
 		Prices: pricing.UnitPrices{
 			InputPerMillion:      pricing.MustDecimalUSD("1"),
@@ -112,9 +109,6 @@ func TestEstimateCandidateUsesExactCandidateAwareTokenizer(t *testing.T) {
 			OutputPerMillion:     pricing.MustDecimalUSD("1"),
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if !called || estimate.InputTokens != 17 || estimate.CacheWriteTokens != 17 || estimate.CandidateID != candidate.ID {
 		t.Fatalf("exact tokenizer estimate = %#v, called=%t", estimate, called)
 	}
@@ -178,6 +172,28 @@ func TestMatcherContextIncludesCandidateClass(t *testing.T) {
 
 func intPointer(value int) *int { return &value }
 
+// mustEstimateCandidate estimates request on candidate, failing the test on an
+// error.
+func mustEstimateCandidate(tb testing.TB, estimator Estimator, request llm.Request, candidate routing.Candidate, entry pricing.Entry) Estimate {
+	tb.Helper()
+	estimate, err := estimator.EstimateCandidate(request, candidate, entry)
+	if err != nil {
+		tb.Fatalf("EstimateCandidate: %v", err)
+	}
+	return estimate
+}
+
+// mustCountInputTokens counts request's input tokens on candidate, failing the
+// test on an error.
+func mustCountInputTokens(tb testing.TB, estimator Estimator, request llm.Request, candidate routing.Candidate) int64 {
+	tb.Helper()
+	tokens, err := estimator.CountInputTokens(request, candidate)
+	if err != nil {
+		tb.Fatalf("CountInputTokens: %v", err)
+	}
+	return tokens
+}
+
 func TestEstimateRejectsOverlappingReasoningPrices(t *testing.T) {
 	for _, family := range []string{"openai_chat", "openai_responses", "anthropic_messages", "bedrock_messages", "bedrock_converse"} {
 		entry := pricing.Entry{Family: family, Prices: pricing.UnitPrices{ReasoningPerMillion: pricing.MustDecimalUSD("1")}}
@@ -193,15 +209,9 @@ func TestHostedToolAllowanceAndKnownContext(t *testing.T) {
 	candidate := routing.Candidate{ID: "openai", Family: "openai_responses", ContextTokens: 1000}
 	entry := pricing.Entry{Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1"), OutputPerMillion: pricing.MustDecimalUSD("2")}}
 	estimator := Estimator{SafetyRatio: big.NewRat(1, 1)}
-	plain, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plain := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	request.WebSearch, request.CodeExecution = true, true
-	hosted, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	hosted := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	if hosted.CostUSD.Cmp(plain.CostUSD) <= 0 || hosted.InputTokens != 4000 || hosted.OutputTokens != 400 {
 		t.Fatalf("allowance=%+v plain=%+v", hosted, plain)
 	}
@@ -216,26 +226,17 @@ func TestResearchReservationUsesTaskSizeNotModelContext(t *testing.T) {
 	candidate := routing.Candidate{ID: "anthropic", Family: "anthropic_messages", ContextTokens: 1_000_000}
 	entry := pricing.Entry{Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("4"), OutputPerMillion: pricing.MustDecimalUSD("20"), CacheWritePerMillion: pricing.MustDecimalUSD("5")}}
 	estimator := Estimator{SafetyRatio: big.NewRat(135, 100)}
-	got, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	if got.OutputTokens != 4096 || got.InputTokens < 49152 || got.InputTokens > 100000 || got.CostUSD.Cmp(pricing.MustUSD("2")) >= 0 {
 		t.Fatalf("task reservation = %+v", got)
 	}
 	candidate.ContextTokens = 200000
-	smaller, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	smaller := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	if smaller.CostUSD.Cmp(got.CostUSD) != 0 {
 		t.Fatalf("unused context changed reservation: %+v vs %+v", smaller, got)
 	}
 	request.WebFetch = true
-	fetched, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	fetched := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	if fetched.InputTokens <= got.InputTokens || fetched.OutputTokens != got.OutputTokens {
 		t.Fatalf("fetch allowance = %+v", fetched)
 	}
@@ -247,18 +248,12 @@ func TestResearchReservationGrowsWithPromptAndFitsProductionWindow(t *testing.T)
 	input := int64(1000)
 	estimator := Estimator{MaxOutput: 32768, SafetyRatio: big.NewRat(135, 100), Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return input, nil }}
 	request := llm.Request{WebSearch: true}
-	small, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	small := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	if small.CostUSD.Cmp(pricing.MustUSD("30")) >= 0 || small.OutputTokens != 32768 {
 		t.Fatalf("production reservation=%+v", small)
 	}
 	input = 2000
-	large, err := estimator.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	large := mustEstimateCandidate(t, estimator, request, candidate, entry)
 	if large.InputTokens-small.InputTokens != 4000 || large.CostUSD.Cmp(small.CostUSD) <= 0 {
 		t.Fatalf("prompt growth not counted for each pass: %+v vs %+v", large, small)
 	}
@@ -269,10 +264,7 @@ func TestResearchReservationBoundsEachContinuationByContext(t *testing.T) {
 	request := llm.Request{WebSearch: true, Output: &llm.OutputSpec{MaxTokens: intPointer(100)}}
 	estimator := Estimator{Tokenizer: func(llm.Request, routing.Candidate) (int64, error) { return 200, nil }}
 	for _, family := range []string{"anthropic_messages", "openai_responses"} {
-		got, err := estimator.EstimateCandidate(request, routing.Candidate{Family: family, ContextTokens: 1000}, pricing.Entry{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := mustEstimateCandidate(t, estimator, request, routing.Candidate{Family: family, ContextTokens: 1000}, pricing.Entry{})
 		if got.InputTokens != 200+3*900 || got.OutputTokens != 100 {
 			t.Fatalf("%s reservation=%+v", family, got)
 		}

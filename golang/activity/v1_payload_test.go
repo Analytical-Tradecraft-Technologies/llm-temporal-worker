@@ -82,17 +82,7 @@ func TestV1PayloadCodecsEnforceInlineLimitOnEncodeAndDecode(t *testing.T) {
 	if err := json.Unmarshal(data, &request); err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	limits := PayloadLimits{MaxInlineBytes: len(encoded) - 1}
-	if _, err := MarshalQueryV1(request, limits); err == nil {
-		t.Fatal("oversize v1 payload was accepted during encode")
-	}
-	if _, err := UnmarshalQueryV1(encoded, limits); err == nil {
-		t.Fatal("oversize v1 payload was accepted during decode")
-	}
+	assertCodecRejectsOneByteOverLimit(t, request, MarshalQueryV1, UnmarshalQueryV1)
 }
 
 func TestV1PayloadCodecsRoundTripContractMatrix(t *testing.T) {

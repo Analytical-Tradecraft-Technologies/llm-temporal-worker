@@ -45,14 +45,8 @@ func (r *resolveRuntime) CompleteExecutionV1(context.Context, llm.ExecutionRefer
 }
 
 func completedResolution(request llm.PrepareExecutionV1) llm.ExecutionResultV1 {
-	return llm.ExecutionResultV1{RequestID: resolveRequestID, Kind: "generate", State: llm.ExecutionCompleted, Capability: "ref_v1.test", Generate: &llm.GenerateResponseV1{
-		APIVersion: llm.APIVersion, OperationKey: request.Generate.OperationKey, OperationID: resolveRequestID,
-		Status:     llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.ModelText("ok")},
-		Checkpoint: llm.CheckpointMetadata{Handle: "ckp-generate", Kind: "cache_replay"},
-		Cache:      llm.CacheDispositionV1{Disposition: "hit"},
-		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-	}}
+	response := completedGenerateResponseV1(request.Generate.OperationKey, resolveRequestID, llm.CheckpointMetadata{Handle: "ckp-generate", Kind: "cache_replay"}, "hit")
+	return llm.ExecutionResultV1{RequestID: resolveRequestID, Kind: "generate", State: llm.ExecutionCompleted, Capability: "ref_v1.test", Generate: &response}
 }
 
 // The resolve Activity returns the plan, and a completed result only when a

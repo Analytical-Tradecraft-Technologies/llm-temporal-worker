@@ -20,10 +20,11 @@ func TestWindowExactUSDReservationPreservesSubMicroAmount(t *testing.T) {
 
 func TestWindowExactUSDRejectsOverflow(t *testing.T) {
 	window := Window{Duration: time.Minute, Bucket: time.Second, LimitUSD: pricing.MustUSD("1")}
-	if _, _, err := window.CanReserveUSD(map[int64]pricing.USD{}, pricing.MustUSD("2"), time.Unix(0, 0)); err != nil {
+	allowed, _, err := window.CanReserveUSD(map[int64]pricing.USD{}, pricing.MustUSD("2"), time.Unix(0, 0))
+	if err != nil {
 		t.Fatalf("oversized reservation should be a denial, not a malformed request: %v", err)
 	}
-	if allowed, _, _ := window.CanReserveUSD(map[int64]pricing.USD{}, pricing.MustUSD("2"), time.Unix(0, 0)); allowed {
+	if allowed {
 		t.Fatal("exact USD reservation exceeded its limit")
 	}
 }

@@ -110,77 +110,75 @@ func childGenerateV1Request(parent llm.CheckpointHandle) llm.GenerateRequestV1 {
 // fixedScopeID resolves every request context to the "scope-id" scope.
 func fixedScopeID(llm.RequestContext) (string, error) { return "scope-id", nil }
 
-func validMaterializedGenerateResponse(operationKey string) llm.GenerateResponseV1 {
-	return llm.GenerateResponseV1{
-		APIVersion: llm.APIVersion, OperationKey: operationKey, OperationID: "operation-generate",
-		Status:     llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.ModelText("ok")},
-		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-generate", Kind: "generation", Depth: 2},
-		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
-		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
+// materializingV1Fixture is a MaterializingV1Runtime scoped by fixedScopeID
+// whose runtime and materializer probes share one event log.
+type materializingV1Fixture struct {
+	events       []string
+	runtime      *materializingRuntimeProbe
+	materializer *materializingMaterializerProbe
+	wrapped      *MaterializingV1Runtime
+}
+
+// newMaterializingV1Fixture materializes validMaterializedState("parent").
+func newMaterializingV1Fixture() *materializingV1Fixture {
+	fixture := &materializingV1Fixture{events: []string{}}
+	fixture.runtime = &materializingRuntimeProbe{events: &fixture.events}
+	fixture.materializer = &materializingMaterializerProbe{events: &fixture.events, result: validMaterializedState("parent")}
+	fixture.wrapped = &MaterializingV1Runtime{Runtime: fixture.runtime, Materializer: fixture.materializer, Scope: fixedScopeID}
+	return fixture
+}
+
+// assertEvents fails unless got equals want, naming what the events describe.
+func assertEvents(t *testing.T, what string, got []string, want ...string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %v, want %v", what, got, want)
 	}
+}
+
+func validMaterializedGenerateResponse(operationKey string) llm.GenerateResponseV1 {
+	return completedGenerateResponseV1(operationKey, "operation-generate", llm.CheckpointMetadata{Handle: "checkpoint-generate", Kind: "generation", Depth: 2}, "disabled")
 }
 
 func validMaterializedCompactResponse(operationKey string) llm.CompactResponseV1 {
 	parent := llm.CheckpointHandle("parent")
-	return llm.CompactResponseV1{
-		APIVersion: llm.CompactAPIVersion, OperationKey: operationKey, OperationID: "operation-compact",
-		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-compact", Parent: &parent, Kind: "compaction", Depth: 3},
-		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
-		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-	}
+	return compactResponseV1(operationKey, "operation-compact", llm.CheckpointMetadata{Handle: "checkpoint-compact", Parent: &parent, Kind: "compaction", Depth: 3}, "disabled")
 }
 
 func TestMaterializingV1RuntimeMaterializesBeforeGenerateDispatch(t *testing.T) {
-	events := []string{}
-	runtime := &materializingRuntimeProbe{events: &events}
-	materialized := validMaterializedState("parent")
-	materialized.Tenant = "tenant/project"
-	materializer := &materializingMaterializerProbe{events: &events, result: materialized}
-	wrapped := &MaterializingV1Runtime{
-		Runtime: runtime, Materializer: materializer,
-		Scope: func(requestContext llm.RequestContext) (string, error) {
-			return requestContext.Tenant + "/" + requestContext.Project, nil
-		},
+	fixture := newMaterializingV1Fixture()
+	fixture.materializer.result.Tenant = "tenant/project"
+	fixture.wrapped.Scope = func(requestContext llm.RequestContext) (string, error) {
+		return requestContext.Tenant + "/" + requestContext.Project, nil
 	}
 	request := childGenerateV1Request("parent")
-	response, err := (&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), request)
+	response, err := (&Activities{V1Runtime: fixture.wrapped}).GenerateV1(context.Background(), request)
 	if err != nil {
 		t.Fatalf("GenerateV1 error = %v", err)
 	}
 	if response == nil || response.OperationKey != request.OperationKey {
 		t.Fatalf("response = %#v", response)
 	}
-	if got, want := events, []string{"materialize:tenant/project:parent", "generate:parent"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("dispatch order = %v, want %v", got, want)
-	}
-	if runtime.generateSeen == nil || runtime.generateSeen.Settings.Model != "logical-model" {
-		t.Fatalf("materialized state = %#v, want replayed model", runtime.generateSeen)
+	assertEvents(t, "dispatch order", fixture.events, "materialize:tenant/project:parent", "generate:parent")
+	if seen := fixture.runtime.generateSeen; seen == nil || seen.Settings.Model != "logical-model" {
+		t.Fatalf("materialized state = %#v, want replayed model", seen)
 	}
 }
 
 func TestMaterializingV1RuntimeMaterializesBeforeCompactDispatch(t *testing.T) {
-	events := []string{}
-	runtime := &materializingRuntimeProbe{events: &events}
-	materializer := &materializingMaterializerProbe{events: &events, result: validMaterializedState("parent")}
-	wrapped := &MaterializingV1Runtime{
-		Runtime: runtime, Materializer: materializer,
-		Scope: fixedScopeID,
-	}
+	fixture := newMaterializingV1Fixture()
 	request := validCompactV1Request()
 	request.Parent = "parent"
-	response, err := (&Activities{V1Runtime: wrapped}).CompactV1(context.Background(), request)
+	response, err := (&Activities{V1Runtime: fixture.wrapped}).CompactV1(context.Background(), request)
 	if err != nil {
 		t.Fatalf("CompactV1 error = %v", err)
 	}
 	if response == nil || response.OperationKey != request.OperationKey {
 		t.Fatalf("response = %#v", response)
 	}
-	if got, want := events, []string{"materialize:scope-id:parent", "compact:parent"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("dispatch order = %v, want %v", got, want)
-	}
-	if runtime.compactSeen == nil || runtime.compactSeen.Handle != state.Handle("parent") {
-		t.Fatalf("materialized state = %#v, want parent", runtime.compactSeen)
+	assertEvents(t, "dispatch order", fixture.events, "materialize:scope-id:parent", "compact:parent")
+	if seen := fixture.runtime.compactSeen; seen == nil || seen.Handle != state.Handle("parent") {
+		t.Fatalf("materialized state = %#v, want parent", seen)
 	}
 }
 
@@ -191,37 +189,25 @@ func TestMaterializingV1RuntimeRootGenerateDoesNotRequireCheckpointMaterializer(
 	if _, err := (&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), validGenerateV1Request()); err != nil {
 		t.Fatalf("root GenerateV1 error = %v", err)
 	}
-	if got, want := events, []string{"generate:normal"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("root dispatch = %v, want %v", got, want)
-	}
+	assertEvents(t, "root dispatch", events, "generate:normal")
 }
 
 func TestMaterializingV1RuntimeFailsClosedBeforeDispatchOnMaterializationError(t *testing.T) {
-	events := []string{}
-	runtime := &materializingRuntimeProbe{events: &events}
-	materializer := &materializingMaterializerProbe{events: &events, err: state.ErrNotFound}
-	wrapped := &MaterializingV1Runtime{
-		Runtime: runtime, Materializer: materializer,
-		Scope: fixedScopeID,
-	}
+	fixture := newMaterializingV1Fixture()
+	fixture.materializer.err = state.ErrNotFound
 	request := childGenerateV1Request("missing")
-	if _, err := (&Activities{V1Runtime: wrapped}).GenerateV1(context.Background(), request); err == nil {
+	if _, err := (&Activities{V1Runtime: fixture.wrapped}).GenerateV1(context.Background(), request); err == nil {
 		t.Fatal("GenerateV1 unexpectedly dispatched after materialization failure")
 	}
-	if got, want := events, []string{"materialize:scope-id:missing"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("events = %v, want %v", got, want)
-	}
+	assertEvents(t, "events", fixture.events, "materialize:scope-id:missing")
 }
 
 func TestMaterializingV1RuntimeFailsClosedWithoutStateAwareRuntime(t *testing.T) {
 	request := childGenerateV1Request("parent")
 	base := &v1RuntimeStub{}
-	materializer := &materializingMaterializerProbe{events: new([]string), result: validMaterializedState("parent")}
-	wrapped := &MaterializingV1Runtime{
-		Runtime: base, Materializer: materializer,
-		Scope: fixedScopeID,
-	}
-	if _, err := wrapped.GenerateV1(context.Background(), request); err == nil {
+	fixture := newMaterializingV1Fixture()
+	fixture.wrapped.Runtime = base
+	if _, err := fixture.wrapped.GenerateV1(context.Background(), request); err == nil {
 		t.Fatal("GenerateV1 unexpectedly accepted a runtime without the state-aware extension")
 	}
 	if base.generateCalls != 0 {
@@ -232,30 +218,21 @@ func TestMaterializingV1RuntimeFailsClosedWithoutStateAwareRuntime(t *testing.T)
 func TestMaterializingV1RuntimeMapsScopeResolverFailure(t *testing.T) {
 	request := childGenerateV1Request("parent")
 	wantErr := errors.New("scope lookup failed")
-	wrapped := &MaterializingV1Runtime{
-		Runtime:      &materializingRuntimeProbe{events: new([]string)},
-		Materializer: &materializingMaterializerProbe{events: new([]string), result: validMaterializedState("parent")},
-		Scope:        func(llm.RequestContext) (string, error) { return "", wantErr },
-	}
+	wrapped := newMaterializingV1Fixture().wrapped
+	wrapped.Scope = func(llm.RequestContext) (string, error) { return "", wantErr }
 	if _, err := wrapped.GenerateV1(context.Background(), request); err == nil {
 		t.Fatal("GenerateV1 unexpectedly accepted scope resolver failure")
 	}
 }
 
 func TestMaterializingV1RuntimePreservesWrappedCancellation(t *testing.T) {
-	events := []string{}
 	request := childGenerateV1Request("parent")
-	wrapper := &MaterializingV1Runtime{
-		Runtime:      &materializingRuntimeProbe{events: &events},
-		Materializer: &materializingMaterializerProbe{events: &events, err: fmt.Errorf("load checkpoint: %w", context.Canceled)},
-		Scope:        fixedScopeID,
-	}
-	if _, err := (&Activities{V1Runtime: wrapper}).GenerateV1(context.Background(), request); !errors.Is(err, context.Canceled) {
+	fixture := newMaterializingV1Fixture()
+	fixture.materializer.err = fmt.Errorf("load checkpoint: %w", context.Canceled)
+	if _, err := (&Activities{V1Runtime: fixture.wrapped}).GenerateV1(context.Background(), request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("GenerateV1 error = %v, want context.Canceled", err)
 	}
-	if got, want := events, []string{"materialize:scope-id:parent"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("events = %v, want materialization without runtime dispatch", got)
-	}
+	assertEvents(t, "events (materialization without runtime dispatch)", fixture.events, "materialize:scope-id:parent")
 }
 
 func TestMapMaterializationDeadlineRetainsRetryableStateLoad(t *testing.T) {
@@ -278,18 +255,13 @@ func assertProviderError(t *testing.T, err error, code provider.Code, phase prov
 
 func TestMaterializingV1RuntimeDeadlineUsesRetryableTemporalError(t *testing.T) {
 	request := childGenerateV1Request("parent")
-	wrapper := &MaterializingV1Runtime{
-		Runtime:      &materializingRuntimeProbe{events: new([]string)},
-		Materializer: &deadlineMaterializerProbe{},
-		Scope:        fixedScopeID,
-	}
+	wrapper := newMaterializingV1Fixture().wrapped
+	wrapper.Materializer = &deadlineMaterializerProbe{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	_, err := (&Activities{V1Runtime: wrapper}).GenerateV1(ctx, request)
 	application, details := safeApplicationError(t, err)
-	if application.Type() != ErrorTypeProviderTransient || application.NonRetryable() {
-		t.Fatalf("application error type=%q non_retryable=%v, want retryable provider transient", application.Type(), application.NonRetryable())
-	}
+	assertApplicationType(t, application, ErrorTypeProviderTransient, false)
 	if details.Code != string(provider.CodeDeadlineExceeded) || details.Phase != string(provider.PhaseStateLoad) {
 		t.Fatalf("safe details = %#v, want state-load deadline", details)
 	}
@@ -316,23 +288,18 @@ func TestV1ActivityPayloadDoesNotScaleWithAncestorLineage(t *testing.T) {
 	limits := PayloadLimits{MaxInlineBytes: 1 << 20}
 	var requestBytes, responseBytes []int
 	for _, turns := range []int{1, 100, 10_000} {
-		events := []string{}
-		runtime := &materializingRuntimeProbe{events: &events}
-		materializer := &materializingMaterializerProbe{events: &events, result: validMaterializedState("parent")}
+		fixture := newMaterializingV1Fixture()
+		materializer := fixture.materializer
 		materializer.result.Items = make([]llm.Item, turns)
 		for index := range materializer.result.Items {
 			materializer.result.Items[index] = llm.HumanText(fmt.Sprintf("ancestor-%05d", index))
-		}
-		wrapped := &MaterializingV1Runtime{
-			Runtime: runtime, Materializer: materializer,
-			Scope: fixedScopeID,
 		}
 		request := childGenerateV1Request("parent")
 		encodedRequest, err := MarshalGenerateV1(request, limits)
 		if err != nil {
 			t.Fatalf("turns=%d marshal request: %v", turns, err)
 		}
-		response, err := (&Activities{V1Runtime: wrapped, PayloadLimits: limits}).GenerateV1(context.Background(), request)
+		response, err := (&Activities{V1Runtime: fixture.wrapped, PayloadLimits: limits}).GenerateV1(context.Background(), request)
 		if err != nil {
 			t.Fatalf("turns=%d GenerateV1: %v", turns, err)
 		}
@@ -343,7 +310,7 @@ func TestV1ActivityPayloadDoesNotScaleWithAncestorLineage(t *testing.T) {
 		if strings.Contains(string(encodedRequest), "ancestor-") || strings.Contains(string(encodedResponse), "ancestor-") {
 			t.Fatalf("turns=%d leaked ancestor transcript into Activity payload", turns)
 		}
-		if got := len(runtime.generateSeen.Items); got != turns {
+		if got := len(fixture.runtime.generateSeen.Items); got != turns {
 			t.Fatalf("turns=%d materialized item count=%d, want %d", turns, got, turns)
 		}
 		requestBytes = append(requestBytes, len(encodedRequest))

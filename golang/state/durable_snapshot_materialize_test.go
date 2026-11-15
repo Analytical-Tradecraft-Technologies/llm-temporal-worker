@@ -99,11 +99,7 @@ func (fixture *snapshotLineageFixture) add(id string, parent string, delta, outp
 		}
 		lineage = append(append([]Handle(nil), full.Lineage...), Handle(id))
 	}
-	encodedLineage, err := json.Marshal(lineage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	row.CanonicalLineageDigest = sha256.Sum256(encodedLineage)
+	row.CanonicalLineageDigest = sha256.Sum256(mustJSON(t, lineage))
 	fixture.plain.rows[row.ID] = row
 	if snapshot {
 		full, err := fixture.materializer(fixture.plain).Materialize(context.Background(), "scope-a", row.ID, MaterializeLimits{})
@@ -130,7 +126,7 @@ func (fixture *snapshotLineageFixture) chain(branch, parent string, from, throug
 		patch := SettingsPatch{}
 		switch depth {
 		case 0:
-			patch = SettingsPatch{Model: SetPatch("gpt-test"), ServiceClass: SetPatch(llm.ServiceClassStandard), Portability: SetPatch(llm.PortabilityStrict)}
+			patch = strictRootSettingsPatch()
 		case 3:
 			temperature := llm.DecimalV1("0.25")
 			patch = SettingsPatch{Model: SetPatch("gpt-next"), TemperatureDecimal: SetPatch(temperature), Instructions: SetPatch([]llm.Instruction{{Text: "be brief"}})}
@@ -139,7 +135,7 @@ func (fixture *snapshotLineageFixture) chain(branch, parent string, from, throug
 		}
 		output := []llm.Item{snapshotLineageMessage(llm.ActorModel, fmt.Sprintf("%s answer %d", branch, depth))}
 		if pending && depth == through {
-			output = append(output, llm.ToolCall{ID: "call-" + id, Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)})
+			output = append(output, lookupCall("call-"+id, `{"q":"x"}`))
 		}
 		parent = string(fixture.add(id, parent, []llm.Item{snapshotLineageMessage(llm.ActorHuman, fmt.Sprintf("%s turn %d", branch, depth))}, output, patch, interval > 0 && depth > 0 && depth%interval == 0))
 	}
@@ -166,15 +162,7 @@ func (fixture *snapshotLineageFixture) requireSameMaterialization(id string) Mat
 	if err != nil {
 		t.Fatalf("snapshot walk of %s: %v", id, err)
 	}
-	wantBytes, err := json.Marshal(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotBytes, err := json.Marshal(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotBytes, wantBytes) {
+	if wantBytes, gotBytes := mustJSON(t, want), mustJSON(t, got); !bytes.Equal(gotBytes, wantBytes) {
 		t.Fatalf("snapshot walk of %s differs from the full walk:\n got %s\nwant %s", id, gotBytes, wantBytes)
 	}
 	return got

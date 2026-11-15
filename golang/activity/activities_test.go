@@ -2,7 +2,6 @@ package activity
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -10,8 +9,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -58,7 +55,7 @@ func (*temporalActivityCaptureRegistry) RegisterDynamicActivity(any, sdkactivity
 var _ worker.ActivityRegistry = (*temporalActivityCaptureRegistry)(nil)
 
 func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T) {
-	response := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
+	response := completedEngineResponse()
 	var created []*fakeHeartbeater
 	value := &fakeEngine{response: response}
 	activities := Activities{
@@ -90,7 +87,7 @@ func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T)
 
 func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	heartbeater := &fakeHeartbeater{}
-	value := &fakeEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
+	value := &fakeEngine{response: completedEngineResponse()}
 	activities := Activities{Engine: value, Heartbeater: heartbeater}
 	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}})
 	if err != nil {
@@ -105,23 +102,15 @@ func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 }
 
 func TestGenerateActivityMapsEngineError(t *testing.T) {
-	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
-	activities := Activities{Engine: &fakeEngine{err: err}}
-	_, got := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(got, &applicationErr) {
-		t.Fatalf("error = %v", got)
-	}
-	if applicationErr.Type() != ErrorTypeAmbiguous || !applicationErr.NonRetryable() {
-		t.Fatalf("error type = %q non_retryable=%v", applicationErr.Type(), applicationErr.NonRetryable())
-	}
+	_, got := ambiguousEngineActivities().Generate(context.Background(), inputlessGeneratePayload())
+	assertAmbiguousActivityError(t, got)
 }
 
 func TestGenerateTemporalReturnsPointerOnlyOnSuccess(t *testing.T) {
-	want := llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
+	want := completedEngineResponse()
 	activities := Activities{Engine: &fakeEngine{response: want}}
 
-	response, err := activities.generateTemporal(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
+	response, err := activities.generateTemporal(context.Background(), inputlessGeneratePayload())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,10 +123,7 @@ func TestGenerateTemporalReturnsPointerOnlyOnSuccess(t *testing.T) {
 }
 
 func TestGenerateTemporalReturnsNilResultForAmbiguousError(t *testing.T) {
-	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
-	activities := Activities{Engine: &fakeEngine{err: err}}
-
-	response, got := activities.generateTemporal(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
+	response, got := ambiguousEngineActivities().generateTemporal(context.Background(), inputlessGeneratePayload())
 	if response != nil {
 		t.Fatalf("Temporal Activity response = %#v, want nil with error", response)
 	}
@@ -145,10 +131,8 @@ func TestGenerateTemporalReturnsNilResultForAmbiguousError(t *testing.T) {
 }
 
 func TestRegisteredTemporalGeneratePreservesAmbiguousApplicationError(t *testing.T) {
-	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
-	activities := Activities{Engine: &fakeEngine{err: err}}
 	registry := &temporalActivityCaptureRegistry{}
-	activities.Register(registry)
+	ambiguousEngineActivities().Register(registry)
 	if registry.name != LegacyGenerateActivityName {
 		t.Fatalf("registered Activity = %q, want %q", registry.name, LegacyGenerateActivityName)
 	}
@@ -157,10 +141,7 @@ func TestRegisteredTemporalGeneratePreservesAmbiguousApplicationError(t *testing
 		t.Fatalf("registered Activity has type %T, want pointer response handler", registry.function)
 	}
 
-	var suite testsuite.WorkflowTestSuite
-	environment := suite.NewTestActivityEnvironment()
-	environment.RegisterActivityWithOptions(generate, sdkactivity.RegisterOptions{Name: registry.name})
-	_, got := environment.ExecuteActivity(generate, GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}})
+	_, got := executeTestActivity(nil, generate, registry.name, inputlessGeneratePayload())
 	if got == nil {
 		t.Fatal("registered Temporal Activity unexpectedly succeeded")
 	}
@@ -170,13 +151,25 @@ func TestRegisteredTemporalGeneratePreservesAmbiguousApplicationError(t *testing
 	assertAmbiguousActivityError(t, got)
 }
 
+// completedEngineResponse is the completed standard-service response the fake
+// engines return for "operation-1".
+func completedEngineResponse() llm.Response {
+	return llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
+}
+
+// inputlessGeneratePayload is a legacy Generate payload with no input items.
+func inputlessGeneratePayload() GenerateRequest {
+	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1"}}
+}
+
+// ambiguousEngineActivities wires an engine that always fails with an
+// ambiguous-dispatch provider error.
+func ambiguousEngineActivities() *Activities {
+	err := provider.NewError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "safe")
+	return &Activities{Engine: &fakeEngine{err: err}}
+}
+
 func assertAmbiguousActivityError(t *testing.T, got error) {
 	t.Helper()
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(got, &applicationErr) {
-		t.Fatalf("error = %T %v, want Temporal application error", got, got)
-	}
-	if applicationErr.Type() != ErrorTypeAmbiguous || !applicationErr.NonRetryable() {
-		t.Fatalf("error type = %q non_retryable=%v, want %q true", applicationErr.Type(), applicationErr.NonRetryable(), ErrorTypeAmbiguous)
-	}
+	assertApplicationError(t, got, ErrorTypeAmbiguous, true)
 }

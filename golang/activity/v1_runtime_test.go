@@ -2,7 +2,6 @@ package activity
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,8 +11,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
-	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/testsuite"
 )
 
 type v1RuntimeStub struct {
@@ -36,14 +33,7 @@ func (runtime *v1RuntimeStub) GenerateV1(_ context.Context, request llm.Generate
 	if runtime.err != nil {
 		return llm.GenerateResponseV1{}, runtime.err
 	}
-	return llm.GenerateResponseV1{
-		APIVersion: llm.APIVersion, OperationKey: request.OperationKey, OperationID: "op-generate",
-		Status:     llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.ModelText("ok")},
-		Checkpoint: llm.CheckpointMetadata{Handle: "ckp-generate", Kind: "generation"},
-		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
-		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-	}, nil
+	return completedGenerateResponseV1(request.OperationKey, "op-generate", llm.CheckpointMetadata{Handle: "ckp-generate", Kind: "generation"}, "disabled"), nil
 }
 
 func (runtime *v1RuntimeStub) CompactV1(_ context.Context, request llm.CompactRequestV1) (llm.CompactResponseV1, error) {
@@ -51,12 +41,7 @@ func (runtime *v1RuntimeStub) CompactV1(_ context.Context, request llm.CompactRe
 	if runtime.err != nil {
 		return llm.CompactResponseV1{}, runtime.err
 	}
-	return llm.CompactResponseV1{
-		APIVersion: llm.CompactAPIVersion, OperationKey: request.OperationKey, OperationID: "op-compact",
-		Checkpoint: llm.CheckpointMetadata{Handle: "ckp-compact", Parent: pointer(llm.CheckpointHandle(request.Parent)), Kind: "compaction"},
-		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
-		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-	}, nil
+	return compactResponseV1(request.OperationKey, "op-compact", llm.CheckpointMetadata{Handle: "ckp-compact", Parent: pointer(llm.CheckpointHandle(request.Parent)), Kind: "compaction"}, "disabled"), nil
 }
 
 func (runtime *v1RuntimeStub) QueryV1(_ context.Context, request llm.QueryRequestV1) (llm.QueryResponseV1, error) {
@@ -101,6 +86,30 @@ func validCompactV1Request() llm.CompactRequestV1 {
 	}
 }
 
+// completedGenerateResponseV1 is a completed one-message Generate response
+// with an exact zero provider-reported cost.
+func completedGenerateResponseV1(operationKey, operationID string, checkpoint llm.CheckpointMetadata, cache string) llm.GenerateResponseV1 {
+	return llm.GenerateResponseV1{
+		APIVersion: llm.APIVersion, OperationKey: operationKey, OperationID: operationID,
+		Status:     llm.ResponseStatusCompleted,
+		Output:     []llm.Item{llm.ModelText("ok")},
+		Checkpoint: checkpoint,
+		Cache:      llm.CacheDispositionV1{Disposition: cache},
+		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
+	}
+}
+
+// compactResponseV1 is a Compact response with an exact zero
+// provider-reported cost.
+func compactResponseV1(operationKey, operationID string, checkpoint llm.CheckpointMetadata, cache string) llm.CompactResponseV1 {
+	return llm.CompactResponseV1{
+		APIVersion: llm.CompactAPIVersion, OperationKey: operationKey, OperationID: operationID,
+		Checkpoint: checkpoint,
+		Cache:      llm.CacheDispositionV1{Disposition: cache},
+		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
+	}
+}
+
 func validQueryV1Request() llm.QueryRequestV1 {
 	return llm.QueryRequestV1{
 		APIVersion: llm.QueryAPIVersion, OperationKey: "query-1", Kind: llm.QueryProviderStatus,
@@ -108,13 +117,15 @@ func validQueryV1Request() llm.QueryRequestV1 {
 	}
 }
 
+// v1ActivityNames is the exact v1 Activity registration order.
+var v1ActivityNames = []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ResolveGenerationActivityName, ExportLangfuseActivityName}
+
 func TestRegisterV1InstallsExactActivityNames(t *testing.T) {
 	registry := &v1Registry{}
 	activities := &Activities{V1Runtime: &v1RuntimeStub{}}
 	activities.Register(registry)
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ResolveGenerationActivityName, ExportLangfuseActivityName}
-	if fmt.Sprint(registry.names) != fmt.Sprint(want) {
-		t.Fatalf("registered names = %v, want %v", registry.names, want)
+	if fmt.Sprint(registry.names) != fmt.Sprint(v1ActivityNames) {
+		t.Fatalf("registered names = %v, want %v", registry.names, v1ActivityNames)
 	}
 	// Every v1 handler takes a raw payload and decodes it strictly inside the
 	// Activity so decode failures map to typed, non-retryable errors.
@@ -154,27 +165,9 @@ func TestUnconfiguredV1RuntimeFailsClosedForEveryOperation(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{
-			name: "generate",
-			call: func() error {
-				_, err := runtime.GenerateV1(context.Background(), validGenerateV1Request())
-				return err
-			},
-		},
-		{
-			name: "compact",
-			call: func() error {
-				_, err := runtime.CompactV1(context.Background(), validCompactV1Request())
-				return err
-			},
-		},
-		{
-			name: "query",
-			call: func() error {
-				_, err := runtime.QueryV1(context.Background(), validQueryV1Request())
-				return err
-			},
-		},
+		{name: "generate", call: func() error { return errOnly(runtime.GenerateV1(context.Background(), validGenerateV1Request())) }},
+		{name: "compact", call: func() error { return errOnly(runtime.CompactV1(context.Background(), validCompactV1Request())) }},
+		{name: "query", call: func() error { return errOnly(runtime.QueryV1(context.Background(), validQueryV1Request())) }},
 	}
 
 	for _, test := range tests {
@@ -195,14 +188,8 @@ func TestV1GeneratePreservesHeartbeatLifecycleDuringRuntimeDispatch(t *testing.T
 	ticker := newManualHeartbeatTicker()
 	heartbeater := newRecordingHeartbeater()
 	runtime := &v1RuntimeStub{entered: make(chan struct{}, 1), release: make(chan struct{})}
-	activities := &Activities{
-		V1Runtime:                  runtime,
-		Heartbeater:                heartbeater,
-		HeartbeatKeepaliveInterval: time.Second,
-		heartbeatTickerFactory: func(time.Duration) heartbeatTicker {
-			return ticker
-		},
-	}
+	activities := keepaliveActivities(nil, heartbeater, ticker)
+	activities.V1Runtime = runtime
 	done := make(chan error, 1)
 	go func() {
 		_, err := activities.GenerateV1(context.Background(), validGenerateV1Request())
@@ -232,21 +219,8 @@ func TestRegisteredV1GenerateExecutesThroughTemporalEnvironment(t *testing.T) {
 	activities := &Activities{V1Runtime: runtime}
 	registry := &v1Registry{}
 	activities.Register(registry)
-	generate := registry.funcs[0]
-	var suite testsuite.WorkflowTestSuite
-	environment := suite.NewTestActivityEnvironment()
-	environment.RegisterActivityWithOptions(generate, sdkactivity.RegisterOptions{Name: GenerateActivityName})
-	result, err := environment.ExecuteActivity(GenerateActivityName, validGenerateV1Request())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var response llm.ExecutionResultV1
-	if err := result.Get(&response); err != nil {
-		t.Fatal(err)
-	}
-	if response.State != llm.ExecutionPending || runtime.calls != 1 {
-		t.Fatalf("result=%#v calls=%d", response, runtime.calls)
-	}
+	result, err := executeTestActivity(nil, registry.funcs[0], GenerateActivityName, validGenerateV1Request())
+	assertPendingExecutionResult(t, runtime, result, err)
 }
 
 func TestV1ActivityRejectsOversizedPayloadBeforeDispatch(t *testing.T) {
@@ -258,10 +232,7 @@ func TestV1ActivityRejectsOversizedPayloadBeforeDispatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("GenerateV1 unexpectedly accepted oversized payload")
 	}
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(err, &applicationErr) || applicationErr.Type() != ErrorTypeInvalidArgument {
-		t.Fatalf("error = %T %v, want non-retryable invalid argument", err, err)
-	}
+	assertApplicationError(t, err, ErrorTypeInvalidArgument, true)
 	if runtime.generateCalls != 0 {
 		t.Fatalf("runtime calls = %d, want zero before payload validation", runtime.generateCalls)
 	}
@@ -272,19 +243,7 @@ func TestV1ActivityFailsClosedWithoutRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("GenerateV1 unexpectedly succeeded without a runtime")
 	}
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(err, &applicationErr) || applicationErr.Type() != ErrorTypeInvalidArgument {
-		t.Fatalf("error = %T %v, want stable configuration error", err, err)
-	}
-}
-
-func TestV1ActivityRedactsRuntimeError(t *testing.T) {
-	secret := "provider-response-secret"
-	runtime := &v1RuntimeStub{err: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseDispatch, provider.DispatchNotDispatched, provider.RetryAfter, secret)}
-	_, err := (&Activities{V1Runtime: runtime}).GenerateV1(context.Background(), validGenerateV1Request())
-	if err == nil || strings.Contains(err.Error(), secret) {
-		t.Fatalf("error = %v, must redact runtime error details", err)
-	}
+	assertApplicationError(t, err, ErrorTypeInvalidArgument, true)
 }
 
 func TestV1ActivityRedactsRuntimeErrorAcrossEveryActivity(t *testing.T) {
@@ -294,30 +253,15 @@ func TestV1ActivityRedactsRuntimeErrorAcrossEveryActivity(t *testing.T) {
 		call  func(*Activities) error
 		calls func(*v1RuntimeStub) int
 	}{
-		{
-			name: "generate",
-			call: func(activities *Activities) error {
-				_, err := activities.GenerateV1(context.Background(), validGenerateV1Request())
-				return err
-			},
-			calls: func(runtime *v1RuntimeStub) int { return runtime.generateCalls },
-		},
-		{
-			name: "compact",
-			call: func(activities *Activities) error {
-				_, err := activities.CompactV1(context.Background(), validCompactV1Request())
-				return err
-			},
-			calls: func(runtime *v1RuntimeStub) int { return runtime.compactCalls },
-		},
-		{
-			name: "query",
-			call: func(activities *Activities) error {
-				_, err := activities.QueryV1(context.Background(), validQueryV1Request())
-				return err
-			},
-			calls: func(runtime *v1RuntimeStub) int { return runtime.queryCalls },
-		},
+		{name: "generate", call: func(activities *Activities) error {
+			return errOnly(activities.GenerateV1(context.Background(), validGenerateV1Request()))
+		}, calls: func(runtime *v1RuntimeStub) int { return runtime.generateCalls }},
+		{name: "compact", call: func(activities *Activities) error {
+			return errOnly(activities.CompactV1(context.Background(), validCompactV1Request()))
+		}, calls: func(runtime *v1RuntimeStub) int { return runtime.compactCalls }},
+		{name: "query", call: func(activities *Activities) error {
+			return errOnly(activities.QueryV1(context.Background(), validQueryV1Request()))
+		}, calls: func(runtime *v1RuntimeStub) int { return runtime.queryCalls }},
 	}
 
 	for _, test := range cases {

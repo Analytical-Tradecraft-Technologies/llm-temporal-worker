@@ -12,11 +12,18 @@ import (
 // fails the test when the example no longer contains the text.
 func replaceExample(t *testing.T, old, replacement string) []byte {
 	t.Helper()
+	return []byte(strings.Replace(exampleContaining(t, old), old, replacement, 1))
+}
+
+// exampleContaining returns the shipped example and fails the test when it no
+// longer contains text.
+func exampleContaining(t *testing.T, text string) string {
+	t.Helper()
 	example := string(exampleYAML(t))
-	if !strings.Contains(example, old) {
-		t.Fatalf("example configuration no longer contains %q", old)
+	if !strings.Contains(example, text) {
+		t.Fatalf("example configuration no longer contains %q", text)
 	}
-	return []byte(strings.Replace(example, old, replacement, 1))
+	return example
 }
 
 func requireLoadError(t *testing.T, data []byte, fragments ...string) {
@@ -41,9 +48,7 @@ func TestLoadRejectsContentAfterTheFirstDocument(t *testing.T) {
 		"garbage after end marker":  "\n...\n}} not yaml [\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := config.Load([]byte(example + trailing)); err == nil {
-				t.Fatal("content after the first YAML document was silently ignored")
-			}
+			requireLoadRejected(t, []byte(example+trailing), "content after the first YAML document was silently ignored")
 		})
 	}
 	// A bare end marker and trailing comments add no content.

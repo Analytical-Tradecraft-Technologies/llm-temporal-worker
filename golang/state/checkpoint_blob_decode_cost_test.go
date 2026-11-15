@@ -23,7 +23,7 @@ func TestCheckpointSnapshotDecodeAllocationsAreBoundedPerItem(t *testing.T) {
 		callID := fmt.Sprintf("call-%d", index)
 		transcript = append(transcript,
 			llm.HumanText("next"),
-			llm.ToolCall{ID: callID, Name: "lookup", Arguments: json.RawMessage(`{"q":"a"}`)},
+			lookupCall(callID, `{"q":"a"}`),
 			llm.ToolResult{CallID: callID, Name: "lookup", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"hits":1}`)}}},
 			llm.ModelText("ok"),
 		)

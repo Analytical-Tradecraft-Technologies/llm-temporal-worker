@@ -1,9 +1,6 @@
 package pricing
 
-import (
-	"math/big"
-	"testing"
-)
+import "testing"
 
 func FuzzParseDecimalAndCeil(f *testing.F) {
 	f.Add("0.000001", int64(1))
@@ -17,16 +14,6 @@ func FuzzParseDecimalAndCeil(f *testing.F) {
 		if err != nil || price.scale > 18 {
 			return
 		}
-		want := decimalCeilingOracle(t, value, units, 1_000_000)
-		got, err := CeilMicroUSD(price, units, 1_000_000)
-		if want.Cmp(big.NewInt(int64(RedisSafeLimit))) > 0 {
-			if err == nil {
-				t.Fatalf("overflow result = %d, want error", got)
-			}
-			return
-		}
-		if err != nil || got.Int64() != want.Int64() {
-			t.Fatalf("CeilMicroUSD(%q, %d) = %d, %v; want %d", value, units, got, err, want)
-		}
+		assertCeilMatchesOracle(t, value, price, units, 1_000_000)
 	})
 }

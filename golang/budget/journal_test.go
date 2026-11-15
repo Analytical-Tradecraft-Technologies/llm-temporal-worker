@@ -8,12 +8,17 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
-func TestReservationEventValidation(t *testing.T) {
-	event := ReservationEvent{
+// testReservationEvent reserves amount USD in the shared test window.
+func testReservationEvent(amount string) ReservationEvent {
+	return ReservationEvent{
 		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
 		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
-		AmountUSD: pricing.MustUSD("0.000000001"),
+		AmountUSD: pricing.MustUSD(amount),
 	}
+}
+
+func TestReservationEventValidation(t *testing.T) {
+	event := testReservationEvent("0.000000001")
 	if err := event.Validate(); err != nil {
 		t.Fatalf("valid reservation rejected: %v", err)
 	}
@@ -95,11 +100,7 @@ func TestCompletionEventRejectsUnknownReasonForKnownCost(t *testing.T) {
 func ptrUSD(value pricing.USD) *pricing.USD { return &value }
 
 func TestJournalEventsRejectBadSharedFields(t *testing.T) {
-	reservation := ReservationEvent{
-		EventID: "event", GenerationID: "generation", OperationID: "operation", WindowID: "window",
-		BucketStart: time.Unix(100, 0).UTC(), OccurredAt: time.Unix(101, 0).UTC(),
-		AmountUSD: pricing.MustUSD("1"),
-	}
+	reservation := testReservationEvent("1")
 	completion := exactReleaseEvent()
 	for _, test := range []struct {
 		name        string

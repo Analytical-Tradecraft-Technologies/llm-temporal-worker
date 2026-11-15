@@ -18,7 +18,7 @@ func TestPlannerEnforcesPerRouteOutputLimits(t *testing.T) {
 		{"too large", outputLimitPointer(201), 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			route := Route{ID: "small", EndpointID: "ep", Provider: "openai", Family: "responses", Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, Capabilities: testCapabilities(), OutputTokens: 100}
+			route := standardRoute("default", Route{ID: "small", EndpointID: "ep", Provider: "openai", Family: "responses", Model: "model", OutputTokens: 100})
 			larger := route
 			larger.ID = "large"
 			larger.OutputTokens = 200

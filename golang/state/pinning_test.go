@@ -6,27 +6,32 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
+// gptPinning is a candidate lineage on another provider than the anthropic
+// constraints the pinning tests start from.
+var gptPinning = Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"}
+
+// assertPinningDecision checks CheckPinning's decision for candidate and
+// returns the result for further checks.
+func assertPinningDecision(t *testing.T, constraints Constraints, candidate Pinning, want Compatibility, label string) CompatibilityResult {
+	t.Helper()
+	got := CheckPinning(constraints, candidate)
+	if got.Decision != want {
+		t.Fatalf("%s = %#v, want %s", label, got, want)
+	}
+	return got
+}
+
 func TestCheckPinning(t *testing.T) {
-	if got := CheckPinning(Constraints{}, Pinning{}); got.Decision != CompatibilityCompatible {
-		t.Fatalf("absent continuation = %#v", got)
-	}
+	assertPinningDecision(t, Constraints{}, Pinning{}, CompatibilityCompatible, "absent continuation")
 	base := Constraints{Present: true, Provider: "anthropic", EndpointID: "prod", Family: "messages", ModelLineage: "claude", TranscriptComplete: true, Portability: llm.PortabilityBestEffort}
-	if got := CheckPinning(base, Pinning{Provider: "anthropic", EndpointID: "prod", AccountRegion: "us-east-1", Family: "messages", ModelLineage: "claude"}); got.Decision != CompatibilityCompatible {
-		t.Fatalf("same lineage = %#v", got)
-	}
-	if got := CheckPinning(base, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"}); got.Decision != CompatibilityPortable {
-		t.Fatalf("portable transcript = %#v", got)
-	}
+	assertPinningDecision(t, base, Pinning{Provider: "anthropic", EndpointID: "prod", AccountRegion: "us-east-1", Family: "messages", ModelLineage: "claude"}, CompatibilityCompatible, "same lineage")
+	assertPinningDecision(t, base, gptPinning, CompatibilityPortable, "portable transcript")
 	base.RequiresOpaqueState = true
-	if got := CheckPinning(base, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"}); got.Decision != CompatibilityRejected {
-		t.Fatalf("opaque mismatch = %#v", got)
-	}
+	assertPinningDecision(t, base, gptPinning, CompatibilityRejected, "opaque mismatch")
 	base.RequiresOpaqueState = false
 	base.TranscriptComplete = false
 	base.Portability = llm.PortabilityStrict
-	if got := CheckPinning(base, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"}); got.Decision != CompatibilityRejected {
-		t.Fatalf("incomplete strict transcript = %#v", got)
-	}
+	assertPinningDecision(t, base, gptPinning, CompatibilityRejected, "incomplete strict transcript")
 }
 
 func TestCheckPinningDropsOnlyOptionalStateForBestEffortPortableTranscript(t *testing.T) {
@@ -39,34 +44,24 @@ func TestCheckPinningDropsOnlyOptionalStateForBestEffortPortableTranscript(t *te
 		TranscriptComplete: true,
 		Portability:        llm.PortabilityBestEffort,
 	}
-	result := CheckPinning(constraints, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"})
-	if result.Decision != CompatibilityPortable || len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "provider_state_dropped" {
+	result := assertPinningDecision(t, constraints, gptPinning, CompatibilityPortable, "optional provider state portability")
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "provider_state_dropped" {
 		t.Fatalf("optional provider state portability = %#v", result)
 	}
 
 	constraints.RequiresOpaqueState = true
-	result = CheckPinning(constraints, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"})
-	if result.Decision != CompatibilityRejected {
-		t.Fatalf("required provider state portability = %#v, want rejected", result)
-	}
+	assertPinningDecision(t, constraints, gptPinning, CompatibilityRejected, "required provider state portability")
 }
 
 func TestCheckPinningRejectsRequiredStateWithIncompleteConstraint(t *testing.T) {
 	constraints := Constraints{Present: true, RequiresOpaqueState: true, TranscriptComplete: true, Portability: llm.PortabilityBestEffort}
-	result := CheckPinning(constraints, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"})
-	if result.Decision != CompatibilityRejected {
-		t.Fatalf("incomplete required constraint = %#v, want rejected", result)
-	}
+	assertPinningDecision(t, constraints, gptPinning, CompatibilityRejected, "incomplete required constraint")
 }
 
 func TestCheckPinningRequiresExactAccountScopeForRequiredState(t *testing.T) {
 	constraints := Constraints{Present: true, Provider: "openai", EndpointID: "prod", AccountRegion: "us-east-1", Family: "responses", ModelLineage: "gpt", RequiresOpaqueState: true}
-	result := CheckPinning(constraints, Pinning{Provider: "openai", EndpointID: "prod", Family: "responses", ModelLineage: "gpt"})
-	if result.Decision != CompatibilityRejected {
-		t.Fatalf("missing candidate account scope = %#v, want rejected", result)
-	}
-	result = CheckPinning(constraints, Pinning{Provider: "openai", EndpointID: "prod", AccountRegion: "us-east-1", Family: "responses", ModelLineage: "gpt"})
-	if result.Decision != CompatibilityCompatible {
-		t.Fatalf("matching candidate account scope = %#v, want compatible", result)
-	}
+	assertPinningDecision(t, constraints, gptPinning, CompatibilityRejected, "missing candidate account scope")
+	scoped := gptPinning
+	scoped.AccountRegion = "us-east-1"
+	assertPinningDecision(t, constraints, scoped, CompatibilityCompatible, "matching candidate account scope")
 }

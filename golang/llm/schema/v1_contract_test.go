@@ -205,15 +205,21 @@ func TestV1ContractCompactionPolicyBounds(t *testing.T) {
 
 func readV1Schema(t *testing.T, name string) *schema.Schema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := schema.Parse(data)
+	compiled, err := schema.Parse(readV1SchemaFile(t, name))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return compiled
+}
+
+// readV1SchemaFile reads the named published v1 schema file.
+func readV1SchemaFile(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func readV1Fixture(t *testing.T, name string) []byte {

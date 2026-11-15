@@ -165,11 +165,7 @@ func syntheticLineageCheckpoint(handle, parent string, turn int, now time.Time, 
 		ExpiresAt:    now.Add(24 * time.Hour),
 	}
 	if root {
-		checkpoint.SettingsPatch = SettingsPatch{
-			Model:        SetPatch("gpt-test"),
-			ServiceClass: SetPatch(llm.ServiceClassStandard),
-			Portability:  SetPatch(llm.PortabilityStrict),
-		}
+		checkpoint.SettingsPatch = strictRootSettingsPatch()
 	} else {
 		parentID := Handle(parent)
 		checkpoint.Parent = &parentID

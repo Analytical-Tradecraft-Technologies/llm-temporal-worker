@@ -18,6 +18,12 @@ func pendingExecution() llm.ExecutionResultV1 {
 	return llm.ExecutionResultV1{RequestID: executionTestID, Kind: "generate", State: llm.ExecutionPending, RetryAfterSeconds: 3}
 }
 
+// executionTestReference names the executionTestID request in the valid
+// Generate context.
+func executionTestReference() llm.ExecutionReferenceV1 {
+	return llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context}
+}
+
 type executionRuntimeStub struct {
 	v1RuntimeStub
 	calls  int
@@ -51,7 +57,7 @@ func (runtime *executionRuntimeStub) CompleteExecutionV1(context.Context, llm.Ex
 }
 
 func TestExecutionActivitiesDispatchOnceAndValidateBeforeDispatch(t *testing.T) {
-	reference := llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context}
+	reference := executionTestReference()
 	generate := validGenerateV1Request()
 	tests := []struct {
 		name, kind, step string
@@ -118,7 +124,7 @@ func TestExecutionActivityRejectsMismatchedOrInvalidResult(t *testing.T) {
 		mutate(&result)
 		runtime := &executionRuntimeStub{result: result}
 		a := &Activities{V1Runtime: runtime}
-		got, err := a.PollExecutionV1(context.Background(), llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context})
+		got, err := a.PollExecutionV1(context.Background(), executionTestReference())
 		if got != nil || err == nil || strings.Contains(err.Error(), "secret-provider-diagnostic") {
 			t.Fatalf("result=%#v error=%v", got, err)
 		}
@@ -160,7 +166,7 @@ func TestExecutionCompletedResponseCannotEscapeItsRequest(t *testing.T) {
 			return a.GenerateStepV1(context.Background(), validGenerateV1Request())
 		},
 		func() (*llm.ExecutionResultV1, error) {
-			return a.CompleteExecutionV1(context.Background(), llm.ExecutionReferenceV1{RequestID: executionTestID, Context: validGenerateV1Request().Context})
+			return a.CompleteExecutionV1(context.Background(), executionTestReference())
 		},
 	} {
 		got, err := call()

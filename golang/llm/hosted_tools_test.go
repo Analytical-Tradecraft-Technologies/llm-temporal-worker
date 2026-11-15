@@ -27,10 +27,7 @@ func TestHostedSearchChargesAndUnknownExecution(t *testing.T) {
 func TestHostedPatchBoolValidation(t *testing.T) {
 	for _, flag := range []string{"web_search", "web_fetch", "code_execution"} {
 		for _, value := range []string{`{"set":true}`, `{"set":false}`, `{"clear":true}`} {
-			var patch SettingsPatchV1
-			if err := json.Unmarshal([]byte(`{"`+flag+`":`+value+`}`), &patch); err != nil {
-				t.Fatal(err)
-			}
+			mustUnmarshalJSON[SettingsPatchV1](t, []byte(`{"`+flag+`":`+value+`}`), "decode "+flag)
 		}
 		for _, value := range []string{`{"set":null}`, `{"set":"true"}`, `{"set":1}`} {
 			var patch SettingsPatchV1

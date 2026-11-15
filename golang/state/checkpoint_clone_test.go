@@ -17,7 +17,7 @@ func TestCheckpointGraphGetDetachesNestedItemData(t *testing.T) {
 			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
 				llm.ImagePart{Bytes: []byte{1, 2, 3}, MediaType: "image/png"},
 			}},
-			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"key":"value"}`)},
+			lookupCall("call-1", `{"key":"value"}`),
 			llm.ProviderState{Provider: "test", EndpointFamily: "chat", MediaType: "application/json", Opaque: []byte{4, 5, 6}},
 			llm.Reference{URI: "https://example.com", Metadata: map[string]json.RawMessage{"key": json.RawMessage(`{"value":1}`)}},
 		},

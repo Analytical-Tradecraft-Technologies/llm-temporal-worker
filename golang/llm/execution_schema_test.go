@@ -18,10 +18,7 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var document map[string]any
-		if err := json.Unmarshal(data, &document); err != nil {
-			t.Fatal(err)
-		}
+		document := mustUnmarshal[map[string]any](t, data, "decode "+name+" schema")
 		id := document["$id"].(string)
 		documents[name] = id
 		if err := compiler.AddResource(id, document); err != nil {
@@ -65,11 +62,7 @@ func TestExecutionSchemaMatchesCodecs(t *testing.T) {
 		}
 		for _, value := range test.values {
 			t.Run(test.name+"/"+value, func(t *testing.T) {
-				var instance any
-				if err := json.Unmarshal([]byte(value), &instance); err != nil {
-					t.Fatal(err)
-				}
-				schemaErr := compiled.Validate(instance)
+				schemaErr := compiled.Validate(mustUnmarshal[any](t, []byte(value), "decode instance"))
 				codecErr := json.Unmarshal([]byte(value), test.target())
 				if (schemaErr == nil) != (codecErr == nil) {
 					t.Fatalf("schema=%v codec=%v", schemaErr, codecErr)

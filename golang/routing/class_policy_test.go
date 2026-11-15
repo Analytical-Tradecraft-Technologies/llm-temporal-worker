@@ -1,7 +1,6 @@
 package routing
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -15,8 +14,7 @@ func classPolicyCatalog(t *testing.T, policies ...ClassPolicy) Catalog {
 	catalog, err := CompileCatalog("route-v1", map[string]Model{
 		"tiered": {Routes: []Route{{ID: "openai", EndpointID: "openai", Provider: "openai", Family: "openai_responses", Model: "gpt", Classes: all,
 			ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassEconomy: "flex", llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "priority"}, Capabilities: testCapabilities(), PriceVersion: "p"}}},
-		"standard-only": {Routes: []Route{{ID: "anthropic", EndpointID: "anthropic", Provider: "anthropic", Family: "anthropic_messages", Model: "claude", Classes: []llm.ServiceClass{llm.ServiceClassStandard},
-			ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard_only"}, Capabilities: testCapabilities(), PriceVersion: "p"}}},
+		"standard-only": {Routes: []Route{standardRoute("standard_only", Route{ID: "anthropic", EndpointID: "anthropic", Provider: "anthropic", Family: "anthropic_messages", Model: "claude", PriceVersion: "p"})}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -54,10 +52,7 @@ func TestPlannerAdjustsDisabledAndUnsupportedClasses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			request := llm.Request{OperationKey: "op", Model: tc.model, ServiceClass: tc.class, ServiceClassFallbacks: tc.fallbacks, Context: tc.context, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman}}}
-			plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
-			if err != nil {
-				t.Fatal(err)
-			}
+			plan := mustPlan(t, Input{Request: request, Catalog: catalog})
 			got := make([]llm.ServiceClass, 0, len(plan.Candidates))
 			requested, _ := llm.NormalizeServiceClass(tc.class)
 			for index, candidate := range plan.Candidates {

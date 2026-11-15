@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"testing"
-	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
@@ -35,11 +34,7 @@ func TestDurableCheckpointMaterializerReplaysThreeWayForkAfterRestart(t *testing
 		if err != nil {
 			t.Fatalf("encode %s response: %v", branch.id, err)
 		}
-		patch, err := fixture.codec.EncodeSettingsPatch(SettingsPatch{})
-		if err != nil {
-			t.Fatalf("encode %s settings patch: %v", branch.id, err)
-		}
-		refs := durableMaterializePutBlobs(fixture.reader, delta, response, patch)
+		refs := durableMaterializePutBlobs(fixture.reader, delta, response, mustEncoded(t)(fixture.codec.EncodeSettingsPatch(SettingsPatch{})))
 		parent := fixture.rootID
 		row := fixture.repository.rows[fixture.childID]
 		row.ID = branch.id
@@ -53,25 +48,16 @@ func TestDurableCheckpointMaterializerReplaysThreeWayForkAfterRestart(t *testing
 		fixture.repository.rows[branch.id] = row
 	}
 
-	newMaterializer := func() *DurableCheckpointMaterializer {
-		return &DurableCheckpointMaterializer{
-			Repository: fixture.repository,
-			Blobs:      fixture.reader,
-			Codec:      fixture.codec,
-			Now:        func() time.Time { return fixture.now },
-		}
-	}
-
 	// Materialize one branch before the simulated restart. A later materializer
 	// must not depend on the first instance's in-memory graph.
-	first, err := newMaterializer().Materialize(context.Background(), "scope-a", branches[0].id, MaterializeLimits{})
+	first, err := fixture.materializer().Materialize(context.Background(), "scope-a", branches[0].id, MaterializeLimits{})
 	if err != nil {
 		t.Fatalf("materialize first branch: %v", err)
 	}
 	assertDurableFork(t, first, fixture.rootID, branches[0])
 
 	for _, branch := range branches[1:] {
-		got, err := newMaterializer().Materialize(context.Background(), "scope-a", branch.id, MaterializeLimits{})
+		got, err := fixture.materializer().Materialize(context.Background(), "scope-a", branch.id, MaterializeLimits{})
 		if err != nil {
 			t.Fatalf("materialize %s after restart: %v", branch.id, err)
 		}

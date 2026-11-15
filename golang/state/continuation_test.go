@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -16,17 +15,25 @@ import (
 func testTranscript() []llm.Item {
 	return []llm.Item{
 		llm.HumanText("hello"),
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
+		lookupCall("call-1", `{"q":"x"}`),
 	}
+}
+
+// mustCanonicalTranscript runs CanonicalTranscript and fails the test on an
+// error.
+func mustCanonicalTranscript(t *testing.T, items []llm.Item) ([]byte, [32]byte) {
+	t.Helper()
+	canonical, digest, err := CanonicalTranscript(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical, digest
 }
 
 func validContinuation(t *testing.T, now time.Time) Continuation {
 	t.Helper()
 	transcript := testTranscript()
-	_, digest, err := CanonicalTranscript(transcript)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, digest := mustCanonicalTranscript(t, transcript)
 	return Continuation{
 		ID:                 "continuation-1",
 		Tenant:             "tenant-a",
@@ -88,25 +95,13 @@ func TestPinningValidationAndEmpty(t *testing.T) {
 
 func TestCanonicalTranscriptIsStableAndRejectsInvalidItems(t *testing.T) {
 	items := testTranscript()
-	first, firstDigest, err := CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, secondDigest, err := CanonicalTranscript(items)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first, firstDigest := mustCanonicalTranscript(t, items)
+	second, secondDigest := mustCanonicalTranscript(t, items)
 	if !bytes.Equal(first, second) || firstDigest != secondDigest {
 		t.Fatal("canonical transcript changed between identical calls")
 	}
-	empty, emptyDigest, err := CanonicalTranscript(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	emptySlice, emptySliceDigest, err := CanonicalTranscript([]llm.Item{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	empty, emptyDigest := mustCanonicalTranscript(t, nil)
+	emptySlice, emptySliceDigest := mustCanonicalTranscript(t, []llm.Item{})
 	if !bytes.Equal(empty, emptySlice) || emptyDigest != emptySliceDigest {
 		t.Fatal("nil and empty transcripts should have the same canonical form")
 	}
@@ -126,7 +121,9 @@ func TestCanonicalTranscriptIsStableAndRejectsInvalidItems(t *testing.T) {
 
 func TestContinuationCloneCopiesMutableFields(t *testing.T) {
 	expires := time.Unix(300, 0)
-	original := Continuation{Transcript: testTranscript(), ProviderState: []OpaqueStateRef{{Data: []byte{1, 2, 3}}}, Affinities: ProviderCacheAffinitySet{{Rank: 0, Provider: "openai", RouteID: "route", EndpointID: "endpoint", EndpointAccountHMAC: [32]byte{1}, Region: "us-east-1", EndpointFamily: "responses", ModelLineage: "lineage", RouteModelRevision: "revision", CacheEpoch: "epoch", LastSuccessAt: time.Unix(100, 0), ExpiresAt: &expires}}}
+	affinity := testAffinity(time.Unix(100, 0))
+	affinity.ExpiresAt = &expires
+	original := Continuation{Transcript: testTranscript(), ProviderState: []OpaqueStateRef{{Data: []byte{1, 2, 3}}}, Affinities: ProviderCacheAffinitySet{affinity}}
 	clone := original.Clone()
 
 	original.Transcript[0] = llm.Message{Actor: llm.ActorModel}

@@ -75,12 +75,11 @@ func TestParseRejectsExponentialFanout(t *testing.T) {
 }
 
 func TestParseAcceptsOrdinarySchemas(t *testing.T) {
-	properties := make([]string, 300)
-	for i := range properties {
-		properties[i] = fmt.Sprintf(`"p%d":{"anyOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}`, i)
-	}
+	properties := joined(300, func(i int) string {
+		return fmt.Sprintf(`"p%d":{"anyOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}`, i)
+	})
 	for name, data := range map[string]string{
-		"wide object":         `{"type":"object","properties":{` + strings.Join(properties, ",") + `},"additionalProperties":false}`,
+		"wide object":         `{"type":"object","properties":{` + properties + `},"additionalProperties":false}`,
 		"recursive tree":      `{"type":"object","properties":{"name":{"type":"string"},"children":{"type":"array","items":{"$ref":"#"}}}}`,
 		"recursive via defs":  `{"$ref":"#/$defs/node","$defs":{"node":{"type":"object","properties":{"next":{"anyOf":[{"$ref":"#/$defs/node"},{"type":"null"}]}}}}}`,
 		"bounded DAG":         dagFanoutSchema(20, 2),
@@ -192,15 +191,9 @@ func TestParseResolvesPercentEncodedReferences(t *testing.T) {
 // Many distinct child-location combinations fold into one merged location
 // once maxFanoutBuckets is reached, instead of materializing them all.
 func TestParseBoundsDistinctChildLocations(t *testing.T) {
-	shared := make([]string, 500)
-	for i := range shared {
-		shared[i] = fmt.Sprintf(`"q%d":{}`, i)
-	}
-	root := make([]string, 500)
-	for i := range root {
-		root[i] = fmt.Sprintf(`"p%d":{"additionalProperties":{},"$ref":"#/$defs/s"}`, i)
-	}
-	data := `{"properties":{` + strings.Join(root, ",") + `},"$defs":{"s":{"properties":{` + strings.Join(shared, ",") + `}}}}`
+	shared := joined(500, func(i int) string { return fmt.Sprintf(`"q%d":{}`, i) })
+	root := joined(500, func(i int) string { return fmt.Sprintf(`"p%d":{"additionalProperties":{},"$ref":"#/$defs/s"}`, i) })
+	data := `{"properties":{` + root + `},"$defs":{"s":{"properties":{` + shared + `}}}}`
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)

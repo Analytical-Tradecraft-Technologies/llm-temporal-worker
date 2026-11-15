@@ -123,6 +123,55 @@ func resumeWorkerAfterDrain(t *testing.T, temporalWorker *app.TemporalWorker, de
 	}
 }
 
+// mustStartWorker starts temporalWorker, failing the test on an error.
+func mustStartWorker(t *testing.T, temporalWorker *app.TemporalWorker) {
+	t.Helper()
+	if err := temporalWorker.Start(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runInBackground runs call on a new goroutine and returns a channel closed
+// once it returns.
+func runInBackground(call func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		call()
+		close(done)
+	}()
+	return done
+}
+
+// requireStillRunning fails with message when done closes within 25ms.
+func requireStillRunning(t *testing.T, done <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-done:
+		t.Fatal(message)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+// requireDrainGatesResume checks that Resume reports ErrWorkerDraining while
+// first's gated drain is in progress, then that releasing the drain lets
+// Resume build and start a second controller.
+func requireDrainGatesResume(t *testing.T, temporalWorker *app.TemporalWorker, health *httpserver.HealthState, first *blockingWorker, controllers *[]app.WorkerController, release func(), drain string) {
+	t.Helper()
+	if err := temporalWorker.Resume(); !errors.Is(err, app.ErrWorkerDraining) {
+		t.Fatalf("Resume during %s = %v, want ErrWorkerDraining", drain, err)
+	}
+	if len(*controllers) != 1 || first.stopCalls.Load() != 1 {
+		t.Fatalf("controllers=%d stop-calls=%d during %s", len(*controllers), first.stopCalls.Load(), drain)
+	}
+
+	release()
+	waitForWorkerEvent(t, first.stopExited, drain+" completion")
+	resumeWorkerAfterDrain(t, temporalWorker, "the "+drain)
+	if len(*controllers) != 2 || !health.Ready() || !temporalWorker.Started() {
+		t.Fatalf("resume after %s controllers=%d ready=%v started=%v", drain, len(*controllers), health.Ready(), temporalWorker.Started())
+	}
+}
+
 func closeWorkerGate(gate chan struct{}) func() {
 	var once sync.Once
 	return func() {
@@ -217,7 +266,7 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 	registry := &fakeRegistry{}
 	var gotQueue string
 	var gotOptions worker.Options
-	temporalWorker, err := app.NewWorker(app.WorkerOptions{
+	temporalWorker := mustNewWorker(t, app.WorkerOptions{
 		TaskQueue: "queue-a", Identity: "identity-a", MaxConcurrentActivities: 3,
 		MaxConcurrentActivityTaskPolls: 2, GracefulStopTimeout: time.Second,
 		Activities: &domainactivity.Activities{}, Health: health,
@@ -226,9 +275,6 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 			return controller, registry, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if gotQueue != "queue-a" || gotOptions.Identity != "identity-a" || gotOptions.MaxConcurrentActivityExecutionSize != 3 || gotOptions.MaxConcurrentActivityTaskPollers != 2 {
 		t.Fatalf("worker options = %#v queue=%q", gotOptions, gotQueue)
 	}
@@ -247,9 +293,7 @@ func TestWorkerRegistersExactActivityAndTransitionsReadiness(t *testing.T) {
 	if health.Ready() {
 		t.Fatal("worker was ready before Start")
 	}
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	if !health.Ready() || !temporalWorker.Started() {
 		t.Fatal("worker did not become ready")
 	}
@@ -396,16 +440,8 @@ func TestWorkerStopWaitsForFailedStartCleanup(t *testing.T) {
 	started := make(chan error, 1)
 	go func() { started <- temporalWorker.Start() }()
 	waitForWorkerEvent(t, failed.stopEntered, "failed controller cleanup")
-	stopped := make(chan struct{})
-	go func() {
-		temporalWorker.Stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		t.Fatal("Stop returned before failed controller cleanup completed")
-	case <-time.After(25 * time.Millisecond):
-	}
+	stopped := runInBackground(temporalWorker.Stop)
+	requireStillRunning(t, stopped, "Stop returned before failed controller cleanup completed")
 
 	release()
 	if err := <-started; !errors.Is(err, startErr) {
@@ -425,9 +461,7 @@ func TestWorkerPauseStopsPollingAndResumeBuildsFreshController(t *testing.T) {
 		controllers = append(controllers, controller)
 		return controller
 	})
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	temporalWorker.Pause()
 	waitForWorkerCondition(t, func() bool { return controllers[0].stopped.Load() }, "paused controller stop")
 	if health.Ready() || !controllers[0].stopped.Load() || temporalWorker.Started() {
@@ -492,9 +526,7 @@ func TestWorkerFatalSDKStopClearsReadinessAndResumeRebuildsController(t *testing
 	})
 	options.Metrics = metrics
 	temporalWorker := mustNewWorker(t, options)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	if !health.Ready() || workerPollingGauge(t, metrics) != 1 {
 		t.Fatal("worker did not report polling after Start")
 	}
@@ -530,9 +562,7 @@ func TestWorkerFatalSDKStopAfterPauseIsIgnored(t *testing.T) {
 		controller = &fatalWorker{onFatal: options.OnFatalError}
 		return controller
 	})
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	paused := controller
 	temporalWorker.Pause()
 	waitForWorkerCondition(t, func() bool { return paused.stopped.Load() }, "paused controller stop")
@@ -551,33 +581,15 @@ func TestWorkerPauseReturnsBeforeDrainAndResumeWaitsForCompletion(t *testing.T) 
 	temporalWorker := newQueueAWorker(t, health, firstThenFakeWorkers(first, &controllers))
 	t.Cleanup(func() { temporalWorker.Stop() })
 	t.Cleanup(release)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 
-	paused := make(chan struct{})
-	go func() {
-		temporalWorker.Pause()
-		close(paused)
-	}()
+	paused := runInBackground(temporalWorker.Pause)
 	waitForWorkerEvent(t, first.stopEntered, "first controller drain")
 	waitForWorkerEvent(t, paused, "Pause to return before the graceful drain completes")
 	if health.Ready() || temporalWorker.Started() {
 		t.Fatal("Pause did not fail readiness closed while draining")
 	}
-	if err := temporalWorker.Resume(); !errors.Is(err, app.ErrWorkerDraining) {
-		t.Fatalf("Resume while draining = %v, want ErrWorkerDraining", err)
-	}
-	if len(controllers) != 1 || first.stopCalls.Load() != 1 {
-		t.Fatalf("controllers=%d stop-calls=%d while draining", len(controllers), first.stopCalls.Load())
-	}
-
-	release()
-	waitForWorkerEvent(t, first.stopExited, "first controller drain completion")
-	resumeWorkerAfterDrain(t, temporalWorker, "the first controller drain")
-	if len(controllers) != 2 || !health.Ready() || !temporalWorker.Started() {
-		t.Fatalf("resume after drain controllers=%d ready=%v started=%v", len(controllers), health.Ready(), temporalWorker.Started())
-	}
+	requireDrainGatesResume(t, temporalWorker, health, first, &controllers, release, "first controller drain")
 }
 
 func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
@@ -587,28 +599,14 @@ func TestWorkerStopWaitsForOwnedPauseDrainWithoutDoubleStopping(t *testing.T) {
 		return first
 	})
 	t.Cleanup(release)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 
-	paused := make(chan struct{})
-	go func() {
-		temporalWorker.Pause()
-		close(paused)
-	}()
+	paused := runInBackground(temporalWorker.Pause)
 	waitForWorkerEvent(t, first.stopEntered, "first controller drain")
 	waitForWorkerEvent(t, paused, "Pause to return before the graceful drain completes")
 
-	stopped := make(chan struct{})
-	go func() {
-		temporalWorker.Stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-		t.Fatal("permanent Stop returned before the owned pause drain completed")
-	case <-time.After(25 * time.Millisecond):
-	}
+	stopped := runInBackground(temporalWorker.Stop)
+	requireStillRunning(t, stopped, "permanent Stop returned before the owned pause drain completed")
 	if err := temporalWorker.Resume(); !errors.Is(err, app.ErrWorkerStopping) {
 		t.Fatalf("Resume while stopping = %v, want ErrWorkerStopping", err)
 	}
@@ -653,19 +651,7 @@ func TestWorkerPauseDuringStartDrainsWithoutBlockingStartOrReplacingController(t
 		t.Fatal("Start waited for the paused controller's graceful drain")
 	}
 	waitForWorkerEvent(t, first.stopEntered, "paused controller drain")
-	if err := temporalWorker.Resume(); !errors.Is(err, app.ErrWorkerDraining) {
-		t.Fatalf("Resume while draining = %v, want ErrWorkerDraining", err)
-	}
-	if len(controllers) != 1 || first.stopCalls.Load() != 1 {
-		t.Fatalf("controllers=%d stop-calls=%d after pause during start", len(controllers), first.stopCalls.Load())
-	}
-
-	releaseStopGate()
-	waitForWorkerEvent(t, first.stopExited, "paused controller drain completion")
-	resumeWorkerAfterDrain(t, temporalWorker, "the paused controller drain")
-	if len(controllers) != 2 || !health.Ready() || !temporalWorker.Started() {
-		t.Fatalf("resume after paused start controllers=%d ready=%v started=%v", len(controllers), health.Ready(), temporalWorker.Started())
-	}
+	requireDrainGatesResume(t, temporalWorker, health, first, &controllers, releaseStopGate, "paused controller drain")
 }
 
 func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
@@ -691,9 +677,7 @@ func TestWorkerPauseDuringBuildPreventsUncommittedStart(t *testing.T) {
 	})
 	t.Cleanup(func() { temporalWorker.Stop() })
 	t.Cleanup(releaseBuildGate)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	temporalWorker.Pause()
 	waitForWorkerCondition(t, func() bool { return initial.stopped.Load() }, "initial controller pause drain")
 
@@ -745,22 +729,14 @@ func TestWorkerStopDuringStartWaitsForControllerStop(t *testing.T) {
 	go func() { started <- temporalWorker.Start() }()
 	waitForWorkerEvent(t, first.startEntered, "first controller start")
 
-	stopped := make(chan struct{})
-	go func() {
-		temporalWorker.Stop()
-		close(stopped)
-	}()
+	stopped := runInBackground(temporalWorker.Stop)
 	waitForWorkerCondition(t, func() bool {
 		return errors.Is(temporalWorker.Resume(), app.ErrWorkerStopping)
 	}, "Stop to own the in-progress start")
 
 	releaseStartGate()
 	waitForWorkerEvent(t, first.stopEntered, "controller stop after start completes")
-	select {
-	case <-stopped:
-		t.Fatal("Stop returned before the in-progress controller completed its graceful stop")
-	case <-time.After(25 * time.Millisecond):
-	}
+	requireStillRunning(t, stopped, "Stop returned before the in-progress controller completed its graceful stop")
 
 	releaseStopGate()
 	waitForWorkerEvent(t, first.stopExited, "controller stop completion")
@@ -780,7 +756,7 @@ type registrationRuntime struct{ domainactivity.V1Runtime }
 func TestWorkerRegistersV1WorkflowsAndActivitiesAgainAfterDrain(t *testing.T) {
 	var registries []*fakeRegistry
 	var controllers []*fakeWorker
-	value, err := app.NewWorker(app.WorkerOptions{
+	value := mustNewWorker(t, app.WorkerOptions{
 		TaskQueue: "v1-queue", MaxConcurrentActivities: 1, MaxConcurrentActivityTaskPolls: 1,
 		GracefulStopTimeout: time.Second,
 		Activities:          &domainactivity.Activities{V1Runtime: registrationRuntime{}},
@@ -791,13 +767,8 @@ func TestWorkerRegistersV1WorkflowsAndActivitiesAgainAfterDrain(t *testing.T) {
 			return controller, registry, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(value.Stop)
-	if err := value.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, value)
 	value.Pause()
 	resumeWorkerAfterDrain(t, value, "new workflow worker")
 	if len(registries) != 2 || !controllers[0].stopped.Load() || !controllers[1].started.Load() {
@@ -895,9 +866,7 @@ func TestWorkerPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(t *testing.
 	const graceful = 20 * time.Millisecond
 	temporalWorker, latest := newSDKLikeTemporalWorker(t, graceful, time.Second)
 	t.Cleanup(temporalWorker.Stop)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	first := latest()
 	temporalWorker.Pause()
 	waitForWorkerEvent(t, first.stopEntered, "paused controller drain")
@@ -917,9 +886,7 @@ func TestWorkerPauseLetsInFlightActivitiesOutliveGracefulStopTimeout(t *testing.
 func TestWorkerStopCancelsInFlightActivitiesAfterGracefulStopTimeout(t *testing.T) {
 	const graceful = 20 * time.Millisecond
 	temporalWorker, latest := newSDKLikeTemporalWorker(t, graceful, time.Minute)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	controller := latest()
 	started := time.Now()
 	temporalWorker.Stop()
@@ -934,9 +901,7 @@ func TestWorkerStopCancelsInFlightActivitiesAfterGracefulStopTimeout(t *testing.
 func TestWorkerStopDuringPauseDrainCancelsInFlightActivitiesAfterGracefulStopTimeout(t *testing.T) {
 	const graceful = 20 * time.Millisecond
 	temporalWorker, latest := newSDKLikeTemporalWorker(t, graceful, time.Minute)
-	if err := temporalWorker.Start(); err != nil {
-		t.Fatal(err)
-	}
+	mustStartWorker(t, temporalWorker)
 	controller := latest()
 	temporalWorker.Pause()
 	waitForWorkerEvent(t, controller.stopEntered, "paused controller drain")

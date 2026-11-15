@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -281,14 +280,7 @@ func TestNormalizeRequestCopyMatchesRoundTripForFixtures(t *testing.T) {
 		t.Fatalf("fixtures: %v %v", paths, err)
 	}
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var request Request
-		if err := json.Unmarshal(data, &request); err != nil {
-			t.Fatal(err)
-		}
+		request := readRequestFile(t, path)
 		assertNormalizeMatchesRoundTrip(t, path, request, true)
 		normalized, err := NormalizeRequest(request)
 		if err != nil {

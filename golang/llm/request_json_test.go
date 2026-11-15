@@ -3,6 +3,7 @@ package llm_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -34,41 +35,26 @@ func TestNormalizeServiceClassRejectsProviderDefault(t *testing.T) {
 
 func TestRequestJSONFixtures(t *testing.T) {
 	for _, name := range []string{"minimal.json", "full.json"} {
-		data := readFixture(t, filepath.Join("request", name))
-		var request llm.Request
-		if err := json.Unmarshal(data, &request); err != nil {
-			t.Fatalf("unmarshal %s: %v", name, err)
-		}
+		request := mustUnmarshal[llm.Request](t, readFixture(t, filepath.Join("request", name)), "unmarshal "+name)
 		encoded, err := json.Marshal(request)
 		if err != nil {
 			t.Fatalf("marshal %s: %v", name, err)
 		}
-		var roundTripped llm.Request
-		if err := json.Unmarshal(encoded, &roundTripped); err != nil {
-			t.Fatalf("round-trip %s: %v\n%s", name, err, encoded)
-		}
+		roundTripped := mustUnmarshal[llm.Request](t, encoded, fmt.Sprintf("round-trip %s (%s)", name, encoded))
 		if request.APIVersion != llm.APIVersion || roundTripped.ServiceClass == "" {
 			t.Fatalf("%s lost normalized contract: %#v", name, roundTripped)
 		}
 	}
 
-	var minimal llm.Request
-	if err := json.Unmarshal(readFixture(t, filepath.Join("request", "minimal.json")), &minimal); err != nil {
-		t.Fatal(err)
-	}
+	minimal := readRequestFixture(t, "minimal.json")
 	if minimal.ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("omitted service class = %q, want standard", minimal.ServiceClass)
 	}
-	if got := mustMarshal(t, minimal); !bytes.Contains(got, []byte(`"service_class":"standard"`)) {
-		t.Fatalf("normalized request omitted explicit standard: %s", got)
-	}
+	requireEncodedContains(t, mustMarshal(t, minimal), `"service_class":"standard"`, "normalized request omitted explicit standard")
 }
 
 func TestRequestFullFixturePreservesTypedItems(t *testing.T) {
-	var request llm.Request
-	if err := json.Unmarshal(readFixture(t, filepath.Join("request", "full.json")), &request); err != nil {
-		t.Fatal(err)
-	}
+	request := readRequestFixture(t, "full.json")
 	if len(request.Input) != 5 {
 		t.Fatalf("input length = %d, want 5", len(request.Input))
 	}
@@ -129,26 +115,16 @@ func TestPublicJSONRejectsNestedDuplicateKeys(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			var request llm.Request
-			if err := json.Unmarshal([]byte(test.json), &request); err == nil {
-				t.Fatalf("accepted nested duplicate key: %s", test.json)
-			}
+			requireUnmarshalRejected[llm.Request](t, []byte(test.json), "accepted nested duplicate key: %s", test.json)
 		})
 	}
 }
 
 func TestResponseJSONFixtures(t *testing.T) {
 	for _, name := range []string{"tool-calls.json", "completed.json"} {
-		data := readFixture(t, filepath.Join("response", name))
-		var response llm.Response
-		if err := json.Unmarshal(data, &response); err != nil {
-			t.Fatalf("unmarshal %s: %v", name, err)
-		}
+		response := mustUnmarshal[llm.Response](t, readFixture(t, filepath.Join("response", name)), "unmarshal "+name)
 		encoded := mustMarshal(t, response)
-		var roundTripped llm.Response
-		if err := json.Unmarshal(encoded, &roundTripped); err != nil {
-			t.Fatalf("round-trip %s: %v\n%s", name, err, encoded)
-		}
+		roundTripped := mustUnmarshal[llm.Response](t, encoded, fmt.Sprintf("round-trip %s (%s)", name, encoded))
 		if response.Status != roundTripped.Status || response.OperationKey != roundTripped.OperationKey {
 			t.Fatalf("round-trip changed response identity: %#v %#v", response, roundTripped)
 		}
@@ -162,25 +138,16 @@ func TestResponseCostStatus(t *testing.T) {
 		Cost:         llm.Cost{Status: llm.CostStatusUnknown},
 	}
 	encoded := mustMarshal(t, response)
-	if !bytes.Contains(encoded, []byte(`"cost_status":"unknown"`)) {
-		t.Fatalf("unknown-cost response omitted cost_status: %s", encoded)
-	}
+	requireEncodedContains(t, encoded, `"cost_status":"unknown"`, "unknown-cost response omitted cost_status")
 	for _, field := range []string{`"reserved_cost_usd":null`, `"actual_cost_usd":null`} {
-		if !bytes.Contains(encoded, []byte(field)) {
-			t.Fatalf("unknown-cost response omitted exact nullable field %s: %s", field, encoded)
-		}
+		requireEncodedContains(t, encoded, field, "unknown-cost response omitted exact nullable field "+field)
 	}
-	var decoded llm.Response
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("unmarshal unknown-cost response: %v", err)
-	}
+	decoded := mustUnmarshal[llm.Response](t, encoded, "unmarshal unknown-cost response")
 	if decoded.Cost.Status != llm.CostStatusUnknown {
 		t.Fatalf("cost status = %q, want unknown", decoded.Cost.Status)
 	}
 	invalid := bytes.Replace(encoded, []byte(`"cost_status":"unknown"`), []byte(`"cost_status":"estimated"`), 1)
-	if err := json.Unmarshal(invalid, &llm.Response{}); err == nil {
-		t.Fatalf("accepted invalid cost status: %s", invalid)
-	}
+	requireUnmarshalRejected[llm.Response](t, invalid, "accepted invalid cost status: %s", invalid)
 }
 
 func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
@@ -193,12 +160,9 @@ func TestSchemasAreValidJSONAndKeepClosedServiceEnum(t *testing.T) {
 			t.Fatalf("schema %s is not valid JSON", name)
 		}
 		if name == "generate-request.schema.json" {
-			var schema struct {
+			schema := mustUnmarshal[struct {
 				AdditionalProperties bool `json:"additionalProperties"`
-			}
-			if err := json.Unmarshal(data, &schema); err != nil {
-				t.Fatal(err)
-			}
+			}](t, data, "decode "+name)
 			if schema.AdditionalProperties {
 				t.Fatal("request schema must close top-level properties")
 			}
@@ -229,4 +193,33 @@ func mustMarshal(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// mustUnmarshal decodes data into a new T, failing with what as context.
+func mustUnmarshal[T any](t testing.TB, data []byte, what string) T {
+	t.Helper()
+	var value T
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	return value
+}
+
+// requireUnmarshalRejected fails with the formatted message when data decodes
+// into a T.
+func requireUnmarshalRejected[T any](t testing.TB, data []byte, format string, args ...any) {
+	t.Helper()
+	var value T
+	if err := json.Unmarshal(data, &value); err == nil {
+		t.Fatalf(format, args...)
+	}
+}
+
+// requireEncodedContains fails with message (followed by the encoding) when
+// encoded does not contain want.
+func requireEncodedContains(t testing.TB, encoded []byte, want, message string) {
+	t.Helper()
+	if !bytes.Contains(encoded, []byte(want)) {
+		t.Fatalf("%s: %s", message, encoded)
+	}
 }
