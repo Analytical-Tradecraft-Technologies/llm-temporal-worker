@@ -288,9 +288,7 @@ func TestRunLayoutDigestSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "index.json"), indexData, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(root, "index.json"), indexData)
 
 	var stdout bytes.Buffer
 	if err := run([]string{"layout-digest", "-layout", root}, &stdout); err != nil {
@@ -311,9 +309,7 @@ func TestRunLayoutDigestRejectsDuplicateDescriptorMembers(t *testing.T) {
 		manifestDigest,
 		len(manifestData),
 	))
-	if err := os.WriteFile(filepath.Join(root, "index.json"), indexData, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(root, "index.json"), indexData)
 
 	var stdout bytes.Buffer
 	err := run([]string{"layout-digest", "-layout", root}, &stdout)
@@ -361,9 +357,7 @@ func TestReleaseEvidenceRecordAndVerifySmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(testSummary, append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, testSummary, append(data, '\n'))
 	if err := run([]string{
 		"verify",
 		"-schema", schemaPath,
@@ -475,9 +469,7 @@ func TestReleaseEvidenceRejectsMissingOrMismatchedPlatformEvidence(t *testing.T)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				writeTestFile(t, path, append(data, '\n'))
 			},
 			want: "image index bytes do not match the evidence image digest",
 		},
@@ -628,9 +620,7 @@ func TestReleaseEvidenceAcceptsOptionalWorkerErrorSummary(t *testing.T) {
 		"redacted":               true,
 	}
 	workerPath := filepath.Join(artifactDir, canonicalArtifactPaths["worker_error_summary"])
-	if err := os.WriteFile(workerPath, mustJSON(t, workerSummary), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, workerPath, mustJSON(t, workerSummary))
 	schemaPath := releaseEvidenceSchemaPath(t)
 	recordArgs := releaseEvidenceRecordArguments(schemaPath, artifactDir, subjects)
 	recordArgs = append(recordArgs, "-artifact", "worker_error_summary="+canonicalArtifactPaths["worker_error_summary"])
@@ -735,9 +725,7 @@ func TestReleaseEvidenceVerifyAcceptsPreBenchmarkV1Bundle(t *testing.T) {
 	}
 	legacyVulnerabilities := []byte(`{"schema_version":1,"kind":"vulnerability_results","status":"pass","components":{"test":"pass","source":"pass","go_mod":"pass","vulnerability":"pass"},"direct_module_count":1,"findings":[],"approved_findings":[],"redacted":true}` + "\n")
 	legacyVulnerabilityPath := filepath.Join(artifactDir, canonicalArtifactPaths["vulnerability_results"])
-	if err := os.WriteFile(legacyVulnerabilityPath, legacyVulnerabilities, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, legacyVulnerabilityPath, legacyVulnerabilities)
 	artifacts["vulnerability_results"] = map[string]any{
 		"path": canonicalArtifactPaths["vulnerability_results"], "sha256": sha256Hex(legacyVulnerabilities), "bytes": len(legacyVulnerabilities), "redacted": true,
 	}
@@ -866,9 +854,7 @@ func rewriteImageIndex(t *testing.T, directory string, subjects *releaseEvidence
 	}
 	manifests := mustUnmarshalMap(t, data)["manifests"].([]any)
 	updated := imageIndexDocument(mutate(manifests))
-	if err := os.WriteFile(path, updated, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, updated)
 	subjects.indexDigest = "sha256:" + sha256Hex(updated)
 	subjects.indexReference = subjects.repository + "@" + subjects.indexDigest
 	replaceArgument(arguments, "-image-reference", subjects.indexReference)
@@ -886,9 +872,7 @@ func readEvidenceRecord(t *testing.T, directory string) map[string]any {
 
 func writeEvidenceRecord(t *testing.T, directory string, record map[string]any) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(directory, "evidence.json"), append(mustJSON(t, record), '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(directory, "evidence.json"), append(mustJSON(t, record), '\n'))
 }
 
 // downgradeToSingleManifestV1 rewrites a freshly recorded bundle into the shape
@@ -961,9 +945,7 @@ func writeReleaseEvidenceArtifacts(t *testing.T, directory string) releaseEviden
 		amd64Digest:    amd64Digest,
 		arm64Digest:    arm64Digest,
 	}
-	if err := os.WriteFile(filepath.Join(directory, canonicalArtifactPaths["image_index"]), index, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(directory, canonicalArtifactPaths["image_index"]), index)
 	artifacts := map[string]any{
 		"test_summary": gateSummary("test_summary"),
 		"race_summary": gateSummary("race_summary"),
@@ -1092,9 +1074,7 @@ func TestValidateImageIndexAcceptsThePublishedBuildxIndex(t *testing.T) {
 		arm64Digest = "sha256:245c33dbdc7b4504c0b12483f39b58a864b0fa315f7f073c32529cb475dd6844"
 	)
 	path := filepath.Join(t.TempDir(), "image-index.json")
-	if err := os.WriteFile(path, []byte(publishedBuildxImageIndex), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, []byte(publishedBuildxImageIndex))
 	subject := image{
 		Reference: repository + "@" + indexDigest,
 		Digest:    indexDigest,
@@ -1135,9 +1115,7 @@ func TestReleaseEvidenceRecordsAndVerifiesTheOCIMergeIndex(t *testing.T) {
 	}
 	artifactDir := newReleaseEvidenceArtifactDirectory(t)
 	writeReleaseEvidenceArtifacts(t, artifactDir)
-	if err := os.WriteFile(filepath.Join(artifactDir, canonicalArtifactPaths["image_index"]), []byte(ocimergeImageIndex), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(artifactDir, canonicalArtifactPaths["image_index"]), []byte(ocimergeImageIndex))
 	writeArtifactJSON(t, artifactDir, "sbom", releaseEvidenceSBOM(repository+"@"+amd64Digest, amd64Digest))
 	writeArtifactJSON(t, artifactDir, "image_scan", releaseEvidenceScan(repository+"@"+amd64Digest, amd64Digest))
 	writeArtifactJSON(t, artifactDir, "sbom_arm64", releaseEvidenceSBOM(repository+"@"+arm64Digest, arm64Digest))
@@ -1200,9 +1178,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 		},
 	}
 	path := filepath.Join(t.TempDir(), "sbom.json")
-	if err := os.WriteFile(path, mustJSON(t, valid), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, mustJSON(t, valid))
 	if err := validateCycloneDXSBOM(path, image); err != nil {
 		t.Fatalf("valid SBOM rejected: %v", err)
 	}
@@ -1229,9 +1205,7 @@ func TestValidateCycloneDXSBOMBindsTheImmutableImageSubject(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			document := cloneJSONMap(t, valid)
 			test.mutate(document)
-			if err := os.WriteFile(path, mustJSON(t, document), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeTestFile(t, path, mustJSON(t, document))
 			if err := validateCycloneDXSBOM(path, image); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateCycloneDXSBOM() error = %v, want substring %q", err, test.want)
 			}
@@ -1252,9 +1226,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 		"Results": []any{map[string]any{"Vulnerabilities": []any{}}},
 	}
 	path := filepath.Join(t.TempDir(), "scan.json")
-	if err := os.WriteFile(path, mustJSON(t, valid), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, mustJSON(t, valid))
 	if err := validateTrivyScan(path, image); err != nil {
 		t.Fatalf("valid Trivy report rejected: %v", err)
 	}
@@ -1277,9 +1249,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			document := cloneJSONMap(t, valid)
 			test.mutate(document)
-			if err := os.WriteFile(path, mustJSON(t, document), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeTestFile(t, path, mustJSON(t, document))
 			if err := validateTrivyScan(path, image); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("validateTrivyScan() error = %v, want substring %q", err, test.want)
 			}
@@ -1290,9 +1260,7 @@ func TestValidateTrivyScanRejectsUnsafeImageReports(t *testing.T) {
 func TestSecureArtifactAndOutputPathsRejectTraversalAndSymlinks(t *testing.T) {
 	directory := t.TempDir()
 	artifactPath := filepath.Join(directory, "artifact.json")
-	if err := os.WriteFile(artifactPath, []byte(`{"ok":true}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, artifactPath, []byte(`{"ok":true}`))
 	if got, err := secureArtifactPath(directory, "artifact.json"); err != nil || got != artifactPath {
 		t.Fatalf("secureArtifactPath valid path = %q, %v", got, err)
 	}
@@ -1302,9 +1270,7 @@ func TestSecureArtifactAndOutputPathsRejectTraversalAndSymlinks(t *testing.T) {
 		}
 	}
 	outside := filepath.Join(t.TempDir(), "outside.json")
-	if err := os.WriteFile(outside, []byte(`{"outside":true}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, outside, []byte(`{"outside":true}`))
 	link := filepath.Join(directory, "link.json")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
@@ -1332,25 +1298,19 @@ func TestValidateFixtureManifestRejectsDuplicateProfilesAndUnsafeProvenance(t *t
 			ManifestSHA256: strings.Repeat("a", 64),
 		}},
 	}
-	if err := os.WriteFile(path, mustJSON(t, valid), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, mustJSON(t, valid))
 	if err := validateFixtureManifest(path); err != nil {
 		t.Fatalf("valid fixture manifest rejected: %v", err)
 	}
 	invalid := valid
 	invalid.Fixtures = append(invalid.Fixtures, valid.Fixtures[0])
-	if err := os.WriteFile(path, mustJSON(t, invalid), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, mustJSON(t, invalid))
 	if err := validateFixtureManifest(path); err == nil || !strings.Contains(err.Error(), "duplicate profile") {
 		t.Fatalf("duplicate fixture profile error = %v", err)
 	}
 	invalid = valid
 	invalid.Fixtures[0].UpstreamURL = "https://user:secret@example.invalid/contracts"
-	if err := os.WriteFile(path, mustJSON(t, invalid), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, path, mustJSON(t, invalid))
 	if err := validateFixtureManifest(path); err == nil || !strings.Contains(err.Error(), "invalid upstream URL") {
 		t.Fatalf("unsafe fixture URL error = %v", err)
 	}
@@ -1379,8 +1339,14 @@ func mustJSON(t *testing.T, value any) []byte {
 	return data
 }
 
-// writeOCILayoutManifest writes an OCI layout marker and a one-layer image
-// manifest with its blobs under root, leaving index.json to the caller.
+// writeTestFile writes data to path, failing the test on an error.
+func writeTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // rewriteBenchmarkSummary lets mutate edit the benchmark summary artifact in
 // artifactDir and writes it back.
 func rewriteBenchmarkSummary(t *testing.T, artifactDir string, mutate func(map[string]any)) {
@@ -1388,16 +1354,14 @@ func rewriteBenchmarkSummary(t *testing.T, artifactDir string, mutate func(map[s
 	benchmarkPath := filepath.Join(artifactDir, canonicalArtifactPaths["benchmark_summary"])
 	benchmark := repotest.ReadJSONObject(t, benchmarkPath)
 	mutate(benchmark)
-	if err := os.WriteFile(benchmarkPath, append(mustJSON(t, benchmark), '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, benchmarkPath, append(mustJSON(t, benchmark), '\n'))
 }
 
+// writeOCILayoutManifest writes an OCI layout marker and a one-layer image
+// manifest with its blobs under root, leaving index.json to the caller.
 func writeOCILayoutManifest(t *testing.T, root string) (string, []byte) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(root, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`))
 	config := []byte(`{"architecture":"arm64","os":"linux"}`)
 	layer := []byte("application layer")
 	configDigest := writeOCIBlob(t, root, config)
@@ -1420,8 +1384,6 @@ func writeOCIBlob(t *testing.T, root string, data []byte) string {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, digest), data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join(directory, digest), data)
 	return digest
 }

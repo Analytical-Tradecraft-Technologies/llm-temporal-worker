@@ -16,14 +16,22 @@ func testCapabilities() CapabilitySet {
 	return CapabilitySet{Version: "cap-v1", Features: features}
 }
 
-func TestPlannerClassMajorAndExplicitFallbackOnly(t *testing.T) {
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
-		{ID: "r1", EndpointID: "ep1", Provider: "openai", Family: "openai_responses", Model: "model-1", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-		{ID: "r2", EndpointID: "ep2", Provider: "anthropic", Family: "anthropic_messages", Model: "model-2", Classes: []llm.ServiceClass{llm.ServiceClassPriority, llm.ServiceClassEconomy}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassPriority: "high", llm.ServiceClassEconomy: "low"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-	}}})
+// mustCompileLogicalCatalog compiles routes as the "logical" model of a
+// route-v1 catalog, failing the test on an error.
+func mustCompileLogicalCatalog(t *testing.T, routes []Route) Catalog {
+	t.Helper()
+	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: routes}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return catalog
+}
+
+func TestPlannerClassMajorAndExplicitFallbackOnly(t *testing.T) {
+	catalog := mustCompileLogicalCatalog(t, []Route{
+		{ID: "r1", EndpointID: "ep1", Provider: "openai", Family: "openai_responses", Model: "model-1", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+		{ID: "r2", EndpointID: "ep2", Provider: "anthropic", Family: "anthropic_messages", Model: "model-2", Classes: []llm.ServiceClass{llm.ServiceClassPriority, llm.ServiceClassEconomy}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassPriority: "high", llm.ServiceClassEconomy: "low"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+	})
 	request := llm.Request{OperationKey: "op-1", Model: "logical", ServiceClass: llm.ServiceClassPriority, ServiceClassFallbacks: []llm.ServiceClass{llm.ServiceClassStandard}, Context: llm.RequestContext{Tenant: "tenant"}, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman}}}
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
 	if err != nil {
@@ -40,14 +48,11 @@ func TestPlannerClassMajorAndExplicitFallbackOnly(t *testing.T) {
 }
 
 func TestPlannerCollectsSafeRejections(t *testing.T) {
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+	catalog := mustCompileLogicalCatalog(t, []Route{
 		{ID: "tenant-blocked", EndpointID: "ep", Provider: "openai", Family: "openai_responses", Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, AllowedTenants: []string{"other"}, Capabilities: testCapabilities(), PriceVersion: "price-v1"},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 	request := llm.Request{OperationKey: "op-2", Model: "logical", Context: llm.RequestContext{Tenant: "tenant"}}
-	_, err = (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
+	_, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
 	if err == nil {
 		t.Fatal("expected no eligible route")
 	}
@@ -58,12 +63,9 @@ func TestPlannerCollectsSafeRejections(t *testing.T) {
 }
 
 func TestPlannerRejectsMissingTenantForTenantScopedRoute(t *testing.T) {
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{
+	catalog := mustCompileLogicalCatalog(t, []Route{
 		{ID: "tenant-scoped", EndpointID: "ep", Provider: "openai", Family: "openai_responses", Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, AllowedTenants: []string{"tenant-a"}, Capabilities: testCapabilities(), PriceVersion: "price-v1"},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	})
 	request := llm.Request{OperationKey: "op-tenantless", Model: "logical"}
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
 	if err == nil {
@@ -75,14 +77,11 @@ func TestPlannerRejectsMissingTenantForTenantScopedRoute(t *testing.T) {
 }
 
 func TestPlannerDoesNotTrustCallerBudgetedTagForPricePolicy(t *testing.T) {
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{{
+	catalog := mustCompileLogicalCatalog(t, []Route{{
 		ID: "unpriced", EndpointID: "ep", Provider: "openai", Family: "openai_responses", Model: "model",
 		Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"},
 		Capabilities: testCapabilities(), PriceAvailable: false,
-	}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	}})
 	request := llm.Request{OperationKey: "op-unpriced", Model: "logical", Context: llm.RequestContext{Tags: map[string]string{"budgeted": "true"}}}
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
 	if err != nil {
@@ -145,10 +144,7 @@ func TestPlannerContextLimitCountsToolResultErrorPrefix(t *testing.T) {
 	route := func(id, family string) Route {
 		return Route{ID: id, EndpointID: id, Provider: id, Family: family, Model: "model", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true, ContextBytes: len(encoded) + 30}
 	}
-	catalog, err := CompileCatalog("route-v1", map[string]Model{"logical": {Routes: []Route{route("openai", "openai_responses"), route("anthropic", "anthropic_messages")}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := mustCompileLogicalCatalog(t, []Route{route("openai", "openai_responses"), route("anthropic", "anthropic_messages")})
 	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)

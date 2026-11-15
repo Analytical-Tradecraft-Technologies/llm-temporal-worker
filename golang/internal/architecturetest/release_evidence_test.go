@@ -348,22 +348,12 @@ func TestReleaseEvidenceLayoutDigestRejectsUnsafeOrUnboundDirectoryEntries(t *te
 func TestReleaseEvidenceCollectorBuildsFixtureManifestFromWhitespaceMetadata(t *testing.T) {
 	root := repositoryRoot(t)
 	fixtureRoot := t.TempDir()
-	fixtureDirectory := filepath.Join(fixtureRoot, "llm", "provider", "example", "testdata", "contracts", "example-profile")
-	if err := os.MkdirAll(fixtureDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	metadata := "profile:   example-profile  \nupstream_url:  https://example.invalid/contracts  \nupstream_date:  '2026-07-15'  \n"
-	writeReleaseArtifact(t, filepath.Join(fixtureDirectory, "metadata.yaml"), []byte(metadata))
+	fixtureDirectory := writeReleaseEvidenceFixtureMetadata(t, fixtureRoot, metadata)
 	writeReleaseArtifact(t, filepath.Join(fixtureDirectory, "fixture.json"), []byte(`{"example":true}`))
 	outputPath := filepath.Join(t.TempDir(), "fixture-manifest.json")
 
-	command := exec.Command(
-		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "fixture-manifest",
-		"--root", fixtureRoot,
-		"--output", outputPath,
-	)
-	command.Dir = root
-	output, err := command.CombinedOutput()
+	output, err := runReleaseCollector(root, "fixture-manifest", "--root", fixtureRoot, "--output", outputPath)
 	if err != nil {
 		t.Fatalf("fixture collector rejected ordinary whitespace-delimited metadata: %v\n%s", err, output)
 	}
@@ -398,19 +388,9 @@ func TestReleaseEvidenceCollectorRejectsUnsafeProvenanceURLs(t *testing.T) {
 
 	t.Run("fixture basic auth", func(t *testing.T) {
 		fixtureRoot := t.TempDir()
-		fixtureDirectory := filepath.Join(fixtureRoot, "llm", "provider", "example", "testdata", "contracts", "example-profile")
-		if err := os.MkdirAll(fixtureDirectory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		writeReleaseArtifact(t, filepath.Join(fixtureDirectory, "metadata.yaml"), []byte("profile: example-profile\nupstream_url: https://operator:"+sentinel+"@example.invalid/contracts\nupstream_date: 2026-07-15\n"))
+		writeReleaseEvidenceFixtureMetadata(t, fixtureRoot, "profile: example-profile\nupstream_url: https://operator:"+sentinel+"@example.invalid/contracts\nupstream_date: 2026-07-15\n")
 		outputPath := filepath.Join(t.TempDir(), "fixture-manifest.json")
-		command := exec.Command(
-			"python3", filepath.Join(root, "scripts", "release", "collect.py"), "fixture-manifest",
-			"--root", fixtureRoot,
-			"--output", outputPath,
-		)
-		command.Dir = root
-		output, err := command.CombinedOutput()
+		output, err := runReleaseCollector(root, "fixture-manifest", "--root", fixtureRoot, "--output", outputPath)
 		assertCommandRejected(t, output, err, "fixture collector accepted basic-auth upstream URL", "userinfo", "fixture basic-auth")
 		assertOutputOmitsSentinel(t, output, sentinel, "fixture basic-auth")
 		if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
@@ -425,14 +405,7 @@ func TestReleaseEvidenceCollectorRejectsUnsafeProvenanceURLs(t *testing.T) {
 		writeReleaseArtifact(t, baselinePath, []byte(`{"trusted_module_roots":[{"path":"example.com/module","license":"Apache-2.0","source":"https://operator:`+sentinel+`@example.invalid/module"}]}`))
 		writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/module","Version":"v1.2.3"}]}`))
 		outputPath := filepath.Join(directory, "dependencies.json")
-		command := exec.Command(
-			"python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license",
-			"--baseline", baselinePath,
-			"--go-mod", goModPath,
-			"--output", outputPath,
-		)
-		command.Dir = root
-		output, err := command.CombinedOutput()
+		output, err := runReleaseCollector(root, "dependency-license", "--baseline", baselinePath, "--go-mod", goModPath, "--output", outputPath)
 		assertCommandRejected(t, output, err, "dependency collector accepted basic-auth source URL", "userinfo", "dependency basic-auth")
 		assertOutputOmitsSentinel(t, output, sentinel, "dependency basic-auth")
 		if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
@@ -475,39 +448,34 @@ func TestReleaseEvidenceCollectorEnforcesCanonicalProvenanceURLPolicy(t *testing
 		for _, kind := range []string{"fixture", "dependency"} {
 			t.Run(kind+" "+test.name, func(t *testing.T) {
 				directory := t.TempDir()
-				var command *exec.Cmd
+				var output []byte
+				var err error
 				var outputPath string
 				switch kind {
 				case "fixture":
-					fixtureDirectory := filepath.Join(directory, "llm", "provider", "example", "testdata", "contracts", "example-profile")
-					if err := os.MkdirAll(fixtureDirectory, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					writeReleaseArtifact(t, filepath.Join(fixtureDirectory, "metadata.yaml"), []byte("profile: example-profile\nupstream_url: "+test.url+"\nupstream_date: 2026-07-15\n"))
+					writeReleaseEvidenceFixtureMetadata(t, directory, "profile: example-profile\nupstream_url: "+test.url+"\nupstream_date: 2026-07-15\n")
 					outputPath = filepath.Join(directory, "fixture-manifest.json")
-					command = exec.Command("python3", filepath.Join(root, "scripts", "release", "collect.py"), "fixture-manifest", "--root", directory, "--output", outputPath)
+					output, err = runReleaseCollector(root, "fixture-manifest", "--root", directory, "--output", outputPath)
 				case "dependency":
 					baselinePath := filepath.Join(directory, "baseline.json")
 					goModPath := filepath.Join(directory, "go-mod.json")
-					baseline, err := json.Marshal(map[string]any{
+					baseline, marshalErr := json.Marshal(map[string]any{
 						"trusted_module_roots": []map[string]string{{
 							"path":    "example.com/module",
 							"license": "Apache-2.0",
 							"source":  test.url,
 						}},
 					})
-					if err != nil {
-						t.Fatal(err)
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
 					}
 					writeReleaseArtifact(t, baselinePath, baseline)
 					writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/module","Version":"v1.2.3"}]}`))
 					outputPath = filepath.Join(directory, "dependencies.json")
-					command = exec.Command("python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license", "--baseline", baselinePath, "--go-mod", goModPath, "--output", outputPath)
+					output, err = runReleaseCollector(root, "dependency-license", "--baseline", baselinePath, "--go-mod", goModPath, "--output", outputPath)
 				default:
 					t.Fatalf("unknown provenance kind %q", kind)
 				}
-				command.Dir = root
-				output, err := command.CombinedOutput()
 				if test.accept {
 					if err != nil {
 						t.Fatalf("collector rejected canonical %s URL: %v\n%s", kind, err, output)
@@ -538,14 +506,7 @@ func TestDependencyEvidenceUsesCurrentVersionsUnderTrustedRoots(t *testing.T) {
 	writeReleaseArtifact(t, baselinePath, []byte(`{"trusted_module_roots":[{"path":"example.com/publisher","license":"Apache-2.0","source":"https://example.com/publisher"}]}`))
 	writeReleaseArtifact(t, goModPath, []byte(`{"Require":[{"Path":"example.com/publisher/module","Version":"v9.8.7"},{"Path":"example.com/indirect","Version":"v1.0.0","Indirect":true}]}`))
 
-	command := exec.Command(
-		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "dependency-license",
-		"--baseline", baselinePath,
-		"--go-mod", goModPath,
-		"--output", outputPath,
-	)
-	command.Dir = root
-	if output, err := command.CombinedOutput(); err != nil {
+	if output, err := runReleaseCollector(root, "dependency-license", "--baseline", baselinePath, "--go-mod", goModPath, "--output", outputPath); err != nil {
 		t.Fatalf("dependency collector failed: %v\n%s", err, output)
 	}
 	var evidence struct {
@@ -574,15 +535,7 @@ func TestReleaseEvidenceCollectorRejectsNonContainerTrivyReport(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("b", 64)
 	writeReleaseArtifact(t, inputPath, []byte(`{"SchemaVersion":2,"ArtifactType":"filesystem","ArtifactName":"image.oci","Results":[]}`))
 
-	command := exec.Command(
-		"python3", filepath.Join(root, "scripts", "release", "collect.py"), "annotate-scan",
-		"--input", inputPath,
-		"--output", outputPath,
-		"--reference", "llm-temporal-worker@"+digest,
-		"--digest", digest,
-	)
-	command.Dir = root
-	output, err := command.CombinedOutput()
+	output, err := runReleaseCollector(root, "annotate-scan", "--input", inputPath, "--output", outputPath, "--reference", "llm-temporal-worker@"+digest, "--digest", digest)
 	assertCommandRejected(t, output, err, "scan collector accepted a non-container Trivy report", "container-image", "non-container scan")
 	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
 		t.Fatalf("scan collector wrote evidence after rejecting non-container report: %v", err)
@@ -606,15 +559,7 @@ func TestReleaseEvidenceCollectorNormalizesTemporaryTrivyOCIDirectoryName(t *tes
 			outputPath := filepath.Join(directory, "image-scan.json")
 			writeReleaseArtifact(t, inputPath, []byte(`{"SchemaVersion":2,"ArtifactType":"container_image","ArtifactName":"`+test.artifactName+`","Results":[]}`))
 
-			command := exec.Command(
-				"python3", filepath.Join(root, "scripts", "release", "collect.py"), "annotate-scan",
-				"--input", inputPath,
-				"--output", outputPath,
-				"--reference", "llm-temporal-worker@"+digest,
-				"--digest", digest,
-			)
-			command.Dir = root
-			output, err := command.CombinedOutput()
+			output, err := runReleaseCollector(root, "annotate-scan", "--input", inputPath, "--output", outputPath, "--reference", "llm-temporal-worker@"+digest, "--digest", digest)
 			if test.accept {
 				if err != nil {
 					t.Fatalf("scan collector rejected temporary OCI directory path: %v\n%s", err, output)
@@ -708,14 +653,7 @@ func TestReleaseEvidenceCollectorRedactsComposeLogsAndRequiresServiceBoundaries(
 			inputPath := filepath.Join(directory, "compose.log")
 			outputPath := filepath.Join(directory, "redacted-log.json")
 			writeReleaseArtifact(t, inputPath, []byte(test.input))
-			command := exec.Command(
-				"python3", filepath.Join(root, "scripts", "release", "collect.py"), "redacted-log",
-				"--kind", test.kind,
-				"--input", inputPath,
-				"--output", outputPath,
-			)
-			command.Dir = root
-			output, err := command.CombinedOutput()
+			output, err := runReleaseCollector(root, "redacted-log", "--kind", test.kind, "--input", inputPath, "--output", outputPath)
 			if err != nil {
 				t.Fatalf("redacted-log collector rejected %s input: %v\n%s", test.name, err, output)
 			}
@@ -755,14 +693,7 @@ func TestReleaseEvidenceCollectorRedactsComposeLogsAndRequiresServiceBoundaries(
 			inputPath := filepath.Join(directory, "compose.log")
 			outputPath := filepath.Join(directory, "redacted-log.json")
 			writeReleaseArtifact(t, inputPath, []byte(test.input))
-			command := exec.Command(
-				"python3", filepath.Join(root, "scripts", "release", "collect.py"), "redacted-log",
-				"--kind", test.kind,
-				"--input", inputPath,
-				"--output", outputPath,
-			)
-			command.Dir = root
-			output, err := command.CombinedOutput()
+			output, err := runReleaseCollector(root, "redacted-log", "--kind", test.kind, "--input", inputPath, "--output", outputPath)
 			assertCommandRejected(t, output, err, "redacted-log collector accepted missing service boundary", "runtime-boundary", "missing boundary")
 			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
 				t.Fatalf("redacted-log collector wrote an artifact after rejecting input: %v", err)
@@ -1669,12 +1600,10 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 				"BenchmarkV1ActivitiesAdmissionMemory" + suffix + "    4267    255245 ns/op         0.7286 p99_ms/op  350632 B/op    4851 allocs/op\n" +
 				"PASS\n"
 			writeReleaseArtifact(t, inputPath, []byte(input))
-			command := exec.Command(
-				"python3", filepath.Join(root, "scripts", "release", "collect.py"), "benchmark-summary",
-				"--kind", "benchmark_summary", "--input", inputPath, "--output", outputPath,
-			)
-			command.Dir = root
-			if output, err := command.CombinedOutput(); err != nil {
+			collect := func() ([]byte, error) {
+				return runReleaseCollector(root, "benchmark-summary", "--kind", "benchmark_summary", "--input", inputPath, "--output", outputPath)
+			}
+			if output, err := collect(); err != nil {
 				t.Fatalf("benchmark collector rejected valid output: %v\n%s", err, output)
 			}
 			document := readReleaseEvidenceJSONArtifact(t, filepath.Dir(outputPath), "benchmark_summary")
@@ -1684,39 +1613,28 @@ func TestReleaseEvidenceCollectorSummarizesMemoryBenchmark(t *testing.T) {
 			if document["p99_ms_per_op"] != 0.7286 {
 				t.Fatalf("benchmark summary p99 = %#v", document["p99_ms_per_op"])
 			}
+			assertRejected := func(input, accepted, retained string) {
+				t.Helper()
+				writeReleaseArtifact(t, inputPath, []byte(input))
+				if output, err := collect(); err == nil {
+					t.Fatalf("benchmark collector accepted %s:\n%s", accepted, output)
+				}
+				if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+					t.Fatalf("benchmark collector retained output %s: %v", retained, err)
+				}
+			}
 
-			writeReleaseArtifact(t, inputPath, []byte(input+"BenchmarkV1ActivitiesAdmissionMemory"+suffix+" 1 1 ns/op 1 p99_ms/op\n"))
 			if err := os.Remove(outputPath); err != nil {
 				t.Fatal(err)
 			}
-			if output, err := command.CombinedOutput(); err == nil {
-				t.Fatalf("benchmark collector accepted multiple measurements:\n%s", output)
-			}
-			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-				t.Fatalf("benchmark collector retained output after rejecting multiple measurements: %v", err)
-			}
-
+			assertRejected(input+"BenchmarkV1ActivitiesAdmissionMemory"+suffix+" 1 1 ns/op 1 p99_ms/op\n",
+				"multiple measurements", "after rejecting multiple measurements")
 			// Output of the legacy engine benchmark is not the v1
 			// Activities measurement and must not be retained (#1497).
-			legacyInput := "goos: linux\n" +
-				"BenchmarkGenerateMemoryAdmissionAndCompile" + suffix + "    4267    255245 ns/op         0.7286 p99_ms/op\nPASS\n"
-			writeReleaseArtifact(t, inputPath, []byte(legacyInput))
-			if output, err := command.CombinedOutput(); err == nil {
-				t.Fatalf("benchmark collector accepted legacy engine benchmark output:\n%s", output)
-			}
-			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-				t.Fatalf("benchmark collector retained output for the legacy engine benchmark: %v", err)
-			}
-
-			targetInput := "goos: linux\n" +
-				"BenchmarkV1ActivitiesAdmissionMemory" + suffix + " 1 1 ns/op 25 p99_ms/op\nPASS\n"
-			writeReleaseArtifact(t, inputPath, []byte(targetInput))
-			if output, err := command.CombinedOutput(); err == nil {
-				t.Fatalf("benchmark collector accepted a p99 at the strict target boundary:\n%s", output)
-			}
-			if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
-				t.Fatalf("benchmark collector retained output after rejecting target miss: %v", err)
-			}
+			assertRejected("goos: linux\nBenchmarkGenerateMemoryAdmissionAndCompile"+suffix+"    4267    255245 ns/op         0.7286 p99_ms/op\nPASS\n",
+				"legacy engine benchmark output", "for the legacy engine benchmark")
+			assertRejected("goos: linux\nBenchmarkV1ActivitiesAdmissionMemory"+suffix+" 1 1 ns/op 25 p99_ms/op\nPASS\n",
+				"a p99 at the strict target boundary", "after rejecting target miss")
 		})
 	}
 }
@@ -1886,69 +1804,29 @@ func writeReleaseEvidenceOCILayoutWithCompatibilityMetadata(t *testing.T, path s
 
 func writeReleaseEvidenceOCILayoutWithCompatibility(t *testing.T, path string, includeCompatibilityMetadata bool) string {
 	t.Helper()
-	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Env":[]}}`)
-	layer := []byte("release-evidence-test-layer")
-	configDigest := sha256Hex(config)
-	layerDigest := sha256Hex(layer)
-	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%d}]}`,
-		configDigest, len(config), layerDigest, len(layer)))
-	manifestDigest := sha256Hex(manifest)
+	entries, manifestDigest, manifestSize := releaseEvidenceImageLayoutEntries()
 	index := []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%d}]}`,
-		manifestDigest, len(manifest)))
-	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	entries := []struct {
-		name string
-		data []byte
-	}{
-		{name: "oci-layout", data: []byte(`{"imageLayoutVersion":"1.0.0"}`)},
-		{name: "index.json", data: index},
-		{name: "blobs/sha256/" + configDigest, data: config},
-		{name: "blobs/sha256/" + layerDigest, data: layer},
-		{name: "blobs/sha256/" + manifestDigest, data: manifest},
-	}
+		manifestDigest, manifestSize))
+	entries = append(entries, releaseEvidenceLayoutEntry{name: "index.json", data: index})
 	if includeCompatibilityMetadata {
-		entries = append(entries, struct {
-			name string
-			data []byte
-		}{name: "manifest.json", data: []byte(`[]`)})
+		entries = append(entries, releaseEvidenceLayoutEntry{name: "manifest.json", data: []byte(`[]`)})
 	}
-	for _, entry := range entries {
-		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
-	}
+	writeReleaseEvidenceLayoutEntries(t, path, entries)
 	return "sha256:" + manifestDigest
 }
 
 func writeReleaseEvidenceNestedOCIIndexLayout(t *testing.T, path string, nestedIndex func(manifestDigest string, manifestSize int) []byte) string {
 	t.Helper()
-	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Env":[]}}`)
-	layer := []byte("release-evidence-test-layer")
-	configDigest := sha256Hex(config)
-	layerDigest := sha256Hex(layer)
-	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%d}]}`,
-		configDigest, len(config), layerDigest, len(layer)))
-	manifestDigest := sha256Hex(manifest)
-	innerIndex := nestedIndex(manifestDigest, len(manifest))
+	entries, manifestDigest, manifestSize := releaseEvidenceImageLayoutEntries()
+	innerIndex := nestedIndex(manifestDigest, manifestSize)
 	innerIndexDigest := sha256Hex(innerIndex)
 	outerIndex := []byte(fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}]}`,
 		innerIndexDigest, len(innerIndex)))
-	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range []struct {
-		name string
-		data []byte
-	}{
-		{name: "oci-layout", data: []byte(`{"imageLayoutVersion":"1.0.0"}`)},
-		{name: "index.json", data: outerIndex},
-		{name: "blobs/sha256/" + configDigest, data: config},
-		{name: "blobs/sha256/" + layerDigest, data: layer},
-		{name: "blobs/sha256/" + manifestDigest, data: manifest},
-		{name: "blobs/sha256/" + innerIndexDigest, data: innerIndex},
-	} {
-		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
-	}
+	entries = append(entries,
+		releaseEvidenceLayoutEntry{name: "index.json", data: outerIndex},
+		releaseEvidenceLayoutEntry{name: "blobs/sha256/" + innerIndexDigest, data: innerIndex},
+	)
+	writeReleaseEvidenceLayoutEntries(t, path, entries)
 	return "sha256:" + manifestDigest
 }
 
@@ -1957,6 +1835,36 @@ func writeReleaseEvidenceOCIIndexChainLayout(t *testing.T, path string, nestedIn
 	if nestedIndexCount < 1 || terminalDescriptorCount < 1 {
 		t.Fatal("test OCI index chain requires positive descriptor counts")
 	}
+	entries, manifestDigest, manifestSize := releaseEvidenceImageLayoutEntries()
+	terminalDescriptor := fmt.Sprintf(`{"mediaType":"%s","digest":"sha256:%s","size":%d}`,
+		terminalDescriptorType, manifestDigest, manifestSize)
+	children := make([]string, terminalDescriptorCount)
+	for index := range children {
+		children[index] = terminalDescriptor
+	}
+	for index := 0; index < nestedIndexCount; index++ {
+		nestedIndex := []byte(`{"schemaVersion":2,"manifests":[` + strings.Join(children, ",") + `]}`)
+		nestedIndexDigest := sha256Hex(nestedIndex)
+		entries = append(entries, releaseEvidenceLayoutEntry{name: "blobs/sha256/" + nestedIndexDigest, data: nestedIndex})
+		children = []string{fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}`,
+			nestedIndexDigest, len(nestedIndex))}
+	}
+	entries = append(entries, releaseEvidenceLayoutEntry{name: "index.json", data: []byte(`{"schemaVersion":2,"manifests":[` + strings.Join(children, ",") + `]}`)})
+	writeReleaseEvidenceLayoutEntries(t, path, entries)
+	return "sha256:" + manifestDigest
+}
+
+// releaseEvidenceLayoutEntry is one file of a test OCI layout, named relative
+// to the layout root with forward slashes.
+type releaseEvidenceLayoutEntry struct {
+	name string
+	data []byte
+}
+
+// releaseEvidenceImageLayoutEntries returns the oci-layout marker and the
+// config, layer and manifest blobs of the single-platform test image, with
+// the manifest's hex digest and size for the caller's index.
+func releaseEvidenceImageLayoutEntries() ([]releaseEvidenceLayoutEntry, string, int) {
 	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Env":[]}}`)
 	layer := []byte("release-evidence-test-layer")
 	configDigest := sha256Hex(config)
@@ -1964,42 +1872,44 @@ func writeReleaseEvidenceOCIIndexChainLayout(t *testing.T, path string, nestedIn
 	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:%s","size":%d}]}`,
 		configDigest, len(config), layerDigest, len(layer)))
 	manifestDigest := sha256Hex(manifest)
-	terminalDescriptor := fmt.Sprintf(`{"mediaType":"%s","digest":"sha256:%s","size":%d}`,
-		terminalDescriptorType, manifestDigest, len(manifest))
-	children := make([]string, terminalDescriptorCount)
-	for index := range children {
-		children[index] = terminalDescriptor
-	}
-	entries := []struct {
-		name string
-		data []byte
-	}{
+	return []releaseEvidenceLayoutEntry{
 		{name: "oci-layout", data: []byte(`{"imageLayoutVersion":"1.0.0"}`)},
 		{name: "blobs/sha256/" + configDigest, data: config},
 		{name: "blobs/sha256/" + layerDigest, data: layer},
 		{name: "blobs/sha256/" + manifestDigest, data: manifest},
-	}
-	for index := 0; index < nestedIndexCount; index++ {
-		nestedIndex := []byte(`{"schemaVersion":2,"manifests":[` + strings.Join(children, ",") + `]}`)
-		nestedIndexDigest := sha256Hex(nestedIndex)
-		entries = append(entries, struct {
-			name string
-			data []byte
-		}{name: "blobs/sha256/" + nestedIndexDigest, data: nestedIndex})
-		children = []string{fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:%s","size":%d}`,
-			nestedIndexDigest, len(nestedIndex))}
-	}
-	entries = append(entries, struct {
-		name string
-		data []byte
-	}{name: "index.json", data: []byte(`{"schemaVersion":2,"manifests":[` + strings.Join(children, ",") + `]}`)})
+	}, manifestDigest, len(manifest)
+}
+
+// writeReleaseEvidenceLayoutEntries writes entries under the layout at path.
+func writeReleaseEvidenceLayoutEntries(t *testing.T, path string, entries []releaseEvidenceLayoutEntry) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Join(path, "blobs", "sha256"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
 		writeReleaseArtifact(t, filepath.Join(path, filepath.FromSlash(entry.name)), entry.data)
 	}
-	return "sha256:" + manifestDigest
+}
+
+// runReleaseCollector runs one scripts/release/collect.py subcommand from the
+// repository root and returns its combined output.
+func runReleaseCollector(root, subcommand string, arguments ...string) ([]byte, error) {
+	command := exec.Command("python3", append([]string{filepath.Join(root, "scripts", "release", "collect.py"), subcommand}, arguments...)...)
+	command.Dir = root
+	return command.CombinedOutput()
+}
+
+// writeReleaseEvidenceFixtureMetadata writes metadata as the metadata.yaml of
+// an example contract fixture profile under fixtureRoot and returns the
+// profile directory.
+func writeReleaseEvidenceFixtureMetadata(t *testing.T, fixtureRoot, metadata string) string {
+	t.Helper()
+	fixtureDirectory := filepath.Join(fixtureRoot, "llm", "provider", "example", "testdata", "contracts", "example-profile")
+	if err := os.MkdirAll(fixtureDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeReleaseArtifact(t, filepath.Join(fixtureDirectory, "metadata.yaml"), []byte(metadata))
+	return fixtureDirectory
 }
 
 func runReleaseEvidenceVerifier(t *testing.T, root, directory string) ([]byte, error) {

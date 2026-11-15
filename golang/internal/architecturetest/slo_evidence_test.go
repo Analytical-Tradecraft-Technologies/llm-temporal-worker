@@ -138,13 +138,7 @@ func TestSLOEvidenceBindsAndVerifiesReleaseMetadataWithoutOverwrite(t *testing.T
 		t.Fatalf("binding content_sha256 = %#v, want %q", got, bindingDigest)
 	}
 	bindingSchema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-evidence-binding.schema.json", "urn:llmtw:slo-evidence-binding:v1")
-	if err := validateJSONSchema(bindingSchema, binding); err != nil {
-		t.Fatalf("binding schema rejects recorded binding: %v", err)
-	}
-	binding["api_key"] = "must-not-be-accepted"
-	if err := validateJSONSchema(bindingSchema, binding); err == nil {
-		t.Fatal("binding schema accepts unsafe unknown field")
-	}
+	assertSLOSchemaRejectsUnknownField(t, bindingSchema, binding, "binding schema", "binding")
 	if !bytes.HasSuffix(raw, []byte("\n")) || bytes.Contains(raw, []byte(": ")) {
 		t.Fatalf("binding is not canonical JSON: %q", raw)
 	}
@@ -297,9 +291,7 @@ func TestSLOEvidenceRejectsDuplicateJSONKeys(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			directory := t.TempDir()
 			inputPath := filepath.Join(directory, "candidate.json")
-			if err := os.WriteFile(inputPath, []byte(testCase.raw), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeReleaseArtifact(t, inputPath, []byte(testCase.raw))
 			output, err := runSLOEvidence(root, "record", "--input", inputPath, "--evidence", filepath.Join(directory, "evidence.json"))
 			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
 				t.Fatalf("record duplicate-key candidate = %v, %q; want safe rejection", err, output)
@@ -308,9 +300,7 @@ func TestSLOEvidenceRejectsDuplicateJSONKeys(t *testing.T) {
 	}
 
 	evidencePath := filepath.Join(t.TempDir(), "evidence.json")
-	if err := os.WriteFile(evidencePath, []byte(`{"schema_version":1,"schema_version":1}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, evidencePath, []byte(`{"schema_version":1,"schema_version":1}`))
 	output, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", strings.Repeat("a", 64))
 	if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
 		t.Fatalf("verify duplicate-key evidence = %v, %q; want safe rejection", err, output)
@@ -327,22 +317,14 @@ func TestSLOEvidenceVerifierRejectsTamperingAndSchemaForbidsUnsafeFields(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(evidencePath, tampered, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, evidencePath, tampered)
 	if output, err := runSLOEvidence(root, "verify", "--evidence", evidencePath, "--source-revision", sloEvidenceSourceRevision, "--content-sha256", digest); err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
 		t.Fatalf("verify tampered evidence = %v, %q; want safe rejection", err, output)
 	}
 
 	schema := compileSLOEvidenceJSONSchema(t, root)
 	delete(record, "endpoint")
-	if err := validateJSONSchema(schema, record); err != nil {
-		t.Fatalf("schema rejects recorded evidence: %v", err)
-	}
-	record["api_key"] = "must-not-be-accepted"
-	if err := validateJSONSchema(schema, record); err == nil {
-		t.Fatal("schema accepts unsafe unknown field")
-	}
+	assertSLOSchemaRejectsUnknownField(t, schema, record, "schema", "evidence")
 }
 
 func TestSLOEvidenceCandidateSchemaMatchesRecorderInput(t *testing.T) {
@@ -371,9 +353,7 @@ func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
 		`llmtw_activity_failure_total{origin="provider"} 7`,
 		"process_cpu_seconds_total 12",
 	}, "\n") + "\n"
-	if err := os.WriteFile(inputPath, []byte(metrics), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, inputPath, []byte(metrics))
 	output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
 	if err != nil {
 		t.Fatalf("worker error summary: %v\n%s", err, output)
@@ -408,13 +388,7 @@ func TestSLOEvidenceWorkerErrorSummaryIsRedactedMeasurementOnly(t *testing.T) {
 		}
 	}
 	schema := compileSLOEvidenceJSONSchemaFile(t, root, "slo-worker-error-summary.schema.json", "urn:llmtw:slo-worker-error-summary:v1")
-	if err := validateJSONSchema(schema, summary); err != nil {
-		t.Fatalf("summary schema rejects recorded output: %v", err)
-	}
-	summary["api_key"] = "must-not-be-accepted"
-	if err := validateJSONSchema(schema, summary); err == nil {
-		t.Fatal("summary schema accepts unsafe unknown field")
-	}
+	assertSLOSchemaRejectsUnknownField(t, schema, summary, "summary schema", "output")
 	delete(summary, "api_key")
 	if bytes.Contains(raw, []byte("llmtw_activity")) || bytes.Contains(raw, []byte("process_cpu")) {
 		t.Fatalf("summary retained raw metric names: %q", raw)
@@ -488,9 +462,7 @@ func TestSLOEvidenceWorkerErrorSummaryRejectsUnsafeSnapshots(t *testing.T) {
 			directory := t.TempDir()
 			inputPath := filepath.Join(directory, "metrics.prom")
 			outputPath := filepath.Join(directory, "summary.json")
-			if err := os.WriteFile(inputPath, []byte(testCase.metrics+"\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeReleaseArtifact(t, inputPath, []byte(testCase.metrics+"\n"))
 			output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
 			if err == nil || strings.TrimSpace(string(output)) != "SLO evidence rejected" {
 				t.Fatalf("summary result = %v, %q; want safe rejection", err, output)
@@ -547,15 +519,27 @@ func writeSLOEvidenceCandidate(t *testing.T, path string, candidate map[string]a
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, path, data)
 }
 
 func runSLOEvidence(root string, arguments ...string) ([]byte, error) {
 	command := exec.Command("python3", append([]string{filepath.Join(root, "scripts", "release", "slo-evidence.py")}, arguments...)...)
 	command.Dir = root
 	return command.CombinedOutput()
+}
+
+// assertSLOSchemaRejectsUnknownField requires schema to accept the recorded
+// document and to reject it once an unsafe unknown api_key field is added.
+// The field is left in document.
+func assertSLOSchemaRejectsUnknownField(t *testing.T, schema *jsonschema.Schema, document map[string]any, label, recorded string) {
+	t.Helper()
+	if err := validateJSONSchema(schema, document); err != nil {
+		t.Fatalf("%s rejects recorded %s: %v", label, recorded, err)
+	}
+	document["api_key"] = "must-not-be-accepted"
+	if err := validateJSONSchema(schema, document); err == nil {
+		t.Fatalf("%s accepts unsafe unknown field", label)
+	}
 }
 
 func compileSLOEvidenceJSONSchema(t *testing.T, root string) *jsonschema.Schema {
@@ -584,9 +568,7 @@ func TestSLOEvidenceAcceptsAHealthyWorkerExport(t *testing.T) {
 	directory := t.TempDir()
 	inputPath := filepath.Join(directory, "metrics.prom")
 	outputPath := filepath.Join(directory, "worker-error-summary.json")
-	if err := os.WriteFile(inputPath, recorder.Body.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeReleaseArtifact(t, inputPath, recorder.Body.Bytes())
 	output, err := runSLOEvidence(root, "worker-error-summary", "--input", inputPath, "--output", outputPath)
 	if err != nil {
 		t.Fatalf("worker error summary of a healthy export: %v\n%s", err, output)

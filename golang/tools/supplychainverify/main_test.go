@@ -570,18 +570,25 @@ func TestWriteReportFileCreatesPrivateNestedReport(t *testing.T) {
 	}
 }
 
+// minimalBaselineJSON is a baseline that trusts one MIT module root and has
+// no vulnerability exceptions.
+const minimalBaselineJSON = `{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`
+
+// writeTestFile writes contents to root/name and returns the path.
+func writeTestFile(t *testing.T, root, name string, contents []byte) string {
+	t.Helper()
+	path := filepath.Join(root, name)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestCommandSmokeWritesRedactedReport(t *testing.T) {
 	baseline := testBaseline()
 	baseline.VulnerabilityExceptions = []vulnerabilityException{testVulnerabilityException("GO-2099-0001", "reachable")}
 	root := t.TempDir()
-	write := func(name string, contents []byte) string {
-		t.Helper()
-		path := filepath.Join(root, name)
-		if err := os.WriteFile(path, contents, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
+	write := func(name string, contents []byte) string { return writeTestFile(t, root, name, contents) }
 	baselineJSON, err := json.Marshal(baseline)
 	if err != nil {
 		t.Fatal(err)
@@ -635,15 +642,8 @@ func TestExecuteValidatesInputsAndComponentStatuses(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	write := func(name, contents string) string {
-		t.Helper()
-		path := filepath.Join(root, name)
-		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	baselinePath := write("baseline.json", `{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`)
+	write := func(name, contents string) string { return writeTestFile(t, root, name, []byte(contents)) }
+	baselinePath := write("baseline.json", minimalBaselineJSON)
 	goModPath := write("go-mod.json", `{"Require":[{"Path":"example.test/one","Version":"v1.2.3"}]}`)
 	vulnerabilityPath := write("vulnerabilities.json", "")
 	components := componentStatus{Test: "pass", Source: "pass", GoMod: "pass", Vulnerability: "pass"}
@@ -780,15 +780,8 @@ func TestExecuteReleaseTagRequiresTheScanToCompleteAndSkipsOtherComponents(t *te
 	t.Parallel()
 
 	root := t.TempDir()
-	write := func(name, contents string) string {
-		t.Helper()
-		path := filepath.Join(root, name)
-		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
-	baselinePath := write("baseline.json", `{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`)
+	write := func(name, contents string) string { return writeTestFile(t, root, name, []byte(contents)) }
+	baselinePath := write("baseline.json", minimalBaselineJSON)
 	vulnerabilityPath := write("vulnerabilities.json", "")
 	now := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
 
@@ -837,14 +830,8 @@ func TestCommandReleaseTagModeRejectsInventoryInputs(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, output)
 	}
-	baselinePath := filepath.Join(root, "baseline.json")
-	if err := os.WriteFile(baselinePath, []byte(`{"version":2,"allowed_licenses":["MIT"],"trusted_module_roots":[{"path":"example.test/one","license":"MIT","source":"https://example.test/one"}],"vulnerability_exceptions":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	vulnerabilityPath := filepath.Join(root, "vulnerabilities.json")
-	if err := os.WriteFile(vulnerabilityPath, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	baselinePath := writeTestFile(t, root, "baseline.json", []byte(minimalBaselineJSON))
+	vulnerabilityPath := writeTestFile(t, root, "vulnerabilities.json", nil)
 	reportPath := filepath.Join(root, "report.json")
 
 	passed := exec.Command(binaryPath, "-release-tag", "-baseline", baselinePath, "-vulnerability-output", vulnerabilityPath, "-report", reportPath)

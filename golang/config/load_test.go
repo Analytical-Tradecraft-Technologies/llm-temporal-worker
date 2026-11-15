@@ -150,21 +150,7 @@ func TestLoadDefaultsCoordinationStreamByStateKind(t *testing.T) {
 }
 
 func TestLoadAcceptsDevelopmentFileBlobStore(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "environment: production", "environment: development", -1)
-	data = strings.Replace(data, `blob_store:
-  kind: s3
-  inline_bytes: 262144
-  s3:
-    bucket: acme-llmtw-production
-    region: ap-southeast-2
-    prefix: v1
-    auth:
-      kind: aws_default_chain`, `blob_store:
-  kind: file
-  inline_bytes: 262144
-  file:
-    root: /var/lib/llmtw/blobs`, 1)
-	loaded := mustLoadConfig(t, []byte(data))
+	loaded := mustLoadConfig(t, developmentFileBlobYAML(t))
 	encoded := mustMarshalJSON(t, loaded)
 	var document struct {
 		BlobStore struct {

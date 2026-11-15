@@ -115,49 +115,12 @@ func TestV1TraceabilityCatalog(t *testing.T) {
 }
 
 func TestV1TraceabilityAdapterGoldenRequirementUsesGenerateOnlySource(t *testing.T) {
-	root := repositoryRoot(t)
-	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, root))
-	const id = "v1.contract.adapter-golden-strict"
-	var requirement *v1TraceabilityRequirement
-	for index := range catalog.Requirements {
-		if catalog.Requirements[index].ID == id {
-			requirement = &catalog.Requirements[index]
-			break
-		}
-	}
-	if requirement == nil {
-		t.Fatalf("catalog is missing %q", id)
-	}
-	if got, want := requirement.Source, (v1TraceabilitySource{
-		Path:   "docs/index.md",
-		Anchor: "#v1-completion-gate",
-		Quote:  "Every adapter has request, response, error, and usage golden tests; strict-mode lossy conversions fail before dispatch.",
-	}); got != want {
-		t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
-	}
+	v1TraceabilityRequirementWithGateSource(t, "v1.contract.adapter-golden-strict", "Every adapter has request, response, error, and usage golden tests; strict-mode lossy conversions fail before dispatch.")
 }
 
 func TestV1TraceabilityCrossProtocolRequirementIncludesBedrockConverse(t *testing.T) {
-	root := repositoryRoot(t)
-	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, root))
 	const id = "v1.contract.cross-protocol"
-	var requirement *v1TraceabilityRequirement
-	for index := range catalog.Requirements {
-		if catalog.Requirements[index].ID == id {
-			requirement = &catalog.Requirements[index]
-			break
-		}
-	}
-	if requirement == nil {
-		t.Fatalf("catalog is missing %q", id)
-	}
-	if got, want := requirement.Source, (v1TraceabilitySource{
-		Path:   "docs/index.md",
-		Anchor: "#v1-completion-gate",
-		Quote:  "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, Amazon Bedrock Anthropic, and Amazon Bedrock Converse profiles supported by the capability matrix.",
-	}); got != want {
-		t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
-	}
+	requirement := v1TraceabilityRequirementWithGateSource(t, id, "The same semantic request passes contract tests against OpenAI Responses, OpenAI-compatible Chat Completions, Anthropic Messages, Claude Platform on AWS, Amazon Bedrock Anthropic, and Amazon Bedrock Converse profiles supported by the capability matrix.")
 	if got, want := requirement.ImplementationPaths, []string{
 		"golang/llm/provider/anthropicmessages",
 		"golang/llm/provider/bedrockconverse",
@@ -475,6 +438,31 @@ func validateEvidenceFreshness(root, revision string, paths []string) error {
 		return fmt.Errorf("implementation paths changed since recorded evidence revision %s; rebind it to a current run or mark it unrecorded", revision)
 	}
 	return nil
+}
+
+// v1TraceabilityRequirementWithGateSource returns the catalog requirement id
+// and checks that its source is quote in the docs/index.md v1 completion gate.
+func v1TraceabilityRequirementWithGateSource(t *testing.T, id, quote string) *v1TraceabilityRequirement {
+	t.Helper()
+	catalog := decodeV1TraceabilityCatalog(t, readV1TraceabilityCatalog(t, repositoryRoot(t)))
+	var requirement *v1TraceabilityRequirement
+	for index := range catalog.Requirements {
+		if catalog.Requirements[index].ID == id {
+			requirement = &catalog.Requirements[index]
+			break
+		}
+	}
+	if requirement == nil {
+		t.Fatalf("catalog is missing %q", id)
+	}
+	if got, want := requirement.Source, (v1TraceabilitySource{
+		Path:   "docs/index.md",
+		Anchor: "#v1-completion-gate",
+		Quote:  quote,
+	}); got != want {
+		t.Errorf("requirement %q source = %#v, want %#v", id, got, want)
+	}
+	return requirement
 }
 
 func readV1TraceabilityCatalog(t *testing.T, root string) []byte {
