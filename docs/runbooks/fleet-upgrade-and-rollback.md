@@ -61,16 +61,23 @@ Compare the current and target configurations field by field (step 1 of the
 5. **Endpoint recovery identity.** An attempt that already reached its provider
    is polled or recovered under a new configuration only while its route and
    its endpoint's recovery identity are unchanged. `timeout`, `langfuse`,
-   `optional` and `outbound_hosts` are not part of that identity and are safe
-   to change with paid work in flight. Every other endpoint field (family,
-   base URL, region, account region, AWS workspace, auth reference, service
-   classes and tiers, capability profile, price catalog, provider storage and
-   extensions) is. Changing one makes in-flight paid attempts on that endpoint
-   wait with a retryable `state_unavailable` until compatible settings return;
-   they are never submitted again. Change these fields only after a
-   [drain](#4-drain-when-the-change-requires-it), or accept the wait; restoring
-   the old settings resumes the waiting work. See
+   `optional` and `outbound_hosts` are not part of that identity. Every other
+   endpoint field (family, base URL, region, account region, AWS workspace,
+   auth reference, service classes and tiers, capability profile, price
+   catalog, provider storage and extensions) is. Changing one makes in-flight
+   paid attempts on that endpoint wait with a retryable `state_unavailable`
+   until compatible settings return; they are never submitted again. Change
+   these fields only after a [drain](#4-drain-when-the-change-requires-it), or
+   accept the wait; restoring the old settings resumes the waiting work. See
    [storage and callers](../reference/mvp-v1-status.md#storage-and-callers).
+
+   The four excluded fields are safe to change with paid work in flight only
+   for attempts planned by a build that has #1640. A plan saved by an earlier
+   build carries only the digest of the whole endpoint configuration, and
+   recovery accepts it only while that whole configuration is unchanged. A
+   change to any endpoint field, these four included, stalls such an attempt
+   the same way. Until no attempt planned before #1640 can still be in flight,
+   keep the whole endpoint configuration unchanged or drain first.
 6. **Durable identity: never change in an upgrade.** Requests, reservations,
    checkpoints and results exist only under the identity they were written
    with, and nothing copies them:
@@ -320,7 +327,10 @@ forward again.
   endpoint's recovery identity. A build without #1640 cannot match it: after a
   rollback below #1640 it answers those in-flight attempts with a retryable
   `state_unavailable` until a newer worker returns. Nothing fails and nothing
-  is submitted again, but that paid work stalls until you roll forward.
+  is submitted again, but that paid work stalls until you roll forward. The
+  older build compares only the digest of the whole endpoint configuration, so
+  rolling back with any endpoint field changed, including `timeout`,
+  `langfuse`, `optional` or `outbound_hosts`, also stalls its own attempts.
 - **Redis admission code.** A rollback needs the old admission library still
   loaded. If it was deleted, load it again ([step 2](#2-load-the-redis-admission-code))
   before rolling back.
