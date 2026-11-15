@@ -91,6 +91,7 @@ worker database; the service has no deployed SQL data. See the
 - [v1 consumer contract kit](testing/contract-kit.md)
 - [Architecture decisions](decisions/)
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
+- [Terminated workflow pending-recovery runbook](runbooks/terminated-workflow-pending-recovery.md)
 
 ## v1 completion gate
 

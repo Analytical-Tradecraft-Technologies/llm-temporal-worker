@@ -12,7 +12,8 @@
 
 The production binary runs as `worker`. Its other commands validate or print
 configuration, initialize the Redis budget namespace, recover historical
-Generate bindings, probe health endpoints, and print build metadata; the
+Generate bindings, list and recover pending requests left by terminated
+workflows, probe health endpoints, and print build metadata; the
 [command-line reference](../reference/cli.md) lists every command:
 
 ```text
@@ -21,6 +22,8 @@ llm-temporal-worker validate-config
 llm-temporal-worker print-effective-config
 llm-temporal-worker budget-initialize
 llm-temporal-worker generation-recover
+llm-temporal-worker pending-list
+llm-temporal-worker pending-recover
 llm-temporal-worker healthcheck
 llm-temporal-worker health-server
 llm-temporal-worker version
@@ -627,8 +630,9 @@ requests. It has read-only permissions and no provider credentials.
 day at 05:00 using the `Australia/Sydney` schedule timezone. On the canonical
 master branch, container builds use Docker Build Cloud, including Compose
 lifecycle and hardened-image/release-evidence builds. Tests still execute on
-GitHub runners. After verification, OCaml tests, and fuzz shards pass, the
-container job pushes `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
+GitHub runners. The image is built and scanned while the gates run; only after
+verification, OCaml tests, and fuzz shards pass does the container job push
+those scanned bytes as `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
 using the UTC build date and `github.run_number`. Push, schedule, and manual
 master runs publish; non-master dispatches cannot enter the Docker environment.
 This publishes a development image and does not deploy or create a signed

@@ -118,7 +118,11 @@ attempt before resubmitting. See [Redis budget leases](../reference/redis-budget
 There is no service cancellation API. Disconnected workflow contexts and child
 abandon policies protect already-paid work from caller cancellation. An
 administrator can terminate a workflow, so pending discovery remains independent
-of Temporal history; automatic orphan cleanup is deferred.
+of Temporal history. The operator `pending-list` and `pending-recover` commands
+find requests no workflow advances and finish them through the same poll,
+completion and settlement steps, without starting new paid work; see the
+[terminated-workflow runbook](../runbooks/terminated-workflow-pending-recovery.md).
+Recovery runs on demand; there is no automatic background reconciler.
 
 ## Heartbeats
 
