@@ -12,7 +12,8 @@
 
 The production binary runs as `worker`. Its other commands validate or print
 configuration, initialize the Redis budget namespace, recover historical
-Generate bindings, probe health endpoints, and print build metadata; the
+Generate bindings, list and recover pending requests left by terminated
+workflows, probe health endpoints, and print build metadata; the
 [command-line reference](../reference/cli.md) lists every command:
 
 ```text
@@ -21,6 +22,8 @@ llm-temporal-worker validate-config
 llm-temporal-worker print-effective-config
 llm-temporal-worker budget-initialize
 llm-temporal-worker generation-recover
+llm-temporal-worker pending-list
+llm-temporal-worker pending-recover
 llm-temporal-worker healthcheck
 llm-temporal-worker health-server
 llm-temporal-worker version
