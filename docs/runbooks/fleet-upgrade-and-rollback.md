@@ -86,7 +86,9 @@ Compare the current and target configurations field by field (step 1 of the
      every cached response into a miss
      ([durable scope identity](../reference/configuration.md#durable-scope-identity));
    - the material behind `state.redis.key_secret` and `state.requests.secret`
-     ([Redis namespace identity](../reference/configuration.md#redis-namespace-identity));
+     ([Redis namespace identity](../reference/configuration.md#redis-namespace-identity)).
+     Replacing either is a separate migration, not an upgrade
+     ([rotating runtime credentials](rotating-runtime-credentials.md));
    - `state.kind`, `state.redis.key_prefix` (and `LLMTW_REDIS_KEY_PREFIX`),
      `state.redis.admission_hash_tag`, the `state.requests` provider block,
      `request_table`, `payload_store` and `namespace`, and the result store's

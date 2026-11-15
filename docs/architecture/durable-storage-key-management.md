@@ -691,11 +691,16 @@ as its acceptance gate. Phases 1 and 2 have no AWS dependency.
 
 ## Out of scope
 
+[Key compromise and credential rotation](key-compromise-and-credential-rotation.md)
+(#1559) covers the keys and credentials listed here, except in-place
+re-encryption and KMS envelopes.
+
 - Rotating the identity key. That requires a namespace migration.
 - Rotating continuation handle keys and provider API credentials. They may
   reuse the `aws_secrets_manager` resolver kind later, with independent
   lifecycles.
 - Redis `key_secret`.
+- Temporal payload codec keys.
 - In-place re-encryption of immutable blobs.
 - Per-object KMS envelope encryption. A future envelope format version could
   add it.

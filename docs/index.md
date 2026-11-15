@@ -95,6 +95,8 @@ worker database; the service has no deployed SQL data. See the
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
 - [Terminated workflow pending-recovery runbook](runbooks/terminated-workflow-pending-recovery.md)
 - [Fleet upgrade and rollback runbook](runbooks/fleet-upgrade-and-rollback.md)
+- [Key compromise and credential rotation design (#1559)](architecture/key-compromise-and-credential-rotation.md)
+- [Rotating runtime credentials runbook](runbooks/rotating-runtime-credentials.md)
 
 ## Incident response
 

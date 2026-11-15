@@ -324,6 +324,13 @@ error names the missing field. `print-effective-config` applies the same
 checks. Use `worker` startup as the full dependency and reference-validation
 gate.
 
+In a production environment, `validate-config` also prints one line per
+reloadable credential configured as `kind: env`, for example
+`warning: state.redis.password uses kind: env; rotating it needs a restart, so use a file reference and SIGHUP instead`.
+Warnings go to standard error, name only the field, and do not change the
+exit status. See
+[rotating runtime credentials](../runbooks/rotating-runtime-credentials.md).
+
 ## `print-effective-config`
 
 Print the canonical effective configuration as JSON without starting runtime
@@ -421,7 +428,12 @@ again on reload and must not change. With `state.kind: memory` the Redis
 section is ignored, so `state.redis.admission_hash_tag` and
 `state.redis.key_secret` can change there.
 
-Environment variables are not re-read during reload.
+Environment variables are not re-read during reload. Every reload, including
+a `SIGHUP` with an unchanged file, re-reads `file` secrets and rebuilds the
+snapshot's clients, but the watcher observes only the `--config` path:
+replacing a secret file alone does not reload. See
+[rotating runtime credentials](../runbooks/rotating-runtime-credentials.md)
+for which credentials a reload rotates.
 
 ## Exit status and diagnostics
 

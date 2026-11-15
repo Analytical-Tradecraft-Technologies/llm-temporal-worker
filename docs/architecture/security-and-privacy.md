@@ -70,6 +70,12 @@ where the official SDK supports it. Secret values:
 - are redacted by allow-list logging, not regex alone;
 - rotate by building a new client snapshot.
 
+A reload builds that snapshot for credentials whose clients are per snapshot
+and whose reference is a file; environment references and process-lifetime
+clients (Temporal, the payload codec) need a restart. What each key's
+compromise exposes, and how to revoke it, is in
+[key compromise and credential rotation](key-compromise-and-credential-rotation.md).
+
 Arbitrary command execution as a secret resolver is not supported.
 
 ## Egress

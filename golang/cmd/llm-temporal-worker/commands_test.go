@@ -108,6 +108,48 @@ func TestConfigCommandsDoNotPrintSecretValues(t *testing.T) {
 	}
 }
 
+// validate-config accepts a production configuration whose reloadable
+// credential is an environment variable, but warns on stderr that rotating
+// it needs a restart (#1559). The warning names the field, never the variable.
+func TestValidateConfigWarnsAboutRotatableEnvSecrets(t *testing.T) {
+	example, err := os.ReadFile(exampleConfigPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const filePassword = "    password:\n      kind: file\n      path: /var/run/secrets/redis-password\n"
+	if !strings.Contains(string(example), filePassword) {
+		t.Fatalf("example configuration no longer contains %q", filePassword)
+	}
+	for _, test := range []struct {
+		name, data, wantWarning string
+	}{
+		{name: "file reference", data: string(example)},
+		{
+			name:        "environment reference",
+			data:        strings.Replace(string(example), filePassword, "    password:\n      kind: env\n      name: ROTATED_REDIS_PASSWORD\n", 1),
+			wantWarning: "warning: state.redis.password uses kind: env; rotating it needs a restart, so use a file reference and SIGHUP instead\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(test.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var output, errorsOut bytes.Buffer
+			code := Execute(context.Background(), []string{"validate-config", "--config", path}, CommandOptions{Out: &output, ErrOut: &errorsOut})
+			if code != 0 || !strings.HasPrefix(output.String(), "valid config version ") {
+				t.Fatalf("validate-config code=%d out=%q error=%q", code, output.String(), errorsOut.String())
+			}
+			if errorsOut.String() != test.wantWarning {
+				t.Fatalf("validate-config stderr = %q, want %q", errorsOut.String(), test.wantWarning)
+			}
+			if strings.Contains(errorsOut.String(), "ROTATED_REDIS_PASSWORD") {
+				t.Fatal("warning named the environment variable")
+			}
+		})
+	}
+}
+
 func TestWorkerCommandUsesPathAwareRuntime(t *testing.T) {
 	path := exampleConfigPath(t)
 	workerCalled := false
