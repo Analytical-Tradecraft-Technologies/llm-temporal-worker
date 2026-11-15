@@ -45,18 +45,8 @@ func TestResponsesContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			assertCanonicalFixtureJSON(t, gotWire, profile.id, "request.wire.json")
 
 			response := loadContractResponseFixture(t, profile.id, "response.completed.json")
-			call := provider.Call{
-				EndpointID:   profile.endpoint,
-				Family:       provider.FamilyOpenAIResponses,
-				Model:        string(response.Model),
-				OperationKey: normalized.OperationKey,
-				ServiceClass: serviceClass,
-				SDKParams:    params,
-			}
-			lifted, err := liftResponse(call, &response, profile.requestID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := profile.call(response, normalized.OperationKey, serviceClass, params)
+			lifted := mustLift(t, call, &response, profile.requestID)
 			gotSemantic := contract.MarshalJSON(t, lifted)
 			assertCanonicalFixtureJSON(t, gotSemantic, profile.id, "response.semantic.json")
 
@@ -108,14 +98,7 @@ func TestResponsesContractFixturesVerifySemanticRoundTrip(t *testing.T) {
 				if err := json.Unmarshal(responseWire, &response); err != nil {
 					return nil, err
 				}
-				call := provider.Call{
-					EndpointID:   profile.endpoint,
-					Family:       provider.FamilyOpenAIResponses,
-					Model:        string(response.Model),
-					OperationKey: normalized.OperationKey,
-					ServiceClass: serviceClass,
-					SDKParams:    params,
-				}
+				call := profile.call(response, normalized.OperationKey, serviceClass, params)
 				lifted, err := liftResponse(call, &response, profile.requestID)
 				if err != nil {
 					return nil, err
@@ -138,17 +121,8 @@ func TestResponsesContractFixturesCoverUsageClassAndStrictLoss(t *testing.T) {
 			assertProfileClassFacts(t, profile)
 
 			response := loadContractResponseFixture(t, profile.id, "usage-cost.response.json")
-			call := provider.Call{
-				EndpointID:   profile.endpoint,
-				Family:       provider.FamilyOpenAIResponses,
-				Model:        string(response.Model),
-				OperationKey: "fixture-usage-cost",
-				ServiceClass: llm.ServiceClassStandard,
-			}
-			lifted, err := liftResponse(call, &response, profile.requestID)
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := profile.call(response, "fixture-usage-cost", llm.ServiceClassStandard, nil)
+			lifted := mustLift(t, call, &response, profile.requestID)
 			got := contract.MarshalJSON(t, lifted)
 			assertCanonicalFixtureJSON(t, got, profile.id, "usage-cost.semantic.json")
 			if lifted.Cost != (llm.Cost{}) {
@@ -182,11 +156,7 @@ func TestResponsesContractFixturesCoverContinuationCompatibility(t *testing.T) {
 }
 
 func TestResponsesContractFixturesStayRedactedAndRespectCoverageBoundary(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	report, err := contracttest.ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := contract.ValidateRepository(t)
 	wantProfiles := map[string]contracttest.Profile{
 		"openai-responses": {
 			ID:       "openai-responses",
@@ -269,10 +239,7 @@ func TestOpenAIResponsesContractFixtureUsesDirectTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if calls != 1 {
 		t.Fatalf("OpenAI Responses HTTP calls = %d, want one", calls)
 	}
@@ -313,10 +280,7 @@ func TestAzureResponsesContractFixtureUsesAzureTransport(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIResponses, request)
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil || got.URL.Path != "/openai/v1/responses" || got.URL.Query().Get("api-version") != "v1" {
 		t.Fatalf("Azure Responses request URL = %v", gotURL(got))
 	}
@@ -348,26 +312,7 @@ func TestCapabilitiesKeepStreamingUnsupportedAndContinuationNative(t *testing.T)
 
 func assertProfileClassFacts(t *testing.T, profile responsesFixtureProfile) {
 	t.Helper()
-	var semantic []struct {
-		Class  llm.ServiceClass `json:"class"`
-		Actual llm.ServiceClass `json:"actual"`
-	}
-	if err := json.Unmarshal(readContractFixture(t, profile.id, "class-facts.semantic.json"), &semantic); err != nil {
-		t.Fatal(err)
-	}
-	var wire []struct {
-		Class         llm.ServiceClass `json:"class"`
-		Supported     bool             `json:"supported"`
-		RequestedTier string           `json:"requested_tier"`
-		ActualTier    string           `json:"actual_tier"`
-	}
-	if err := json.Unmarshal(readContractFixture(t, profile.id, "class-facts.wire.json"), &wire); err != nil {
-		t.Fatal(err)
-	}
-	actualByClass := make(map[llm.ServiceClass]llm.ServiceClass, len(semantic))
-	for _, fact := range semantic {
-		actualByClass[fact.Class] = fact.Actual
-	}
+	wire, actualByClass := contract.ClassFacts(t, readContractFixture(t, profile.id, "class-facts.semantic.json"), readContractFixture(t, profile.id, "class-facts.wire.json"))
 	for _, fact := range wire {
 		if !fact.Supported {
 			continue
@@ -388,11 +333,7 @@ func assertProfileClassFacts(t *testing.T, profile responsesFixtureProfile) {
 
 func assertLossyRequestIsRejectedBeforeDispatch(t *testing.T, adapter *Adapter, profile responsesFixtureProfile, request llm.Request) {
 	t.Helper()
-	_, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query:   provider.CapabilityQuery{EndpointID: profile.endpoint, Family: provider.FamilyOpenAIResponses, Model: request.Model},
-		Strict:  true,
-	})
+	_, err := adaptertest.Compile(adapter, profile.endpoint, provider.FamilyOpenAIResponses, request, true)
 	providerErr, ok := err.(*provider.Error)
 	if !ok {
 		t.Fatalf("%s lossy compile error = %T %v, want provider error", profile.id, err, err)
@@ -415,16 +356,7 @@ func assertLossyRequestIsRejectedBeforeDispatch(t *testing.T, adapter *Adapter, 
 
 func assertClassifiedErrorFixture(t *testing.T, profile responsesFixtureProfile) {
 	t.Helper()
-	var fixture struct {
-		Status     int    `json:"status"`
-		Code       string `json:"code"`
-		RequestID  string `json:"request_id"`
-		RetryAfter string `json:"retry_after"`
-		Message    string `json:"message"`
-	}
-	if err := json.Unmarshal(readContractFixture(t, profile.id, "classified-error.wire.json"), &fixture); err != nil {
-		t.Fatal(err)
-	}
+	fixture := contract.DecodeJSON[contract.ClassifiedErrorFixture](t, readContractFixture(t, profile.id, "classified-error.wire.json"))
 	mapped := mapError(&openai.Error{
 		Code:       fixture.Code,
 		Message:    fixture.Message,
@@ -511,4 +443,17 @@ func readContractFixture(t *testing.T, profile, name string) []byte {
 func assertCanonicalFixtureJSON(t *testing.T, got []byte, profile, name string) {
 	t.Helper()
 	contract.AssertCanonicalJSON(t, got, readContractFixture(t, profile, name), profile+"/"+name)
+}
+
+// call is the call profile's endpoint makes for response's model under
+// operationKey and serviceClass, carrying params.
+func (profile responsesFixtureProfile) call(response responses.Response, operationKey string, serviceClass llm.ServiceClass, params any) provider.Call {
+	return provider.Call{
+		EndpointID:   profile.endpoint,
+		Family:       provider.FamilyOpenAIResponses,
+		Model:        string(response.Model),
+		OperationKey: operationKey,
+		ServiceClass: serviceClass,
+		SDKParams:    params,
+	}
 }

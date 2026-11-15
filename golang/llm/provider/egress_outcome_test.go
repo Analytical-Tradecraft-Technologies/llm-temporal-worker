@@ -2,13 +2,13 @@ package provider_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestEgressOutcomeRecordsOnlyMarkedDenials(t *testing.T) {
@@ -92,10 +92,7 @@ func TestEgressOutcomeClassifiesOversizedResponseWithoutUnsafeDiagnostics(t *tes
 	if !errors.Is(mapped, provider.ErrProviderResponseTooLarge) {
 		t.Fatalf("oversized-response cause = %v, want ErrProviderResponseTooLarge", mapped)
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	for _, unsafe := range []string{"provider.example", "raw-provider-body"} {
 		if strings.Contains(mapped.Error(), unsafe) || strings.Contains(string(encoded), unsafe) {
 			t.Fatalf("oversized-response diagnostics exposed %q: error=%q json=%s", unsafe, mapped.Error(), encoded)

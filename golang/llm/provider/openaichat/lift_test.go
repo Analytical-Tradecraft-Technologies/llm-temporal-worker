@@ -9,6 +9,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
@@ -36,11 +37,7 @@ func TestLiftCompletedToolResponsePreservesUsageAndIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := testProfile()
-	call := provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model", OperationKey: "op-lift", ServiceClass: llm.ServiceClassPriority}
-	lifted, err := profile.liftResponse(call, &response, "req-1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, profile, liftCall("op-lift", llm.ServiceClassPriority), &response, "req-1")
 	if lifted.Status != llm.ResponseStatusToolCalls || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassPriority {
 		t.Fatalf("status/service = %#v %#v", lifted.Status, lifted.Service)
 	}
@@ -74,7 +71,7 @@ func TestLiftMapsFinishReasonsAndKeepsUnreportedTierUnclassified(t *testing.T) {
 		{reason: "content_filter", want: llm.ResponseStatusContentFiltered},
 	} {
 		response := openai.ChatCompletion{ID: "id", Model: "model", ServiceTier: openai.ChatCompletionServiceTierDefault, Choices: []openai.ChatCompletionChoice{{FinishReason: test.reason, Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
-		got, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &response, "req")
+		got, err := testProfile().liftResponse(liftCall("op", llm.ServiceClassStandard), &response, "req")
 		if err != nil || got.Status != test.want {
 			t.Fatalf("reason %q = %#v, %v", test.reason, got, err)
 		}
@@ -83,7 +80,7 @@ func TestLiftMapsFinishReasonsAndKeepsUnreportedTierUnclassified(t *testing.T) {
 	// unrecognized tier reports no actual class and keeps the raw value.
 	for _, tier := range []openai.ChatCompletionServiceTier{"", "scale"} {
 		response := openai.ChatCompletion{ID: "id", Model: "model", ServiceTier: tier, Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
-		got, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}, &response, "req")
+		got, err := testProfile().liftResponse(liftCall("op", llm.ServiceClassPriority), &response, "req")
 		if err != nil {
 			t.Fatalf("tier %q: %v", tier, err)
 		}
@@ -94,7 +91,7 @@ func TestLiftMapsFinishReasonsAndKeepsUnreportedTierUnclassified(t *testing.T) {
 	explicit := testProfile()
 	explicit.MissingActualServiceClass = llm.ServiceClassStandard
 	response := openai.ChatCompletion{ID: "id", Model: "model", Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Role: "assistant"}}}}
-	got, err := explicit.liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassPriority}, &response, "req")
+	got, err := explicit.liftResponse(liftCall("op", llm.ServiceClassPriority), &response, "req")
 	if err != nil || got.Service.Actual == nil || *got.Service.Actual != llm.ServiceClassStandard {
 		t.Fatalf("explicit missing-tier class = %+v, %v", got.Service, err)
 	}
@@ -102,7 +99,7 @@ func TestLiftMapsFinishReasonsAndKeepsUnreportedTierUnclassified(t *testing.T) {
 
 func TestLiftRejectsMalformedToolArguments(t *testing.T) {
 	response := openai.ChatCompletion{ID: "id", Model: "model", ServiceTier: openai.ChatCompletionServiceTierDefault, Choices: []openai.ChatCompletionChoice{{FinishReason: "tool_calls", Message: openai.ChatCompletionMessage{Role: "assistant", ToolCalls: []openai.ChatCompletionMessageToolCallUnion{{ID: "call", Type: "function", Function: openai.ChatCompletionMessageFunctionToolCallFunction{Name: "lookup", Arguments: "{"}}}}}}}
-	_, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &response, "req")
+	_, err := testProfile().liftResponse(liftCall("op", llm.ServiceClassStandard), &response, "req")
 	var providerErr *provider.Error
 	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse {
 		t.Fatalf("malformed args error = %#v", err)
@@ -120,10 +117,8 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := provider.Call{
-		EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model",
-		OperationKey: "op-json", ServiceClass: llm.ServiceClassStandard, SDKParams: params,
-	}
+	call := liftCall("op-json", llm.ServiceClassStandard)
+	call.SDKParams = params
 	valid := openai.ChatCompletion{
 		ID: "valid", Model: "chat-model", ServiceTier: openai.ChatCompletionServiceTierDefault,
 		Choices: []openai.ChatCompletionChoice{{FinishReason: "stop", Message: openai.ChatCompletionMessage{Content: `{"answer":"ok"}`}}},
@@ -135,10 +130,7 @@ func TestLiftLocallyValidatesRequestedJSONSchema(t *testing.T) {
 	invalid.ID = "invalid"
 	invalid.Choices[0].Message.Content = `{"answer":3}`
 	_, err = testProfile().liftResponse(call, &invalid, "req")
-	var providerErr *provider.Error
-	if !errors.As(err, &providerErr) || providerErr.Code != provider.CodeProviderInvalidResponse || providerErr.Dispatch != provider.DispatchAccepted {
-		t.Fatalf("invalid JSON response error = %#v", err)
-	}
+	adaptertest.RequireAcceptedInvalidResponse(t, err, "invalid JSON response error")
 }
 
 func TestLiftPreservesIncompleteJSONAndUsage(t *testing.T) {
@@ -191,16 +183,10 @@ func TestLiftToolCallsWithStopReason(t *testing.T) {
 		{name: "refusal takes precedence", reason: "stop", refusal: "Cannot comply", want: llm.ResponseStatusRefused},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var response openai.ChatCompletion
-			if err := json.Unmarshal([]byte(`{"id":"chat-tool","model":"model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"Checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"Sydney\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`), &response); err != nil {
-				t.Fatal(err)
-			}
+			response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(`{"id":"chat-tool","model":"model","service_tier":"default","choices":[{"index":0,"message":{"role":"assistant","content":"Checking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"Sydney\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`))
 			response.Choices[0].FinishReason = test.reason
 			response.Choices[0].Message.Refusal = test.refusal
-			got, err := testProfile().liftResponse(provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}, &response, "req")
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := mustLift(t, testProfile(), liftCall("op", llm.ServiceClassStandard), &response, "req")
 			if got.Status != test.want {
 				t.Fatalf("status=%s want %s", got.Status, test.want)
 			}
@@ -222,7 +208,7 @@ func TestLiftToolCallsWithStopReason(t *testing.T) {
 }
 
 func TestLiftAcceptsNullFinishReason(t *testing.T) {
-	call := provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "model", OperationKey: "op", ServiceClass: llm.ServiceClassStandard}
+	call := liftCall("op", llm.ServiceClassStandard)
 	for _, test := range []struct {
 		message string
 		want    llm.ResponseStatus
@@ -230,10 +216,7 @@ func TestLiftAcceptsNullFinishReason(t *testing.T) {
 		{message: `{"role":"assistant","content":"hello"}`, want: llm.ResponseStatusCompleted},
 		{message: `{"role":"assistant","content":null,"tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}`, want: llm.ResponseStatusToolCalls},
 	} {
-		var response openai.ChatCompletion
-		if err := json.Unmarshal([]byte(`{"id":"gen","object":"chat.completion","model":"model","choices":[{"index":0,"finish_reason":null,"message":`+test.message+`}]}`), &response); err != nil {
-			t.Fatal(err)
-		}
+		response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(`{"id":"gen","object":"chat.completion","model":"model","choices":[{"index":0,"finish_reason":null,"message":`+test.message+`}]}`))
 		got, err := testProfile().liftResponse(call, &response, "req")
 		if err != nil || got.Status != test.want || got.Provider.FinishReason != "" {
 			t.Fatalf("null finish reason = %#v, %v", got, err)
@@ -243,4 +226,25 @@ func TestLiftAcceptsNullFinishReason(t *testing.T) {
 	if _, err := testProfile().liftResponse(call, &response, "req"); err == nil {
 		t.Fatal("an unknown finish reason must still be rejected")
 	}
+}
+
+// liftCall is a call for the test model on the chat-prod endpoint.
+func liftCall(operationKey string, class llm.ServiceClass) provider.Call {
+	return provider.Call{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model", OperationKey: operationKey, ServiceClass: class}
+}
+
+// liftStandard lifts response with the test profile for a standard-class
+// call that carries nothing else.
+func liftStandard(response *openai.ChatCompletion) (llm.Response, error) {
+	return testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, response, "req")
+}
+
+// mustLift lifts response for call with profile and fails t on error.
+func mustLift(t *testing.T, profile Profile, call provider.Call, response *openai.ChatCompletion, requestID string) llm.Response {
+	t.Helper()
+	lifted, err := profile.liftResponse(call, response, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lifted
 }

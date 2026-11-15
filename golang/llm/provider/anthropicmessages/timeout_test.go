@@ -4,42 +4,31 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicaws "github.com/anthropics/anthropic-sdk-go/aws"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/messagestest"
 )
 
 func TestLargeNonStreamingRequestReachesTransport(t *testing.T) {
-	for _, gateway := range []bool{false, true} {
-		for _, timeout := range []time.Duration{0, time.Second} {
-			calls := 0
-			httpClient := &http.Client{Timeout: timeout, Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				calls++
-				deadline, ok := request.Context().Deadline()
-				if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 10*time.Minute {
-					t.Error("request has no active timeout")
+	for name, newClient := range map[string]func(httpClient *http.Client) (*Client, error){
+		"direct": func(httpClient *http.Client) (*Client, error) {
+			return NewClient(ClientConfig{BaseURL: "http://127.0.0.1", APIKey: "test-key", HTTPClient: httpClient})
+		},
+		"gateway": func(httpClient *http.Client) (*Client, error) {
+			return NewAWSClient(context.Background(), AWSClientConfig{BaseURL: "http://127.0.0.1", HTTPClient: httpClient, AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			messagestest.LargeNonStreamingRequestReachesTransport(t, func(t *testing.T, httpClient *http.Client, params anthropic.MessageNewParams) error {
+				client, err := newClient(httpClient)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if timeout > 0 && time.Until(deadline) > timeout {
-					t.Error("request exceeds configured timeout")
-				}
-				return adaptertest.JSONResponse(request, 200, `{"id":"msg-local","type":"message","role":"assistant","content":[],"model":"claude-contract","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`), nil
-			})}
-			var client *Client
-			var err error
-			if gateway {
-				client, err = NewAWSClient(context.Background(), AWSClientConfig{BaseURL: "http://127.0.0.1", HTTPClient: httpClient, AWSConfig: anthropicaws.ClientConfig{AWSRegion: "us-east-1", WorkspaceID: "ws-contract", SkipAuth: true}})
-			} else {
-				client, err = NewClient(ClientConfig{BaseURL: "http://127.0.0.1", APIKey: "test-key", HTTPClient: httpClient})
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = client.messages.New(context.Background(), anthropic.MessageNewParams{MaxTokens: 32768, Model: "claude-contract", Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("hello"))}})
-			if err != nil || calls != 1 {
-				t.Fatalf("gateway=%v timeout=%s calls=%d error=%v", gateway, timeout, calls, err)
-			}
-		}
+				_, err = client.messages.New(context.Background(), params)
+				return err
+			})
+		})
 	}
 }

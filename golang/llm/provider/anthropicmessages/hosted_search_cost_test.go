@@ -1,13 +1,13 @@
 package anthropicmessages
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 )
 
@@ -47,10 +47,7 @@ func TestHostedSearchUsageDistinguishesUnusedFromUnreported(t *testing.T) {
 			if tc.server != "" {
 				usage += `,"server_tool_use":` + tc.server
 			}
-			var message anthropic.Message
-			if err := json.Unmarshal([]byte(`{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":`+tc.content+`,"usage":{`+usage+`}}`), &message); err != nil {
-				t.Fatal(err)
-			}
+			message := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"msg-synthetic","type":"message","role":"assistant","model":"claude-contract","stop_reason":"end_turn","content":`+tc.content+`,"usage":{`+usage+`}}`))
 			got, err := mustProfile(t, testProfile()).liftResponse(provider.Call{
 				OperationKey: "search-cost", Model: "claude-contract", ServiceClass: llm.ServiceClassStandard,
 				Metadata: provider.CallMetadata{WebSearch: true, WebFetch: true},
