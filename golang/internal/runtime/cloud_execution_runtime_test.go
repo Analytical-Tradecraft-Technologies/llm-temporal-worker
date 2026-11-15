@@ -86,7 +86,7 @@ func boundedCloud(t testing.TB, async bool, configure ...func(*budgetPlanningFix
 	answer := func(call provider.Call) provider.ResumableResult {
 		v := executionResponse(call)
 		v.ProviderOperationID = "job"
-		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
+		v.Result.Response.Output = []llm.Item{llm.ModelText("answer")}
 		return v
 	}
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
@@ -592,7 +592,7 @@ func TestCloudExecutionRuntimeCacheSemanticIdentity(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	temperature, _ := llm.NewDecimalV1("0.5")
 	f.request.SettingsPatch.Temperature.Set = &temperature
-	f.request.Append = []llm.Item{preparationMessage(strings.Repeat("a", 300<<10))}
+	f.request.Append = []llm.Item{llm.HumanText(strings.Repeat("a", 300<<10))}
 	first := f.finish(t)
 	if first.Generate.Cache.Disposition != "miss_populated" {
 		t.Fatal("large semantic input not cached")
@@ -810,7 +810,7 @@ func pinnedCloud(t *testing.T) *pinnedCloudFixture {
 		result.Response.Output = []llm.Item{
 			llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json",
 				Opaque: []byte(`{"type":"reasoning","encrypted_content":"` + call.EndpointID + `"}`)},
-			modelMessage("answer"),
+			llm.ModelText("answer"),
 		}
 		if p.plain {
 			result.Response.Output = result.Response.Output[1:]
@@ -834,7 +834,7 @@ func (p *pinnedCloudFixture) reorder(t *testing.T) {
 func (p *pinnedCloudFixture) child(parent llm.ExecutionResultV1, key string) {
 	handle := parent.Generate.Checkpoint.Handle
 	p.request = llm.GenerateRequestV1{OperationKey: key, Context: p.request.Context, Parent: &handle,
-		Append: []llm.Item{preparationMessage("next question")}}
+		Append: []llm.Item{llm.HumanText("next question")}}
 }
 
 // lastCompiled returns the request most recently compiled for an endpoint.
@@ -1299,14 +1299,14 @@ func benchmarkCloudExecutionRuntimeTurnLargeParent(b *testing.B, storage, step s
 		f := boundedCloud(b, false, options...)
 		f.request.Append = nil
 		for i := 0; i < 10; i++ {
-			f.request.Append = append(f.request.Append, preparationMessage(strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)))
+			f.request.Append = append(f.request.Append, llm.HumanText(strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)))
 		}
 		parent := f.finish(b)
 		if parent.Generate == nil {
 			b.Fatal("missing parent")
 		}
 		handle := parent.Generate.Checkpoint.Handle
-		child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage(strings.Repeat("x", 64))}}
+		child := llm.GenerateRequestV1{Context: f.request.Context, Parent: &handle, Append: []llm.Item{llm.HumanText(strings.Repeat("x", 64))}}
 		ctx := context.Background()
 		var stepUsed executionStorageCounts
 		timed := func(name string, run func() (llm.ExecutionResultV1, error)) (llm.ExecutionResultV1, error) {
@@ -1372,7 +1372,7 @@ func TestCloudExecutionRuntimeDefaultFallsBackAndSurvivesContinuation(t *testing
 				t.Fatalf("standard-only model did not adjust default: %+v", root.Generate.Service)
 			}
 			handle := root.Generate.Checkpoint.Handle
-			f.request = llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+			f.request = llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{llm.HumanText("next")}}
 			child := f.finish(t)
 			if child.Generate.Service.Requested != llm.ServiceClassEconomy || child.Generate.Service.Attempted != llm.ServiceClassStandard {
 				t.Fatalf("continuation lost default: %+v", child.Generate.Service)

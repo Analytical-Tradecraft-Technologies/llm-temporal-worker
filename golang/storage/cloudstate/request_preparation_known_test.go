@@ -41,7 +41,7 @@ func TestRequestPreparationKnownParent(t *testing.T) {
 				return nil
 			}
 			other, err := (state.CheckpointBlobCodec{}).EncodeSnapshot(*state.NewCheckpointSnapshot(state.MaterializedState{
-				Items:    []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "another transcript"}}}},
+				Items:    []llm.Item{llm.HumanText("another transcript")},
 				Settings: state.RootModelState("private-model"), Lineage: []state.Handle{"00000000-0000-4000-8000-000000000002"},
 			}))
 			if err != nil {

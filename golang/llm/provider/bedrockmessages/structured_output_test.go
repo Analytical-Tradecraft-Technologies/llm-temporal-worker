@@ -50,7 +50,7 @@ func bedrockCompileInput(request llm.Request, strict bool) provider.CompileInput
 
 func structuredOutputRequest(schema string) llm.Request {
 	return llm.Request{
-		Input:  []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "extract"}}}},
+		Input:  []llm.Item{llm.HumanText("extract")},
 		Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Strict: true, Schema: json.RawMessage(schema)}},
 	}
 }

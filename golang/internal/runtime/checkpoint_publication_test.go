@@ -88,9 +88,9 @@ func publicationFixture(t *testing.T) (*CheckpointPublication, *CheckpointReplay
 	identity := CheckpointPublicationIdentity{Scope: "scope", OperationID: state.OperationID(uuid.NewString()), CheckpointID: state.CheckpointID(uuid.NewString()), CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
 	model := "reasoning"
 	decimal, _ := llm.NewDecimalV1("0.123456789012345678")
-	req := llm.GenerateRequestV1{OperationKey: "root", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}, Append: []llm.Item{preparationMessage("hello")}, SettingsPatch: llm.SettingsPatchV1{Model: llm.Patch[string]{Set: &model}, Temperature: llm.Patch[llm.DecimalV1]{Set: &decimal}}}
+	req := llm.GenerateRequestV1{OperationKey: "root", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}, Append: []llm.Item{llm.HumanText("hello")}, SettingsPatch: llm.SettingsPatchV1{Model: llm.Patch[string]{Set: &model}, Temperature: llm.Patch[llm.DecimalV1]{Set: &decimal}}}
 	amount, _ := pricing.ParseUSD("0.00001")
-	result := llm.Response{OperationKey: req.OperationKey, OperationID: string(identity.OperationID), Status: llm.ResponseStatusCompleted, Output: []llm.Item{modelMessage("answer")}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &amount, Method: "catalog_usage"}}
+	result := llm.Response{OperationKey: req.OperationKey, OperationID: string(identity.OperationID), Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.ModelText("answer")}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &amount, Method: "catalog_usage"}}
 	return p, replay, store, identity, req, result
 }
 func publishRoot(t *testing.T, p *CheckpointPublication, store *publicationStore, identity CheckpointPublicationIdentity, req llm.GenerateRequestV1, result llm.Response) (state.DurableCheckpoint, llm.GenerateResponseV1) {
@@ -114,7 +114,7 @@ func TestCheckpointPublicationGenerationRoundTripAndFork(t *testing.T) {
 	request.Parent = &response.Checkpoint.Handle
 	request.OperationKey = "child"
 	request.SettingsPatch = llm.SettingsPatchV1{}
-	request.Append = []llm.Item{preparationMessage("follow up")}
+	request.Append = []llm.Item{llm.HumanText("follow up")}
 	base, err := replay.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			p, replay, store, id, req, result := publicationFixture(t)
 			if !noWork {
 				for i := 0; i < 20; i++ {
-					req.Append = append(req.Append, preparationMessage("old message"))
+					req.Append = append(req.Append, llm.HumanText("old message"))
 				}
 			}
 			_, root := publishRoot(t, p, store, id, req, result)
@@ -252,7 +252,7 @@ func TestCheckpointPublicationCacheHitMakesDistinctZeroCostChild(t *testing.T) {
 func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) {
 	p, replay, store, id, request, result := publicationFixture(t)
 	for i := 0; i < 20; i++ {
-		request.Append = append(request.Append, preparationMessage("shared source content"))
+		request.Append = append(request.Append, llm.HumanText("shared source content"))
 	}
 	_, root := publishRoot(t, p, store, id, request, result)
 	compact := llm.CompactRequestV1{OperationKey: "compact-origin", Context: request.Context, Parent: root.Checkpoint.Handle}
@@ -273,7 +273,7 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	// settings, parent and lineage rather than copying the origin's snapshot.
 	id = nextPublication(id)
 	request.OperationKey = "consumer-root"
-	request.Append[len(request.Append)-1] = preparationMessage("consumer private suffix")
+	request.Append[len(request.Append)-1] = llm.HumanText("consumer private suffix")
 	result.OperationKey, result.OperationID = request.OperationKey, string(id.OperationID)
 	consumerCP, consumerRoot := publishRoot(t, p, store, id, request, result)
 	compact.Parent, compact.OperationKey = consumerRoot.Checkpoint.Handle, "compact-consumer"
@@ -358,7 +358,7 @@ func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
 	request.Parent = &response.Checkpoint.Handle
 	request.OperationKey = "child"
 	request.SettingsPatch = llm.SettingsPatchV1{}
-	request.Append = []llm.Item{preparationMessage("follow up")}
+	request.Append = []llm.Item{llm.HumanText("follow up")}
 	base, err := replay.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)

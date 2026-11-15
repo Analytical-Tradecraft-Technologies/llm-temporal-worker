@@ -51,7 +51,7 @@ func invokeRealConverse(t *testing.T, transport http.RoundTripper, credentials f
 		t.Fatal(err)
 	}
 	request := llm.Request{OperationKey: "op-decode", Model: "amazon.nova-pro-v1:0",
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}}
+		Input: []llm.Item{llm.HumanText("Hello")}}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: true})
 	if err != nil {
 		t.Fatal(err)

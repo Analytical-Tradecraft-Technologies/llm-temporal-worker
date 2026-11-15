@@ -107,7 +107,7 @@ func TestOperationCodecRoundTripPreservesUnixEpoch(t *testing.T) {
 func TestContinuationCodecRoundTripDecodesMessageAndToolItems(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	transcript := []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find the weather"}}},
+		llm.HumanText("find the weather"),
 		llm.ToolCall{ID: "call-weather", Name: "weather", Arguments: json.RawMessage(`{"city":"Sydney"}`)},
 	}
 	_, digest, err := state.CanonicalTranscript(transcript)

@@ -86,7 +86,7 @@ func TestCloudResponseCacheLargeAndToolResponses(t *testing.T) {
 			if err := json.Unmarshal(entry.Response, &response); err != nil {
 				t.Fatal(err)
 			}
-			response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("large answer ", 30000)}}}}
+			response.Output = []llm.Item{llm.ModelText(strings.Repeat("large answer ", 30000))}
 			if tools {
 				response.Status = llm.ResponseStatusToolCalls
 				response.Output = []llm.Item{llm.ToolCall{ID: "call-1", Name: "weather", Arguments: json.RawMessage(`{"city":"Sydney"}`)}}

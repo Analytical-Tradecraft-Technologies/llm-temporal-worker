@@ -80,7 +80,7 @@ func WireAuditTool(name string) llm.Tool {
 
 // WireAuditUserText is a single human text message, for wire audits.
 func WireAuditUserText(text string) []llm.Item {
-	return []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}}
+	return []llm.Item{llm.HumanText(text)}
 }
 
 // WireAuditCase is a named request for a wire audit.

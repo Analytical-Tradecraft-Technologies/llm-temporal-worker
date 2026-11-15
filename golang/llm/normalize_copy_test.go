@@ -370,7 +370,7 @@ func TestNormalizeRequestCopyMatchesRoundTripRandomized(t *testing.T) {
 		case 5:
 			return &ToolCall{ID: "c", Name: "tool", Arguments: json.RawMessage(`{}`)}
 		default:
-			return Message{Actor: ActorHuman, Content: []Part{TextPart{Text: "hi"}}}
+			return HumanText("hi")
 		}
 	}
 	for iteration := 0; iteration < 20000; iteration++ {
@@ -474,7 +474,7 @@ func FuzzMarshaledRawJSON(f *testing.F) {
 func BenchmarkNormalizeRequestLargeTranscript(b *testing.B) {
 	request := Request{OperationKey: "op", Model: "model"}
 	for i := 0; i < 10; i++ {
-		request.Input = append(request.Input, Message{Actor: ActorHuman, Content: []Part{TextPart{Text: strings.Repeat(fmt.Sprintf("turn %d ", i), 100<<10/7)}}})
+		request.Input = append(request.Input, HumanText(strings.Repeat(fmt.Sprintf("turn %d ", i), 100<<10/7)))
 	}
 	for name, normalize := range map[string]func(Request) (Request, error){"copy": NormalizeRequest, "roundtrip": normalizeRequestRoundTrip} {
 		b.Run(name, func(b *testing.B) {

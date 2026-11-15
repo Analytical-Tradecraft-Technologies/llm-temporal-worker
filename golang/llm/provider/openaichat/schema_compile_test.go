@@ -18,7 +18,7 @@ import (
 // compile time, before anything is dispatched or paid for (#1100).
 func TestCompileRejectsAnUnsupportedOutputSchemaBeforeDispatch(t *testing.T) {
 	_, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-schema", Model: "chat-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}},
+		Request: llm.Request{OperationKey: "op-schema", Model: "chat-model", Input: []llm.Item{llm.HumanText("hi")},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Schema: json.RawMessage(`{"type":"object","patternProperties":{"^x":{"type":"string"}}}`)}}},
 		Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 	})
@@ -36,7 +36,7 @@ func TestCompileRejectsAnExponentialOutputSchemaBeforeDispatch(t *testing.T) {
 	} {
 		started := time.Now()
 		_, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
-			Request: llm.Request{OperationKey: "op-fanout", Model: "chat-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}},
+			Request: llm.Request{OperationKey: "op-fanout", Model: "chat-model", Input: []llm.Item{llm.HumanText("hi")},
 				Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Schema: json.RawMessage(schema)}}},
 			Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 		})
@@ -78,7 +78,7 @@ func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return validateFinalJSON(call, []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}, llm.ResponseStatusCompleted, false, false)
+		return validateFinalJSON(call, []llm.Item{llm.ModelText(text)}, llm.ResponseStatusCompleted, false, false)
 	})
 }
 

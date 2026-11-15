@@ -46,7 +46,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-once", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}})
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-once", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}})
 	result, err := adapter.Invoke(context.Background(), call, nil)
 	if err != nil {
 		var providerErr *provider.Error

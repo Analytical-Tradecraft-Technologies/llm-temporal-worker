@@ -31,9 +31,7 @@ func TestValidateStreamEventAllowsCompletedResponseAtResponsePayloadSize(t *test
 			OperationKey: "operation-1",
 			OperationID:  "operation-1",
 			Status:       ResponseStatusCompleted,
-			Output: []Item{Message{Actor: ActorModel, Content: []Part{
-				TextPart{Text: strings.Repeat("x", MaxStreamEventBytes+1)},
-			}}},
+			Output:       []Item{ModelText(strings.Repeat("x", MaxStreamEventBytes+1))},
 		},
 	}
 	if err := ValidateStreamEvent(completed); err != nil {

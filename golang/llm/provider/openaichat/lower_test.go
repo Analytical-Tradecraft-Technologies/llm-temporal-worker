@@ -31,7 +31,7 @@ func TestCompileLowersRolesMultimodalToolsAndStructuredOutput(t *testing.T) {
 				llm.TextPart{Text: "hello"},
 				llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png", Detail: "high"},
 			}},
-			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "thinking"}}},
+			llm.ModelText("thinking"),
 			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 		},
@@ -125,10 +125,10 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 		for _, isError := range []bool{true, false} {
 			call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{OperationKey: "op-tool-error", Model: "chat-model", Input: []llm.Item{
-					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look it up"}}},
+					llm.HumanText("look it up"),
 					llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 					llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError},
-					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "continue"}}},
+					llm.HumanText("continue"),
 				}},
 				Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 				Strict: strict,
@@ -163,7 +163,7 @@ func TestCompilePreservesDisabledReasoning(t *testing.T) {
 		t.Run(string(effort), func(t *testing.T) {
 			adapter := testAdapter(t)
 			call := adaptertest.CompileStrict(t, adapter, "chat-prod", provider.FamilyOpenAIChat, llm.Request{OperationKey: "disabled-reasoning", Model: "chat-model", ServiceClass: llm.ServiceClassStandard,
-				Input:     []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+				Input:     []llm.Item{llm.HumanText("hello")},
 				Reasoning: &llm.ReasoningSpec{Mode: llm.ReasoningModeDisabled, Effort: effort}})
 			wire := contract.JSONObject(t, call.SDKParams)
 			if wire["reasoning_effort"] != "none" {
@@ -178,7 +178,7 @@ func TestCompileOmitsToolControlsWithoutTools(t *testing.T) {
 		for _, parallel := range []bool{false, true} {
 			request := llm.Request{
 				OperationKey: "tool-less", Model: "chat-model",
-				Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Summarize this text"}}}},
+				Input:      []llm.Item{llm.HumanText("Summarize this text")},
 				ToolPolicy: llm.ToolPolicy{Mode: mode, Parallel: parallel},
 			}
 			call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
@@ -206,8 +206,8 @@ func TestLiftedRefusalReplaysAsAssistantRefusalPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := append([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}}}, lifted.Output...)
-	input = append(input, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "a benign follow-up"}}})
+	input := append([]llm.Item{llm.HumanText("question")}, lifted.Output...)
+	input = append(input, llm.HumanText("a benign follow-up"))
 	params, err := lowerRequest(llm.Request{Model: "chat-model", Input: input}, testProfile(), "default")
 	if err != nil {
 		t.Fatalf("replaying a lifted refusal: %v", err)

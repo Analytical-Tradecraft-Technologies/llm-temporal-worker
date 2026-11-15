@@ -46,7 +46,7 @@ func TestCloudExecutionAdmitsInlineImageOnContextLimitedRoute(t *testing.T) {
 	}
 	handle := parent.Generate.Checkpoint.Handle
 	f.request.Parent, f.request.OperationKey, f.request.SettingsPatch = &handle, "next-turn", llm.SettingsPatchV1{}
-	f.request.Append = []llm.Item{preparationMessage("and now?")}
+	f.request.Append = []llm.Item{llm.HumanText("and now?")}
 	decision, err := f.runtime.PlanGenerationV1(ctx, f.request)
 	if err != nil || decision.CompactBeforeGenerate {
 		t.Fatalf("retained inline image forced compaction: decision=%+v err=%v", decision, err)

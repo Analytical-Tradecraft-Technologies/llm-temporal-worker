@@ -16,7 +16,7 @@ func TestOpenRouterServerSearchOnWire(t *testing.T) {
 			profile := wireAuditProfiles(t)[2]
 			profile.model = model
 			profile.profile.ExpectedModel = model
-			request := llm.Request{OperationKey: "search", Model: model, WebSearch: true, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "search"}}}}}
+			request := llm.Request{OperationKey: "search", Model: model, WebSearch: true, Input: []llm.Item{llm.HumanText("search")}}
 			wire := captureWireBody(t, profile, request)
 			tools := wire["tools"].([]any)
 			if len(tools) != 1 || tools[0].(map[string]any)["type"] != "openrouter:web_search" {
@@ -147,7 +147,7 @@ func TestOpenRouterSearchStatesJSONOutputAsInstruction(t *testing.T) {
 	schema := json.RawMessage(`{"type": "object", "additionalProperties": false, "required": ["url"], "properties": {"url": {"type": "string"}}}`)
 	base := llm.Request{OperationKey: "search", Model: "deepseek/deepseek-test", WebSearch: true,
 		Instructions: []llm.Instruction{{Level: llm.InstructionLevelApplication, Content: []llm.Part{llm.TextPart{Text: "be brief"}}}},
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find the page"}}}}}
+		Input:        []llm.Item{llm.HumanText("find the page")}}
 	for _, test := range []struct {
 		name   string
 		search bool

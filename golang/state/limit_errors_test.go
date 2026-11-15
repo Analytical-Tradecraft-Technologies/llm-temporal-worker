@@ -14,8 +14,8 @@ func TestMaterializationLimitViolationsAreTyped(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxItems: 1})
 	root := rootCheckpoint("root", "tenant-a", "op-root")
 	root.Delta = []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "one"}}},
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "two"}}},
+		llm.HumanText("one"),
+		llm.ModelText("two"),
 	}
 	err := graph.PutRoot(root)
 	if err == nil {
@@ -32,7 +32,7 @@ func TestMaterializationLimitViolationsAreTyped(t *testing.T) {
 func TestAggregateLineageByteLimitIsTyped(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxBytes: 1024})
 	root := rootCheckpoint("root", "tenant-a", "op-root")
-	root.Delta = []llm.Item{message(strings.Repeat("r", 600))}
+	root.Delta = []llm.Item{llm.HumanText(strings.Repeat("r", 600))}
 	if err := graph.PutRoot(root); err != nil {
 		t.Fatalf("root within the byte limit rejected: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestAggregateLineageByteLimitIsTyped(t *testing.T) {
 }
 
 func TestCheckpointBlobSizeViolationsAreTyped(t *testing.T) {
-	items := []llm.Item{message(strings.Repeat("x", 600))}
+	items := []llm.Item{llm.HumanText(strings.Repeat("x", 600))}
 	encoded, err := CheckpointBlobCodec{}.EncodeDelta(items)
 	if err != nil {
 		t.Fatal(err)

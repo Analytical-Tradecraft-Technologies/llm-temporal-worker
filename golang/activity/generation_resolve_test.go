@@ -48,7 +48,7 @@ func completedResolution(request llm.PrepareExecutionV1) llm.ExecutionResultV1 {
 	return llm.ExecutionResultV1{RequestID: resolveRequestID, Kind: "generate", State: llm.ExecutionCompleted, Capability: "ref_v1.test", Generate: &llm.GenerateResponseV1{
 		APIVersion: llm.APIVersion, OperationKey: request.Generate.OperationKey, OperationID: resolveRequestID,
 		Status:     llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "ok"}}}},
+		Output:     []llm.Item{llm.ModelText("ok")},
 		Checkpoint: llm.CheckpointMetadata{Handle: "ckp-generate", Kind: "cache_replay"},
 		Cache:      llm.CacheDispositionV1{Disposition: "hit"},
 		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},

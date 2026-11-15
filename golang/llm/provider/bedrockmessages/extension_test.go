@@ -19,7 +19,7 @@ func compileExtensionRequest(t *testing.T, adapter *Adapter, strict bool, extens
 		Request: llm.Request{
 			OperationKey: "bedrock-extension",
 			Model:        "claude-contract",
-			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+			Input:        []llm.Item{llm.HumanText("hello")},
 			Extensions:   extensions,
 		},
 		Query:  provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},

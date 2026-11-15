@@ -286,11 +286,6 @@ func isProviderError(err error, code provider.Code, retry provider.RetryDisposit
 	return errors.As(err, &mapped) && mapped.Code == code && mapped.Retry == retry
 }
 
-// modelMessage is a model message holding one text part.
-func modelMessage(text string) llm.Message {
-	return llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}
-}
-
 // requireCacheOutcome requires the Generate result v to report cache
 // disposition after exactly submits provider submissions; what names the
 // step in the failure.

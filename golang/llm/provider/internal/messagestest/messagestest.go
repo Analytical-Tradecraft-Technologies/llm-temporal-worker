@@ -72,7 +72,7 @@ func ManualThinkingCombinations(t *testing.T, compile Compile) {
 			request := test.request
 			request.OperationKey = "thinking-combination"
 			request.Model = ContractModel
-			request.Input = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+			request.Input = []llm.Item{llm.HumanText("hello")}
 			_, err := compile(t, request, true)
 			if test.wantError == "" {
 				if err != nil {
@@ -182,10 +182,6 @@ func ExtraHighEffortByModel(t *testing.T, compile Compile) {
 	}
 }
 
-func human(text string) llm.Message {
-	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
-}
-
 // SkipsReplayedEmptyModelMessage checks that a replayed model message with
 // no parts, as a lifted empty or content-filtered reply is, never puts an
 // assistant message without content on the wire.
@@ -193,10 +189,10 @@ func SkipsReplayedEmptyModelMessage(t *testing.T, compile Compile) {
 	// The empty model turn sits between two user turns and again next to a
 	// model turn that was split into text and a tool call.
 	request := llm.Request{OperationKey: "empty-model-replay", Model: ContractModel, Input: []llm.Item{
-		human("question"),
+		llm.HumanText("question"),
 		llm.Message{Actor: llm.ActorModel},
-		human("follow-up"),
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}}},
+		llm.HumanText("follow-up"),
+		llm.ModelText("looking"),
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{}},
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "found"}}},
@@ -243,12 +239,12 @@ func SkipsReplayedReferenceAnnotations(t *testing.T, compile Compile) {
 	// The second response splits one model turn into text and a tool call and
 	// carries a citation between the call and its result.
 	request := llm.Request{OperationKey: "reference-replay", Model: ContractModel, Input: []llm.Item{
-		human("question"),
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}},
+		llm.HumanText("question"),
+		llm.ModelText("answer"),
 		llm.Reference{URI: "https://example.com/cited-source", Metadata: map[string]json.RawMessage{"title": json.RawMessage(`"Cited source"`)}},
 		llm.Reference{URI: "https://example.com/second-source"},
-		human("follow-up"),
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}}},
+		llm.HumanText("follow-up"),
+		llm.ModelText("looking"),
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 		llm.Reference{URI: "https://example.com/third-source"},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "found"}}},

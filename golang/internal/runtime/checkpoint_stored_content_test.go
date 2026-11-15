@@ -38,7 +38,7 @@ func publishStoredRoot(t *testing.T, f *boundedCloudFixture, delta []llm.Item) l
 	if err != nil {
 		t.Fatal(err)
 	}
-	output := []llm.Item{modelMessage("answer")}
+	output := []llm.Item{llm.ModelText("answer")}
 	items := append(append([]llm.Item(nil), delta...), output...)
 	checkpoint, err = publication.blobs(ctx, checkpoint, state.MaterializedState{}, settings, delta, output, patch, items, false, nil, nil)
 	if err != nil {
@@ -143,7 +143,7 @@ func TestCloudExecutionRuntimeReplaysStoredPublicMediaURL(t *testing.T) {
 func TestCloudExecutionRuntimeAggregateLineageByteLimitIsNotRetried(t *testing.T) {
 	f := boundedCloud(t, false)
 	ctx := context.Background()
-	delta := []llm.Item{preparationMessage(strings.Repeat("x", 600))}
+	delta := []llm.Item{llm.HumanText(strings.Repeat("x", 600))}
 	parent := publishStoredRoot(t, f, delta)
 	encoded, err := json.Marshal(delta)
 	if err != nil {

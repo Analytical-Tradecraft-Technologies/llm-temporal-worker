@@ -101,9 +101,9 @@ func TestCloudCompactionRequestAndCheckpointShapeOnUserFirstFamilies(t *testing.
 			f.restart(t)
 			f.answerWith(
 				[]llm.Item{outputShapeCall("call_1")},
-				[]llm.Item{modelMessage("model answer")},
-				[]llm.Item{modelMessage("the summary")},
-				[]llm.Item{modelMessage("after")},
+				[]llm.Item{llm.ModelText("model answer")},
+				[]llm.Item{llm.ModelText("the summary")},
+				[]llm.Item{llm.ModelText("after")},
 			)
 			policy := json.RawMessage(`{"recent_turns":0}`)
 			f.request.SettingsPatch.CompactionPolicy.Set = &policy
@@ -130,7 +130,7 @@ func TestCloudCompactionRequestAndCheckpointShapeOnUserFirstFamilies(t *testing.
 			}
 
 			f.request.OperationKey, f.request.Parent = "after-compaction", &v.Compact.Checkpoint.Handle
-			f.request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "next question"}}}}
+			f.request.Append = []llm.Item{llm.HumanText("next question")}
 			f.now = f.now.Add(time.Minute)
 			f.finish(t)
 			if len(calls) != 4 {

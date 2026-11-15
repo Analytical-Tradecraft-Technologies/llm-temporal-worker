@@ -41,7 +41,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 			return provider.Result{}, err
 		}
 		v := executionResponse(call)
-		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
+		v.Result.Response.Output = []llm.Item{llm.ModelText("answer")}
 		if cited {
 			v.Result.Response.Output = append(v.Result.Response.Output, reference)
 		}
@@ -56,7 +56,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 	}
 
 	f.now = f.now.Add(time.Minute)
-	f.request = llm.GenerateRequestV1{OperationKey: "follow-up", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{preparationMessage("follow-up")}}
+	f.request = llm.GenerateRequestV1{OperationKey: "follow-up", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("follow-up")}}
 	child := f.finish(t)
 	if child.Generate == nil || child.Generate.Checkpoint.Parent == nil || *child.Generate.Checkpoint.Parent != root.Generate.Checkpoint.Handle || f.submits.Load() != 2 {
 		t.Fatalf("follow-up turn did not continue the checkpoint: %+v", child.Generate)
@@ -80,7 +80,7 @@ func TestCloudExecutionRuntimeContinuesCheckpointWithReferenceOutput(t *testing.
 	// A plain-text summary cannot hold a citation, so the compacted
 	// transcript carries both citations verbatim after it.
 	f.now = f.now.Add(time.Minute)
-	f.request = llm.GenerateRequestV1{OperationKey: "after-compaction", Context: f.request.Context, Parent: &v.Compact.Checkpoint.Handle, Append: []llm.Item{preparationMessage("after compaction")}}
+	f.request = llm.GenerateRequestV1{OperationKey: "after-compaction", Context: f.request.Context, Parent: &v.Compact.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("after compaction")}}
 	if after := f.finish(t); after.Generate == nil || f.submits.Load() != 4 {
 		t.Fatalf("turn after compaction did not continue: %+v", after.Generate)
 	}

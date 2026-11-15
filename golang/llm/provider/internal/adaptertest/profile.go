@@ -85,7 +85,7 @@ func UndeclaredServiceClassesAreUnsupported(t *testing.T, validate func(tiers ma
 // strict portability.
 func StrictCompactionRequest(t *testing.T) llm.Request {
 	t.Helper()
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	input := []llm.Item{llm.HumanText("hello")}
 	source := llm.Request{OperationKey: "generate", Model: "claude-test", Input: input, Instructions: []llm.Instruction{
 		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "You are a helpful assistant"},
 	}}

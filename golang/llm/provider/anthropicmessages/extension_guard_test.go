@@ -58,7 +58,7 @@ func TestCompileRejectsRequestOwnedExtensionFields(t *testing.T) {
 						OperationKey: "owned-extension",
 						Model:        "claude-contract",
 						Instructions: []llm.Instruction{{Text: "answer"}},
-						Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+						Input:        []llm.Item{llm.HumanText("hello")},
 						Output:       &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
 						Extensions:   map[string]json.RawMessage{"anthropic.owned": json.RawMessage(`{"` + wire + `":` + value + `}`)},
 					},
@@ -84,7 +84,7 @@ func TestCompileAcceptsAllowedNonOwnedExtensionField(t *testing.T) {
 				Request: llm.Request{
 					OperationKey: "allowed-extension",
 					Model:        "claude-contract",
-					Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+					Input:        []llm.Item{llm.HumanText("hello")},
 					Extensions:   map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"tag":"us"}`)},
 				},
 				Query:  provider.CapabilityQuery{EndpointID: "anthropic-test", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},

@@ -31,7 +31,7 @@ func TestV1PayloadSizeDoesNotFollowAncestorLineage(t *testing.T) {
 			OperationKey: "lineage-generate",
 			Context:      llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "workflow"},
 			Parent:       &parent,
-			Append:       []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "one delta"}}}},
+			Append:       []llm.Item{llm.HumanText("one delta")},
 		}
 		compactRequest := llm.CompactRequestV1{
 			APIVersion:   llm.CompactAPIVersion,
@@ -43,7 +43,7 @@ func TestV1PayloadSizeDoesNotFollowAncestorLineage(t *testing.T) {
 		generateResponse := llm.GenerateResponseV1{
 			APIVersion: llm.APIVersion, OperationKey: "lineage-generate", OperationID: "operation-generate",
 			Status:     llm.ResponseStatusCompleted,
-			Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "one response"}}}},
+			Output:     []llm.Item{llm.ModelText("one response")},
 			Checkpoint: llm.CheckpointMetadata{Handle: handle, Kind: "generation", Depth: int32(count)},
 			Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
 			Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},

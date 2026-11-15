@@ -73,14 +73,6 @@ func reasoningState(t *testing.T, id string, encrypted any) llm.ProviderState {
 	return llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: reasoningStateMediaType, Opaque: opaque}
 }
 
-func humanText(text string) llm.Message {
-	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
-}
-
-func modelText(text string) llm.Message {
-	return llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}
-}
-
 func TestStorageDeniedRequestsEncryptedReasoning(t *testing.T) {
 	reasoning := &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}
 	extension := func(body string) map[string]json.RawMessage {
@@ -112,7 +104,7 @@ func TestStorageDeniedRequestsEncryptedReasoning(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := test.request
 			request.OperationKey = "first-turn"
-			request.Input = []llm.Item{humanText("question")}
+			request.Input = []llm.Item{llm.HumanText("question")}
 			_, wire := compileWire(t, storagePolicyAdapter(t, test.permitted, nil), request, true)
 			if got := wireIncludes(wire); !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("include = %v, want %v", got, test.want)
@@ -140,15 +132,15 @@ func TestStorageDeniedReplaysLiftedEncryptedReasoning(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := storagePolicyAdapter(t, false, encoded)
-	first := llm.Request{OperationKey: "first-turn", Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}, Input: []llm.Item{humanText("question")}}
+	first := llm.Request{OperationKey: "first-turn", Reasoning: &llm.ReasoningSpec{Effort: llm.ReasoningEffortLow}, Input: []llm.Item{llm.HumanText("question")}}
 	call, _ := compileWire(t, adapter, first, true)
 	result, err := adapter.Invoke(context.Background(), call, nil)
 	if err != nil {
 		t.Fatalf("Invoke() error = %v", err)
 	}
 
-	input := append([]llm.Item{humanText("question")}, result.Response.Output...)
-	input = append(input, humanText("follow-up"))
+	input := append([]llm.Item{llm.HumanText("question")}, result.Response.Output...)
+	input = append(input, llm.HumanText("follow-up"))
 	// The second turn configures no reasoning: the replayed state alone keeps
 	// the conversation stateless-replayable.
 	_, wire := compileWire(t, adapter, llm.Request{OperationKey: "second-turn", Input: input}, true)
@@ -167,7 +159,7 @@ func TestStorageDeniedReplaysLiftedEncryptedReasoning(t *testing.T) {
 func TestStorageDeniedDropsReasoningWithoutEncryptedContent(t *testing.T) {
 	for _, encrypted := range []any{nil, "", "absent"} {
 		for _, strict := range []bool{true, false} {
-			input := []llm.Item{humanText("question"), reasoningState(t, "rs-1", encrypted), modelText("answer"), humanText("follow-up")}
+			input := []llm.Item{llm.HumanText("question"), reasoningState(t, "rs-1", encrypted), llm.ModelText("answer"), llm.HumanText("follow-up")}
 			_, wire := compileWire(t, storagePolicyAdapter(t, false, nil), llm.Request{OperationKey: "second-turn", Input: input}, strict)
 			if items := wireReasoningItems(wire); len(items) != 0 {
 				t.Fatalf("encrypted_content=%v strict=%v: unresolvable reasoning item sent: %v", encrypted, strict, items)
@@ -194,10 +186,10 @@ func TestStorageDeniedDropsReasoningWithoutEncryptedContent(t *testing.T) {
 // the output they produced, so that one stays replayable.
 func TestStorageDeniedKeepsSealedReasoningBeforeBareItem(t *testing.T) {
 	for name, tail := range map[string]llm.Item{
-		"message":   modelText("answer"),
+		"message":   llm.ModelText("answer"),
 		"tool call": llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
 	} {
-		input := []llm.Item{humanText("question"), reasoningState(t, "rs-1", "sealed-rs-1"), reasoningState(t, "rs-2", nil), tail}
+		input := []llm.Item{llm.HumanText("question"), reasoningState(t, "rs-1", "sealed-rs-1"), reasoningState(t, "rs-2", nil), tail}
 		_, wire := compileWire(t, storagePolicyAdapter(t, false, nil), llm.Request{OperationKey: "replay", Input: input}, true)
 		items := wireReasoningItems(wire)
 		if len(items) != 1 || items[0]["id"] != "rs-1" || items[0]["encrypted_content"] != "sealed-rs-1" {
@@ -214,18 +206,18 @@ func TestDanglingReasoningIsNotReplayed(t *testing.T) {
 		input []llm.Item
 		want  []string
 	}{
-		{name: "reasoning-only response then next turn", input: []llm.Item{humanText("question"), sealed("rs-1"), humanText("follow-up")}},
-		{name: "reasoning is the last item", input: []llm.Item{humanText("question"), sealed("rs-1")}},
-		{name: "followed only by a tool result", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "ok"}}}}},
-		{name: "followed by its message", input: []llm.Item{humanText("question"), sealed("rs-1"), modelText("answer"), humanText("follow-up")}, want: []string{"rs-1"}},
-		{name: "followed by its tool call", input: []llm.Item{humanText("question"), sealed("rs-1"), call}, want: []string{"rs-1"}},
-		{name: "consecutive reasoning before a message", input: []llm.Item{humanText("question"), sealed("rs-1"), sealed("rs-2"), modelText("answer")}, want: []string{"rs-1", "rs-2"}},
-		{name: "earlier turn kept, dangling tail dropped", input: []llm.Item{humanText("question"), sealed("rs-1"), modelText("answer"), humanText("again"), sealed("rs-2"), humanText("follow-up")}, want: []string{"rs-1"}},
+		{name: "reasoning-only response then next turn", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.HumanText("follow-up")}},
+		{name: "reasoning is the last item", input: []llm.Item{llm.HumanText("question"), sealed("rs-1")}},
+		{name: "followed only by a tool result", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "ok"}}}}},
+		{name: "followed by its message", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.ModelText("answer"), llm.HumanText("follow-up")}, want: []string{"rs-1"}},
+		{name: "followed by its tool call", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), call}, want: []string{"rs-1"}},
+		{name: "consecutive reasoning before a message", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), sealed("rs-2"), llm.ModelText("answer")}, want: []string{"rs-1", "rs-2"}},
+		{name: "earlier turn kept, dangling tail dropped", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.ModelText("answer"), llm.HumanText("again"), sealed("rs-2"), llm.HumanText("follow-up")}, want: []string{"rs-1"}},
 		// References and empty model messages have no wire form, so they
 		// cannot be the output a reasoning item is followed by.
-		{name: "followed only by a skipped reference", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.Reference{URI: "https://example.com/source"}, humanText("follow-up")}},
-		{name: "followed only by a skipped empty model message", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.Message{Actor: llm.ActorModel}, humanText("follow-up")}},
-		{name: "skipped items before its message", input: []llm.Item{humanText("question"), sealed("rs-1"), llm.Reference{URI: "https://example.com/source"}, llm.Message{Actor: llm.ActorModel}, modelText("answer")}, want: []string{"rs-1"}},
+		{name: "followed only by a skipped reference", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.Reference{URI: "https://example.com/source"}, llm.HumanText("follow-up")}},
+		{name: "followed only by a skipped empty model message", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.Message{Actor: llm.ActorModel}, llm.HumanText("follow-up")}},
+		{name: "skipped items before its message", input: []llm.Item{llm.HumanText("question"), sealed("rs-1"), llm.Reference{URI: "https://example.com/source"}, llm.Message{Actor: llm.ActorModel}, llm.ModelText("answer")}, want: []string{"rs-1"}},
 	} {
 		for _, permitted := range []bool{false, true} {
 			_, wire := compileWire(t, storagePolicyAdapter(t, permitted, nil), llm.Request{OperationKey: "replay", Input: test.input}, true)

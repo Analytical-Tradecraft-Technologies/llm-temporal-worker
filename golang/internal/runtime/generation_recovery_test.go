@@ -72,7 +72,7 @@ func TestGenerationRecoveryDoesNotOverwriteConflictingPlanOrBinding(t *testing.T
 					t.Fatal(err)
 				}
 			case "effective":
-				proof.effective.Append = []llm.Item{preparationMessage("changed")}
+				proof.effective.Append = []llm.Item{llm.HumanText("changed")}
 				proof.original.Append = proof.effective.Append
 			case "missing":
 				proof.effective.OperationKey = "absent"

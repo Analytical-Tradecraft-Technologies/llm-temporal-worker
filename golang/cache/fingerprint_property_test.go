@@ -28,7 +28,7 @@ func TestFingerprintRouteIdentityFieldsNeverShare(t *testing.T) {
 		{"epoch", func(input *Input) { input.Epoch = "epoch-2" }},
 		{"conversation", func(input *Input) { input.Conversation = "sha256:other" }},
 		{"output", func(input *Input) {
-			input.Request.Input = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "different"}}}}
+			input.Request.Input = []llm.Item{llm.HumanText("different")}
 		}},
 	}
 	for _, test := range cases {

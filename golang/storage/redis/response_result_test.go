@@ -28,7 +28,7 @@ func responseResultTestResponse(key string) *llm.GenerateResponseV1 {
 		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint", Kind: "generation", Depth: 1},
 		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
 		Cost:       llm.CostV1{Status: "unknown", UnknownReason: "provider_did_not_report_cost"},
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "the private answer"}}}},
+		Output:     []llm.Item{llm.ModelText("the private answer")},
 	}
 }
 

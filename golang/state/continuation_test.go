@@ -15,7 +15,7 @@ import (
 
 func testTranscript() []llm.Item {
 	return []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}},
+		llm.HumanText("hello"),
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 	}
 }

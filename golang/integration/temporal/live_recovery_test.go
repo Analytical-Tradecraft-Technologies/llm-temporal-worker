@@ -359,9 +359,7 @@ func liveFixtureRequest(operationKey, text string) llm.Request {
 		OperationKey: operationKey,
 		Context:      llm.RequestContext{Tenant: "live-tenant"},
 		Model:        "live-recovery-model",
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.TextPart{Text: text},
-		}}},
+		Input:        []llm.Item{llm.HumanText(text)},
 	}
 }
 

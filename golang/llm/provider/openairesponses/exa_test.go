@@ -38,7 +38,7 @@ func exaAgentAdapter(t *testing.T, captured **http.Request, body *[]byte) *Adapt
 
 func compileExaAgent(adapter *Adapter, reasoning *llm.ReasoningSpec) (provider.Call, error) {
 	request := llm.Request{OperationKey: "exa-op", Model: ExaAgentModel, ServiceClass: llm.ServiceClassStandard, Reasoning: reasoning,
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "research this"}}}}}
+		Input: []llm.Item{llm.HumanText("research this")}}
 	return adapter.Compile(context.Background(), provider.CompileInput{Request: request,
 		Query:    provider.CapabilityQuery{EndpointID: "exa-agent", Family: provider.FamilyOpenAIResponses, Model: ExaAgentModel},
 		Metadata: provider.CallMetadata{ProviderTier: "standard"}})

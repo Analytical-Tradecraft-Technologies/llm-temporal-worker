@@ -147,7 +147,7 @@ func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing
 	recovery := &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
 		recoveries++
 		v := executionResponse(call)
-		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
+		v.Result.Response.Output = []llm.Item{llm.ModelText("answer")}
 		return v, nil
 	}}
 	f.cap.Adapters = engine.AdapterMap{"endpoint": recovery}
@@ -349,7 +349,7 @@ func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T
 	f.cap.Adapters = engine.AdapterMap{"endpoint": &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
 		recoveries++
 		v := executionResponse(call)
-		v.Result.Response.Output = []llm.Item{modelMessage("answer")}
+		v.Result.Response.Output = []llm.Item{llm.ModelText("answer")}
 		return v, nil
 	}}}
 	f.restart(t)

@@ -15,7 +15,7 @@ func TestToolBatchAcceptsModelTurnContent(t *testing.T) {
 	result := func(id string) llm.ToolResult { return llm.ToolResult{CallID: id} }
 	thinking := llm.ProviderState{Provider: "provider", EndpointFamily: "family", MediaType: "application/json", Opaque: []byte("{}")}
 	citation := llm.Reference{URI: "https://example.com/source"}
-	text := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "checking"}}}
+	text := llm.ModelText("checking")
 	for _, test := range []struct {
 		name    string
 		items   []llm.Item

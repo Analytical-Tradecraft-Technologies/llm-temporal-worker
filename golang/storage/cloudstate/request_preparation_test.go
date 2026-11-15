@@ -31,7 +31,7 @@ func preparationFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, 
 	settings.TemperatureDecimal = &decimal
 	settings.Extensions = map[string]json.RawMessage{"vendor": json.RawMessage(`{"integer":9007199254740993}`)}
 	snapshot, err := (state.CheckpointBlobCodec{}).EncodeSnapshot(*state.NewCheckpointSnapshot(state.MaterializedState{
-		Items:    []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "private parent transcript"}}}},
+		Items:    []llm.Item{llm.HumanText("private parent transcript")},
 		Settings: settings, Lineage: []state.Handle{"00000000-0000-4000-8000-000000000001"},
 	}))
 	if err != nil {

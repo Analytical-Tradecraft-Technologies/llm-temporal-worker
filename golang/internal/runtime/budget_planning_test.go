@@ -463,7 +463,7 @@ func TestBudgetPlanningEstimatesUnmodifiedPreparedContentWithoutTokenizer(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.generate.Request.Input = append(f.generate.Request.Input, preparationMessage(strings.Repeat("more content ", 1000)))
+	f.generate.Request.Input = append(f.generate.Request.Input, llm.HumanText(strings.Repeat("more content ", 1000)))
 	second, err := p.Generate(context.Background(), f.generate, f.attempt)
 	if err != nil || second.Estimate.InputTokens <= first.Estimate.InputTokens || second.Estimate.CostUSD.Cmp(first.Estimate.CostUSD) <= 0 ||
 		second.Provider.Call.Metadata.SchemaDigest == first.Provider.Call.Metadata.SchemaDigest {

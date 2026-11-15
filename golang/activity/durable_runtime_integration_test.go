@@ -157,7 +157,7 @@ func durableTestReservation(route durable.RoutePlan) durable.ReserveResult {
 func durableGenerateResponse(request llm.GenerateRequestV1) llm.GenerateResponseV1 {
 	return llm.GenerateResponseV1{
 		APIVersion: llm.APIVersion, OperationKey: request.OperationKey, OperationID: "operation-id", Status: llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "ok"}}}},
+		Output:     []llm.Item{llm.ModelText("ok")},
 		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint", Kind: "generation"},
 		Cache:      llm.CacheDispositionV1{Disposition: "disabled"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
 	}

@@ -81,7 +81,7 @@ func collisionRequest(extensions map[string]json.RawMessage) llm.Request {
 	return llm.Request{
 		OperationKey: "extension-collision",
 		Model:        "chat-model",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Input:        []llm.Item{llm.HumanText("hello")},
 		Extensions:   extensions,
 	}
 }

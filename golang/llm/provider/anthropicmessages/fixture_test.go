@@ -15,7 +15,7 @@ import (
 
 func TestWireFixtureMatchesTypedSDKParams(t *testing.T) {
 	profile := mustProfile(t, testProfile())
-	params, err := lowerRequest(llm.Request{OperationKey: "fixture-op", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}, profile, "standard_only")
+	params, err := lowerRequest(llm.Request{OperationKey: "fixture-op", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}}, profile, "standard_only")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
 				llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png"},
 				llm.DocumentPart{Bytes: []byte("plain document"), MediaType: "text/plain", Title: "notes"},
 			}},
-			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "prior"}}},
+			llm.ModelText("prior"),
 			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 		},

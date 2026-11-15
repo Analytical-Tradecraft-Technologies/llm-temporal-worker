@@ -16,7 +16,7 @@ import (
 func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: DefaultProfile("nova")}
 	human := func(text string) llm.Message {
-		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
+		return llm.HumanText(text)
 	}
 	// The empty model turn sits between two user turns and again next to a
 	// model turn that was split into text and a tool call.
@@ -24,7 +24,7 @@ func TestCompileSkipsReplayedEmptyModelMessage(t *testing.T) {
 		human("question"),
 		llm.Message{Actor: llm.ActorModel},
 		human("follow-up"),
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}}},
+		llm.ModelText("looking"),
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{}},
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "found"}}},

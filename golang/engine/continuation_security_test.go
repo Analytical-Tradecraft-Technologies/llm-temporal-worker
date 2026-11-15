@@ -76,7 +76,7 @@ func TestLoadContinuationUsesTenantScopedLookup(t *testing.T) {
 
 func validContinuation(t *testing.T, now time.Time, tenant string) state.Continuation {
 	t.Helper()
-	transcript := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	transcript := []llm.Item{llm.HumanText("hello")}
 	_, digest, err := state.CanonicalTranscript(transcript)
 	if err != nil {
 		t.Fatal(err)

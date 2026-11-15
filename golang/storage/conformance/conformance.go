@@ -362,7 +362,7 @@ func testContinuations(t *testing.T, factory StoreFactory) {
 	if err != nil {
 		t.Fatalf("create continuation root: %v", err)
 	}
-	root.Transcript[0] = llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "mutated"}}}
+	root.Transcript[0] = llm.HumanText("mutated")
 	root.ProviderState[0].Data[0] = 99
 	loaded, err := stores.Continuations.GetForTenant(ctx, "tenant-a", rootHandle)
 	if err != nil {
@@ -371,7 +371,7 @@ func testContinuations(t *testing.T, factory StoreFactory) {
 	if loaded.TranscriptDigest != rootDigest || !bytes.Equal(loaded.ProviderState[0].Data, []byte{1, 2, 3}) {
 		t.Fatalf("continuation write was mutable: %#v", loaded)
 	}
-	loaded.Transcript[0] = llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "mutated read"}}}
+	loaded.Transcript[0] = llm.HumanText("mutated read")
 	loaded.ProviderState[0].Data[0] = 98
 	again, err := stores.Continuations.Get(ctx, rootHandle)
 	if err != nil {
@@ -549,7 +549,7 @@ func admissionAmount(value int) pricing.MicroUSD { return pricing.MicroUSD(value
 
 func continuation(t *testing.T, now time.Time) state.Continuation {
 	t.Helper()
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "root"}}}}
+	items := []llm.Item{llm.HumanText("root")}
 	_, digest, err := state.CanonicalTranscript(items)
 	if err != nil {
 		t.Fatal(err)
@@ -579,7 +579,7 @@ func continuationChild(t *testing.T, parent state.Continuation, parentHandle sta
 	child.ParentID = parentHandle.String()
 	child.Depth = parent.Depth + 1
 	child.LastOperationID = "child-operation"
-	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}})
+	child.Transcript = append(child.Transcript, llm.ModelText(text))
 	var err error
 	_, child.TranscriptDigest, err = state.CanonicalTranscript(child.Transcript)
 	if err != nil {

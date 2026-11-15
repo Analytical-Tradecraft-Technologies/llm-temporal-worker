@@ -21,10 +21,10 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 			adapter := newFixtureAdapter(t, []byte(`{"id":"unused"}`))
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{OperationKey: "op-tool-error", Model: "gpt-contract", Input: []llm.Item{
-					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look it up"}}},
+					llm.HumanText("look it up"),
 					llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"x"}`)},
 					llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: isError},
-					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "continue"}}},
+					llm.HumanText("continue"),
 				}},
 				Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
 				Strict: strict,
@@ -267,13 +267,13 @@ func TestReplayToolCallDoesNotInventProviderItemID(t *testing.T) {
 
 func TestReplayAssistantHistoryUsesOutputContentTypes(t *testing.T) {
 	params, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}},
+		llm.HumanText("question"),
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{
 			llm.TextPart{Text: "answer"},
 			llm.JSONPart{Value: json.RawMessage(`{"a":1}`)},
 			llm.RefusalPart{Text: "declined", ProviderCode: "openai.refusal"},
 		}},
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "follow-up"}}},
+		llm.HumanText("follow-up"),
 	}}, llm.ServiceClassStandard)
 	if err != nil {
 		t.Fatal(err)

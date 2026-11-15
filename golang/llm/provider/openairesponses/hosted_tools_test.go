@@ -10,7 +10,7 @@ import (
 
 func TestHostedToolsSurviveSDKWire(t *testing.T) {
 	for _, on := range []bool{false, true} {
-		wire := captureWireBody(t, wireAuditProfiles()[0], llm.Request{OperationKey: "hosted", Model: "gpt-test", WebSearch: on, CodeExecution: on, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "calculate"}}}}})
+		wire := captureWireBody(t, wireAuditProfiles()[0], llm.Request{OperationKey: "hosted", Model: "gpt-test", WebSearch: on, CodeExecution: on, Input: []llm.Item{llm.HumanText("calculate")}})
 		if !on {
 			if _, ok := wire["tools"]; ok {
 				t.Fatal("off still sends tools")

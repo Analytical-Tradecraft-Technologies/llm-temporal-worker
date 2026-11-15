@@ -22,10 +22,10 @@ func TestCheckpointSnapshotDecodeAllocationsAreBoundedPerItem(t *testing.T) {
 	for index := 0; len(transcript) < items; index++ {
 		callID := fmt.Sprintf("call-%d", index)
 		transcript = append(transcript,
-			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "next"}}},
+			llm.HumanText("next"),
 			llm.ToolCall{ID: callID, Name: "lookup", Arguments: json.RawMessage(`{"q":"a"}`)},
 			llm.ToolResult{CallID: callID, Name: "lookup", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"hits":1}`)}}},
-			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "ok"}}},
+			llm.ModelText("ok"),
 		)
 	}
 	snapshot := CheckpointSnapshot{Items: transcript, Settings: ModelState{Model: "gpt-test", ServiceClass: llm.ServiceClassStandard, Portability: llm.PortabilityStrict}, Depth: 1, Lineage: []Handle{"root", "child"}}

@@ -18,13 +18,13 @@ func TestCompileCoalescesInterleavedModelTurnIntoOneAssistantMessage(t *testing.
 	for _, strict := range []bool{true, false} {
 		call, err := testAdapter(t).Compile(context.Background(), provider.CompileInput{
 			Request: llm.Request{OperationKey: "op-interleaved", Model: "chat-model", Input: []llm.Item{
-				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look both up"}}},
+				llm.HumanText("look both up"),
 				llm.ToolCall{ID: "call-a", Name: "lookup", Arguments: json.RawMessage(`{"q":"a"}`)},
-				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "and the other"}}},
+				llm.ModelText("and the other"),
 				llm.ToolCall{ID: "call-b", Name: "lookup", Arguments: json.RawMessage(`{"q":"b"}`)},
 				llm.ToolResult{CallID: "call-a", Content: []llm.Part{llm.TextPart{Text: "result a"}}},
 				llm.ToolResult{CallID: "call-b", Content: []llm.Part{llm.TextPart{Text: "result b"}}},
-				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "done"}}},
+				llm.ModelText("done"),
 			}},
 			Query:  provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},
 			Strict: strict,

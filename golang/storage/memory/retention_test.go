@@ -56,7 +56,7 @@ func retentionChild(t *testing.T, parent state.Continuation, parentHandle state.
 	child.ParentID = parentHandle.String()
 	child.Depth = parent.Depth + 1
 	child.LastOperationID = "op"
-	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}})
+	child.Transcript = append(child.Transcript, llm.ModelText(text))
 	child.TranscriptDigest = canonicalDigest(t, child.Transcript)
 	child.ExpiresAt = expiresAt
 	return child

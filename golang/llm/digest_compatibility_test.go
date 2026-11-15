@@ -72,7 +72,7 @@ func TestRequestDigestLegacyCompatibility(t *testing.T) {
 			r.Extensions = map[string]json.RawMessage{"opaque": json.RawMessage(`{"large":9007199254740993,"decimal":0.1234567890123456789,"exponent":1e100}`)}
 		},
 		"escaped text": func(r *Request) {
-			r.Input = []Item{Message{Actor: ActorHuman, Content: []Part{TextPart{Text: "<>&\u2028\u2029\x00\xff"}}}}
+			r.Input = []Item{HumanText("<>&\u2028\u2029\x00\xff")}
 		},
 		"nil collections": func(r *Request) {
 			r.Input, r.Instructions, r.Tools, r.Extensions, r.ServiceClassFallbacks = nil, nil, nil, nil, nil
@@ -110,7 +110,7 @@ func FuzzRequestDigestLegacyCompatibility(f *testing.F) {
 }
 
 func BenchmarkRequestDigestLargeTranscript(b *testing.B) {
-	request := Request{OperationKey: "op", Model: "m", Input: []Item{Message{Actor: ActorHuman, Content: []Part{TextPart{Text: strings.Repeat("a", 1<<20)}}}}}
+	request := Request{OperationKey: "op", Model: "m", Input: []Item{HumanText(strings.Repeat("a", 1<<20))}}
 	for _, method := range []struct {
 		name string
 		run  func(Request) ([32]byte, error)

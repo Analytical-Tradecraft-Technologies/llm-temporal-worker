@@ -123,7 +123,7 @@ func TestLowerRejectsBooleanChildSchemasAtParse(t *testing.T) {
 func TestValidateAppliesTheCallerSchema(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","minLength":3}},"required":["name"]}`)
 	output := func(text string) []llm.Item {
-		return []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}
+		return []llm.Item{llm.ModelText(text)}
 	}
 	if err := Validate(schema, output(`{"name":"abc"}`)); err != nil {
 		t.Fatalf("conforming JSON = %v", err)

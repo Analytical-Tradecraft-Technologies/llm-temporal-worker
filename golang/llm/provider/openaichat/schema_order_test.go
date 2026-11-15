@@ -29,7 +29,7 @@ func sendSchemaRequest(t *testing.T, toolSchema, outputSchema string) []byte {
 	adapter.client = client
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{OperationKey: "op-order", Model: "chat-model",
-			Input:  []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}},
+			Input:  []llm.Item{llm.HumanText("hi")},
 			Tools:  []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(toolSchema)}},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(outputSchema)}}},
 		Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"},

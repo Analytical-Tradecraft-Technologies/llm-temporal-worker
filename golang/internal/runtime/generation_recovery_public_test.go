@@ -24,7 +24,7 @@ func TestRecoveredHistoricalCompactionReplaysPublicGenerate(t *testing.T) {
 			f.request.SettingsPatch.CompactionPolicy.Set = &policy
 			root := f.finish(t)
 			f.now = f.now.Add(time.Minute)
-			original := llm.GenerateRequestV1{OperationKey: "legacy-compacted-public", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{preparationMessage("legacy follow-up")}}
+			original := llm.GenerateRequestV1{OperationKey: "legacy-compacted-public", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("legacy follow-up")}}
 			encoded, _ := original.MarshalJSON()
 			digest := sha256.Sum256(encoded)
 			compact := llm.CompactRequestV1{OperationKey: "llmtw_compact_" + hex.EncodeToString(digest[:]), Context: original.Context, Parent: *original.Parent, Cache: &llm.CachePolicyV1{}}

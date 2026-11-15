@@ -33,7 +33,7 @@ func TestContinuationStoreBranchesImmutably(t *testing.T) {
 	child.ParentID = rootHandle.String()
 	child.Depth = 1
 	child.LastOperationID = "op-1"
-	child.Transcript = append(child.Transcript, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "world"}}})
+	child.Transcript = append(child.Transcript, llm.ModelText("world"))
 	child.TranscriptDigest = canonicalDigest(t, child.Transcript)
 	childHandle, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: rootHandle, Child: child, OperationKey: "op-1"})
 	if err != nil {
@@ -56,7 +56,7 @@ func TestContinuationStoreHundredWaySameKeyReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childItems := append(append([]llm.Item(nil), items...), llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "child"}}})
+	childItems := append(append([]llm.Item(nil), items...), llm.ModelText("child"))
 	childDigest := canonicalDigest(t, childItems)
 	child := state.Continuation{
 		Tenant: "tenant", ParentID: root.String(), Transcript: childItems, TranscriptDigest: childDigest,

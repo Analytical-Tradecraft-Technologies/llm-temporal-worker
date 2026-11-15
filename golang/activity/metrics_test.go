@@ -95,11 +95,8 @@ func TestGenerateActivityRecordsWorkerFailureForOversizedResponse(t *testing.T) 
 			OperationKey: "operation-1",
 			OperationID:  "operation-id",
 			Status:       llm.ResponseStatusCompleted,
-			Output: []llm.Item{llm.Message{
-				Actor:   llm.ActorModel,
-				Content: []llm.Part{llm.TextPart{Text: strings.Repeat("x", 1024)}},
-			}},
-			Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard},
+			Output:       []llm.Item{llm.ModelText(strings.Repeat("x", 1024))},
+			Service:      llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard},
 		}},
 	}
 	_, _ = activities.Generate(context.Background(), validGeneratePayload())
@@ -108,7 +105,7 @@ func TestGenerateActivityRecordsWorkerFailureForOversizedResponse(t *testing.T) 
 }
 
 func validGeneratePayload() GenerateRequest {
-	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}}
+	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
 }
 
 func newActivityTestMetrics(t *testing.T) *observability.Metrics {

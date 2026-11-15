@@ -36,8 +36,8 @@ func TestEmptyLiftedAssistantReplyIsNotReplayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := append([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}}}, lifted.Output...)
-	input = append(input, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "try again"}}})
+	input := append([]llm.Item{llm.HumanText("question")}, lifted.Output...)
+	input = append(input, llm.HumanText("try again"))
 	params, err := lowerRequest(llm.Request{Model: "chat-model", Input: input}, testProfile(), "default")
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestEmptyLiftedAssistantReplyIsNotReplayed(t *testing.T) {
 
 	// An assistant turn that only carries tool calls is still replayed.
 	params, err = lowerRequest(llm.Request{Model: "chat-model", Input: []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "look up"}}},
+		llm.HumanText("look up"),
 		llm.Message{Actor: llm.ActorModel},
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{}`)},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "ok"}}},

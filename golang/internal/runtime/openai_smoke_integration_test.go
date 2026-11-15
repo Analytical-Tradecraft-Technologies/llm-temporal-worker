@@ -96,7 +96,7 @@ func configureOpenAISmoke(t *testing.T, f *boundedCloudFixture, key string) (llm
 	}
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
 	request := f.request
-	request.Append = []llm.Item{preparationMessage("Reply with exactly OK.")}
+	request.Append = []llm.Item{llm.HumanText("Reply with exactly OK.")}
 	request.SettingsPatch.ServiceClass.Set = preparationPointer(llm.ServiceClassStandard)
 	request.SettingsPatch.ServiceClassFallbacks.Set = nil
 	request.SettingsPatch.Output.Set = &llm.OutputSpec{MaxTokens: preparationPointer(256), Format: llm.OutputFormat{Kind: llm.OutputKindText}}

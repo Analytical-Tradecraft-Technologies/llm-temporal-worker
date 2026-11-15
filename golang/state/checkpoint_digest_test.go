@@ -16,7 +16,7 @@ import (
 func TestCheckpointGraphLargeCheckpointConflictIsDetected(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{})
 	first := rootCheckpoint("root", "tenant-a", "operation-root")
-	first.Delta = []llm.Item{message(strings.Repeat("a", 9<<20))}
+	first.Delta = []llm.Item{llm.HumanText(strings.Repeat("a", 9<<20))}
 	if err := graph.PutRoot(first); err != nil {
 		t.Fatalf("put large root: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestCheckpointGraphLargeCheckpointConflictIsDetected(t *testing.T) {
 	}
 
 	conflicting := rootCheckpoint("root", "tenant-a", "operation-root")
-	conflicting.Delta = []llm.Item{message(strings.Repeat("b", 9<<20))}
+	conflicting.Delta = []llm.Item{llm.HumanText(strings.Repeat("b", 9<<20))}
 	if err := graph.PutRoot(conflicting); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflicting large checkpoint returned %v, want %v", err, ErrConflict)
 	}
@@ -54,7 +54,7 @@ func TestCheckpointGraphAcceptsSeparatelyBoundedPartsBeyondCombinedLimit(t *test
 	const limit = 4 << 10
 	withParts := func(text, instructions string) Checkpoint {
 		checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
-		checkpoint.Delta = []llm.Item{message(text)}
+		checkpoint.Delta = []llm.Item{llm.HumanText(text)}
 		checkpoint.SettingsPatch.Instructions = SetPatch([]llm.Instruction{{
 			Kind: llm.InstructionKindParts, Level: llm.InstructionLevelApplication,
 			Content: []llm.Part{llm.TextPart{Text: instructions}},
@@ -87,7 +87,7 @@ func TestCheckpointGraphAcceptsSeparatelyBoundedPartsBeyondCombinedLimit(t *test
 func TestCheckpointGraphRejectsRequestBeyondByteLimit(t *testing.T) {
 	graph := NewCheckpointGraph(MaterializeLimits{MaxBytes: 1 << 10})
 	checkpoint := rootCheckpoint("root", "tenant-a", "operation-root")
-	checkpoint.Delta = []llm.Item{message(strings.Repeat("a", 2<<10))}
+	checkpoint.Delta = []llm.Item{llm.HumanText(strings.Repeat("a", 2<<10))}
 	if err := graph.PutRoot(checkpoint); !errors.Is(err, ErrLimitExceeded) {
 		t.Fatalf("oversized checkpoint returned %v, want %v", err, ErrLimitExceeded)
 	}

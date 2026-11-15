@@ -52,7 +52,7 @@ func TestCloudGenerateReusedLineageToolCallIDPublishes(t *testing.T) {
 	f.answerWith(
 		[]llm.Item{outputShapeCall("call_0")},
 		[]llm.Item{outputShapeCall("call_0"), outputShapeCall("call_1")},
-		[]llm.Item{modelMessage("done")},
+		[]llm.Item{llm.ModelText("done")},
 	)
 	first := f.finish(t)
 	f.continueFrom(first, "second", outputShapeResult("call_0"))
@@ -81,7 +81,7 @@ func TestCloudGenerateModelTurnContentInsideToolBatchPublishes(t *testing.T) {
 		"call then state":        {outputShapeCall("a"), thinking},
 		"state call state call":  {thinking, outputShapeCall("a"), thinking, outputShapeCall("b")},
 		"call then reference":    {outputShapeCall("a"), citation},
-		"call text state source": {outputShapeCall("a"), modelMessage("checking"), thinking, citation, outputShapeCall("b")},
+		"call text state source": {outputShapeCall("a"), llm.ModelText("checking"), thinking, citation, outputShapeCall("b")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := boundedCloud(t, false)
@@ -143,7 +143,7 @@ func TestCloudGenerateUnusableOutputFailsTerminally(t *testing.T) {
 				t.Fatalf("unusable output was paid for %d times", f.submits.Load())
 			}
 			// The unusable response is not cached: a new operation is a new attempt.
-			f.answerWith(nil, []llm.Item{modelMessage("answer")})
+			f.answerWith(nil, []llm.Item{llm.ModelText("answer")})
 			f.request.OperationKey = "independent"
 			if next := f.finish(t); next.Generate.Cache.Disposition == "hit" || f.submits.Load() != 2 {
 				t.Fatalf("disposition=%q submits=%d", next.Generate.Cache.Disposition, f.submits.Load())

@@ -37,9 +37,9 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 	}
 	// The fixture lists its reasoning item last. The provider emits one ahead
 	// of the output it produced, and a dangling one is not replayed.
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}}, *state}
+	input := []llm.Item{llm.HumanText("question"), *state}
 	input = append(input, produced...)
-	input = append(input, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "follow-up"}}})
+	input = append(input, llm.HumanText("follow-up"))
 	params, err := lowerRequest(llm.Request{Model: "gpt-contract", OperationKey: "replay", Input: input}, llm.ServiceClassStandard)
 	if err != nil {
 		t.Fatalf("replaying lifted output: %v", err)
@@ -74,7 +74,7 @@ func TestStrictCompileAcceptsReplayedReasoning(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
-	request.Input = append(append(request.Input, lifted.Output...), llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "follow-up"}}})
+	request.Input = append(append(request.Input, lifted.Output...), llm.HumanText("follow-up"))
 	if _, err := fixtureAdapterForProfile(t, responsesFixtureProfiles[0]).Compile(context.Background(), provider.CompileInput{
 		Request: request,
 		Query:   provider.CapabilityQuery{EndpointID: "openai-fixture", Family: provider.FamilyOpenAIResponses, Model: request.Model},

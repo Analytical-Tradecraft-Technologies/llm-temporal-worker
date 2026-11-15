@@ -32,7 +32,7 @@ func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	request := llm.Request{
 		OperationKey: "state-replay",
 		Model:        "claude-contract",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "continue"}}}},
+		Input:        []llm.Item{llm.HumanText("continue")},
 		Continuation: &llm.Continuation{Handle: lifted.Continuation.Handle, EndpointID: "anthropic-prod", Model: "claude-contract", Pinned: true, ProviderStates: lifted.Continuation.ProviderStates},
 	}
 	params, err := lowerRequest(request, profile, "standard_only")

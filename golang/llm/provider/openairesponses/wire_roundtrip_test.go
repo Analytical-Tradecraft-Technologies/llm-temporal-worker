@@ -114,7 +114,7 @@ func wireAuditCases() []contract.WireAuditCase {
 		{Name: "tool output schema and bare tool", Request: llm.Request{Input: contract.WireAuditUserText("hello"), Tools: []llm.Tool{withOutputSchema, {Name: "bare", InputSchema: json.RawMessage(`{"type":"object"}`)}}}},
 		{Name: "tool history", Request: llm.Request{
 			Input: []llm.Item{
-				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find sydney"}}},
+				llm.HumanText("find sydney"),
 				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}, llm.JSONPart{Value: json.RawMessage(`{"step":1}`)}}},
 				reasoningState,
 				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
@@ -122,7 +122,7 @@ func wireAuditCases() []contract.WireAuditCase {
 				llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 				llm.ToolResult{CallID: "call-2", Content: []llm.Part{llm.TextPart{Text: ""}}},
 				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.RefusalPart{Text: "cannot continue"}}},
-				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "try again"}}},
+				llm.HumanText("try again"),
 			},
 			Tools: tools,
 		}},
@@ -283,7 +283,7 @@ func TestCapturedWireBodyAddsStoreFalseAndEncryptedReasoningIncludeWhenStorageIs
 		{
 			name: "replayed reasoning state",
 			request: llm.Request{Input: []llm.Item{
-				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find sydney"}}},
+				llm.HumanText("find sydney"),
 				sealed,
 				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 				llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "ok"}}},

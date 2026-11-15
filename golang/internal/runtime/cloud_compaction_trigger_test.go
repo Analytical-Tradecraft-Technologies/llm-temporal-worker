@@ -36,7 +36,7 @@ func compactionTriggerFixture(t *testing.T, policy string, instructions ...llm.I
 func (f *boundedCloudFixture) turn(t *testing.T, key, text string) llm.CheckpointHandle {
 	t.Helper()
 	f.request.OperationKey = key
-	f.request.Append = []llm.Item{preparationMessage(text)}
+	f.request.Append = []llm.Item{llm.HumanText(text)}
 	result := f.finish(t)
 	handle := result.Generate.Checkpoint.Handle
 	f.request.Parent = &handle
@@ -65,7 +65,7 @@ func (f *boundedCloudFixture) compactWith(t *testing.T, request llm.CompactReque
 func (f *boundedCloudFixture) plan(t *testing.T, key, text string) bool {
 	t.Helper()
 	f.request.OperationKey = key
-	f.request.Append = []llm.Item{preparationMessage(text)}
+	f.request.Append = []llm.Item{llm.HumanText(text)}
 	before := f.submits.Load()
 	decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestCloudGenerationPlanCountsTheSummaryNearTheTrigger(t *testing.T) {
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
 		result, err := invoke(ctx, call, o)
 		if err == nil && summarize {
-			result.Response.Output = []llm.Item{modelMessage(fmt.Sprintf("%d%s", f.submits.Load(), strings.Repeat("s", 7000)))}
+			result.Response.Output = []llm.Item{llm.ModelText(fmt.Sprintf("%d%s", f.submits.Load(), strings.Repeat("s", 7000)))}
 		}
 		return result, err
 	}

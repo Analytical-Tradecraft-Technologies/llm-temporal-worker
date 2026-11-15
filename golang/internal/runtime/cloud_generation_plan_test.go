@@ -90,12 +90,12 @@ func TestCloudGenerationPlanLargeInputAndTokenizerFailure(t *testing.T) {
 	policy := json.RawMessage(`{"recent_turns":0}`)
 	f.request.SettingsPatch.CompactionPolicy.Set = &policy
 	// The large turn is history: the next turn can compact it away.
-	f.request.Append = []llm.Item{preparationMessage(strings.Repeat("x", 300<<10))}
+	f.request.Append = []llm.Item{llm.HumanText(strings.Repeat("x", 300<<10))}
 	parent := f.finish(t)
 	handle := parent.Generate.Checkpoint.Handle
 	f.request.Parent = &handle
 	f.request.OperationKey = "large-next"
-	f.request.Append = []llm.Item{preparationMessage("next")}
+	f.request.Append = []llm.Item{llm.HumanText("next")}
 	f.cap.BudgetEstimator.Tokenizer = nil
 	f.restart(t)
 	decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)

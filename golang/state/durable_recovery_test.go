@@ -27,17 +27,11 @@ func TestDurableCheckpointMaterializerReplaysThreeWayForkAfterRestart(t *testing
 
 	for _, branch := range branches {
 		branch := branch
-		delta, err := fixture.codec.EncodeDelta([]llm.Item{llm.Message{
-			Actor:   llm.ActorHuman,
-			Content: []llm.Part{llm.TextPart{Text: branch.text}},
-		}})
+		delta, err := fixture.codec.EncodeDelta([]llm.Item{llm.HumanText(branch.text)})
 		if err != nil {
 			t.Fatalf("encode %s delta: %v", branch.id, err)
 		}
-		response, err := fixture.codec.EncodeResponse([]llm.Item{llm.Message{
-			Actor:   llm.ActorModel,
-			Content: []llm.Part{llm.TextPart{Text: "answer-" + branch.text}},
-		}})
+		response, err := fixture.codec.EncodeResponse([]llm.Item{llm.ModelText("answer-" + branch.text)})
 		if err != nil {
 			t.Fatalf("encode %s response: %v", branch.id, err)
 		}

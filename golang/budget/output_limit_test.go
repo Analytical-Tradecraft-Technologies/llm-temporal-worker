@@ -11,7 +11,7 @@ import (
 func TestPreparedOutputLimitMatchesEstimate(t *testing.T) {
 	for _, configured := range []int64{0, 16} {
 		for _, explicit := range []int{0, 7} {
-			request := llm.Request{OperationKey: "limit", Model: "model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}
+			request := llm.Request{OperationKey: "limit", Model: "model", Input: []llm.Item{llm.HumanText("hello")}}
 			if explicit != 0 {
 				request.Output = &llm.OutputSpec{MaxTokens: &explicit}
 			}
@@ -48,7 +48,7 @@ func TestPreparedOutputLimitMatchesEstimate(t *testing.T) {
 func TestOutputLimitRejectsZeroNegativeAndSDKOverflow(t *testing.T) {
 	for _, limit := range []int64{0, -1, math.MaxInt32 + 1} {
 		value := int(limit)
-		request := llm.Request{OperationKey: "limit", Model: "model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}, Output: &llm.OutputSpec{MaxTokens: &value}}
+		request := llm.Request{OperationKey: "limit", Model: "model", Input: []llm.Item{llm.HumanText("hello")}, Output: &llm.OutputSpec{MaxTokens: &value}}
 		estimator := Estimator{MaxOutput: 16}
 		if _, err := estimator.PrepareRequest(request); err == nil {
 			t.Fatalf("prepared invalid cap %d", limit)

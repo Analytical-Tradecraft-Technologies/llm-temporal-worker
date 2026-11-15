@@ -194,7 +194,7 @@ func (p *CheckpointPublication) compact(ctx context.Context, identity Checkpoint
 		if err != nil {
 			return zero, response, checkpointPublicationError(provider.CodeStateCorrupt)
 		}
-		summaryItems = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: summary}}}}
+		summaryItems = []llm.Item{llm.ModelText(summary)}
 		// The transcript opens with the summary as a human-role message:
 		// Messages and Converse reject a conversation that starts with an
 		// assistant turn.

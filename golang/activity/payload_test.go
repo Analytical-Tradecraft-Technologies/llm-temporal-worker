@@ -12,7 +12,7 @@ import (
 )
 
 func TestRequestPayloadRoundTrip(t *testing.T) {
-	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant-1"}, Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}}
+	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant-1"}, Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
 	encoded, err := MarshalRequest(payload, PayloadLimits{MaxInlineBytes: 16 * 1024})
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestRequestPayloadRejectsUnknownVersionFieldsAndDuplicates(t *testing.T) {
 }
 
 func TestRequestPayloadRejectsOversizeAndMalformedBlob(t *testing.T) {
-	oversize := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "large", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("x", 128)}}}}}}
+	oversize := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "large", Model: "model-1", Input: []llm.Item{llm.HumanText(strings.Repeat("x", 128))}}}
 	if _, err := MarshalRequest(oversize, PayloadLimits{MaxInlineBytes: 64}); err == nil {
 		t.Fatal("oversize payload unexpectedly accepted")
 	}

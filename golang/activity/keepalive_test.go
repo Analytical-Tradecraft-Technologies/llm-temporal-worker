@@ -375,7 +375,7 @@ func (heartbeater *gatedCancellationHeartbeater) Beat(ctx context.Context, progr
 var _ Heartbeater = (*gatedCancellationHeartbeater)(nil)
 
 func testKeepalivePayload() GenerateRequest {
-	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}}
+	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
 }
 
 func testKeepaliveResponse() llm.Response {

@@ -107,7 +107,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 		t.Fatalf("OpenRouter input price = %s, want the 0.8 maximum over upstreams", got)
 	}
 	plan, err := routing.DeterministicPlanner{}.Plan(context.Background(), routing.Input{Catalog: snapshot.Routes, Now: time.Now(),
-		Request: llm.Request{OperationKey: "sync-test", Model: "openai/gpt-5.4-mini", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}}})
+		Request: llm.Request{OperationKey: "sync-test", Model: "openai/gpt-5.4-mini", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{llm.HumanText("hi")}}})
 	if err != nil || len(plan.Candidates) != 1 || plan.Candidates[0].PriceVersion != "" {
 		t.Fatalf("plan = %+v, err = %v; want one unpinned candidate", plan.Candidates, err)
 	}

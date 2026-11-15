@@ -23,7 +23,7 @@ func TestLowerRequestMapsSystemToolsOutputSamplingAndReasoning(t *testing.T) {
 			{Kind: llm.InstructionKindParts, Content: []llm.Part{llm.JSONPart{Value: []byte(`{"policy":"strict"}`)}}},
 		},
 		Input: []llm.Item{
-			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}},
+			llm.HumanText("hello"),
 		},
 		Tools:      []llm.Tool{{Name: "lookup", Description: "Look up a city", InputSchema: []byte(`{"type":"object","properties":{"city":{"type":"string"}}}`)}},
 		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceRequired, Parallel: false},

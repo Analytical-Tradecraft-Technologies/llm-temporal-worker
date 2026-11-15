@@ -28,7 +28,7 @@ func TestLocalValidationUsesExactOriginalSchemaNumbers(t *testing.T) {
 				text  string
 				valid bool
 			}{{`{"id":` + tc.original + `}`, true}, {`{"id":` + tc.rounded + `}`, false}} {
-				output := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: tc.text}}}}
+				output := []llm.Item{llm.ModelText(tc.text)}
 				err := validateFinalJSON(call, output, llm.ResponseStatusCompleted, false, false)
 				if (err == nil) != tc.valid {
 					t.Fatalf("content %s valid=%v: %v", tc.text, tc.valid, err)

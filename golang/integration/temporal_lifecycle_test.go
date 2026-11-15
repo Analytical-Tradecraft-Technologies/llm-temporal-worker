@@ -234,7 +234,7 @@ func newIntegrationEngine(t *testing.T) integrationEngine {
 	}
 	adapter := &recordingAdapter{response: llm.Response{
 		Status:   llm.ResponseStatusCompleted,
-		Output:   []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "offline response"}}}},
+		Output:   []llm.Item{llm.ModelText("offline response")},
 		Usage:    llm.Usage{OutputTokens: 1},
 		Provider: llm.ProviderFacts{RequestID: "provider-request-1"},
 	}}
@@ -260,9 +260,7 @@ func integrationRequest(operationKey string) llm.Request {
 		OperationKey: operationKey,
 		Context:      llm.RequestContext{Tenant: "tenant-1"},
 		Model:        "logical-model",
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.TextPart{Text: "hello"},
-		}}},
+		Input:        []llm.Item{llm.HumanText("hello")},
 	}
 }
 

@@ -26,11 +26,11 @@ func checkpointFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, s
 	r, table, blobs, request := fixture(t)
 	s := r.Checkpoints()
 	codec := state.CheckpointBlobCodec{}
-	delta, err := codec.EncodeDelta([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "private prompt"}}}})
+	delta, err := codec.EncodeDelta([]llm.Item{llm.HumanText("private prompt")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := codec.EncodeResponse([]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "private answer"}}}})
+	response, err := codec.EncodeResponse([]llm.Item{llm.ModelText("private answer")})
 	if err != nil {
 		t.Fatal(err)
 	}

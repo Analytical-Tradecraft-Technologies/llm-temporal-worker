@@ -31,7 +31,7 @@ func TestCompileSequentialToolUsePolicy(t *testing.T) {
 				policy := choice
 				policy.Parallel = parallel
 				request := llm.Request{OperationKey: "parallel-policy", Model: "amazon.nova-pro-v1:0",
-					Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Look up Sydney"}}}},
+					Input:      []llm.Item{llm.HumanText("Look up Sydney")},
 					Tools:      []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)}},
 					ToolPolicy: policy}
 				call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
@@ -73,7 +73,7 @@ func TestCompileSequentialToolUsePolicy(t *testing.T) {
 // says, and a request without tools carries no tool-use constraint at all.
 func TestCompileSequentialToolUseLeavesNoneAndToollessRequests(t *testing.T) {
 	adapter := &Adapter{endpointID: "test", profile: DefaultProfile("nova")}
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}
+	input := []llm.Item{llm.HumanText("Hello")}
 	tools := []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	for _, parallel := range []bool{false, true} {
 		for _, strict := range []bool{false, true} {

@@ -27,7 +27,7 @@ func TestToolOutputSchemaCompilerRejection(t *testing.T) {
 			adapter := route.adapter(t)
 			for _, strict := range []bool{true, false} {
 				request := llm.Request{OperationKey: "tool-contract", Model: "provider-model", ServiceClass: llm.ServiceClassStandard,
-					Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "lookup"}}}},
+					Input: []llm.Item{llm.HumanText("lookup")},
 					Tools: []llm.Tool{toolOutputContract()}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceAuto, Parallel: true}}
 				input := provider.CompileInput{Request: request, Strict: strict,
 					Query: provider.CapabilityQuery{EndpointID: "endpoint", Family: route.family, Model: request.Model}}

@@ -114,7 +114,7 @@ func parityGenerateRequests() map[string]llm.GenerateRequestV1 {
 	age := int64(60)
 	requests := map[string]llm.GenerateRequestV1{
 		"empty-append": {OperationKey: "op", Context: context},
-		"fork-with-cache": {OperationKey: "op", Context: context, Parent: &parent, Append: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		"fork-with-cache": {OperationKey: "op", Context: context, Parent: &parent, Append: []llm.Item{llm.HumanText("hello")},
 			Cache: &llm.CachePolicyV1{MaxAgeSeconds: age, Variant: 3}},
 	}
 	var all []llm.Item

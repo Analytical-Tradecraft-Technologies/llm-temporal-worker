@@ -38,7 +38,7 @@ func checkpointReplayFixture(t *testing.T) (*CheckpointReplay, *checkpointReplay
 	t.Helper()
 	parent := llm.CheckpointHandle("cp1.opaque.parent")
 	caller := llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"}
-	m := &checkpointReplayMaterializer{result: state.MaterializedState{Handle: state.Handle(parent), Tenant: "opaque-scope", Items: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "parent message"}}}}}}
+	m := &checkpointReplayMaterializer{result: state.MaterializedState{Handle: state.Handle(parent), Tenant: "opaque-scope", Items: []llm.Item{llm.HumanText("parent message")}}}
 	r, err := replayCapabilities(m).NewCheckpointReplay(func(_ context.Context, got llm.RequestContext) (string, error) {
 		if !reflect.DeepEqual(got, caller) {
 			t.Fatal("lost caller scope")
@@ -62,7 +62,7 @@ func assertCheckpointReplayError(t *testing.T, err error, code provider.Code) {
 }
 func TestCheckpointReplayMaterializesBothPhasesAndPreservesDelta(t *testing.T) {
 	r, m, g, c := checkpointReplayFixture(t)
-	g.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "new delta"}}}}
+	g.Append = []llm.Item{llm.HumanText("new delta")}
 	base, err := r.Generate(context.Background(), g)
 	if err != nil || !reflect.DeepEqual(base.State, replayCallerState(m.result, g.Context)) || base.Completed != nil || base.ReconciliationPending != nil {
 		t.Fatalf("Generate = %#v, %v", base, err)

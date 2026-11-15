@@ -12,10 +12,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
-func message(text string) llm.Item {
-	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
-}
-
 func rootCheckpoint(handle, tenant, operation string) Checkpoint {
 	return Checkpoint{
 		Handle:       Handle(handle),
@@ -26,13 +22,13 @@ func rootCheckpoint(handle, tenant, operation string) Checkpoint {
 			Model:        SetPatch("gpt-test"),
 			ServiceClass: SetPatch(llm.ServiceClassStandard),
 		},
-		Delta: []llm.Item{message("root")},
+		Delta: []llm.Item{llm.HumanText("root")},
 	}
 }
 
 func childCheckpoint(handle, parent, tenant, operation, text string) Checkpoint {
 	parentHandle := Handle(parent)
-	return Checkpoint{Handle: Handle(handle), Parent: &parentHandle, Tenant: tenant, OperationKey: operation, Delta: []llm.Item{message(text)}}
+	return Checkpoint{Handle: Handle(handle), Parent: &parentHandle, Tenant: tenant, OperationKey: operation, Delta: []llm.Item{llm.HumanText(text)}}
 }
 
 func mustPutRoot(t testing.TB, graph *CheckpointGraph, checkpoint Checkpoint) {
@@ -271,7 +267,7 @@ func TestMaterializationCarriesEveryAncestorAndSnapshotMatchesReplay(t *testing.
 	full := mustMaterialize(t, graph, "tenant-a", "two")
 	snapshot := NewCheckpointSnapshot(full)
 	leaf := childCheckpoint("three", "two", "tenant-a", "op-three", "three")
-	snapshot.Items = append(snapshot.Items, message("three"))
+	snapshot.Items = append(snapshot.Items, llm.HumanText("three"))
 	snapshot.Depth = 3
 	snapshot.Lineage = append(snapshot.Lineage, Handle("three"))
 	snapshot.Digest = snapshot.digest()
@@ -335,7 +331,7 @@ func TestMaterializationIsIndependentOfDeltaSegmentation(t *testing.T) {
 
 	segmented := NewCheckpointGraph(MaterializeLimits{})
 	root := rootCheckpoint("segmented-root", "tenant-a", "segmented-root-operation")
-	root.Output = []llm.Item{message("root-output")}
+	root.Output = []llm.Item{llm.HumanText("root-output")}
 	if err := segmented.PutRoot(root); err != nil {
 		t.Fatal(err)
 	}
@@ -349,8 +345,8 @@ func TestMaterializationIsIndependentOfDeltaSegmentation(t *testing.T) {
 			Tenant:       "tenant-a",
 			OperationKey: fmt.Sprintf("segmented-operation-%03d", index),
 			Delta: []llm.Item{
-				message(fmt.Sprintf("delta-%03d", index)),
-				message(fmt.Sprintf("response-%03d", index)),
+				llm.HumanText(fmt.Sprintf("delta-%03d", index)),
+				llm.HumanText(fmt.Sprintf("response-%03d", index)),
 			},
 		}
 		if err := segmented.PutChild(checkpoint); err != nil {
@@ -365,15 +361,15 @@ func TestMaterializationIsIndependentOfDeltaSegmentation(t *testing.T) {
 
 	grouped := NewCheckpointGraph(MaterializeLimits{})
 	groupedRoot := rootCheckpoint("grouped-root", "tenant-a", "grouped-root-operation")
-	groupedRoot.Output = []llm.Item{message("root-output")}
+	groupedRoot.Output = []llm.Item{llm.HumanText("root-output")}
 	if err := grouped.PutRoot(groupedRoot); err != nil {
 		t.Fatal(err)
 	}
 	allEvents := make([]llm.Item, 0, eventCount*2)
 	for index := 0; index < eventCount; index++ {
 		allEvents = append(allEvents,
-			message(fmt.Sprintf("delta-%03d", index)),
-			message(fmt.Sprintf("response-%03d", index)),
+			llm.HumanText(fmt.Sprintf("delta-%03d", index)),
+			llm.HumanText(fmt.Sprintf("response-%03d", index)),
 		)
 	}
 	groupedParent := groupedRoot.Handle
@@ -466,7 +462,7 @@ func TestMaterializationAllowsTextWithinParallelToolResponse(t *testing.T) {
 	root := rootCheckpoint("mixed", "tenant-a", "mixed-root")
 	root.Output = []llm.Item{
 		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "Checking another source"}}},
+		llm.ModelText("Checking another source"),
 		llm.ToolCall{ID: "b", Name: "lookup", Arguments: []byte("{}")},
 	}
 	mustPutRoot(t, graph, root)
@@ -476,7 +472,7 @@ func TestMaterializationAllowsTextWithinParallelToolResponse(t *testing.T) {
 	}
 	child := childCheckpoint("mixed-child", root.Handle.String(), "tenant-a", "mixed-child-op", "")
 	child.Delta = []llm.Item{llm.ToolResult{CallID: "b"}, llm.ToolResult{CallID: "a"}}
-	child.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "Done"}}}}
+	child.Output = []llm.Item{llm.ModelText("Done")}
 	mustPutChild(t, graph, child)
 	resolved := mustMaterialize(t, graph, "tenant-a", child.Handle)
 	if len(resolved.PendingToolCalls) != 0 {

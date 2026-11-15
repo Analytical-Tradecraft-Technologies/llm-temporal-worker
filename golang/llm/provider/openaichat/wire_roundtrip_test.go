@@ -212,14 +212,14 @@ func wireAuditCases() []contract.WireAuditCase {
 		}},
 		{Name: "tool history", Request: llm.Request{
 			Input: []llm.Item{
-				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "find sydney"}}},
-				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}}},
+				llm.HumanText("find sydney"),
+				llm.ModelText("looking"),
 				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 				llm.ToolCall{ID: "call-2", Name: "search", Arguments: json.RawMessage(`{"q":"harbour","limit":2}`)},
 				llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 				llm.ToolResult{CallID: "call-2", Content: []llm.Part{llm.TextPart{Text: "two results"}}},
 				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.RefusalPart{Text: "cannot continue"}}},
-				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "try again"}}},
+				llm.HumanText("try again"),
 				llm.ToolCall{ID: "call-3", Name: "lookup", Arguments: json.RawMessage(`{"q":"perth"}`)},
 				llm.ToolResult{CallID: "call-3", Content: []llm.Part{llm.TextPart{Text: ""}}},
 			},
@@ -242,7 +242,7 @@ func wireAuditCases() []contract.WireAuditCase {
 			Instructions: []llm.Instruction{{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"}},
 			Input: []llm.Item{
 				llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}, llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png", Detail: "high"}}},
-				llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "thinking"}}},
+				llm.ModelText("thinking"),
 				llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 				llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 			},

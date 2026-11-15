@@ -10,7 +10,7 @@ import (
 
 func TestLowerRequestRejectsTemperatureAboveOne(t *testing.T) {
 	temperature := 1.5
-	request := llm.Request{OperationKey: "op", Model: "nova", Sampling: &llm.SamplingSpec{Temperature: &temperature}, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}}
+	request := llm.Request{OperationKey: "op", Model: "nova", Sampling: &llm.SamplingSpec{Temperature: &temperature}, Input: []llm.Item{llm.HumanText("hi")}}
 	if _, err := lowerRequest(request, DefaultProfile("nova"), string(types.ServiceTierTypeDefault), true); err == nil {
 		t.Fatal("temperature 1.5 was accepted")
 	}

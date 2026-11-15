@@ -16,7 +16,7 @@ func FuzzCanonicalTranscriptNeverPanics(f *testing.F) {
 		if len(text) > 1<<16 || len(arguments) > 1<<16 {
 			t.Skip()
 		}
-		items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}}
+		items := []llm.Item{llm.HumanText(text)}
 		if includeTool {
 			items = append(items, llm.ToolCall{ID: "call-fuzz", Name: "lookup", Arguments: json.RawMessage(arguments)})
 		}
