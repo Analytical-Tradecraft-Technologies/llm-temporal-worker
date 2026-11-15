@@ -51,10 +51,7 @@ func MicroFromUSD(usd USD) (MicroUSD, error) {
 	if err := usd.valid(); err != nil {
 		return 0, err
 	}
-	units := new(big.Int)
-	if usd.units != nil {
-		units.Set(usd.units)
-	}
+	units := usdUnits(usd)
 	units.Quo(units, big.NewInt(1_000_000_000_000))
 	if !units.IsInt64() {
 		return 0, fmt.Errorf("USD value overflows microUSD compatibility range")
@@ -73,10 +70,7 @@ func CeilMicroFromUSD(usd USD) (MicroUSD, error) {
 	if err := usd.valid(); err != nil {
 		return 0, err
 	}
-	units := new(big.Int)
-	if usd.units != nil {
-		units.Set(usd.units)
-	}
+	units := usdUnits(usd)
 	divisor := big.NewInt(1_000_000_000_000)
 	remainder := new(big.Int)
 	units.QuoRem(units, divisor, remainder)
