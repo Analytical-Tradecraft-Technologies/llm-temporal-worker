@@ -5,10 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/repotest"
 	redisstore "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/redis"
 	"go.yaml.in/yaml/v4"
 )
@@ -36,28 +36,19 @@ type composeBuild struct {
 	Context string `yaml:"context"`
 }
 
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
-	}
-	directory := filepath.Dir(source)
-	for {
-		if _, err := os.Stat(filepath.Join(directory, ".git")); err == nil {
-			return directory
-		}
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			t.Fatal("repository checkout root not found")
-		}
-		directory = parent
-	}
-}
+var (
+	repositoryRoot = repotest.RepositoryRoot
+	moduleRoot     = repotest.ModuleRoot
+)
 
-func moduleRoot(t *testing.T) string {
+// readMakefile returns the module Makefile that defines the Compose targets.
+func readMakefile(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(repositoryRoot(t), "golang")
+	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func readCompose(t *testing.T) (composeDocument, []byte) {
@@ -470,10 +461,7 @@ func TestComposeWorkerUsesDurableFileBlobAndExactHealthEndpoints(t *testing.T) {
 }
 
 func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	makefile := readMakefile(t)
 	for _, required := range []string{
 		"compose-live-integration:",
 		"LLMTW_COMPOSE_LIVE:-0",
@@ -511,7 +499,7 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"LLMTW_REDIS_PASSWORD",
 		"LLMTW_REDIS_KEY_PREFIX",
 	} {
-		if !strings.Contains(string(data), required) {
+		if !strings.Contains(makefile, required) {
 			t.Errorf("compose live integration target is missing %q", required)
 		}
 	}
@@ -521,22 +509,17 @@ func TestComposeLiveIntegrationTargetIsExplicitAndFailsClosed(t *testing.T) {
 		"LLMTW_COMPOSE_HEALTH_PORT:-18080",
 		"LLMTW_COMPOSE_METRICS_PORT:-19090",
 	} {
-		if strings.Contains(string(data), fixedPort) {
+		if strings.Contains(makefile, fixedPort) {
 			t.Errorf("compose live integration target retains fixed host port %q", fixedPort)
 		}
 	}
-	if strings.Contains(string(data), "up --wait --wait-timeout 180") {
+	if strings.Contains(makefile, "up --wait --wait-timeout 180") {
 		t.Error("compose live integration retains a wait timeout shorter than the manifest healthcheck bound")
 	}
 }
 
 func TestComposeLiveIntegrationMakesFileSecretReadableToNonrootWorker(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	makefile := string(data)
+	makefile := readMakefile(t)
 	for _, required := range []string{
 		`tmpdir="$$(mktemp -d`,
 		`umask 077;`,
@@ -549,16 +532,13 @@ func TestComposeLiveIntegrationMakesFileSecretReadableToNonrootWorker(t *testing
 }
 
 func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	makefile := readMakefile(t)
 	const marker = "compose-live-integration Temporal healthcheck output (redacted):"
-	start := strings.Index(string(data), marker)
+	start := strings.Index(makefile, marker)
 	if start < 0 {
 		t.Fatalf("compose live integration target is missing %q", marker)
 	}
-	diagnostics := string(data)[start:]
+	diagnostics := makefile[start:]
 	for _, required := range []string{
 		"$$( $(COMPOSE) ps -q temporal 2>/dev/null || true )",
 		"docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}'",
@@ -574,16 +554,16 @@ func TestComposeFailureDiagnosticsIncludeRedactedTemporalHealthOutput(t *testing
 	}
 }
 
-func TestComposeLifecycleFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// The Makefile commands that run the two tagged Compose suites.
+const (
+	composeLifecycleTestCommand        = `GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_WORKER_METRICS_ADDR="$$metrics_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose`
+	composeTemporalRecoveryTestCommand = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestLiveRedisKeyPrefixFollowsComposeNamespace|TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum|TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
+)
 
-	const lifecycleTest = `GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_WORKER_METRICS_ADDR="$$metrics_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose`
+func TestComposeLifecycleFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) {
 	const nextTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address"`
-	makefile := string(data)
-	start := strings.Index(makefile, "if ! "+lifecycleTest)
+	makefile := readMakefile(t)
+	start := strings.Index(makefile, "if ! "+composeLifecycleTestCommand)
 	if start < 0 {
 		t.Fatalf("compose live integration target is missing the Redis lifecycle failure wrapper")
 	}
@@ -591,37 +571,13 @@ func TestComposeLifecycleFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) 
 	if end < 0 {
 		t.Fatalf("compose live integration target is missing the subsequent Temporal recovery test")
 	}
-	failurePath := makefile[start : start+end]
-
-	for _, required := range []string{
-		`if ! ` + lifecycleTest + `; then \`,
-		"compose-live-integration Redis lifecycle test service logs (redacted; service output only; no environment inspection):",
-		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker",
-		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
-		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD=\"$$postgres_password\"",
-		"LLMTW_LOG_REDACT_MOCK_API_KEY=\"$$mock_api_key\"",
-		"LLMTW_LOG_REDACT_CONTINUATION_HMAC=\"$$continuation_hmac\"",
-		`sh ./scripts/redact-compose-logs.sh >&2 || true; \`,
-		`exit 1; \`,
-	} {
-		if !strings.Contains(failurePath, required) {
-			t.Errorf("Redis lifecycle failure diagnostics are missing %q", required)
-		}
-	}
-	if strings.Contains(failurePath, "docker inspect") {
-		t.Error("Redis lifecycle failure diagnostics must emit only redacted Compose service logs")
-	}
+	assertRedactedServiceLogFailurePath(t, makefile[start:start+end], composeLifecycleTestCommand,
+		"compose-live-integration Redis lifecycle test service logs (redacted; service output only; no environment inspection):", "Redis lifecycle")
 }
 
 func TestComposeTemporalRecoveryFailureDiagnosticsUseRedactedServiceLogs(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestLiveRedisKeyPrefixFollowsComposeNamespace|TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum|TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
-	makefile := string(data)
-	start := strings.Index(makefile, "if ! "+temporalRecoveryTest)
+	makefile := readMakefile(t)
+	start := strings.Index(makefile, "if ! "+composeTemporalRecoveryTestCommand)
 	if start < 0 {
 		t.Fatalf("compose live integration target is missing the Temporal recovery failure wrapper")
 	}
@@ -629,11 +585,18 @@ func TestComposeTemporalRecoveryFailureDiagnosticsUseRedactedServiceLogs(t *test
 	if end < 0 {
 		t.Fatal("compose live integration target is missing the end of the Temporal recovery failure wrapper")
 	}
-	failurePath := makefile[start : start+end]
+	assertRedactedServiceLogFailurePath(t, makefile[start:start+end], composeTemporalRecoveryTestCommand,
+		"compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):", "Temporal recovery")
+}
 
+// assertRedactedServiceLogFailurePath checks that failurePath, the Makefile
+// failure branch around testCommand, prints only redacted Compose service
+// logs under heading and then fails the target.
+func assertRedactedServiceLogFailurePath(t *testing.T, failurePath, testCommand, heading, label string) {
+	t.Helper()
 	for _, required := range []string{
-		`if ! ` + temporalRecoveryTest + `; then \`,
-		"compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):",
+		`if ! ` + testCommand + `; then \`,
+		heading,
 		"$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker",
 		"LLMTW_LOG_REDACT_REDIS_PASSWORD=\"$$redis_password\"",
 		"LLMTW_LOG_REDACT_POSTGRES_PASSWORD=\"$$postgres_password\"",
@@ -643,25 +606,18 @@ func TestComposeTemporalRecoveryFailureDiagnosticsUseRedactedServiceLogs(t *test
 		`exit 1; \`,
 	} {
 		if !strings.Contains(failurePath, required) {
-			t.Errorf("Temporal recovery failure diagnostics are missing %q", required)
+			t.Errorf("%s failure diagnostics are missing %q", label, required)
 		}
 	}
 	if strings.Contains(failurePath, "docker inspect") {
-		t.Error("Temporal recovery failure diagnostics must emit only redacted Compose service logs")
+		t.Errorf("%s failure diagnostics must emit only redacted Compose service logs", label)
 	}
 }
 
 func TestComposeTemporalRecoveryRefreshesRedisAddressAfterLifecycle(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), "Makefile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	const lifecycleTest = `GOCACHE="$$go_cache" LLMTW_COMPOSE_WORKER_HEALTH_ADDR="$$health_address" LLMTW_COMPOSE_WORKER_METRICS_ADDR="$$metrics_address" LLMTW_COMPOSE_REDIS_CONTAINER="$$redis_container" $(GO) test -count=1 -tags=composeliveintegration ./integration/compose`
-	const temporalRecoveryTest = `GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestLiveRedisKeyPrefixFollowsComposeNamespace|TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum|TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'`
 	const redisAddressRefresh = `redis_address="$$( $(COMPOSE) port redis 6379 )";`
-	makefile := string(data)
-	lifecycleStart := strings.Index(makefile, "if ! "+lifecycleTest)
+	makefile := readMakefile(t)
+	lifecycleStart := strings.Index(makefile, "if ! "+composeLifecycleTestCommand)
 	if lifecycleStart < 0 {
 		t.Fatal("compose live integration target is missing the Redis lifecycle wrapper")
 	}
@@ -670,7 +626,7 @@ func TestComposeTemporalRecoveryRefreshesRedisAddressAfterLifecycle(t *testing.T
 		t.Fatal("compose live integration target is missing the end of the Redis lifecycle wrapper")
 	}
 	lifecycleEnd := lifecycleStart + lifecycleEndOffset + len("\tfi; \\\n")
-	temporalStart := strings.Index(makefile, "if ! "+temporalRecoveryTest)
+	temporalStart := strings.Index(makefile, "if ! "+composeTemporalRecoveryTestCommand)
 	if temporalStart < 0 {
 		t.Fatal("compose live integration target is missing the Temporal recovery wrapper")
 	}

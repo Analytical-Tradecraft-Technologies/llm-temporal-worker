@@ -77,72 +77,17 @@ func TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum(t *testing.T) {
 // ambiguous outcome. The replacement replica must never replay that provider
 // call or reserve the shared budget a second time.
 func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
-	temporalAddress := os.Getenv("LLMTW_TEMPORAL_ADDRESS")
-	redisAddress := os.Getenv("LLMTW_REDIS_ADDR")
-	redisUsername := os.Getenv("LLMTW_REDIS_USERNAME")
-	redisPassword := os.Getenv("LLMTW_REDIS_PASSWORD")
-	redisKeyPrefix := liveRedisKeyPrefix()
-	if temporalAddress == "" || redisAddress == "" || redisUsername == "" || redisPassword == "" {
-		t.Skip("make compose-live-integration supplies the local Temporal and authenticated Redis addresses")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	workflowClient, err := client.Dial(client.Options{HostPort: temporalAddress, Namespace: "default"})
-	if err != nil {
-		t.Fatalf("dial Temporal: %v", err)
-	}
-	t.Cleanup(func() { workflowClient.Close() })
-
-	queue := fmt.Sprintf("llmtw-live-recovery-%d", time.Now().UnixNano())
-	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddress, Username: redisUsername, Password: redisPassword})
-	t.Cleanup(func() { _ = redisClient.Close() })
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		t.Fatalf("ping Compose Redis: %v", err)
-	}
-	admissionStore, err := redisstore.NewAdmissionStore(redisstore.AdmissionOptions{
-		Client:          redisClient,
-		Mode:            redisstore.AdmissionModeFunction,
-		FunctionVersion: redisstore.AdmissionFunctionVersion,
-		Keys: redisstore.KeyOptions{
-			Prefix:    redisKeyPrefix,
-			HashTag:   "admission",
-			KeySecret: liveKeySecret(queue),
-		},
-		Clock:          time.Now,
-		MaxRecordBytes: 256 << 10,
-	})
-	if err != nil {
-		t.Fatalf("create shared Redis admission store: %v", err)
-	}
+	fixture, ctx := newLiveComposeFixture(t, "llmtw-live-recovery")
+	admissionStore := fixture.admissions
 
 	adapter := newAcceptedThenStoppedAdapter()
 	results := &liveResultStore{}
 	firstEngine := newLiveRecoveryEngine(t, admissionStore, results, adapter)
 	secondEngine := newLiveRecoveryEngine(t, admissionStore, results, adapter)
-	first := newLiveRecoveryWorker(t, workflowClient, queue, "first", firstEngine)
-	firstStarted := false
-	defer func() {
-		if firstStarted {
-			first.Stop()
-		}
-	}()
-	if err := first.Start(); err != nil {
-		t.Fatalf("start first Temporal worker: %v", err)
-	}
-	firstStarted = true
+	stopFirst := fixture.startWorker(t, "first", firstEngine, "first Temporal worker")
 
 	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: liveRecoveryRequest()}
-	firstRun, err := workflowClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       fmt.Sprintf("llmtw-live-first-%d", time.Now().UnixNano()),
-		TaskQueue:                queue,
-		WorkflowRunTimeout:       30 * time.Second,
-		WorkflowTaskTimeout:      5 * time.Second,
-		WorkflowExecutionTimeout: 30 * time.Second,
-	}, liveRecoveryWorkflowName, payload)
-	if err != nil {
-		t.Fatalf("start first recovery workflow: %v", err)
-	}
+	firstRun := fixture.startWorkflow(t, ctx, "llmtw-live-first", payload, "first recovery workflow")
 	if err := adapter.WaitAccepted(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -150,20 +95,9 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 	// Start the replacement before stopping the accepted attempt. This is the
 	// rolling two-replica shape operators use during a worker restart; after
 	// Stop returns the second replica is the only eligible poller.
-	second := newLiveRecoveryWorker(t, workflowClient, queue, "second", secondEngine)
-	secondStarted := false
-	defer func() {
-		if secondStarted {
-			second.Stop()
-		}
-	}()
-	if err := second.Start(); err != nil {
-		t.Fatalf("start replacement Temporal worker: %v", err)
-	}
-	secondStarted = true
+	fixture.startWorker(t, "second", secondEngine, "replacement Temporal worker")
 
-	first.Stop()
-	firstStarted = false
+	stopFirst()
 	firstDetails := waitForAmbiguousWorkflow(t, ctx, firstRun)
 	if firstDetails.OperationID == "" {
 		t.Fatal("ambiguous Activity error did not contain an operation ID")
@@ -182,16 +116,7 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 	// A new Temporal workflow with the same request is an existing-operation
 	// replay against the replacement replica. It must receive the same safe
 	// ambiguity rather than invoke the adapter or create another reservation.
-	secondRun, err := workflowClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       fmt.Sprintf("llmtw-live-replay-%d", time.Now().UnixNano()),
-		TaskQueue:                queue,
-		WorkflowRunTimeout:       30 * time.Second,
-		WorkflowTaskTimeout:      5 * time.Second,
-		WorkflowExecutionTimeout: 30 * time.Second,
-	}, liveRecoveryWorkflowName, payload)
-	if err != nil {
-		t.Fatalf("start replay workflow: %v", err)
-	}
+	secondRun := fixture.startWorkflow(t, ctx, "llmtw-live-replay", payload, "replay workflow")
 	secondDetails := waitForAmbiguousWorkflow(t, ctx, secondRun)
 	if secondDetails.Code != string(provider.CodeAmbiguousDispatch) || secondDetails.Phase != string(provider.PhaseAdmission) || secondDetails.Dispatch != string(provider.DispatchAmbiguous) {
 		t.Fatalf("replayed ambiguous Activity details = %#v, want ambiguous admission refusal", secondDetails)
@@ -228,6 +153,42 @@ func TestTemporalRecoveryWithSharedRedis(t *testing.T) {
 // Adapter.Invoke call longer than the Activity heartbeat timeout. The Activity
 // must complete from that one call rather than timing out and retrying it.
 func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
+	fixture, ctx := newLiveComposeFixture(t, "llmtw-live-keepalive")
+
+	adapter := newDelayedSuccessfulAdapter(liveSuccessfulProviderHold)
+	results := &liveSuccessfulResultStore{}
+	value := newLiveRecoveryEngine(t, fixture.admissions, results, adapter)
+	fixture.startWorker(t, "keepalive", value, "Temporal worker")
+
+	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: liveKeepaliveRequest()}
+	run := fixture.startWorkflow(t, ctx, "llmtw-live-keepalive", payload, "keepalive workflow")
+	if err := run.Get(ctx, nil); err != nil {
+		t.Fatalf("long one-shot keepalive workflow: %v", err)
+	}
+	if calls := adapter.Calls(); calls != 1 {
+		t.Fatalf("provider calls across completed Activity = %d, want one", calls)
+	}
+	if elapsed := adapter.SuccessfulCallElapsed(); elapsed <= liveHeartbeatTimeout {
+		t.Fatalf("successful provider call ran for %s, want longer than heartbeat timeout %s", elapsed, liveHeartbeatTimeout)
+	}
+	if puts := results.Puts(); puts != 1 {
+		t.Fatalf("completed provider call wrote %d results, want one", puts)
+	}
+}
+
+// liveComposeFixture is the Compose Temporal client, a fresh task queue and
+// the shared Redis admission store that every live recovery test runs on.
+type liveComposeFixture struct {
+	workflowClient client.Client
+	queue          string
+	admissions     *redisstore.AdmissionStore
+}
+
+// newLiveComposeFixture skips unless make compose-live-integration supplied
+// the Compose addresses, then connects to them under a 45-second deadline
+// that it returns. Clients close at test cleanup.
+func newLiveComposeFixture(t *testing.T, queuePrefix string) (liveComposeFixture, context.Context) {
+	t.Helper()
 	temporalAddress := os.Getenv("LLMTW_TEMPORAL_ADDRESS")
 	redisAddress := os.Getenv("LLMTW_REDIS_ADDR")
 	redisUsername := os.Getenv("LLMTW_REDIS_USERNAME")
@@ -238,14 +199,14 @@ func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	workflowClient, err := client.Dial(client.Options{HostPort: temporalAddress, Namespace: "default"})
 	if err != nil {
 		t.Fatalf("dial Temporal: %v", err)
 	}
 	t.Cleanup(func() { workflowClient.Close() })
 
-	queue := fmt.Sprintf("llmtw-live-keepalive-%d", time.Now().UnixNano())
+	queue := fmt.Sprintf("%s-%d", queuePrefix, time.Now().UnixNano())
 	redisClient := redisclient.NewClient(&redisclient.Options{Addr: redisAddress, Username: redisUsername, Password: redisPassword})
 	t.Cleanup(func() { _ = redisClient.Close() })
 	if err := redisClient.Ping(ctx).Err(); err != nil {
@@ -266,45 +227,36 @@ func TestTemporalKeepaliveCompletesLongOneShotProviderCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create shared Redis admission store: %v", err)
 	}
+	return liveComposeFixture{workflowClient: workflowClient, queue: queue, admissions: admissionStore}, ctx
+}
 
-	adapter := newDelayedSuccessfulAdapter(liveSuccessfulProviderHold)
-	results := &liveSuccessfulResultStore{}
-	value := newLiveRecoveryEngine(t, admissionStore, results, adapter)
-	valueWorker := newLiveRecoveryWorker(t, workflowClient, queue, "keepalive", value)
-	started := false
-	defer func() {
-		if started {
-			valueWorker.Stop()
-		}
-	}()
+// startWorker starts a recovery worker on the fixture queue and returns an
+// idempotent stop, which test cleanup also runs.
+func (fixture liveComposeFixture) startWorker(t *testing.T, identity string, value *engine.Engine, description string) func() {
+	t.Helper()
+	valueWorker := newLiveRecoveryWorker(t, fixture.workflowClient, fixture.queue, identity, value)
 	if err := valueWorker.Start(); err != nil {
-		t.Fatalf("start Temporal worker: %v", err)
+		t.Fatalf("start %s: %v", description, err)
 	}
-	started = true
+	var once sync.Once
+	stop := func() { once.Do(valueWorker.Stop) }
+	t.Cleanup(stop)
+	return stop
+}
 
-	payload := activity.GenerateRequest{APIVersion: activity.APIVersion, Request: liveKeepaliveRequest()}
-	run, err := workflowClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
-		ID:                       fmt.Sprintf("llmtw-live-keepalive-%d", time.Now().UnixNano()),
-		TaskQueue:                queue,
+func (fixture liveComposeFixture) startWorkflow(t *testing.T, ctx context.Context, idPrefix string, payload activity.GenerateRequest, description string) client.WorkflowRun {
+	t.Helper()
+	run, err := fixture.workflowClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+		ID:                       fmt.Sprintf("%s-%d", idPrefix, time.Now().UnixNano()),
+		TaskQueue:                fixture.queue,
 		WorkflowRunTimeout:       30 * time.Second,
 		WorkflowTaskTimeout:      5 * time.Second,
 		WorkflowExecutionTimeout: 30 * time.Second,
 	}, liveRecoveryWorkflowName, payload)
 	if err != nil {
-		t.Fatalf("start keepalive workflow: %v", err)
+		t.Fatalf("start %s: %v", description, err)
 	}
-	if err := run.Get(ctx, nil); err != nil {
-		t.Fatalf("long one-shot keepalive workflow: %v", err)
-	}
-	if calls := adapter.Calls(); calls != 1 {
-		t.Fatalf("provider calls across completed Activity = %d, want one", calls)
-	}
-	if elapsed := adapter.SuccessfulCallElapsed(); elapsed <= liveHeartbeatTimeout {
-		t.Fatalf("successful provider call ran for %s, want longer than heartbeat timeout %s", elapsed, liveHeartbeatTimeout)
-	}
-	if puts := results.Puts(); puts != 1 {
-		t.Fatalf("completed provider call wrote %d results, want one", puts)
-	}
+	return run
 }
 
 func liveRecoveryWorkflow(ctx workflow.Context, payload activity.GenerateRequest) error {
@@ -395,23 +347,20 @@ func newLiveRecoveryEngine(t *testing.T, admissions admission.AdmissionStore, re
 }
 
 func liveRecoveryRequest() llm.Request {
-	return llm.Request{
-		OperationKey: "shared-recovery-operation",
-		Context:      llm.RequestContext{Tenant: "live-tenant"},
-		Model:        "live-recovery-model",
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.TextPart{Text: "content-free live recovery fixture"},
-		}}},
-	}
+	return liveFixtureRequest("shared-recovery-operation", "content-free live recovery fixture")
 }
 
 func liveKeepaliveRequest() llm.Request {
+	return liveFixtureRequest("shared-keepalive-operation", "content-free live keepalive fixture")
+}
+
+func liveFixtureRequest(operationKey, text string) llm.Request {
 	return llm.Request{
-		OperationKey: "shared-keepalive-operation",
+		OperationKey: operationKey,
 		Context:      llm.RequestContext{Tenant: "live-tenant"},
 		Model:        "live-recovery-model",
 		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.TextPart{Text: "content-free live keepalive fixture"},
+			llm.TextPart{Text: text},
 		}}},
 	}
 }
@@ -508,7 +457,27 @@ func liveResultRef(operationID string) state.BlobRef {
 	return state.BlobRef{Digest: digest, Size: int64(len(operationID)), Media: "application/json"}
 }
 
+// contentFreeAdapterContract is the text-only capability set and pass-through
+// compile shared by the in-process fixture adapters, which differ only in
+// how Invoke behaves.
+type contentFreeAdapterContract struct{}
+
+func (contentFreeAdapterContract) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
+	return provider.CapabilitySet{Version: "live-recovery-capabilities-v1", Features: map[provider.Feature]provider.Capability{
+		provider.FeatureText:      {State: provider.CapabilityNative},
+		provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
+	}}, nil
+}
+
+func (contentFreeAdapterContract) Compile(_ context.Context, input provider.CompileInput) (provider.Call, error) {
+	return provider.Call{
+		EndpointID: input.Query.EndpointID, Family: input.Query.Family, Model: input.Query.Model,
+		OperationKey: input.Request.OperationKey, ServiceClass: input.Query.ServiceClass, Metadata: input.Metadata,
+	}, nil
+}
+
 type acceptedThenStoppedAdapter struct {
+	contentFreeAdapterContract
 	mu       sync.Mutex
 	calls    int
 	accepted chan struct{}
@@ -519,20 +488,6 @@ func newAcceptedThenStoppedAdapter() *acceptedThenStoppedAdapter {
 }
 
 func (*acceptedThenStoppedAdapter) Name() string { return "content-free-live-recovery" }
-
-func (*acceptedThenStoppedAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
-	return provider.CapabilitySet{Version: "live-recovery-capabilities-v1", Features: map[provider.Feature]provider.Capability{
-		provider.FeatureText:      {State: provider.CapabilityNative},
-		provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
-	}}, nil
-}
-
-func (*acceptedThenStoppedAdapter) Compile(_ context.Context, input provider.CompileInput) (provider.Call, error) {
-	return provider.Call{
-		EndpointID: input.Query.EndpointID, Family: input.Query.Family, Model: input.Query.Model,
-		OperationKey: input.Request.OperationKey, ServiceClass: input.Query.ServiceClass, Metadata: input.Metadata,
-	}, nil
-}
 
 func (adapter *acceptedThenStoppedAdapter) Invoke(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.Result, error) {
 	if err := observer.BeforePossibleWrite(ctx); err != nil {
@@ -570,6 +525,7 @@ func (adapter *acceptedThenStoppedAdapter) Calls() int {
 }
 
 type delayedSuccessfulAdapter struct {
+	contentFreeAdapterContract
 	mu      sync.Mutex
 	delay   time.Duration
 	calls   int
@@ -581,20 +537,6 @@ func newDelayedSuccessfulAdapter(delay time.Duration) *delayedSuccessfulAdapter 
 }
 
 func (*delayedSuccessfulAdapter) Name() string { return "content-free-live-keepalive" }
-
-func (*delayedSuccessfulAdapter) Capabilities(context.Context, provider.CapabilityQuery) (provider.CapabilitySet, error) {
-	return provider.CapabilitySet{Version: "live-recovery-capabilities-v1", Features: map[provider.Feature]provider.Capability{
-		provider.FeatureText:      {State: provider.CapabilityNative},
-		provider.FeatureStreaming: {State: provider.CapabilityUnsupported},
-	}}, nil
-}
-
-func (*delayedSuccessfulAdapter) Compile(_ context.Context, input provider.CompileInput) (provider.Call, error) {
-	return provider.Call{
-		EndpointID: input.Query.EndpointID, Family: input.Query.Family, Model: input.Query.Model,
-		OperationKey: input.Request.OperationKey, ServiceClass: input.Query.ServiceClass, Metadata: input.Metadata,
-	}, nil
-}
 
 func (adapter *delayedSuccessfulAdapter) Invoke(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.Result, error) {
 	if err := observer.BeforePossibleWrite(ctx); err != nil {
