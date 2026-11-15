@@ -54,13 +54,7 @@ func TestRuntimeReloadFileRejectsProcessLifetimeReplacementAndRecordsBoundedFail
 	oldVersion := old.Config.ConfigVersion()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	const replacementQueue = "llm-inference-restart-required"
-	replacement := strings.Replace(string(data), "task_queue: llm-inference", "task_queue: "+replacementQueue, 1)
-	if replacement == string(data) {
-		t.Fatal("test replacement did not change the task queue")
-	}
-	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeReplacedConfig(t, path, data, "task_queue: llm-inference", "task_queue: "+replacementQueue)
 
 	err := runtime.ReloadFile(context.Background(), path)
 	if err == nil || err.Error() != "reload configuration failed" {
@@ -91,10 +85,7 @@ func TestRuntimeReloadFileCountsPublishedDrainCancellationAsSuccess(t *testing.T
 	defer lease.Release()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	replacement := strings.Replace(string(data), "provider_timeout: 120s", "provider_timeout: 121s", 1)
-	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeReplacedConfig(t, path, data, "provider_timeout: 120s", "provider_timeout: 121s")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -148,10 +139,7 @@ func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 	go func() { done <- runtime.RunWithReload(ctx, path, reloads) }()
 	waitForReloadRuntimeStart(t, runtime, done)
 	oldVersion := runtime.App.Current().Config.ConfigVersion()
-	replacement := strings.Replace(string(data), "provider_timeout: 120s", "provider_timeout: 121s", 1)
-	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeReplacedConfig(t, path, data, "provider_timeout: 120s", "provider_timeout: 121s")
 	signals <- syscall.SIGHUP
 	waitForRuntime(t, func() bool {
 		current := runtime.App.Current()
@@ -167,14 +155,7 @@ func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 		t.Fatalf("reload success metric = %v, want 1", got)
 	}
 	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("RunWithReload returned %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunWithReload did not shut down")
-	}
+	requireCleanReturn(t, done, "RunWithReload")
 }
 
 func TestRuntimeRunCancellationInterruptsPublishedReloadDrain(t *testing.T) {
@@ -182,13 +163,7 @@ func TestRuntimeRunCancellationInterruptsPublishedReloadDrain(t *testing.T) {
 	var closed atomic.Bool
 	data := runtimeConfig(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	replacement := strings.Replace(string(data), "provider_timeout: 120s", "provider_timeout: 121s", 1)
-	if replacement == string(data) {
-		t.Fatal("test replacement did not change the provider timeout")
-	}
-	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeReplacedConfig(t, path, data, "provider_timeout: 120s", "provider_timeout: 121s")
 	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
 	if err != nil {
 		t.Fatal(err)
@@ -379,13 +354,7 @@ func TestRuntimeReloadFileLabelsIdentifiersIntroducedByTheReload(t *testing.T) {
 	data := runtimeConfig(t)
 	runtime := newTestRuntime(t, context.Background(), data, options)
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	replacement := strings.Replace(string(data), "model: gpt-example-2026-07-01", "model: gpt-replacement-2026-09-20", 1)
-	if replacement == string(data) {
-		t.Fatal("example route model not found")
-	}
-	if err := os.WriteFile(path, []byte(replacement), 0600); err != nil {
-		t.Fatal(err)
-	}
+	writeReplacedConfig(t, path, data, "model: gpt-example-2026-07-01", "model: gpt-replacement-2026-09-20")
 	// Hold the old snapshot so the reload publishes and then blocks draining:
 	// requests can already run on the replacement during that interval.
 	old := runtime.App.Current()
@@ -420,5 +389,17 @@ func TestRuntimeReloadFileLabelsIdentifiersIntroducedByTheReload(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("model introduced by reload was not labelled after the reload")
+	}
+}
+
+// writeReplacedConfig writes data to path with the first occurrence of old
+// replaced by replacement, failing the test if data does not contain old.
+func writeReplacedConfig(t *testing.T, path string, data []byte, old, replacement string) {
+	t.Helper()
+	if !bytes.Contains(data, []byte(old)) {
+		t.Fatalf("test configuration does not contain %q", old)
+	}
+	if err := os.WriteFile(path, bytes.Replace(data, []byte(old), []byte(replacement), 1), 0600); err != nil {
+		t.Fatal(err)
 	}
 }

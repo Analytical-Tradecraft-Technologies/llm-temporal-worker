@@ -290,19 +290,7 @@ func TestCloudExecutionRuntimeExpiredClaimRenewsAttempt(t *testing.T) {
 	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
 		t.Fatalf("expired claim = %+v, %v", saved.Execution, err)
 	}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
-		t.Fatalf("expired attempt not renewed: %+v, %v", next, err)
-	}
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	if f.submits.Load() != 1 {
-		t.Fatal("renewed attempt not submitted once", f.submits.Load())
-	}
+	f.requireRenewedAttemptCompletes(t, ctx, ref, scope, first)
 }
 
 // A worker that dies after the pre-HTTP marker leaves its attempt submitting.
@@ -313,12 +301,7 @@ func TestCloudReloadSettlesCrashedSubmissionOnChangedEndpoint(t *testing.T) {
 	for _, step := range []string{"generate", "poll"} {
 		t.Run(step, func(t *testing.T) {
 			f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
-			f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-				if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
-					return provider.Result{}, err
-				}
-				panic("worker crashed mid-dispatch")
-			}
+			crashMidDispatch(f)
 			ctx := context.Background()
 			ref := crashAfterPossibleWrite(t, f)
 			f.now = f.now.Add(16 * time.Minute)
@@ -394,12 +377,7 @@ func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T
 // settled as unknown here.
 func TestCloudReloadWaitsForCrashedSubmissionOnUnservedEndpoint(t *testing.T) {
 	f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
-	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
-			return provider.Result{}, err
-		}
-		panic("worker crashed mid-dispatch")
-	}
+	crashMidDispatch(f)
 	ctx := context.Background()
 	ref := crashAfterPossibleWrite(t, f)
 	f.cap.Adapters = engine.AdapterMap{"other-endpoint": f.adapter.executionSyncAdapter}
@@ -416,6 +394,17 @@ func TestCloudReloadWaitsForCrashedSubmissionOnUnservedEndpoint(t *testing.T) {
 // crashAfterPossibleWrite admits the fixture's request and runs its
 // submission into an adapter that crashes after the pre-HTTP marker. It then
 // rolls out a configuration that changes the bound endpoint.
+// crashMidDispatch makes the fixture's provider count a submission,
+// cross the possible-write boundary and then panic like a crashed worker.
+func crashMidDispatch(f *boundedCloudFixture) {
+	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
+		if err := countedPossibleWrite(ctx, &f.submits, o); err != nil {
+			return provider.Result{}, err
+		}
+		panic("worker crashed mid-dispatch")
+	}
+}
+
 func crashAfterPossibleWrite(t *testing.T, f *boundedCloudFixture) llm.ExecutionReferenceV1 {
 	t.Helper()
 	ctx := context.Background()

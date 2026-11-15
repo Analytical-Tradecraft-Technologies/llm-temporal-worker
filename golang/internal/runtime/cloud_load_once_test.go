@@ -27,6 +27,27 @@ func loadOnceChild(t *testing.T, f *boundedCloudFixture, key string) (llm.Genera
 	return child, boundedState(t, v, err, llm.ExecutionBudgetRequired)
 }
 
+// parentSnapshotBlob returns the blob key of the parent snapshot that the
+// request record of child, prepared as v, references.
+func parentSnapshotBlob(t *testing.T, f *boundedCloudFixture, child llm.GenerateRequestV1, v llm.ExecutionResultV1) blob.BlobKey {
+	t.Helper()
+	record, err := f.repository.Read(context.Background(), cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var progress struct {
+		Preparation struct {
+			Ref struct {
+				Blob string `json:"blob"`
+			} `json:"parent_snapshot_ref"`
+		} `json:"request_preparation"`
+	}
+	if json.Unmarshal(record.Progress, &progress) != nil || progress.Preparation.Ref.Blob == "" {
+		t.Fatalf("no parent reference in %s", record.Progress)
+	}
+	return blob.BlobKey(progress.Preparation.Ref.Blob)
+}
+
 // TestCloudPreparedInputMatchesPreparation proves the input a step prepares
 // once (#1112) is what preparing it again returns: every copy equals a fresh
 // PrepareGenerateInput, copies are independent, and a different manifest or
@@ -92,9 +113,9 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 // attempt-result check.
 func TestCloudExecutionRuntimeReadsParentOncePerStep(t *testing.T) {
 	f := boundedCloud(t, false, withParentSnapshotBlob)
-	parent := f.finish(t)
-	handle := parent.Generate.Checkpoint.Handle
-	child := llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+	// The key is known once the preparation exists; prepare writes the blob,
+	// reads it back and reads the durable winner.
+	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
 	var parentKey blob.BlobKey
 	opens := 0
@@ -114,25 +135,7 @@ func TestCloudExecutionRuntimeReadsParentOncePerStep(t *testing.T) {
 		}
 		return v
 	}
-	// The key is known once the preparation exists; prepare writes the blob,
-	// reads it back and reads the durable winner.
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	record, err := f.repository.Read(ctx, cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var progress struct {
-		Preparation struct {
-			Ref struct {
-				Blob string `json:"blob"`
-			} `json:"parent_snapshot_ref"`
-		} `json:"request_preparation"`
-	}
-	if json.Unmarshal(record.Progress, &progress) != nil || progress.Preparation.Ref.Blob == "" {
-		t.Fatalf("no parent reference in %s", record.Progress)
-	}
-	parentKey = blob.BlobKey(progress.Preparation.Ref.Blob)
+	parentKey = parentSnapshotBlob(t, f, child, v)
 	f.now = f.now.Add(time.Second)
 	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
 	step("acquire", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) }, llm.ExecutionAcquired)
@@ -149,27 +152,14 @@ func TestCloudExecutionRuntimeTurnStillRejectsCorruptParent(t *testing.T) {
 	f := boundedCloud(t, false, withParentSnapshotBlob)
 	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
-	record, err := f.repository.Read(ctx, cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var progress struct {
-		Preparation struct {
-			Ref struct {
-				Blob string `json:"blob"`
-			} `json:"parent_snapshot_ref"`
-		} `json:"request_preparation"`
-	}
-	if json.Unmarshal(record.Progress, &progress) != nil || progress.Preparation.Ref.Blob == "" {
-		t.Fatal("no parent reference")
-	}
+	parentKey := parentSnapshotBlob(t, f, child, v)
 	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionAcquired)
 	v, err = f.runtime.GenerateStepV1(ctx, child)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	f.blobs.mu.Lock()
-	f.blobs.values[blob.BlobKey(progress.Preparation.Ref.Blob)][20] ^= 1
+	f.blobs.values[parentKey][20] ^= 1
 	f.blobs.mu.Unlock()
 	if v, err := f.runtime.CompleteExecutionV1(ctx, ref); err == nil {
 		t.Fatalf("completed over a corrupt parent: %+v", v)

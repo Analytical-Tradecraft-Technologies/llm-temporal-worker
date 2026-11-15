@@ -206,6 +206,23 @@ func TestBudgetCapabilityBelongsToSnapshot(t *testing.T) {
 	}
 }
 
+// requireSnapshotCapabilities checks that set returns a complete capability
+// bundle for the snapshot version with the given clock.
+func requireSnapshotCapabilities(t *testing.T, set *productionClientSet, version string, clock func() time.Time) {
+	t.Helper()
+	got := set.V1RuntimeCapabilities()
+	if got.Snapshot == nil || got.Planner == nil || got.Adapters == nil || got.Clock == nil {
+		t.Fatalf("%s snapshot capability bundle is incomplete: %#v", version, got)
+	}
+	snapshot, err := got.Snapshot.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Version != version || got.Clock() != clock().UTC() {
+		t.Fatalf("%s snapshot capabilities = %#v, snapshot=%#v", version, got, snapshot)
+	}
+}
+
 func TestProductionClientSetReturnsSnapshotOwnedV1CapabilitiesWithoutFallback(t *testing.T) {
 	firstClock := nowFunc(time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC))
 	secondClock := nowFunc(time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC))
@@ -224,28 +241,8 @@ func TestProductionClientSetReturnsSnapshotOwnedV1CapabilitiesWithoutFallback(t 
 	firstSet := &productionClientSet{v1Capabilities: first}
 	secondSet := &productionClientSet{v1Capabilities: second, v1Runtime: testV1Runtime{}}
 
-	gotFirst := firstSet.V1RuntimeCapabilities()
-	if gotFirst.Snapshot == nil || gotFirst.Planner == nil || gotFirst.Adapters == nil || gotFirst.Clock == nil {
-		t.Fatalf("first snapshot capability bundle is incomplete: %#v", gotFirst)
-	}
-	firstSnapshot, err := gotFirst.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if firstSnapshot.Version != "first" || gotFirst.Clock() != firstClock().UTC() {
-		t.Fatalf("first snapshot capabilities = %#v, snapshot=%#v", gotFirst, firstSnapshot)
-	}
-	gotSecond := secondSet.V1RuntimeCapabilities()
-	if gotSecond.Snapshot == nil || gotSecond.Planner == nil || gotSecond.Adapters == nil || gotSecond.Clock == nil {
-		t.Fatalf("second snapshot capability bundle is incomplete: %#v", gotSecond)
-	}
-	secondSnapshot, err := gotSecond.Snapshot.Current(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if secondSnapshot.Version != "second" || gotSecond.Clock() != secondClock().UTC() {
-		t.Fatalf("second snapshot capabilities = %#v, snapshot=%#v", gotSecond, secondSnapshot)
-	}
+	requireSnapshotCapabilities(t, firstSet, "first", firstClock)
+	requireSnapshotCapabilities(t, secondSet, "second", secondClock)
 
 	// A client set with only the legacy v1 runtime must not synthesize a
 	// capability bundle from that process-level value.

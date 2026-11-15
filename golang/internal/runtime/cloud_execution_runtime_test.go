@@ -1205,12 +1205,8 @@ func TestEndpointAccountDigestIgnoresNonAccountSettings(t *testing.T) {
 // gives exactly what validating and decoding it again gives.
 func TestCloudRequestPreparationReusesValidatedParent(t *testing.T) {
 	f := boundedCloud(t, false, withParentSnapshotBlob)
-	parent := f.finish(t)
-	handle := parent.Generate.Checkpoint.Handle
-	child := llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
 	scope, id := cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID)
 	record, err := f.repository.Read(ctx, scope, id)
 	if err != nil {
@@ -1258,12 +1254,8 @@ func TestCloudExecutionRuntimeTurnParentSnapshotStorage(t *testing.T) {
 				options = append(options, withParentSnapshotBlob)
 			}
 			f := boundedCloud(t, false, options...)
-			parent := f.finish(t)
-			handle := parent.Generate.Checkpoint.Handle
-			child := llm.GenerateRequestV1{OperationKey: "child", Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+			child, v := loadOnceChild(t, f, "child")
 			ctx := context.Background()
-			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &child})
-			boundedState(t, v, err, llm.ExecutionBudgetRequired)
 			record, err := f.repository.Read(ctx, cloudstate.Scope{Tenant: child.Context.Tenant, Project: child.Context.Project}, cloudstate.RequestID(v.RequestID))
 			if err != nil {
 				t.Fatal(err)

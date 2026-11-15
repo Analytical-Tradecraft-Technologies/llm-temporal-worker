@@ -74,17 +74,7 @@ func TestSnapshotV1RuntimeUsesTheCurrentSnapshotAndHoldsItsLease(t *testing.T) {
 
 func TestSnapshotV1RuntimeDoesNotUseFallbackWhenSourceIsUnconfigured(t *testing.T) {
 	fallback := &recordingV1Runtime{}
-	application, err := app.New(context.Background(), app.Options{
-		InitialConfig: runtimeConfig(t),
-		Builder:       app.SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-			return &snapshotClients{v1Runtime: nil}, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("app.New() error = %v", err)
-	}
-	defer application.Close(context.Background())
+	application := newStaticClientsApp(t, &snapshotClients{v1Runtime: nil})
 	runtime := &snapshotV1Runtime{application: application, fallback: fallback}
 	if _, err := runtime.GenerateV1(context.Background(), llm.GenerateRequestV1{}); err == nil {
 		t.Fatal("unconfigured snapshot unexpectedly used fallback runtime")
@@ -96,17 +86,7 @@ func TestSnapshotV1RuntimeDoesNotUseFallbackWhenSourceIsUnconfigured(t *testing.
 
 func TestSnapshotV1RuntimeUsesFallbackForLegacyClientSet(t *testing.T) {
 	fallback := &recordingV1Runtime{}
-	application, err := app.New(context.Background(), app.Options{
-		InitialConfig: runtimeConfig(t),
-		Builder:       app.SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-			return app.ClientSetFunc(func(context.Context) error { return nil }), nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("app.New() error = %v", err)
-	}
-	defer application.Close(context.Background())
+	application := newStaticClientsApp(t, app.ClientSetFunc(func(context.Context) error { return nil }))
 	runtime := &snapshotV1Runtime{application: application, fallback: fallback}
 	if _, err := runtime.GenerateV1(context.Background(), llm.GenerateRequestV1{}); err != nil {
 		t.Fatalf("fallback GenerateV1() error = %v", err)
@@ -118,17 +98,7 @@ func TestSnapshotV1RuntimeUsesFallbackForLegacyClientSet(t *testing.T) {
 
 func TestSnapshotQueryServiceFallsBackToSnapshotV1Runtime(t *testing.T) {
 	v1Runtime := &recordingV1Runtime{}
-	application, err := app.New(context.Background(), app.Options{
-		InitialConfig: runtimeConfig(t),
-		Builder:       app.SnapshotBuilder{},
-		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
-			return &snapshotClients{v1Runtime: v1Runtime}, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("app.New() error = %v", err)
-	}
-	defer application.Close(context.Background())
+	application := newStaticClientsApp(t, &snapshotClients{v1Runtime: v1Runtime})
 	service := &snapshotQueryService{application: application}
 	if _, err := service.Execute(context.Background(), llm.QueryRequestV1{}); err != nil {
 		t.Fatalf("snapshot query fallback error = %v", err)
@@ -136,4 +106,22 @@ func TestSnapshotQueryServiceFallsBackToSnapshotV1Runtime(t *testing.T) {
 	if v1Runtime.queryCalls.Load() != 1 {
 		t.Fatalf("v1 QueryV1 calls = %d, want 1", v1Runtime.queryCalls.Load())
 	}
+}
+
+// newStaticClientsApp builds an application from runtimeConfig whose every
+// snapshot uses clients. The application closes when the test ends.
+func newStaticClientsApp(t *testing.T, clients app.ClientSet) *app.App {
+	t.Helper()
+	application, err := app.New(context.Background(), app.Options{
+		InitialConfig: runtimeConfig(t),
+		Builder:       app.SnapshotBuilder{},
+		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
+			return clients, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("app.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+	return application
 }

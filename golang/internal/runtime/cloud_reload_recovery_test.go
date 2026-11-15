@@ -126,22 +126,30 @@ func TestCloudReloadPollsPendingPaidWorkOnlyOnUnchangedEndpoint(t *testing.T) {
 	}
 }
 
-func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpointChanged bool) {
-	ctx := context.Background()
-	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, unchanged) })
+// pendingUnderNewConfig submits the fixture's Generate request until it is a
+// pending paid job, then changes the configuration digest (not yet loaded by
+// a restart). It returns the job's reference and the planning source.
+func pendingUnderNewConfig(t *testing.T, ctx context.Context, f *boundedCloudFixture) (llm.ExecutionReferenceV1, *planningSource) {
+	t.Helper()
 	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionPending)
-	ref := f.ref(v)
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
+	return f.ref(v), source
+}
+
+func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpointChanged bool) {
+	ctx := context.Background()
+	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, unchanged) })
+	ref, source := pendingUnderNewConfig(t, ctx, f)
 	if endpointChanged {
 		bindReloadEndpoints(source, changed)
 	}
 	f.restart(t)
 	f.now = f.now.Add(2 * time.Second)
 	if endpointChanged {
-		_, err = f.runtime.PollExecutionV1(ctx, ref)
+		_, err := f.runtime.PollExecutionV1(ctx, ref)
 		assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 		var mapped *temporal.ApplicationError
 		if !errors.As(activity.ToTemporalError(err), &mapped) || mapped.NonRetryable() {
@@ -154,7 +162,7 @@ func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpo
 		bindReloadEndpoints(source, unchanged)
 		f.restart(t)
 	}
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	v, err := f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)
@@ -170,12 +178,7 @@ func reloadPollsPendingPaidWork(t *testing.T, unchanged, changed [32]byte, endpo
 func TestCloudReloadWaitsWhenBoundRouteIsRemoved(t *testing.T) {
 	ctx := context.Background()
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, [32]byte{31}) })
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := f.ref(v)
-	f.cap.ConfigDigest[0]++
-	source := f.cap.Snapshot.(*planningSource)
-	source.value.ConfigDigest = f.cap.ConfigDigest
+	ref, source := pendingUnderNewConfig(t, ctx, f)
 	for _, model := range source.value.Routes.Models {
 		for index := range model.Routes {
 			model.Routes[index].ID += "-renamed"
@@ -183,7 +186,7 @@ func TestCloudReloadWaitsWhenBoundRouteIsRemoved(t *testing.T) {
 	}
 	f.restart(t)
 	f.now = f.now.Add(2 * time.Second)
-	_, err = f.runtime.PollExecutionV1(ctx, ref)
+	_, err := f.runtime.PollExecutionV1(ctx, ref)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 	if f.submits.Load() != 1 || f.polls.Load() != 0 {
 		t.Fatal("reload dispatched on a changed route")
@@ -214,12 +217,7 @@ func TestCloudReloadPollsPendingPaidWorkRecordedWithLegacyEndpointDigest(t *test
 	ctx := context.Background()
 	legacy, recovery := [32]byte{41}, [32]byte{42}
 	f := boundedCloud(t, true, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, legacy) })
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
-	ref := f.ref(v)
-	f.cap.ConfigDigest[0]++
-	source := f.cap.Snapshot.(*planningSource)
-	source.value.ConfigDigest = f.cap.ConfigDigest
+	ref, source := pendingUnderNewConfig(t, ctx, f)
 	for _, model := range source.value.Routes.Models {
 		for index := range model.Routes {
 			model.Routes[index].EndpointDigest, model.Routes[index].LegacyEndpointDigest = recovery, legacy
@@ -227,7 +225,7 @@ func TestCloudReloadPollsPendingPaidWorkRecordedWithLegacyEndpointDigest(t *test
 	}
 	f.restart(t)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
+	v, err := f.runtime.PollExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
 	boundedState(t, v, err, llm.ExecutionCompleted)

@@ -33,13 +33,9 @@ func TestCloudExecutionRuntimeRenewsAttemptBeforeLeaseExpiry(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	ctx := context.Background()
 	v := f.prepareGenerate(t, ctx)
-	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, scope, first := f.firstAttempt(t, ctx, v)
 	f.now = first.CreatedAt.Add(cache.MaxFillLease - cloudstate.UnusedAttemptRenewMargin)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
+	v, err := f.runtime.GenerateStepV1(ctx, f.request)
 	boundedState(t, v, err, llm.ExecutionProviderCompleted)
 	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
@@ -102,33 +98,16 @@ func checkUnclaimedFillStartRenews(t *testing.T, f *boundedCloudFixture, fills c
 	if !v.Retryable || v.Dispatch != string(provider.DispatchNotDispatched) || v.RetryAfterSeconds != 0 || f.submits.Load() != 0 {
 		t.Fatalf("expired fill start result = %+v submits=%d", v, f.submits.Load())
 	}
-	scope := cloudstate.Scope{Tenant: f.request.Context.Tenant, Project: f.request.Context.Project}
-	first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, scope, first := f.firstAttempt(t, ctx, v)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || saved.Plan.RequiresReservation() == unreserved || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
 		t.Fatalf("expired fill start = %+v, %v", saved.Execution, err)
 	}
 	f.cap.ResponseFills = fills
 	f.restart(t)
-	ref := f.ref(v)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
-		t.Fatalf("expired attempt not renewed: %+v, %v", next, err)
-	}
 	// The renewed attempt owns the fill at once; it never waits on a fill
 	// left started by the expired one.
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	if f.submits.Load() != 1 {
-		t.Fatal("renewed attempt not submitted once", f.submits.Load())
-	}
+	f.requireRenewedAttemptCompletes(t, ctx, f.ref(v), scope, first)
 }
 
 // Sweep cached steps that start shortly before the lease expires, with

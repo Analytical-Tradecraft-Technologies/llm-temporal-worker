@@ -69,14 +69,7 @@ func TestProductionFactoryBuildsBedrockAdaptersWithAWSRegion(t *testing.T) {
 					return aws.Config{Region: region}, nil
 				},
 			}}
-			endpointID := test.endpointID
-			value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
-				Family: test.family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
-				Region: test.wantRegion, Auth: config.AuthConfig{Kind: "aws_default_chain"},
-			}}}
-			snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
-
-			adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
+			adapter, err := buildBedrockAdapter(factory, test.family, test.endpointID, test.wantRegion, config.AuthConfig{Kind: "aws_default_chain"}, nil)
 			if err != nil {
 				t.Fatalf("buildAdapter() error = %v", err)
 			}
@@ -109,14 +102,7 @@ func TestProductionFactoryRejectsNonDefaultBedrockAuthBeforeDependencies(t *test
 					return aws.Config{Region: "us-east-1"}, nil
 				},
 			}}
-			endpointID := "bedrock"
-			value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
-				Family: family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
-				Region: "us-east-1", Auth: config.AuthConfig{Kind: "bearer_env", Name: "BEDROCK_KEY"},
-			}}}
-			snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
-
-			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
+			_, err := buildBedrockAdapter(factory, family, "bedrock", "us-east-1", config.AuthConfig{Kind: "bearer_env", Name: "BEDROCK_KEY"}, nil)
 			if !errors.Is(err, ErrUnsupportedProviderAuth) {
 				t.Fatalf("buildAdapter() error = %v, want ErrUnsupportedProviderAuth", err)
 			}
@@ -177,21 +163,31 @@ func buildGeneratedBedrockAdapter(t *testing.T, family, endpointID, region strin
 			return aws.Config{Region: gotRegion}, nil
 		},
 	}}
-	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
-		Family: family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
-		Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
-		ServiceClasses: map[llm.ServiceClass]config.TierConfig{
-			llm.ServiceClassEconomy:  {ProviderValue: "flex"},
-			llm.ServiceClassStandard: {ProviderValue: "default"},
-			llm.ServiceClassPriority: {ProviderValue: "priority"},
-		},
-	}}}
-	snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
-	adapter, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
+	adapter, err := buildBedrockAdapter(factory, family, endpointID, region, config.AuthConfig{Kind: "aws_default_chain"}, bedrockTestTiers)
 	if err != nil {
 		t.Fatalf("buildAdapter() error = %v", err)
 	}
-	return adapter, value.Endpoints[endpointID].BaseURL, awsConfigCalled
+	return adapter, bedrockTestBaseURL, awsConfigCalled
+}
+
+const bedrockTestBaseURL = "https://bedrock-runtime.example.test"
+
+// bedrockTestTiers maps every service class to a Bedrock service tier.
+var bedrockTestTiers = map[llm.ServiceClass]config.TierConfig{
+	llm.ServiceClassEconomy:  {ProviderValue: "flex"},
+	llm.ServiceClassStandard: {ProviderValue: "default"},
+	llm.ServiceClassPriority: {ProviderValue: "priority"},
+}
+
+// buildBedrockAdapter builds factory's adapter for one Bedrock endpoint
+// endpointID of family at bedrockTestBaseURL in region, with auth and tiers,
+// serving a single "model" route.
+func buildBedrockAdapter(factory *ProductionEngineFactory, family, endpointID, region string, auth config.AuthConfig, tiers map[llm.ServiceClass]config.TierConfig) (provider.Adapter, error) {
+	value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
+		Family: family, BaseURL: bedrockTestBaseURL, OutboundHosts: []string{"bedrock-runtime.example.test"},
+		Region: region, Auth: auth, ServiceClasses: tiers,
+	}}}
+	return factory.buildAdapter(context.Background(), value, singleRouteSnapshot("model", endpointID, "bedrock/v1"), endpointID, nil)
 }
 
 func TestProductionFactoryFailsClosedWhenBedrockAWSConfigFactoryFails(t *testing.T) {
@@ -207,18 +203,7 @@ func TestProductionFactoryFailsClosedWhenBedrockAWSConfigFactoryFails(t *testing
 					return aws.Config{}, wantErr
 				},
 			}}
-			endpointID := "bedrock"
-			value := config.Config{Endpoints: map[string]config.EndpointConfig{endpointID: {
-				Family: family, BaseURL: "https://bedrock-runtime.example.test", OutboundHosts: []string{"bedrock-runtime.example.test"},
-				Region: region, Auth: config.AuthConfig{Kind: "aws_default_chain"},
-				ServiceClasses: map[llm.ServiceClass]config.TierConfig{
-					llm.ServiceClassEconomy:  {ProviderValue: "flex"},
-					llm.ServiceClassStandard: {ProviderValue: "default"},
-					llm.ServiceClassPriority: {ProviderValue: "priority"},
-				},
-			}}}
-			snapshot := singleRouteSnapshot("model", endpointID, "bedrock/v1")
-			_, err := factory.buildAdapter(context.Background(), value, snapshot, endpointID, nil)
+			_, err := buildBedrockAdapter(factory, family, "bedrock", region, config.AuthConfig{Kind: "aws_default_chain"}, bedrockTestTiers)
 			if !errors.Is(err, wantErr) {
 				t.Fatalf("buildAdapter() error = %v, want AWS config error", err)
 			}

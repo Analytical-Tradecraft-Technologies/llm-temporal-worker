@@ -65,26 +65,10 @@ func TestCloudExecutionLogsProviderAttemptFailure(t *testing.T) {
 		failure.Cause = fmt.Errorf("upstream said: secret prompt text")
 		return provider.Result{}, failure
 	})
-	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	v, logged, output := generateLoggingAttemptFailure(t, f)
 	// The upstream status is saved with the failure and reported in the result.
 	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Failure == nil || execution.Failure.ProviderStatus != 502 || v.ProviderStatus != 502 {
 		t.Fatalf("saved failure=%+v result status=%d", execution.Failure, v.ProviderStatus)
-	}
-	var logged map[string]any
-	for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
-		var entry map[string]any
-		if json.Unmarshal(line, &entry) == nil && entry["msg"] == "provider attempt failed" {
-			logged = entry
-		}
-	}
-	if logged == nil {
-		t.Fatalf("no provider attempt log in %s", output.String())
 	}
 	for key, want := range map[string]string{"level": "WARN", "error_code": "provider_unavailable", "phase": "lift", "dispatch": "accepted", "status": "502", "outcome": string(cloudstate.ExecutionFailed)} {
 		if logged[key] != want {
@@ -143,23 +127,7 @@ func TestCloudExecutionLogsLiftCause(t *testing.T) {
 				failure.SafeDetails = test.details
 				return provider.Result{}, failure
 			})
-			var output bytes.Buffer
-			logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-			if err != nil {
-				t.Fatal(err)
-			}
-			v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			var logged map[string]any
-			for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
-				var entry map[string]any
-				if json.Unmarshal(line, &entry) == nil && entry["msg"] == "provider attempt failed" {
-					logged = entry
-				}
-			}
-			if logged == nil {
-				t.Fatalf("no provider attempt log in %s", output.String())
-			}
+			_, logged, _ := generateLoggingAttemptFailure(t, f)
 			if cause, _ := logged["cause"].(string); cause != test.cause {
 				t.Fatalf("cause = %q, want %q (entry %v)", cause, test.cause, logged)
 			}
@@ -168,4 +136,29 @@ func TestCloudExecutionLogsLiftCause(t *testing.T) {
 			}
 		})
 	}
+}
+
+// generateLoggingAttemptFailure runs the fixture's Generate step with a JSON
+// logger, expecting it to fail, and returns the result, the last "provider
+// attempt failed" log entry and the whole log.
+func generateLoggingAttemptFailure(t *testing.T, f *boundedCloudFixture) (llm.ExecutionResultV1, map[string]any, *bytes.Buffer) {
+	t.Helper()
+	var output bytes.Buffer
+	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.runtime.GenerateStepV1(observability.WithLogger(context.Background(), logger), f.request)
+	boundedState(t, v, err, llm.ExecutionFailed)
+	var logged map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
+		var entry map[string]any
+		if json.Unmarshal(line, &entry) == nil && entry["msg"] == "provider attempt failed" {
+			logged = entry
+		}
+	}
+	if logged == nil {
+		t.Fatalf("no provider attempt log in %s", output.String())
+	}
+	return v, logged, &output
 }
