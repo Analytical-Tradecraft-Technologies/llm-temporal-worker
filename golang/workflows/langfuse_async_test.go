@@ -17,7 +17,6 @@ import (
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -26,7 +25,7 @@ import (
 // The export runs in its own abandoned workflow, carrying the request's
 // reference, so the request workflow does not wait for Langfuse (#1351).
 func TestLangfuseExportRunsInAbandonedChild(t *testing.T) {
-	f := workflowTest(t, "generate", workflowStep{name: activity.PrepareActivityName, state: llm.ExecutionCompleted})
+	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionCompleted))
 	var children []string
 	f.env.SetOnChildWorkflowStartedListener(func(info *workflow.Info, _ workflow.Context, args converter.EncodedValues) {
 		var ref llm.ExecutionReferenceV1
@@ -46,7 +45,7 @@ func TestLangfuseExportRunsInAbandonedChild(t *testing.T) {
 // A history that scheduled the export Activity before the export moved to a
 // child keeps running it inline.
 func TestLangfuseInlineExportHistoryKeepsActivity(t *testing.T) {
-	f := workflowTest(t, "generate", workflowStep{name: activity.PrepareActivityName, state: llm.ExecutionCompleted})
+	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionCompleted))
 	f.env.OnGetVersion(asyncExportChange, workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
 	f.env.SetOnChildWorkflowStartedListener(func(info *workflow.Info, _ workflow.Context, _ converter.EncodedValues) {
 		t.Errorf("started child %s", info.WorkflowType.Name)
@@ -62,8 +61,7 @@ func TestLangfuseInlineExportHistoryKeepsActivity(t *testing.T) {
 // The export workflow reports a failed export as an unsuccessful result
 // rather than a failed workflow, after the bounded attempts.
 func TestLangfuseExportWorkflowSwallowsFailure(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
+	env := newWorkflowEnv()
 	RegisterInternal(env, activity.PayloadLimits{})
 	calls := 0
 	env.RegisterActivityWithOptions(func(context.Context, llm.ExecutionReferenceV1) error {
@@ -71,7 +69,7 @@ func TestLangfuseExportWorkflowSwallowsFailure(t *testing.T) {
 		return errors.New("sink unavailable")
 	}, sdkactivity.RegisterOptions{Name: activity.ExportLangfuseActivityName})
 	f := workflowTest(t, "generate")
-	env.ExecuteWorkflow(LangfuseExportWorkflowName, llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability})
+	env.ExecuteWorkflow(LangfuseExportWorkflowName, f.reference())
 	var exported bool
 	if err := env.GetWorkflowResult(&exported); err != nil || exported || calls != 10 {
 		t.Fatalf("exported = %t, err = %v, calls = %d", exported, err, calls)
@@ -88,8 +86,7 @@ func TestLangfuseExportWorkflowRetriesSaturation(t *testing.T) {
 		want    bool
 	}{{"current", 1, 6, true}, {"before retry change", workflow.DefaultVersion, 3, false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			var suite testsuite.WorkflowTestSuite
-			env := suite.NewTestWorkflowEnvironment()
+			env := newWorkflowEnv()
 			RegisterInternal(env, activity.PayloadLimits{})
 			env.OnGetVersion(exportRetryChange, workflow.DefaultVersion, workflow.Version(1)).Return(tc.version)
 			calls := 0
@@ -101,7 +98,7 @@ func TestLangfuseExportWorkflowRetriesSaturation(t *testing.T) {
 				return nil
 			}, sdkactivity.RegisterOptions{Name: activity.ExportLangfuseActivityName})
 			f := workflowTest(t, "generate")
-			env.ExecuteWorkflow(LangfuseExportWorkflowName, llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability})
+			env.ExecuteWorkflow(LangfuseExportWorkflowName, f.reference())
 			var exported bool
 			if err := env.GetWorkflowResult(&exported); err != nil || exported != tc.want || calls != tc.calls {
 				t.Fatalf("exported = %t, err = %v, calls = %d", exported, err, calls)
@@ -125,7 +122,7 @@ func completedRequestHistory(t *testing.T, add func(*legacyHistory, llm.Executio
 	h.activity(activity.PrepareActivityName, f.input, completed)
 	h.workflowTask()
 	h.marker("langfuse-export-v1")
-	add(h, llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability})
+	add(h, f.reference())
 	h.workflowTask()
 	h.add(enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED, func(e *historypb.HistoryEvent) {
 		e.Attributes = &historypb.HistoryEvent_WorkflowExecutionCompletedEventAttributes{WorkflowExecutionCompletedEventAttributes: &historypb.WorkflowExecutionCompletedEventAttributes{Result: h.payloads(f.completed)}}

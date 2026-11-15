@@ -9,28 +9,22 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 func TestTracerDropsUnsafeAttributesAndHashesTenant(t *testing.T) {
-	exporter := &observability.MemoryExporter{}
-	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	exporter, tracer := newMemoryTracer()
 	ctx, span := tracer.Start(context.Background(), "provider.attempt", attribute.String("tenant", "secret-tenant"), attribute.String("operation_id", "op-1"), attribute.String("prompt", "secret-prompt"))
 	span.End()
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
-	spans := exporter.Spans()
-	if len(spans) != 1 {
-		t.Fatalf("span count = %d", len(spans))
-	}
-	for _, attr := range spans[0].Attributes() {
+	span0 := shutdownSingleSpan(t, ctx, tracer, exporter)
+	for _, attr := range span0.Attributes() {
 		if strings.Contains(attr.Value.AsString(), "secret") || string(attr.Key) == "prompt" {
 			t.Fatalf("unsafe trace attribute: %#v", attr)
 		}
 	}
 	foundTenant := false
-	for _, attr := range spans[0].Attributes() {
+	for _, attr := range span0.Attributes() {
 		if string(attr.Key) == "tenant_hash" {
 			foundTenant = true
 		}
@@ -41,8 +35,7 @@ func TestTracerDropsUnsafeAttributesAndHashesTenant(t *testing.T) {
 }
 
 func TestTracerAllowsOnlyPublicServiceClasses(t *testing.T) {
-	exporter := &observability.MemoryExporter{}
-	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	exporter, tracer := newMemoryTracer()
 	ctx := context.Background()
 	classes := []llm.ServiceClass{
 		llm.ServiceClassEconomy,
@@ -80,8 +73,7 @@ func TestTracerAllowsOnlyPublicServiceClasses(t *testing.T) {
 }
 
 func TestTracerContextUsesBoundTracerAndFlushes(t *testing.T) {
-	exporter := &observability.MemoryExporter{}
-	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	exporter, tracer := newMemoryTracer()
 	ctx := observability.WithTracer(context.Background(), tracer)
 	if observability.FromContext(ctx) != tracer {
 		t.Fatal("context did not retain the configured tracer")
@@ -100,8 +92,7 @@ func TestTracerContextUsesBoundTracerAndFlushes(t *testing.T) {
 }
 
 func TestTracerRecordErrorDropsMalformedProviderFields(t *testing.T) {
-	exporter := &observability.MemoryExporter{}
-	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	exporter, tracer := newMemoryTracer()
 	ctx, span := tracer.Start(context.Background(), "provider.attempt")
 
 	secret := "secret-token-value"
@@ -115,22 +106,14 @@ func TestTracerRecordErrorDropsMalformedProviderFields(t *testing.T) {
 		"provider failure",
 	))
 	span.End()
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	spans := exporter.Spans()
-	if len(spans) != 1 {
-		t.Fatalf("span count = %d", len(spans))
-	}
-	if got := len(spans[0].Attributes()); got != 0 {
+	span0 := shutdownSingleSpan(t, ctx, tracer, exporter)
+	if got := len(span0.Attributes()); got != 0 {
 		t.Fatalf("malformed provider error exported %d trace attributes, want none", got)
 	}
 }
 
 func TestTracerRecordErrorKeepsApprovedProviderFields(t *testing.T) {
-	exporter := &observability.MemoryExporter{}
-	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+	exporter, tracer := newMemoryTracer()
 	ctx, span := tracer.Start(context.Background(), "provider.attempt")
 	tracer.RecordError(span, provider.NewError(
 		provider.CodeProviderUnavailable,
@@ -140,19 +123,12 @@ func TestTracerRecordErrorKeepsApprovedProviderFields(t *testing.T) {
 		"provider failure",
 	))
 	span.End()
-	if err := tracer.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	spans := exporter.Spans()
-	if len(spans) != 1 {
-		t.Fatalf("span count = %d", len(spans))
-	}
-	if got := len(spans[0].Attributes()); got != 2 {
+	span0 := shutdownSingleSpan(t, ctx, tracer, exporter)
+	if got := len(span0.Attributes()); got != 2 {
 		t.Fatalf("approved provider error exported %d trace attributes, want 2", got)
 	}
-	attrs := make(map[string]string, len(spans[0].Attributes()))
-	for _, attr := range spans[0].Attributes() {
+	attrs := make(map[string]string, len(span0.Attributes()))
+	for _, attr := range span0.Attributes() {
 		attrs[string(attr.Key)] = attr.Value.AsString()
 	}
 	if got := attrs["error_code"]; got != string(provider.CodeProviderUnavailable) {
@@ -263,4 +239,24 @@ func TestDisabledTracerPreservesExistingParentContext(t *testing.T) {
 	if !span.SpanContext().Equal(parent) || !oteltrace.SpanContextFromContext(child).Equal(parent) {
 		t.Fatal("disabled tracer replaced incoming trace context")
 	}
+}
+
+// newMemoryTracer returns an enabled tracer that exports synchronously to an
+// in-memory exporter.
+func newMemoryTracer() (*observability.MemoryExporter, *observability.Tracer) {
+	exporter := &observability.MemoryExporter{}
+	return exporter, observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
+}
+
+// shutdownSingleSpan shuts the tracer down and returns the only exported span.
+func shutdownSingleSpan(t *testing.T, ctx context.Context, tracer *observability.Tracer, exporter *observability.MemoryExporter) sdktrace.ReadOnlySpan {
+	t.Helper()
+	if err := tracer.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.Spans()
+	if len(spans) != 1 {
+		t.Fatalf("span count = %d", len(spans))
+	}
+	return spans[0]
 }

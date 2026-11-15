@@ -142,7 +142,7 @@ func TestParseComposeContainerRestartDiagnostic(t *testing.T) {
 }
 
 func TestComposeRestartDiagnosticUsesOnlySafeDockerHealthFields(t *testing.T) {
-	for _, required := range []string{
+	expectContainsEach(t, composeContainerRestartDiagnosticFormat, "restart diagnostic is missing %q",
 		".State.Running",
 		".State.Status",
 		".State.StartedAt",
@@ -150,16 +150,25 @@ func TestComposeRestartDiagnosticUsesOnlySafeDockerHealthFields(t *testing.T) {
 		".Start",
 		".End",
 		".ExitCode",
-	} {
-		if !strings.Contains(composeContainerRestartDiagnosticFormat, required) {
-			t.Errorf("restart diagnostic is missing %q", required)
-		}
-	}
+	)
 	if strings.Contains(composeContainerRestartDiagnosticFormat, ".Output") {
 		t.Error("restart diagnostic must not inspect Docker health output")
 	}
 	if got, want := composeRedisAuthenticatedPingCommand, `redis-cli --user "$REDIS_USERNAME" --pass "$REDIS_PASSWORD" ping`; got != want {
 		t.Fatalf("authenticated Redis diagnostic command = %q, want %q", got, want)
+	}
+}
+
+func TestPollComposeUntilReportsLastMismatchOrError(t *testing.T) {
+	reads := 0
+	if reached, last := pollComposeUntil(func() (int, error) { reads++; return reads, nil }, 2, time.Second, "status %d"); !reached || last != nil || reads != 2 {
+		t.Fatalf("poll = %v/%v after %d reads, want reached on the second read", reached, last, reads)
+	}
+	if reached, last := pollComposeUntil(func() (int, error) { return 503, nil }, 200, time.Millisecond, "status %d"); reached || last == nil || last.Error() != "status 503" {
+		t.Fatalf("mismatch poll = %v/%v, want unreached with the last status", reached, last)
+	}
+	if reached, last := pollComposeUntil(func() (int, error) { return 0, errors.New("refused") }, 200, time.Millisecond, "status %d"); reached || last == nil || last.Error() != "refused" {
+		t.Fatalf("error poll = %v/%v, want unreached with the last error", reached, last)
 	}
 }
 
@@ -498,21 +507,30 @@ func composeReadinessTransitionTimeoutForConfig(configuration config.Config) tim
 
 func waitForComposeStatus(t *testing.T, address, path string, want int, timeout time.Duration) {
 	t.Helper()
+	if reached, last := pollComposeUntil(func() (int, error) { return composeStatus(address, path) }, want, timeout, "status %d"); !reached {
+		t.Fatalf("%s did not reach HTTP %d within %s: %v", path, want, timeout, last)
+	}
+}
+
+// pollComposeUntil reads every composeStatusPollInterval until read returns
+// want or timeout elapses. It reports the last read error, or the last
+// mismatching value formatted with mismatch, when want was never reached.
+func pollComposeUntil[T comparable](read func() (T, error), want T, timeout time.Duration, mismatch string) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	var last error
 	for time.Now().Before(deadline) {
-		status, err := composeStatus(address, path)
-		if err == nil && status == want {
-			return
+		value, err := read()
+		if err == nil && value == want {
+			return true, nil
 		}
 		if err != nil {
 			last = err
 		} else {
-			last = fmt.Errorf("status %d", status)
+			last = fmt.Errorf(mismatch, value)
 		}
 		time.Sleep(composeStatusPollInterval)
 	}
-	t.Fatalf("%s did not reach HTTP %d within %s: %v", path, want, timeout, last)
+	return false, last
 }
 
 func waitForComposeContainerHealthy(t *testing.T, address, container string, restartedAt time.Time, timeout time.Duration) {
@@ -732,21 +750,9 @@ func assertComposeMetric(t *testing.T, address, name string, want float64) {
 
 func waitForComposeMetric(t *testing.T, address, name string, want float64, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var last error
-	for time.Now().Before(deadline) {
-		value, err := composeMetricValue(address, name)
-		if err == nil && value == want {
-			return
-		}
-		if err != nil {
-			last = err
-		} else {
-			last = fmt.Errorf("value %v", value)
-		}
-		time.Sleep(composeStatusPollInterval)
+	if reached, last := pollComposeUntil(func() (float64, error) { return composeMetricValue(address, name) }, want, timeout, "value %v"); !reached {
+		t.Fatalf("%s did not reach %v within %s: %v", name, want, timeout, last)
 	}
-	t.Fatalf("%s did not reach %v within %s: %v", name, want, timeout, last)
 }
 
 // composeMetricValue reads only the bounded, non-secret metric needed by the

@@ -53,7 +53,7 @@ func TestExecuteRequestObtainsCapabilityForLegacyPreparation(t *testing.T) {
 // A run that already has a capability never prepares again or records a
 // version marker for the legacy path.
 func TestExecuteRequestWithCapabilitySkipsLegacyPath(t *testing.T) {
-	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionPending), step(activity.PollActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
+	f := workflowTest(t, "generate", pendingPollCompleteSteps()...)
 	f.env.OnGetVersion(requestCapabilityChange+"1", workflow.DefaultVersion, workflow.Version(1)).Panic("legacy path taken")
 	f.run(t)
 }

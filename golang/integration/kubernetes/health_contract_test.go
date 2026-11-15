@@ -222,9 +222,5 @@ func assertHealthProbe(t *testing.T, name string, probe healthProbe, wantPath st
 
 func readHealthFixture(t *testing.T, path string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(moduleRoot(t), path))
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return data
+	return []byte(readRepositoryFile(t, path))
 }

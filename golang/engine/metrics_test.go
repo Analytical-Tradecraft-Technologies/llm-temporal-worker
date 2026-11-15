@@ -15,38 +15,34 @@ func TestGenerateRecordsMetricsForSuccessfulProviderDispatch(t *testing.T) {
 	actual := llm.ServiceClassStandard
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	adapter.response.Service.Actual = &actual
-	harness := newHarness(t, adapter)
-	metrics := newEngineTestMetrics(t)
-
-	if _, err := harness.engine.Generate(observability.WithMetrics(context.Background(), metrics), baseRequest("metrics-success")); err != nil {
+	metrics, err := generateWithMetrics(t, adapter, "metrics-success")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "outcome": "success"}, 1)
-	assertMetricHistogramCount(t, metrics, "llmtw_provider_duration_seconds", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard"}, 1)
+	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "success"), 1)
+	assertMetricHistogramCount(t, metrics, "llmtw_provider_duration_seconds", standardProviderLabels(), 1)
 	for _, state := range []string{"reserved", "dispatching", "completed"} {
 		assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
 	}
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "standard", "endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "method": "catalog_usage"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_status_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "status": "exact", "method": "catalog_usage"}, 1)
+	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", standardProviderLabels("method", "catalog_usage"), 1)
+	assertMetricCounter(t, metrics, "llmtw_cost_status_total", standardProviderLabels("status", "exact", "method", "catalog_usage"), 1)
 }
 
 func TestGenerateRecordsMetricsForAmbiguousProviderDispatch(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse(), ambiguous: true}
-	harness := newHarness(t, adapter)
-	metrics := newEngineTestMetrics(t)
-
-	if _, err := harness.engine.Generate(observability.WithMetrics(context.Background(), metrics), baseRequest("metrics-ambiguous")); err == nil {
+	metrics, err := generateWithMetrics(t, adapter, "metrics-ambiguous")
+	if err == nil {
 		t.Fatal("Generate unexpectedly succeeded")
 	}
 
-	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "outcome": "failure"}, 1)
+	assertMetricCounter(t, metrics, "llmtw_provider_attempt_total", standardProviderLabels("outcome", "failure"), 1)
 	for _, state := range []string{"reserved", "dispatching", "ambiguous"} {
 		assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": state}, 1)
 	}
 	assertMetricCounter(t, metrics, "llmtw_ambiguous_total", map[string]string{"endpoint": "endpoint-1"}, 1)
-	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard", "method": "catalog_usage"}, 0)
+	assertMetricCounter(t, metrics, "llmtw_cost_usd_total", standardProviderLabels("method", "catalog_usage"), 0)
 }
 
 func TestOperationMetricsMapRawFailedStatesToBoundedFailedLabel(t *testing.T) {
@@ -75,6 +71,24 @@ func TestHandleCancellationRecordsDurablePreDispatchTransitions(t *testing.T) {
 	assertMetricCounter(t, metrics, "llmtw_operation_state_total", map[string]string{"state": "failed"}, 1)
 }
 
+// generateWithMetrics runs one Generate for key and returns the metrics it recorded.
+func generateWithMetrics(t *testing.T, adapter *fakeAdapter, key string) (*observability.Metrics, error) {
+	t.Helper()
+	harness := newHarness(t, adapter)
+	metrics := newEngineTestMetrics(t)
+	_, err := harness.engine.Generate(observability.WithMetrics(context.Background(), metrics), baseRequest(key))
+	return metrics, err
+}
+
+// standardProviderLabels returns the endpoint-1/provider-model/standard labels plus extra key/value pairs.
+func standardProviderLabels(extra ...string) map[string]string {
+	labels := map[string]string{"endpoint": "endpoint-1", "model": "provider-model", "class": "standard"}
+	for index := 0; index+1 < len(extra); index += 2 {
+		labels[extra[index]] = extra[index+1]
+	}
+	return labels
+}
+
 func newEngineTestMetrics(t *testing.T) *observability.Metrics {
 	t.Helper()
 	metrics, err := observability.NewMetrics(observability.AllowedValues{
@@ -92,10 +106,8 @@ func newEngineTestMetrics(t *testing.T) *observability.Metrics {
 func TestGenerateRecordsUnreportedActualServiceClassAsUnknown(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	adapter.response.Service.Actual = nil
-	harness := newHarness(t, adapter)
-	metrics := newEngineTestMetrics(t)
-
-	if _, err := harness.engine.Generate(observability.WithMetrics(context.Background(), metrics), baseRequest("metrics-unknown-actual")); err != nil {
+	metrics, err := generateWithMetrics(t, adapter, "metrics-unknown-actual")
+	if err != nil {
 		t.Fatal(err)
 	}
 	assertMetricCounter(t, metrics, "llmtw_service_class_actual_total", map[string]string{"requested": "standard", "actual": "unknown", "endpoint": "endpoint-1"}, 1)

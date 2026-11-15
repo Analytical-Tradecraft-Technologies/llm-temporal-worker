@@ -12,7 +12,7 @@ import (
 )
 
 func TestLangfuseFailureIsBoundedAndPreservesOperation(t *testing.T) {
-	f := workflowTest(t, "generate", workflowStep{name: activity.PrepareActivityName, state: llm.ExecutionCompleted})
+	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionCompleted))
 	calls := 0
 	f.env.RegisterActivityWithOptions(func(_ context.Context, ref llm.ExecutionReferenceV1) error {
 		calls++
@@ -28,7 +28,7 @@ func TestLangfuseFailureIsBoundedAndPreservesOperation(t *testing.T) {
 }
 
 func TestLangfuseOldHistorySkipsExport(t *testing.T) {
-	f := workflowTest(t, "generate", workflowStep{name: activity.PrepareActivityName, state: llm.ExecutionCompleted})
+	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionCompleted))
 	f.env.OnGetVersion("langfuse-export-v1", workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
 	calls := 0
 	f.env.RegisterActivityWithOptions(func(context.Context, llm.ExecutionReferenceV1) error { calls++; return nil }, sdkactivity.RegisterOptions{Name: activity.ExportLangfuseActivityName})
@@ -39,7 +39,7 @@ func TestLangfuseOldHistorySkipsExport(t *testing.T) {
 }
 
 func TestLangfuseRejectedExportPreservesOriginalFailure(t *testing.T) {
-	f := workflowTest(t, "generate", workflowStep{name: activity.PrepareActivityName, state: llm.ExecutionFailed})
+	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionFailed))
 	calls := 0
 	f.env.RegisterActivityWithOptions(func(context.Context, llm.ExecutionReferenceV1) error {
 		calls++

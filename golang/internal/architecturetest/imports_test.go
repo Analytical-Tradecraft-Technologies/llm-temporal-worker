@@ -98,4 +98,11 @@ var (
 	repositoryRoot = repotest.RepositoryRoot
 	moduleRoot     = repotest.ModuleRoot
 	readJSONObject = repotest.ReadJSONObject
+	readText       = repotest.ReadText
+	writeFile      = repotest.WriteFile
+
+	assertContains     = repotest.AssertContains
+	assertOmits        = repotest.AssertOmits
+	assertContainsEach = repotest.AssertContainsEach
+	assertOmitsEach    = repotest.AssertOmitsEach
 )

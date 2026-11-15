@@ -260,12 +260,8 @@ func TestLoadContinuationRequiresRequestTenant(t *testing.T) {
 }
 
 func TestGenerateDefaultsOmittedServiceClassToStandard(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
-	response, err := harness.engine.Generate(context.Background(), baseRequest("default-class"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	adapter, harness := newFakeHarness(t)
+	response := harness.mustGenerate(t, baseRequest("default-class"))
 	if response.Service.Requested != llm.ServiceClassStandard || response.Service.Attempted != llm.ServiceClassStandard {
 		t.Fatalf("service facts = %#v, want standard/standard", response.Service)
 	}
@@ -273,8 +269,7 @@ func TestGenerateDefaultsOmittedServiceClassToStandard(t *testing.T) {
 }
 
 func TestGenerateRejectsUnmatchedRequiredBudgetPolicyBeforeAdmission(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	adapter, harness := newFakeHarness(t)
 	harness.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.RequireBudgetMatch = true
 		snapshot.Environment = "production"
@@ -282,31 +277,25 @@ func TestGenerateRejectsUnmatchedRequiredBudgetPolicyBeforeAdmission(t *testing.
 	})
 
 	request := baseRequest("unmatched-required-budget")
-	_, err := harness.engine.Generate(context.Background(), request)
-	mapped := requireProviderError(t, err, "unmatched required budget unexpectedly dispatched")
+	mapped := harness.generateFailure(t, request, "unmatched required budget unexpectedly dispatched")
 	if _, ok := isNotDispatchedFailure(mapped, provider.CodeNoRoute, provider.PhasePrice); !ok {
 		t.Fatalf("budget-policy error = %#v", mapped)
 	}
 	if mapped.SafeDetails["reason"] != "no_matching_budget_policy" {
 		t.Fatalf("budget-policy safe details = %#v, want no_matching_budget_policy", mapped.SafeDetails)
 	}
-	adapter.requireInvokes(t, 0, "provider invoke count = %d, want zero")
-	requireNoOperation(t, harness, request)
+	requireNothingDispatched(t, harness, adapter, request)
 }
 
 func TestGenerateUsesOnlyExplicitFallbackWithMatchingRequiredBudgetPolicy(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	adapter, harness := newFakeHarness(t)
 	harness.updateSnapshot(func(snapshot *Snapshot) {
 		snapshot.RequireBudgetMatch = true
 		snapshot.BudgetPolicies = []budget.Policy{tenantClassBudgetPolicy("standard-only", llm.ServiceClassStandard)}
 	})
 
 	request := priorityWithStandardFallback("budgeted-explicit-fallback")
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := harness.mustGenerate(t, request)
 	if response.Service.Requested != llm.ServiceClassPriority || response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
 		t.Fatalf("service facts = %#v, want explicit standard fallback", response.Service)
 	}
@@ -336,10 +325,7 @@ func TestGenerateCarriesExactReservationAlongsideRedisCompatibilityAmount(t *tes
 		t.Fatal(err)
 	}
 	harness.updateSnapshot(func(snapshot *Snapshot) { snapshot.Prices = pricing.NewResolver(catalog) })
-	response, err := harness.engine.Generate(context.Background(), baseRequest("exact-reservation"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := harness.mustGenerate(t, baseRequest("exact-reservation"))
 	if got, want := recording.begin.ReservationUSD.String(), "0.000000000000000001"; got != want {
 		t.Fatalf("exact reservation = %s, want %s", got, want)
 	}
@@ -359,10 +345,7 @@ func TestGenerateFallbackDoesNotReplayRejectedDispatch(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", rejectFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
 	request := priorityWithStandardFallback("fallback")
-	response, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := harness.mustGenerate(t, request)
 	if response.Service.Requested != llm.ServiceClassPriority || response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
 		t.Fatalf("service facts = %#v, want priority requested and standard fallback", response.Service)
 	}
@@ -399,10 +382,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkFallsBackWithoutAmbiguity(t
 			adapter := &fakeAdapter{name: "fake", egressFirst: test.egress, preDispatchFirst: test.preDispatch, response: successfulResponse()}
 			harness := newHarness(t, adapter)
 			request := priorityWithStandardFallback("egress-fallback-" + test.name)
-			response, err := harness.engine.Generate(context.Background(), request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			response := harness.mustGenerate(t, request)
 			if response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
 				t.Fatalf("service facts = %#v, want standard fallback", response.Service)
 			}
@@ -430,8 +410,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkRecordsNoCost(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			adapter := &fakeAdapter{name: "fake", egressFirst: test.egress, preDispatchFirst: test.preDispatch, response: successfulResponse()}
 			harness := newHarness(t, adapter)
-			_, err := harness.engine.Generate(context.Background(), baseRequest("egress-no-cost-"+test.name))
-			mapped := requireProviderError(t, err, "egress-denied request unexpectedly succeeded")
+			mapped := harness.generateFailure(t, baseRequest("egress-no-cost-"+test.name), "egress-denied request unexpectedly succeeded")
 			if mapped.Code != provider.CodeProviderUnavailable || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute {
 				t.Fatalf("mapped egress error = %#v", mapped)
 			}
@@ -442,7 +421,7 @@ func TestGenerateCertifiedPreDispatchFailureAfterMarkRecordsNoCost(t *testing.T)
 				t.Fatal("mapped pre-dispatch error did not retain its marker")
 			}
 			operation := harness.operation(t, mapped.OperationID)
-			if operation.State != admission.StateDefiniteFailed || operation.Attempt.Dispatch != admission.NotDispatched || operation.IncurredMicroUSD != 0 || operation.FinalMicroUSD != 0 {
+			if !isZeroCostNoDispatchFailure(operation) {
 				t.Fatalf("operation after egress denial = %#v, want definite zero-cost no-dispatch failure", operation)
 			}
 		})
@@ -454,8 +433,7 @@ func TestGenerateCertifiedPreDispatchCallerDeadlineAfterMarkDoesNotFallback(t *t
 	harness := newHarness(t, adapter)
 	request := priorityWithStandardFallback("pre-dispatch-caller-deadline")
 
-	_, err := harness.engine.Generate(context.Background(), request)
-	mapped := requireProviderError(t, err, "certified caller deadline unexpectedly succeeded")
+	mapped := harness.generateFailure(t, request, "certified caller deadline unexpectedly succeeded")
 	if mapped.Code != provider.CodeDeadlineExceeded || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
 		t.Fatalf("mapped caller deadline = %#v, want non-retryable not-dispatched deadline", mapped)
 	}
@@ -464,7 +442,7 @@ func TestGenerateCertifiedPreDispatchCallerDeadlineAfterMarkDoesNotFallback(t *t
 	}
 	adapter.requireInvokes(t, 1, "provider invoke count = %d, want one without fallback")
 	operation := harness.operation(t, mapped.OperationID)
-	if operation.State != admission.StateDefiniteFailed || operation.Attempt.Dispatch != admission.NotDispatched || operation.IncurredMicroUSD != 0 || operation.FinalMicroUSD != 0 {
+	if !isZeroCostNoDispatchFailure(operation) {
 		t.Fatalf("operation after certified caller deadline = %#v, want definite zero-cost no-dispatch failure", operation)
 	}
 }
@@ -474,8 +452,7 @@ func TestGenerateRawDeadlineAfterMarkRemainsAmbiguous(t *testing.T) {
 	harness := newHarness(t, adapter)
 	request := priorityWithStandardFallback("raw-post-mark-deadline")
 
-	_, err := harness.engine.Generate(context.Background(), request)
-	mapped := requireProviderError(t, err, "raw post-mark deadline unexpectedly succeeded")
+	mapped := harness.generateFailure(t, request, "raw post-mark deadline unexpectedly succeeded")
 	if mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
 		t.Fatalf("mapped raw deadline = %#v, want ambiguous non-retryable result", mapped)
 	}
@@ -486,8 +463,7 @@ func TestGenerateRedirectResponseAfterMarkDoesNotFallback(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", redirectFirst: true, response: successfulResponse()}
 	harness := newHarness(t, adapter)
 	request := priorityWithStandardFallback("redirect-no-fallback")
-	_, err := harness.engine.Generate(context.Background(), request)
-	mapped := requireProviderError(t, err, "redirect response unexpectedly succeeded")
+	mapped := harness.generateFailure(t, request, "redirect response unexpectedly succeeded")
 	if mapped.Code != provider.CodeAmbiguousDispatch || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever {
 		t.Fatalf("mapped redirect error = %#v, want ambiguous non-retriable dispatch error", mapped)
 	}
@@ -499,17 +475,10 @@ func TestGenerateRedirectResponseAfterMarkDoesNotFallback(t *testing.T) {
 }
 
 func TestGenerateReplaysCompletedResultWithoutProviderCall(t *testing.T) {
-	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-	harness := newHarness(t, adapter)
+	adapter, harness := newFakeHarness(t)
 	request := baseRequest("replay")
-	first, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := harness.engine.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := harness.mustGenerate(t, request)
+	second := harness.mustGenerate(t, request)
 	if first.OperationID == "" || first.OperationID != second.OperationID || first.Output[0].(llm.Message).Content[0].(llm.TextPart).Text != second.Output[0].(llm.Message).Content[0].(llm.TextPart).Text {
 		t.Fatalf("replayed response differs: first=%#v second=%#v", first, second)
 	}
