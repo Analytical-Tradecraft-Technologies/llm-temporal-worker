@@ -4,8 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 	"strings"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/schemaorder"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
@@ -56,7 +57,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, strict bool) (
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		if anthropicwire.EmptyModelMessage(item) {
+		if provider.EmptyModelMessage(item) {
 			continue
 		}
 		messages = append(messages, message)

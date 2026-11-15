@@ -253,29 +253,21 @@ func (adapter *Adapter) Invoke(ctx context.Context, call provider.Call, observer
 	if response == nil {
 		return provider.Result{}, provider.NewInvalidResponseError(call, "", "provider returned an empty response")
 	}
-	metadata := provider.ResponseMetadata{ResponseID: response.ID, ProviderTier: string(response.ServiceTier)}
-	if rawResponse != nil {
-		metadata.Status = rawResponse.StatusCode
-		metadata.RequestID = rawResponse.Header.Get("x-request-id")
-	}
-	if err := dispatch.AfterResponseHeaders(metadata); err != nil {
-		return provider.Result{}, err
-	}
-	dispatch.LiftProgress(len(response.Output))
-	lifted, err := liftResponse(call, response, metadata.RequestID)
-	if err != nil {
-		return provider.Result{}, err
-	}
-	if adapter.exaAgent {
+	metadata := provider.HTTPResponseMetadata(response.ID, string(response.ServiceTier), rawResponse, "x-request-id")
+	return dispatch.Lift(metadata, len(response.Output), func() (llm.Response, error) {
+		lifted, err := liftResponse(call, response, metadata.RequestID)
+		if err != nil || !adapter.exaAgent {
+			return lifted, err
+		}
 		cost, costErr := exaAgentCost(response.RawJSON())
 		if costErr != nil {
-			return provider.Result{}, provider.NewInvalidResponseErrorWithID(call, metadata.RequestID, response.ID, costErr.Error())
+			return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, metadata.RequestID, response.ID, costErr.Error())
 		}
 		if cost != nil {
 			lifted.Cost = llm.Cost{ActualCostUSD: cost, Method: "exa_reported"}
 		}
-	}
-	return provider.Result{Response: lifted}, nil
+		return lifted, nil
+	})
 }
 
 func requiredFeatures(request llm.Request) []provider.Feature {

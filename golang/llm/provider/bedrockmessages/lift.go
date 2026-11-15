@@ -1,7 +1,6 @@
 package bedrockmessages
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -31,41 +30,22 @@ func (profile Profile) liftResponseWithTier(call provider.Call, response *anthro
 		providerTier = headerTier
 	}
 	actual := profile.actualClass(providerTier)
-	output, states, hasToolCalls, err := anthropicwire.LiftContent(response.Content, "bedrock", contentStateBlocks)
+	output, states, status, err := anthropicwire.LiftMessage(call, requestID, response, "bedrock", contentStateBlocks, liftStatus)
 	if err != nil {
-		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
-	}
-	hasRefusal := string(response.StopReason) == "refusal" || response.StopDetails.Category != ""
-	status, err := liftStatus(response.StopReason, hasToolCalls, hasRefusal)
-	if err != nil {
-		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
-	}
-	if err := anthropicwire.ValidateFinalJSON(call, output, status, hasToolCalls, hasRefusal); err != nil {
-		return llm.Response{}, provider.NewInvalidResponseErrorWithID(call, requestID, response.ID, err.Error())
+		return llm.Response{}, err
 	}
 	return llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
 		Output:       output,
-		Route: llm.RouteFacts{
-			EndpointID: call.EndpointID, APIFamily: string(provider.FamilyBedrockMessages),
-			RequestedModel: call.Model, ResolvedModel: string(response.Model),
-		},
-		Service: llm.ServiceFacts{
-			Requested: call.ServiceClass, Attempted: call.ServiceClass, Actual: actual,
-			ProviderValue: providerTier, FallbackIndex: 0,
-		},
-		Usage: llm.Usage{
-			InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
-			ReasoningTokens: response.Usage.OutputTokensDetails.ThinkingTokens,
-			CacheReadTokens: response.Usage.CacheReadInputTokens, CacheWriteTokens: response.Usage.CacheCreationInputTokens,
-			ProviderRaw: rawUsageFacts(response),
-		},
+		Route:        call.RouteFacts(provider.FamilyBedrockMessages, string(response.Model)),
+		Service:      call.ServiceFacts(actual, providerTier),
+		Usage:        anthropicwire.Usage(response),
 		Provider: llm.ProviderFacts{
-			ResponseID: response.ID, RequestID: requestID, FinishReason: string(response.StopReason), Raw: rawResponseFacts(response),
+			ResponseID: response.ID, RequestID: requestID, FinishReason: string(response.StopReason), Raw: anthropicwire.RawResponseFacts(response),
 		},
-		Continuation: continuationForResponse(call, response, states),
+		Continuation: anthropicwire.Continuation(call, response, states, "bedrock-messages:"),
 		Diagnostics:  liftDiagnostics(call),
 	}, nil
 }
@@ -104,46 +84,4 @@ func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) 
 	default:
 		return "", fmt.Errorf("provider returned unknown stop reason %q", stopReason)
 	}
-}
-
-func rawResponseFacts(response *anthropic.Message) map[string]json.RawMessage {
-	result := map[string]json.RawMessage{}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(response.RawJSON()), &fields); err != nil {
-		return result
-	}
-	for _, key := range []string{"stop_sequence", "container", "inference_geo", "stop_details"} {
-		if raw, ok := fields[key]; ok {
-			result[key] = append(json.RawMessage(nil), raw...)
-		}
-	}
-	return result
-}
-
-func rawUsageFacts(response *anthropic.Message) map[string]json.RawMessage {
-	result := map[string]json.RawMessage{}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(response.Usage.RawJSON()), &fields); err != nil {
-		for key, value := range map[string]any{
-			"service_tier":                response.Usage.ServiceTier,
-			"cache_creation_input_tokens": response.Usage.CacheCreationInputTokens,
-			"cache_read_input_tokens":     response.Usage.CacheReadInputTokens,
-			"thinking_tokens":             response.Usage.OutputTokensDetails.ThinkingTokens,
-		} {
-			encoded, _ := json.Marshal(value)
-			result[key] = encoded
-		}
-		return result
-	}
-	for key, raw := range fields {
-		result[key] = append(json.RawMessage(nil), raw...)
-	}
-	return result
-}
-
-func continuationForResponse(call provider.Call, response *anthropic.Message, states []llm.ProviderState) *llm.Continuation {
-	if response.ID == "" || len(states) == 0 {
-		return nil
-	}
-	return &llm.Continuation{Handle: "bedrock-messages:" + response.ID, EndpointID: call.EndpointID, Model: string(response.Model), Pinned: true, ProviderStates: append([]llm.ProviderState(nil), states...)}
 }

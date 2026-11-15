@@ -3,12 +3,10 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -31,14 +29,8 @@ import (
 
 func trustedTemporalSnapshot(t *testing.T, value config.Config) *config.Snapshot {
 	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := encodeJSON(t, value)
+	snapshot := mustCompileConfig(t, data)
 	return snapshot
 }
 
@@ -185,10 +177,7 @@ func TestProductionRuntimeRejectsMissingPolicyBeforeSecretResolution(t *testing.
 	value := trustedTemporalTestConfig(t)
 	value.Authorization = nil
 	value.State.Redis.Username = config.SecretRef{Kind: "file", Path: t.TempDir() + "/missing-secret"}
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := encodeJSON(t, value)
 	if runtime, err := newProductionRuntime(context.Background(), data); !errors.Is(err, ErrDurableV1Composition) || runtime != nil {
 		t.Fatalf("CLI did not reject missing policy before reading the missing secret: %v", err)
 	}
@@ -205,11 +194,7 @@ func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
 	value := trustedTemporalTestConfig(t)
 	encode := func(value config.Config) []byte {
 		t.Helper()
-		data, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data
+		return encodeJSON(t, value)
 	}
 	invalid := []config.Config{value.Clone(), value.Clone()}
 	invalid[0].Authorization = nil
@@ -245,10 +230,7 @@ func TestCLIPolicyPreflightOnInitialConfigAndReload(t *testing.T) {
 func TestCLIExamplePolicies(t *testing.T) {
 	for _, path := range []string{"../../deploy/kubernetes/base/config.yaml", "../../deploy/local/config.yaml"} {
 		t.Run(path, func(t *testing.T) {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			data := mustReadFile(t, path)
 			var resolved int
 			snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 				resolved++
@@ -299,12 +281,7 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 			next.ConfigDigest, next.ConfigEpoch = snapshot.Digest(), snapshot.ConfigVersion()
 			return next, nil
 		}),
-		Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
-			if ref.Name == "REQUEST_KEY" {
-				return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
-			}
-			return bytes.Repeat([]byte{7}, 32), nil
-		}),
+		Resolver:    bootstrapResolver,
 		RedisClient: redis, RedisKeySecret: bytes.Repeat([]byte{8}, 32),
 		BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
 			return &cloudBootstrapBlobStore{newTestBlobStore()}, cloudBootstrapCloser{func() { closed++ }}, nil
@@ -389,9 +366,7 @@ func TestCLICloudFactoryBuildsAndReloadsBoundedRuntime(t *testing.T) {
 	if _, set, err := factory.Build(context.Background(), trustedTemporalSnapshot(t, value)); !errors.Is(err, ErrDurableV1Composition) || set != nil || builds != 2 {
 		t.Fatal("missing policy passed reload preflight", err)
 	}
-	if f.submits.Load() != 0 {
-		t.Fatal("construction dispatched paid work")
-	}
+	requireCount(t, &f.submits, 0, "construction dispatched paid work")
 }
 
 func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
@@ -437,9 +412,7 @@ func TestTrustedTemporalRevocationPrecedesTerminalReplay(t *testing.T) {
 			}
 		})
 	}
-	if f.submits.Load() != 1 {
-		t.Fatal("revoked caller dispatched work")
-	}
+	requireCount(t, &f.submits, 1, "revoked caller dispatched work")
 	if store.accesses != 0 {
 		t.Fatal("revoked caller accessed storage")
 	}
@@ -460,10 +433,7 @@ func TestKubernetesBaseCatalogsLoadThroughSnapshotLoader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(base, "config.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := mustReadFile(t, filepath.Join(base, "config.yaml"))
 	data = []byte(strings.ReplaceAll(string(data), "/etc/llmtw/", base+"/"))
 	snapshot, err := config.Compile(context.Background(), data, newCLIReferenceResolver(secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
 		return []byte("test-secret"), nil
@@ -489,10 +459,7 @@ func TestTrustedTemporalScopeDenialIsLoggedAndNotDispatched(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Format: "json", Output: &output})
 	ctx := observability.WithLogger(context.Background(), logger)
 	if _, err := options.ResolveScope(ctx, llm.RequestContext{Tenant: "intruder-tenant", Project: "intruder-project", Actor: "intruder-actor"}); err == nil {
 		t.Fatal("unlisted scope allowed")

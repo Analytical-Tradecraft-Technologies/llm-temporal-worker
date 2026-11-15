@@ -11,19 +11,30 @@ import (
 // *P is accepted too. A call from another adapter, or with parameters of any
 // other type, is refused as not dispatched.
 func DispatchParams[P any](call Call, family Family, endpointID string) (P, error) {
-	var params P
 	if call.Family != family || call.EndpointID != endpointID {
+		var params P
 		return params, NewDispatchError("call does not belong to this adapter", DispatchNotDispatched)
 	}
+	params, ok := SDKParamsAs[P](call)
+	if !ok {
+		return params, NewDispatchError("call SDK parameters have unexpected type", DispatchNotDispatched)
+	}
+	return params, nil
+}
+
+// SDKParamsAs returns the call's SDK parameters when they are a P or a
+// non-nil *P.
+func SDKParamsAs[P any](call Call) (P, bool) {
 	switch value := call.SDKParams.(type) {
 	case P:
-		return value, nil
+		return value, true
 	case *P:
 		if value != nil {
-			return *value, nil
+			return *value, true
 		}
 	}
-	return params, NewDispatchError("call SDK parameters have unexpected type", DispatchNotDispatched)
+	var zero P
+	return zero, false
 }
 
 // OutputSchema returns a copy of the caller's json_schema output schema, for

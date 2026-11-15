@@ -56,7 +56,7 @@ func TestCloudExecutionRuntimeCacheHitWritesNoAttempt(t *testing.T) {
 		t.Fatalf("a warm hit made %d storage calls, budget %d", calls, cacheHitPrepareStorageBound)
 	}
 	t.Logf("warm hit: %d storage calls", calls)
-	scope, id := cloudstate.Scope{Tenant: "tenant", Project: "project"}, cloudstate.RequestID(hit.RequestID)
+	scope, id := testRequestScope, cloudstate.RequestID(hit.RequestID)
 	// Attempts are child records, and each holds its budget plan and fill.
 	if _, last, err := f.repository.LangfusePaidAttempts(ctx, scope, id); err != nil || last != "" {
 		t.Fatalf("hit created attempt %q: %v", last, err)
@@ -112,7 +112,7 @@ func TestCloudExecutionRuntimeResolveCachedStartsNoAttempt(t *testing.T) {
 	f.request.Cache = &llm.CachePolicyV1{}
 	f.finish(t)
 	ctx := context.Background()
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	scope := testRequestScope
 	resolve := func(key string, variant int32) (llm.ExecutionResultV1, bool, uint64) {
 		t.Helper()
 		f.now = f.now.Add(time.Second)

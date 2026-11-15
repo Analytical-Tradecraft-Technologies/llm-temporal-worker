@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -57,17 +56,14 @@ func TestCloudExecutionAdmissionResumesConcurrentWinner(t *testing.T) {
 						ctx := context.Background()
 						input := llm.PrepareExecutionV1{Generate: &f.request}
 						if kind == "compact" {
-							policy := json.RawMessage(`{"recent_turns":0}`)
-							f.request.SettingsPatch.CompactionPolicy.Set = &policy
+							keepNoRecentTurns(&f.request)
 							parent := f.finish(t)
 							f.now = f.now.Add(time.Minute)
 							input = llm.PrepareExecutionV1{Compact: &llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: &llm.CachePolicyV1{}}}
 						}
-						v, err := f.runtime.PrepareExecutionV1(ctx, input)
-						boundedState(t, v, err, llm.ExecutionBudgetRequired)
+						v := f.prepare(t, ctx, input, llm.ExecutionBudgetRequired)
 						ref := f.ref(v)
-						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-						boundedState(t, v, err, llm.ExecutionAcquired)
+						v = f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 						winner := f.runtime
 						f.restart(t)
 						before := f.submits.Load()
@@ -92,7 +88,7 @@ func TestCloudExecutionAdmissionResumesConcurrentWinner(t *testing.T) {
 							}
 						}
 						f.runtime.store, f.runtime.execution.admission.store = store, store
-						v, err = f.runtime.prepareStep(ctx, input, step)
+						v, err := f.runtime.prepareStep(ctx, input, step)
 						want := llm.ExecutionProviderCompleted
 						if mode == "async" {
 							want = llm.ExecutionPending
@@ -105,11 +101,9 @@ func TestCloudExecutionAdmissionResumesConcurrentWinner(t *testing.T) {
 						}
 						if mode == "async" {
 							f.now = f.now.Add(2 * time.Second)
-							v, err = f.runtime.PollExecutionV1(ctx, ref)
-							boundedState(t, v, err, llm.ExecutionProviderCompleted)
+							f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
 						}
-						v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-						boundedState(t, v, err, llm.ExecutionCompleted)
+						f.complete(t, ctx, ref, llm.ExecutionCompleted)
 					})
 				}
 			}
@@ -136,11 +130,8 @@ func TestCloudExecutionStaleAdmissionCannotSubmitReplacementAttempt(t *testing.T
 		boundedState(t, v, err, llm.ExecutionAcquired)
 	}}
 	f.runtime.store, f.runtime.execution.admission.store = store, store
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
-	if f.submits.Load() != 1 {
-		t.Fatal("stale submission dispatched a replacement paid attempt")
-	}
+	f.step(t, ctx, f.request, llm.ExecutionOutcomeUnknown)
+	requireCount(t, &f.submits, 1, "stale submission dispatched a replacement paid attempt")
 }
 
 type conflictingAdmissionStore struct{ cloudAdmissionStore }

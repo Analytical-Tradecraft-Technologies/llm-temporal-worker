@@ -30,11 +30,10 @@ func TestCloudExecutionRuntimeUnknownOutcomeSettlesAfterRecoveryWindow(t *testin
 		t.Run(step, func(t *testing.T) {
 			f := boundedCloud(t, false, singleReservationLimits)
 			original := f.adapter.invoke
-			ctx, v, ref, scope, first := startUnknownOutcome(t, f)
+			ctx, _, ref, scope, first := startUnknownOutcome(t, f)
 			var err error
 			// Inside the recovery window the claim is retained as it is.
-			v, err = f.runtime.PollExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionPending)
+			f.poll(t, ctx, ref, llm.ExecutionPending)
 			saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 			if err != nil || saved.Execution.Claim == nil || saved.Execution.Settlement != nil || saved.Execution.Settled {
 				t.Fatal("unknown claim settled inside the recovery window", err)
@@ -42,17 +41,12 @@ func TestCloudExecutionRuntimeUnknownOutcomeSettlesAfterRecoveryWindow(t *testin
 			f.now = f.now.Add(16 * time.Minute)
 			f.restart(t)
 			if step == "poll" {
-				v, err = f.runtime.PollExecutionV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+				f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
 			} else {
 				// The retry stays behind its own conservative charge for the window.
-				v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionBudgetWait)
+				f.acquire(t, ctx, ref, llm.ExecutionBudgetWait)
 			}
-			saved, err = f.repository.LoadProviderExecution(ctx, scope, first.ID)
-			if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
-				t.Fatalf("unknown claim not settled after the recovery window: %+v %v", saved.Execution, err)
-			}
+			saved = f.requireUnknownSettled(t, ctx, scope, first.ID, "unknown claim not settled after the recovery window")
 			if len(saved.Execution.Settlement.Events) != len(saved.Execution.Reservation.Events) {
 				t.Fatal("settlement does not cover every reserved window")
 			}
@@ -67,19 +61,15 @@ func TestCloudExecutionRuntimeUnknownOutcomeSettlesAfterRecoveryWindow(t *testin
 			// replacement, so only the poll path re-observes the old outcome.
 			f.restart(t)
 			if step == "poll" {
-				v, err = f.runtime.PollExecutionV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+				f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
 			}
 			// An independent request after every window has rolled over gets its capacity back.
 			f.now = f.now.Add(48 * time.Hour)
 			f.adapter.invoke = original
 			f.restart(t)
 			f.request.OperationKey = "independent"
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			if f.submits.Load() != 2 {
-				t.Fatal("unknown attempt resubmitted", f.submits.Load())
-			}
+			f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+			requireCount(t, &f.submits, 2, "unknown attempt resubmitted")
 		})
 	}
 }
@@ -127,14 +117,9 @@ func TestCloudExecutionRuntimeSettlesExpiredUnknownAcrossConfigRollout(t *testin
 	if _, err := f.runtime.AcquireBudgetV1(ctx, ref); err == nil {
 		t.Fatal("incompatible worker advanced the request")
 	}
-	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
-	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
-		t.Fatalf("expired unknown claim not settled by an incompatible worker: %+v %v", saved.Execution, err)
-	}
+	saved := f.requireUnknownSettled(t, ctx, scope, first.ID, "expired unknown claim not settled by an incompatible worker")
 	assertUnknownWorkCharged(t, saved)
-	if f.submits.Load() != 1 {
-		t.Fatal("incompatible worker resubmitted", f.submits.Load())
-	}
+	requireCount(t, &f.submits, 1, "incompatible worker resubmitted")
 }
 
 // When recovery resolves an expired unknown attempt during acquisition, the
@@ -142,7 +127,7 @@ func TestCloudExecutionRuntimeSettlesExpiredUnknownAcrossConfigRollout(t *testin
 func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing.T) {
 	f := boundedCloud(t, true)
 	f.adapter.submit = submitFailingAfterWrite(&f.submits, errors.New("connection lost after accepting"))
-	ctx, v, ref, scope, first := startPendingAttempt(t, f)
+	ctx, _, ref, scope, first := startPendingAttempt(t, f)
 	recoveries := 0
 	recovery := &executionRecoveryAdapter{executionAsyncAdapter: f.adapter, recover: func(_ context.Context, call provider.Call, _ provider.Observer) (provider.ResumableResult, error) {
 		recoveries++
@@ -153,8 +138,7 @@ func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing
 	f.cap.Adapters = engine.AdapterMap{"endpoint": recovery}
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.acquire(t, ctx, ref, llm.ExecutionProviderCompleted)
 	attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(ref.RequestID))
 	if err != nil || attempt.ID != first.ID {
 		t.Fatalf("recovered attempt was replaced: %v", err)
@@ -170,24 +154,17 @@ func TestCloudExecutionRuntimeAcquireFinishesARecoveredUnknownAttempt(t *testing
 func TestCloudReloadSettlesUnknownWorkOnSyncedRoute(t *testing.T) {
 	digest := syncedEndpointDigest(t, nil)
 	f := boundedCloud(t, false, singleReservationLimits, func(b *budgetPlanningFixture) { bindReloadEndpoints(b.source, digest) })
-	ctx, v, ref, scope, first := startUnknownOutcome(t, f)
-	var err error
+	ctx, _, ref, scope, first := startUnknownOutcome(t, f)
 	f.cap.ConfigDigest[0]++
 	source := f.cap.Snapshot.(*planningSource)
 	source.value.ConfigDigest = f.cap.ConfigDigest
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
-	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
-	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
-		t.Fatalf("unknown claim not settled after the reload: %+v %v", saved.Execution, err)
-	}
+	f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
+	saved := f.requireUnknownSettled(t, ctx, scope, first.ID, "unknown claim not settled after the reload")
 	assertUnknownWorkCharged(t, saved)
 	assertCloudStatus(t, f, first.ID, cloudstate.StatusOutcomeUnknown)
-	if f.submits.Load() != 1 {
-		t.Fatal("unknown attempt resubmitted", f.submits.Load())
-	}
+	requireCount(t, &f.submits, 1, "unknown attempt resubmitted")
 }
 
 // A claim Redis applied whose reply, and the replay resolving it, were both
@@ -203,7 +180,7 @@ func TestCloudExecutionRuntimeSettlesLostClaimReplyAfterRecoveryWindow(t *testin
 	}
 	f.cap.Budgets = leaser
 	f.restart(t)
-	ctx, v, ref, scope, first := startPendingAttempt(t, f)
+	ctx, _, ref, scope, first := startPendingAttempt(t, f)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Claim != nil || f.submits.Load() != 0 {
 		t.Fatalf("unresolved claim = %+v, %v", saved.Execution, err)
@@ -212,22 +189,15 @@ func TestCloudExecutionRuntimeSettlesLostClaimReplyAfterRecoveryWindow(t *testin
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
 	// The retry stays behind the lost claim's conservative charge.
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionBudgetWait)
-	saved, err = f.repository.LoadProviderExecution(ctx, scope, first.ID)
-	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
-		t.Fatalf("lost claim not settled after the recovery window: %+v %v", saved.Execution, err)
-	}
+	f.acquire(t, ctx, ref, llm.ExecutionBudgetWait)
+	saved = f.requireUnknownSettled(t, ctx, scope, first.ID, "lost claim not settled after the recovery window")
 	assertUnknownWorkCharged(t, saved)
 	// An independent request after every window has rolled over is admitted.
 	f.now = f.now.Add(48 * time.Hour)
 	f.restart(t)
 	f.request.OperationKey = "independent"
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	if f.submits.Load() != 1 {
-		t.Fatal("lost claim dispatched", f.submits.Load())
-	}
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	requireCount(t, &f.submits, 1, "lost claim dispatched")
 }
 
 // An attempt whose claim never reached Redis is unknown until its recovery
@@ -246,8 +216,7 @@ func TestCloudExecutionRuntimeRenewsUnclaimedUnknownAttempt(t *testing.T) {
 	leaser.claim = nil
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	v = f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	saved, err := f.repository.LoadProviderExecution(ctx, scope, first.ID)
 	if err != nil || !saved.Execution.Unclaimed(saved.Plan) || !saved.Execution.Settled {
 		t.Fatalf("unclaimed unknown attempt = %+v, %v", saved.Execution, err)
@@ -256,11 +225,8 @@ func TestCloudExecutionRuntimeRenewsUnclaimedUnknownAttempt(t *testing.T) {
 	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
 		t.Fatalf("unclaimed attempt not renewed: %+v, %v", next, err)
 	}
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	if f.submits.Load() != 1 {
-		t.Fatal("renewed attempt not submitted once", f.submits.Load())
-	}
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	requireCount(t, &f.submits, 1, "renewed attempt not submitted once")
 }
 
 // expired is a definite non-dispatch (#1312): no outcome_unknown, no wait for
@@ -328,9 +294,7 @@ func TestCloudReloadSettlesCrashedSubmissionOnChangedEndpoint(t *testing.T) {
 			f.now = f.now.Add(defaultCloudReloadGrace)
 			_, err = f.runtime.AcquireBudgetV1(ctx, ref)
 			assertRecoveryError(t, err, provider.CodeConfiguration, provider.RetryNever)
-			if f.submits.Load() != 1 {
-				t.Fatal("crashed submission resubmitted", f.submits.Load())
-			}
+			requireCount(t, &f.submits, 1, "crashed submission resubmitted")
 		})
 	}
 }
@@ -365,8 +329,7 @@ func TestCloudReloadWaitsToRecoverCrashedSubmissionByIdempotencyKey(t *testing.T
 	// Only the endpoint is restored; the configuration digest still differs.
 	bindReloadEndpoints(f.cap.Snapshot.(*planningSource), [32]byte{31})
 	f.restart(t)
-	v, err := f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
 	if recoveries != 1 || f.submits.Load() != 1 {
 		t.Fatalf("recoveries=%d submits=%d, want one each", recoveries, f.submits.Load())
 	}
@@ -410,8 +373,7 @@ func crashAfterPossibleWrite(t *testing.T, f *boundedCloudFixture) llm.Execution
 	ctx := context.Background()
 	v := f.prepareGenerate(t, ctx)
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	v = f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	func() {
 		defer func() { _ = recover() }()
 		_, _ = f.runtime.GenerateStepV1(ctx, f.request)
@@ -450,4 +412,15 @@ func startPendingAttempt(t *testing.T, f *boundedCloudFixture) (context.Context,
 	ctx, v := f.generateStep(t, llm.ExecutionPending)
 	ref, scope, first := f.firstAttempt(t, ctx, v)
 	return ctx, v, ref, scope, first
+}
+
+// requireUnknownSettled loads attempt id's provider execution and requires an
+// unknown outcome whose reservation is settled; what names the failure.
+func (f *boundedCloudFixture) requireUnknownSettled(t *testing.T, ctx context.Context, scope cloudstate.Scope, id cloudstate.RequestID, what string) cloudstate.SavedProviderExecution {
+	t.Helper()
+	saved, err := f.repository.LoadProviderExecution(ctx, scope, id)
+	if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Settlement == nil || !saved.Execution.Settled {
+		t.Fatalf("%s: %+v %v", what, saved.Execution, err)
+	}
+	return saved
 }

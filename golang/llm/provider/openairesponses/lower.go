@@ -53,7 +53,7 @@ func lowerRequestMap(request llm.Request, serviceClass llm.ServiceClass, storage
 		if err != nil {
 			return nil, loweredToolPolicy{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		if emptyModelMessage(item) {
+		if provider.EmptyModelMessage(item) {
 			continue
 		}
 		items = append(items, lowered)
@@ -183,29 +183,18 @@ func lowerInstruction(instruction llm.Instruction) (map[string]any, error) {
 	return map[string]any{"type": "message", "role": role, "content": content}, nil
 }
 
-// emptyModelMessage reports a replayed model turn with no parts (for example a
-// lifted content_filter or empty stop reply). It has no Responses wire content and carries no
-// history to preserve.
-func emptyModelMessage(item llm.Item) bool {
-	message, ok := item.(llm.Message)
-	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
-}
-
 func lowerItem(item llm.Item) (map[string]any, error) {
 	switch value := item.(type) {
 	case llm.Message:
+		role, lower := "user", lowerParts
 		if value.Actor == llm.ActorModel {
-			content, err := lowerModelParts(value.Content)
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{"type": "message", "role": "assistant", "content": content}, nil
+			role, lower = "assistant", lowerModelParts
 		}
-		content, err := lowerParts(value.Content)
+		content, err := lower(value.Content)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"type": "message", "role": "user", "content": content}, nil
+		return map[string]any{"type": "message", "role": role, "content": content}, nil
 	case llm.ToolCall:
 		if !json.Valid(value.Arguments) {
 			return nil, fmt.Errorf("tool call %q arguments are invalid JSON", value.ID)

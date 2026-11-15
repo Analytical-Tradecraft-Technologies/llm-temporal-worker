@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
@@ -107,10 +106,7 @@ func TestCatalogDerivedChatAdapterCompilesTextAndImageRequests(t *testing.T) {
 	profile := bundle.Capabilities["profile-a"]
 	profile.Set.Features[provider.FeatureImage] = provider.Capability{State: provider.CapabilityNative}
 	bundle.Capabilities["profile-a"] = profile
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	route := routes.Models["logical-model"].Routes[0]
 	if route.ProviderFeatures[string(provider.FeatureImage)].State != routing.CapabilityNative {
 		t.Fatalf("route provider features = %#v, want catalog image capability", route.ProviderFeatures)

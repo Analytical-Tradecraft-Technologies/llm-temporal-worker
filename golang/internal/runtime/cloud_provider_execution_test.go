@@ -304,9 +304,7 @@ func TestCloudProviderExecutionLostAcknowledgementsNeverResubmit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if f.submits.Load() != before {
-				t.Fatal("recovery submitted again")
-			}
+			requireCount(t, &f.submits, before, "recovery submitted again")
 			if stage == cloudstate.ExecutionClaiming {
 				if result.Saved.Execution.Stage != cloudstate.ExecutionUnknown || f.settlements.Load() != 0 {
 					t.Fatal("uncertain submission refunded or guessed")
@@ -487,9 +485,7 @@ func TestCloudProviderExecutionConcurrentSubmitsClaimAndCallOnce(t *testing.T) {
 		}()
 	}
 	group.Wait()
-	if f.submits.Load() != 1 {
-		t.Fatal("duplicate submission", f.submits.Load())
-	}
+	requireCount(t, &f.submits, 1, "duplicate submission")
 }
 
 func TestCloudProviderExecutionPollFailurePreservesKnownJob(t *testing.T) {

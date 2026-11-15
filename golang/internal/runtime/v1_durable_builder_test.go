@@ -11,7 +11,6 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/admission"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/secrets"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
@@ -309,14 +308,10 @@ func TestDurableV1RuntimeBuilderRequiresCapabilitySource(t *testing.T) {
 
 func TestNewProductionEngineFactoryInstallsCompleteBuilderWhenBothFactoriesExist(t *testing.T) {
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: emptySnapshotLoader,
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			return validBuilderGeneratePorts(nil), nil
-		},
-		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
-			return validCompactPorts(), nil
-		},
+		Resolver:             nilSecretResolver,
+		SnapshotLoader:       emptySnapshotLoader,
+		GeneratePortsFactory: validGeneratePortsFactory,
+		CompactPortsFactory:  validCompactPortsFactory,
 		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durable.Composition, error) {
 			return validCapabilityComposition(), nil
 		},
@@ -331,14 +326,10 @@ func TestNewProductionEngineFactoryInstallsCompleteBuilderWhenBothFactoriesExist
 
 func TestNewProductionEngineFactoryLeavesPhaseFactoriesUnconfiguredWithoutComposition(t *testing.T) {
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: emptySnapshotLoader,
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			return validBuilderGeneratePorts(nil), nil
-		},
-		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
-			return validCompactPorts(), nil
-		},
+		Resolver:             nilSecretResolver,
+		SnapshotLoader:       emptySnapshotLoader,
+		GeneratePortsFactory: validGeneratePortsFactory,
+		CompactPortsFactory:  validCompactPortsFactory,
 	})
 	if err != nil {
 		t.Fatalf("NewProductionEngineFactory() error = %v", err)
@@ -353,15 +344,11 @@ func TestNewProductionEngineFactoryPreservesExplicitBuilderWithoutComposition(t 
 		return testV1Runtime{}, nil
 	})
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:         secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader:   emptySnapshotLoader,
-		V1RuntimeBuilder: customBuilder,
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			return validBuilderGeneratePorts(nil), nil
-		},
-		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
-			return validCompactPorts(), nil
-		},
+		Resolver:             nilSecretResolver,
+		SnapshotLoader:       emptySnapshotLoader,
+		V1RuntimeBuilder:     customBuilder,
+		GeneratePortsFactory: validGeneratePortsFactory,
+		CompactPortsFactory:  validCompactPortsFactory,
 	})
 	if err != nil {
 		t.Fatalf("NewProductionEngineFactory() error = %v", err)
@@ -373,11 +360,9 @@ func TestNewProductionEngineFactoryPreservesExplicitBuilderWithoutComposition(t 
 
 func TestNewProductionEngineFactoryLeavesPartialPhaseCompositionUnconfigured(t *testing.T) {
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: emptySnapshotLoader,
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
-			return validBuilderGeneratePorts(nil), nil
-		},
+		Resolver:             nilSecretResolver,
+		SnapshotLoader:       emptySnapshotLoader,
+		GeneratePortsFactory: validGeneratePortsFactory,
 	})
 	if err != nil {
 		t.Fatalf("NewProductionEngineFactory() error = %v", err)
@@ -512,4 +497,14 @@ func durableBuilderSnapshot(t *testing.T) *config.Snapshot {
 		t.Fatalf("compile example config: %v", err)
 	}
 	return snapshot
+}
+
+// validGeneratePortsFactory builds valid Generate ports for any capabilities.
+func validGeneratePortsFactory(context.Context, V1RuntimeCapabilities) (durable.GeneratePorts, error) {
+	return validBuilderGeneratePorts(nil), nil
+}
+
+// validCompactPortsFactory builds valid Compact ports for any capabilities.
+func validCompactPortsFactory(context.Context, V1RuntimeCapabilities) (durable.CompactPorts, error) {
+	return validCompactPorts(), nil
 }

@@ -90,14 +90,8 @@ func TestRuntimeReplacementValidatorRejectsFileResultRootChange(t *testing.T) {
 			value.BlobStore.File.Root = root
 		}
 	}
-	current, err := config.Compile(context.Background(), replacementTestConfig(t, fileStore("/var/lib/llmtw/results")), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := config.Compile(context.Background(), replacementTestConfig(t, fileStore("/var/lib/llmtw/other")), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	current := mustCompileConfig(t, replacementTestConfig(t, fileStore("/var/lib/llmtw/results")))
+	replacement := mustCompileConfig(t, replacementTestConfig(t, fileStore("/var/lib/llmtw/other")))
 	var change *processLifetimeChangeError
 	if err := validateRuntimeReplacement(current, replacement); !errors.As(err, &change) || change.field != "blob_store.file.root" {
 		t.Fatalf("validateRuntimeReplacement() = %v, want blob_store.file.root", err)
@@ -107,10 +101,7 @@ func TestRuntimeReplacementValidatorRejectsFileResultRootChange(t *testing.T) {
 // How to reach the same Redis data is not identity: endpoints, credentials,
 // TLS and timeouts are swapped with the snapshot's rebuilt clients.
 func TestRuntimeReplacementValidatorAllowsStateConnectionChanges(t *testing.T) {
-	current, err := config.Compile(context.Background(), replacementTestConfig(t, func(*config.Config) {}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	current := mustCompileConfig(t, replacementTestConfig(t, func(*config.Config) {}))
 	replacement, err := config.Compile(context.Background(), replacementTestConfig(t, func(value *config.Config) {
 		value.State.Redis.Addresses = []string{"redis-2.example.internal:6379"}
 		value.State.Redis.Username.Name = "REDIS_USERNAME_ROTATED"
@@ -132,10 +123,7 @@ func TestRuntimeReplacementValidatorAllowsStateConnectionChanges(t *testing.T) {
 // Parent-snapshot storage only selects how new preparations are written. Every
 // build that has the setting reads both forms, so a reload may change it.
 func TestRuntimeReplacementValidatorAllowsParentSnapshotStorageChange(t *testing.T) {
-	current, err := config.Compile(context.Background(), replacementTestConfig(t, func(*config.Config) {}), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	current := mustCompileConfig(t, replacementTestConfig(t, func(*config.Config) {}))
 	replacement, err := config.Compile(context.Background(), replacementTestConfig(t, func(value *config.Config) {
 		value.State.Requests.ParentSnapshotStorage = config.ParentSnapshotStorageBlob
 	}), nil)

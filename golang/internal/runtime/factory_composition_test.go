@@ -55,7 +55,7 @@ func TestProductionFactoryRejectsUnconfiguredDurableSnapshotBeforeLoadingEngine(
 	snapshot := durableBuilderSnapshot(t)
 	loaded := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
+		Resolver: nilSecretResolver,
 		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
 			loaded = true
 			return engine.Snapshot{}, nil
@@ -187,14 +187,10 @@ func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t 
 
 	seen := make(map[[32]byte]int)
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:       secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader: emptySnapshotLoader,
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
-			return validBuilderGeneratePorts(nil), nil
-		},
-		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
-			return validCompactPorts(), nil
-		},
+		Resolver:             nilSecretResolver,
+		SnapshotLoader:       emptySnapshotLoader,
+		GeneratePortsFactory: validGeneratePortsFactory,
+		CompactPortsFactory:  validCompactPortsFactory,
 		DurableCompositionFactory: func(_ context.Context, capabilities V1RuntimeCapabilities) (durablestore.Composition, error) {
 			if capabilities.ConfigDigest == ([32]byte{}) {
 				t.Fatal("automatic preflight omitted the current config digest")
@@ -226,15 +222,11 @@ func TestProductionFactoryPreflightsAutomaticCompositionForEachReloadIdentity(t 
 func TestProductionFactoryDoesNotPreflightCompositionForExplicitBuilder(t *testing.T) {
 	compositionCalled := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver:         secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
-		SnapshotLoader:   emptySnapshotLoader,
-		V1RuntimeBuilder: NewGenerateV1RuntimeBuilder(),
-		GeneratePortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.GeneratePorts, error) {
-			return validBuilderGeneratePorts(nil), nil
-		},
-		CompactPortsFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.CompactPorts, error) {
-			return validCompactPorts(), nil
-		},
+		Resolver:             nilSecretResolver,
+		SnapshotLoader:       emptySnapshotLoader,
+		V1RuntimeBuilder:     NewGenerateV1RuntimeBuilder(),
+		GeneratePortsFactory: validGeneratePortsFactory,
+		CompactPortsFactory:  validCompactPortsFactory,
 		DurableCompositionFactory: func(context.Context, V1RuntimeCapabilities) (durablestore.Composition, error) {
 			compositionCalled = true
 			return durablestore.Composition{}, nil
@@ -256,7 +248,7 @@ func TestProductionFactoryDoesNotInferDurableBuilderFromCompositionFactory(t *te
 	loaded := false
 	compositionCalled := false
 	factory, err := NewProductionEngineFactory(ProductionFactoryOptions{
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil }),
+		Resolver: nilSecretResolver,
 		SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
 			loaded = true
 			return engine.Snapshot{}, nil

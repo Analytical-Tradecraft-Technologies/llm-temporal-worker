@@ -21,34 +21,19 @@ func checkpointFinalizerFixture(t *testing.T, kind, mode string) (*cloudRequestR
 	if err := save(effects); err != nil {
 		t.Fatal(err)
 	}
-	var payload cloudFinalizationPayload
-	if err := json.Unmarshal(repository.handoff.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := decodeJSON[cloudFinalizationPayload](t, repository.handoff.Payload)
 	checkpoint := state.DurableCheckpoint{ID: repository.handoff.CheckpointID, ScopeID: repository.handoff.CheckpointScope}
 	manifest := append(json.RawMessage(nil), repository.operation.Manifest...)
 	repository.handoff = nil
 	repository.record.Progress = json.RawMessage(`{"version":1}`)
 	commit := func() error {
 		if kind == "generate" {
-			var request llm.GenerateRequestV1
-			var response llm.GenerateResponseV1
-			if err := json.Unmarshal(manifest, &request); err != nil {
-				t.Fatal(err)
-			}
-			if err := json.Unmarshal(payload.Response, &response); err != nil {
-				t.Fatal(err)
-			}
+			request := decodeJSON[llm.GenerateRequestV1](t, manifest)
+			response := decodeJSON[llm.GenerateResponseV1](t, payload.Response)
 			return r.finalizer.CommitGenerate(context.Background(), request, checkpoint, response, effects)
 		}
-		var request llm.CompactRequestV1
-		var response llm.CompactResponseV1
-		if err := json.Unmarshal(manifest, &request); err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(payload.Response, &response); err != nil {
-			t.Fatal(err)
-		}
+		request := decodeJSON[llm.CompactRequestV1](t, manifest)
+		response := decodeJSON[llm.CompactResponseV1](t, payload.Response)
 		return r.finalizer.CommitCompact(context.Background(), request, checkpoint, response, effects)
 	}
 	return r, repository, store, run, commit
@@ -136,10 +121,7 @@ func TestCloudCheckpointFinalizationValidatesBeforePublication(t *testing.T) {
 				t.Fatal("lost plan acknowledgement hidden")
 			}
 			repository.savePlanErr = nil
-			var payload cloudFinalizationPayload
-			if err := json.Unmarshal(repository.checkpointPlan.Handoff.Payload, &payload); err != nil {
-				t.Fatal(err)
-			}
+			payload := decodeJSON[cloudFinalizationPayload](t, repository.checkpointPlan.Handoff.Payload)
 			switch failure {
 			case "version":
 				payload.Version = 2
@@ -240,14 +222,8 @@ func TestCloudCheckpointFinalizationNoWorkRejectsPaidOrCachedPayload(t *testing.
 				t.Fatal("expected lost acknowledgement")
 			}
 			repository.savePlanErr = nil
-			var payload cloudFinalizationPayload
-			if err := json.Unmarshal(repository.checkpointPlan.Handoff.Payload, &payload); err != nil {
-				t.Fatal(err)
-			}
-			var response llm.CompactResponseV1
-			if err := json.Unmarshal(payload.Response, &response); err != nil {
-				t.Fatal(err)
-			}
+			payload := decodeJSON[cloudFinalizationPayload](t, repository.checkpointPlan.Handoff.Payload)
+			response := decodeJSON[llm.CompactResponseV1](t, payload.Response)
 			switch fault {
 			case "kind":
 				response.Checkpoint.Kind = "generation"

@@ -95,18 +95,15 @@ func Validate(schema json.RawMessage, output []llm.Item) error {
 }
 
 func lowerSchema(source map[string]any, path string, strict bool) (map[string]any, error) {
+	lower := func(child any, path string) (map[string]any, error) { return lowerChild(child, path, strict) }
 	if ref, ok := source["$ref"]; ok {
 		// The provider does not accept $ref alongside other keywords; only
 		// the definitions it may point at are kept.
 		result := map[string]any{"$ref": ref}
 		if defs, ok := source["$defs"].(map[string]any); ok {
-			lowered := make(map[string]any, len(defs))
-			for name, child := range defs {
-				nested, err := lowerChild(child, schemawire.PointerJoin(schemawire.PointerJoin(path, "$defs"), name), strict)
-				if err != nil {
-					return nil, err
-				}
-				lowered[name] = nested
+			lowered, err := schemawire.LowerMap(defs, schemawire.PointerJoin(path, "$defs"), lower)
+			if err != nil {
+				return nil, err
 			}
 			result["$defs"] = lowered
 		}
@@ -126,30 +123,22 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 		switch key {
 		case "$defs", "properties":
 			children, _ := value.(map[string]any)
-			lowered := make(map[string]any, len(children))
-			for name, child := range children {
-				nested, err := lowerChild(child, schemawire.PointerJoin(childPath, name), strict)
-				if err != nil {
-					return nil, err
-				}
-				lowered[name] = nested
+			lowered, err := schemawire.LowerMap(children, childPath, lower)
+			if err != nil {
+				return nil, err
 			}
 			result[key] = lowered
 		case "items":
-			nested, err := lowerChild(value, childPath, strict)
+			nested, err := lower(value, childPath)
 			if err != nil {
 				return nil, err
 			}
 			result[key] = nested
 		case "anyOf", "allOf", "oneOf":
 			children, _ := value.([]any)
-			lowered := make([]any, 0, len(children))
-			for index, child := range children {
-				nested, err := lowerChild(child, fmt.Sprintf("%s/%d", childPath, index), strict)
-				if err != nil {
-					return nil, err
-				}
-				lowered = append(lowered, nested)
+			lowered, err := schemawire.LowerList(children, childPath, lower)
+			if err != nil {
+				return nil, err
 			}
 			result[key] = lowered
 		case "minItems":
@@ -171,16 +160,7 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 			result[key] = value
 		}
 	}
-	// oneOf is not accepted; anyOf is the nearest looser form, and the caller
-	// schema still enforces exclusivity on the final JSON.
-	if variants, ok := result["oneOf"]; ok {
-		if _, both := result["anyOf"]; both {
-			extras["oneOf"] = source["oneOf"]
-		} else {
-			result["anyOf"] = variants
-		}
-		delete(result, "oneOf")
-	}
+	schemawire.MergeOneOf(result, source, extras)
 	if schemawire.IsObjectSchema(source) {
 		properties, _ := result["properties"].(map[string]any)
 		if additional, present := source["additionalProperties"]; present && additional != false {
@@ -200,15 +180,8 @@ func lowerSchema(source map[string]any, path string, strict bool) (map[string]an
 	} else if additional, present := source["additionalProperties"]; present {
 		extras["additionalProperties"] = additional
 	}
-	if len(extras) > 0 {
-		note, err := schemawire.DescribeExtras(extras)
-		if err != nil {
-			return nil, fmt.Errorf("output schema at %s: %w", schemawire.DisplayPath(path), err)
-		}
-		if description, ok := result["description"].(string); ok && description != "" {
-			note = description + "\n\n" + note
-		}
-		result["description"] = note
+	if err := schemawire.NoteExtras(result, extras, path); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

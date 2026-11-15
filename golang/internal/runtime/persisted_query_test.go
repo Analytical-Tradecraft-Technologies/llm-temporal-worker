@@ -70,7 +70,7 @@ func (fake *fakePersistedProvider) ListCreditStatuses(_ context.Context, _ contr
 func persistedQueryTestService(t *testing.T, providerReader *fakePersistedProvider, audit control.AuditFunc) *control.QueryService {
 	t.Helper()
 	now := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
-	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	codec := testCursorCodec(128)
 	handler := &persistedQueryHandler{configDigest: sha256.Sum256([]byte("snapshot")), provider: providerReader, cursor: codec, clock: func() time.Time { return now }}
 	if audit == nil {
 		audit = func(context.Context, control.QueryAuditRecord) error { return nil }
@@ -137,7 +137,7 @@ func TestPersistedQueryBudgetStatusUsesRedisReaderContract(t *testing.T) {
 			AvailableUSD:     "7",
 		}},
 	}}
-	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	codec := testCursorCodec(128)
 	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
 	var audited control.QueryAuditRecord
 	service := &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, Audit: func(_ context.Context, record control.QueryAuditRecord) error { audited = record; return nil }, CursorCodec: codec, Clock: func() time.Time { return activeAt.Add(5 * time.Minute) }}
@@ -272,7 +272,7 @@ func TestPersistedQuerySpendSummaryUsesExplicitScopeResolver(t *testing.T) {
 		StartTime: start, EndTime: end,
 		Buckets: []control.SpendBucket{{KnownActualCostUSD: "1.25", ExactOperationCount: 1, Completeness: "complete"}},
 	}}
-	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	codec := testCursorCodec(128)
 	now := end.Add(time.Minute)
 	var resolved control.QueryScope
 	service, err := NewPersistedQueryService(&config.Snapshot{}, QueryRepositories{SpendSummary: spend}, PersistedQueryOptions{
@@ -386,10 +386,7 @@ func TestNewPersistedQueryServiceBuilderRequiresDeploymentSecurityInputs(t *test
 
 func TestPersistedQueryServiceBuilderLogsWithoutAuditRepository(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Output: &output})
 	authorize := func(context.Context, control.Authorization) error { return nil }
 	cursorKey := []byte("query-builder-key")
 	builder, err := NewPersistedQueryServiceBuilder(PersistedQueryBuilderOptions{
@@ -608,7 +605,13 @@ func encodeTestQuery(t *testing.T, key control.OperationKey, kind llm.QueryKind,
 // budgetStatusService is a query service answering budget status from reader
 // with every clock fixed at now.
 func budgetStatusService(reader BudgetStatusReader, now time.Time) *control.QueryService {
-	codec := &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: 128}
+	codec := testCursorCodec(128)
 	handler := &persistedQueryHandler{budget: reader, cursor: codec, clock: func() time.Time { return now }}
 	return &control.QueryService{TypedHandler: handler, Authorize: func(context.Context, control.Authorization) error { return nil }, CursorCodec: codec, Clock: func() time.Time { return now }}
+}
+
+// testCursorCodec is the query tests' hour-long cursor codec admitting
+// positions up to maxPosition.
+func testCursorCodec(maxPosition int) *control.CursorCodec {
+	return &control.CursorCodec{Key: []byte("query-test-key"), TTL: time.Hour, MaxPosition: maxPosition}
 }

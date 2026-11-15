@@ -64,7 +64,7 @@ func lowerRequestWithStrict(request llm.Request, profile Profile, serviceTier st
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("input item %d: %w", index, err)
 		}
-		if anthropicwire.EmptyModelMessage(item) {
+		if provider.EmptyModelMessage(item) {
 			continue
 		}
 		messages = append(messages, message)

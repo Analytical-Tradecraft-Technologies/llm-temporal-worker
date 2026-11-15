@@ -92,25 +92,13 @@ func liftResponse(call provider.Call, response *responses.Response, requestID st
 		encoded, _ := json.Marshal(response.Usage.TotalTokens)
 		usage.ProviderRaw["total_tokens"] = encoded
 	}
-	service := llm.ServiceFacts{
-		Requested:     call.ServiceClass,
-		Attempted:     call.ServiceClass,
-		Actual:        actual,
-		ProviderValue: string(response.ServiceTier),
-		FallbackIndex: 0,
-	}
 	result := llm.Response{
 		APIVersion:   llm.APIVersion,
 		OperationKey: call.OperationKey,
 		Status:       status,
 		Output:       output,
-		Route: llm.RouteFacts{
-			EndpointID:     call.EndpointID,
-			APIFamily:      string(provider.FamilyOpenAIResponses),
-			RequestedModel: call.Model,
-			ResolvedModel:  string(response.Model),
-		},
-		Service:      service,
+		Route:        call.RouteFacts(provider.FamilyOpenAIResponses, string(response.Model)),
+		Service:      call.ServiceFacts(actual, string(response.ServiceTier)),
 		Usage:        usage,
 		Provider:     providerFacts,
 		Continuation: continuationForResponse(call, response),
@@ -130,13 +118,7 @@ func validateFinalJSON(call provider.Call, output []llm.Item, status llm.Respons
 	if status != llm.ResponseStatusCompleted || hasToolCalls || hasRefusal || call.SDKParams == nil {
 		return nil
 	}
-	params, ok := call.SDKParams.(responses.ResponseNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*responses.ResponseNewParams); pointerOK && pointer != nil {
-			params = *pointer
-			ok = true
-		}
-	}
+	params, ok := provider.SDKParamsAs[responses.ResponseNewParams](call)
 	if !ok {
 		return nil
 	}
@@ -363,13 +345,7 @@ func continuationForResponse(call provider.Call, response *responses.Response) *
 }
 
 func statefulContinuationEnabled(call provider.Call) bool {
-	params, ok := call.SDKParams.(responses.ResponseNewParams)
-	if !ok {
-		if pointer, pointerOK := call.SDKParams.(*responses.ResponseNewParams); pointerOK && pointer != nil {
-			params = *pointer
-			ok = true
-		}
-	}
+	params, ok := provider.SDKParamsAs[responses.ResponseNewParams](call)
 	if !ok {
 		return true
 	}

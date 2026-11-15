@@ -195,10 +195,7 @@ func TestCheckpointReplayCancellationAndMalformedRequestsDoNotRead(t *testing.T)
 	}
 }
 func TestCheckpointReplayRealHandleVerifierRejectsOtherScopeBeforeRead(t *testing.T) {
-	keyring, err := state.NewKeyring([]state.Key{{ID: "key", Secret: bytes.Repeat([]byte{4}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyring := testKeyring(t, state.Key{ID: "key", Secret: bytes.Repeat([]byte{4}, 32)})
 	handle, err := keyring.IssueCheckpointHandle("signed-scope", "00000000-0000-4000-8000-000000000001")
 	if err != nil {
 		t.Fatal(err)

@@ -39,11 +39,9 @@ func TestCloudWorkflowLiveExpiredAdmission(t *testing.T) {
 	h := newLiveCloudWorkflow(t, false, false)
 	f := h.fixture
 	ageLiveCloudAttempt(t, h)
-	prepared, err := f.runtime.PrepareExecutionV1(h.ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+	prepared := f.prepare(t, h.ctx, llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionBudgetRequired)
 	ref := f.ref(prepared)
-	acquired, err := f.runtime.AcquireBudgetV1(h.ctx, ref)
-	boundedState(t, acquired, err, llm.ExecutionAcquired)
+	acquired := f.acquire(t, h.ctx, ref, llm.ExecutionAcquired)
 	_, scope, first := f.firstAttempt(t, h.ctx, acquired)
 	leases := liveCloudLeases(t, h)
 	old, ok := leases[string(first.ID)]
@@ -61,9 +59,7 @@ func TestCloudWorkflowLiveExpiredAdmission(t *testing.T) {
 	h.startWorker(t)
 	h.generate(t, f.request)
 	next, leases := liveReplacementAttempt(t, h, scope, first)
-	if f.submits.Load() != 1 {
-		t.Fatal("expired admission did not become exactly one fresh attempt")
-	}
+	requireCount(t, &f.submits, 1, "expired admission did not become exactly one fresh attempt")
 	retired, err := f.repository.Read(h.ctx, scope, first.ID)
 	if err != nil || retired.Status != cloudstate.StatusFailed {
 		t.Fatal("unused attempt was not retired", err)
@@ -96,8 +92,7 @@ func TestCloudWorkflowLiveUnknownSubmission(t *testing.T) {
 			f.adapter.submit = func(ctx context.Context, _ provider.Call, observer provider.Observer) (provider.ResumableResult, error) {
 				return provider.ResumableResult{}, lost(ctx, observer)
 			}
-			pending, err := f.runtime.GenerateStepV1(h.ctx, f.request)
-			boundedState(t, pending, err, llm.ExecutionPending)
+			pending := f.step(t, h.ctx, f.request, llm.ExecutionPending)
 			_, scope, first := f.firstAttempt(t, h.ctx, pending)
 			saved, err := f.repository.LoadProviderExecution(h.ctx, scope, first.ID)
 			if err != nil || saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Claim == nil || saved.Execution.Settled {
@@ -112,9 +107,7 @@ func TestCloudWorkflowLiveUnknownSubmission(t *testing.T) {
 			h.startWorker(t)
 			h.generate(t, f.request)
 			next, leases := liveReplacementAttempt(t, h, scope, first)
-			if f.submits.Load() != 2 {
-				t.Fatal("uncertain submission did not acquire one independent paid retry")
-			}
+			requireCount(t, &f.submits, 2, "uncertain submission did not acquire one independent paid retry")
 			old, err := f.repository.Read(h.ctx, scope, first.ID)
 			if err != nil || old.Status != cloudstate.StatusOutcomeUnknown {
 				t.Fatal("original paid work was discarded", err)

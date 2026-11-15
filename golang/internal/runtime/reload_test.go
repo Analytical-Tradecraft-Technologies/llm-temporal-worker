@@ -24,10 +24,7 @@ func TestRuntimeReloadFileRejectsBadReplacementAndRecordsBoundedFailure(t *testi
 	options.LogOutput = &logs
 	runtime := newTestRuntime(t, context.Background(), runtimeConfig(t), options)
 	old := runtime.App.Current()
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("not-a-valid-config: true\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	path := tempConfigFile(t, "not-a-valid-config: true\n")
 	err := runtime.ReloadFile(context.Background(), path)
 	testassert.ErrorContains(t, err, "reload configuration failed")
 	if runtime.App.Current() != old {
@@ -122,14 +119,8 @@ func TestRuntimeRunReloadsFromSIGHUPTrigger(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
 	data := runtimeConfig(t)
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := tempConfigFile(t, string(data))
+	runtime := mustNewRuntime(t, data, testRuntimeOptions(t, controller, &closed))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	signals := make(chan os.Signal, 1)
@@ -163,10 +154,7 @@ func TestRuntimeRunCancellationInterruptsPublishedReloadDrain(t *testing.T) {
 	data := runtimeConfig(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	writeReplacedConfig(t, path, data, "provider_timeout: 120s", "provider_timeout: 121s")
-	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, data, testRuntimeOptions(t, controller, &closed))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	reloads := make(chan struct{}, 1)
@@ -188,7 +176,7 @@ func TestRuntimeRunCancellationInterruptsPublishedReloadDrain(t *testing.T) {
 	go func() { done <- runtime.RunWithReload(ctx, path, reloads) }()
 	waitForReloadRuntimeStart(t, runtime, done)
 	old := runtime.App.Current()
-	lease, err = runtime.App.Acquire()
+	lease, err := runtime.App.Acquire()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,10 +248,7 @@ func waitForReloadRuntimeStart(t *testing.T, runtime *Runtime, done <-chan error
 }
 
 func TestConfigFileWatcherDetectsAtomicReplacement(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("first"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	path := tempConfigFile(t, "first")
 	watcher, err := newConfigFileWatcher(path, time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -284,17 +269,8 @@ func TestConfigFileWatcherDetectsAtomicReplacement(t *testing.T) {
 }
 
 func TestConfigFileWatcherDetectsReplacementBeforeWatcherInitialization(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	initial := []byte("version: initial\n")
-	replacement := []byte("version: replacement\n")
-	if err := os.WriteFile(path, replacement, 0600); err != nil {
-		t.Fatal(err)
-	}
-	watcher, err := newConfigFileWatcherWithBaseline(path, time.Millisecond, initial)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = watcher.Close() })
+	path := tempConfigFile(t, "version: replacement\n")
+	watcher := pollingConfigFileWatcher(t, path, time.Millisecond, []byte("version: initial\n"))
 	select {
 	case <-watcher.Changes():
 		// A metadata-only watcher would have incorrectly treated the
@@ -305,16 +281,9 @@ func TestConfigFileWatcherDetectsReplacementBeforeWatcherInitialization(t *testi
 }
 
 func TestConfigFileWatcherDoesNotEmitForMatchingStartupBaseline(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	initial := []byte("version: initial\n")
-	if err := os.WriteFile(path, initial, 0600); err != nil {
-		t.Fatal(err)
-	}
-	watcher, err := newConfigFileWatcherWithBaseline(path, time.Millisecond, initial)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = watcher.Close() })
+	const initial = "version: initial\n"
+	path := tempConfigFile(t, initial)
+	watcher := pollingConfigFileWatcher(t, path, time.Millisecond, []byte(initial))
 	select {
 	case <-watcher.Changes():
 		t.Fatal("watcher emitted a false startup replacement notification")

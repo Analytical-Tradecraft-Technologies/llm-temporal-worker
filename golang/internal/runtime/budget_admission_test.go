@@ -168,10 +168,7 @@ func TestBudgetAdmissionRejectsInvalidInputsBeforeRedis(t *testing.T) {
 			f := newBudgetAdmissionFixture(t)
 			ctx := context.Background()
 			code := provider.CodeInvalidArgument
-			f.leaser.accept = func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
-				t.Fatal("invalid input reached Redis")
-				return durable.ReserveResult{}, nil
-			}
+			f.leaser.accept = forbidReserve(t, "invalid input reached Redis")
 			switch name {
 			case "Generate request":
 				f.gen.OperationKey = ""
@@ -227,10 +224,7 @@ func TestBudgetAdmissionValidatesReservationBeforeClaiming(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			f.leaser.claim = func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
-				t.Fatal("invalid reservation reached Redis claim")
-				return durable.ClaimReceipt{}, nil
-			}
+			f.leaser.claim = forbidClaim(t, "invalid reservation reached Redis claim")
 			switch name {
 			case "wait":
 				result.Accepted, result.Events = false, nil
@@ -349,10 +343,7 @@ func TestBudgetAdmissionConcurrentClaimsGrantOnePermission(t *testing.T) {
 
 func TestBudgetAdmissionCapturesCompositionLeaserAcrossReload(t *testing.T) {
 	f := newBudgetAdmissionFixture(t)
-	other := &admissionLeaser{accept: func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
-		t.Fatal("old adapter used new snapshot or separate capability leaser")
-		return durable.ReserveResult{}, nil
-	}}
+	other := &admissionLeaser{accept: forbidReserve(t, "old adapter used new snapshot or separate capability leaser")}
 	f.cap.Budgets = other
 	f.cap.composition.Materializer = other
 	f.cap.ConfigDigest = [32]byte{4}
@@ -482,5 +473,23 @@ func TestBudgetAdmissionStartDeadlineAndShorterPlannerExpiry(t *testing.T) {
 				assertBudgetAdmissionError(t, err, provider.CodeBudgetDenied, provider.DispatchNotDispatched, provider.RetryAfter)
 			}
 		})
+	}
+}
+
+// forbidReserve is a reservation hook that fails the test with message if
+// any reservation reaches Redis.
+func forbidReserve(t *testing.T, message string) func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
+	return func(context.Context, durable.ReserveRequest) (durable.ReserveResult, error) {
+		t.Fatal(message)
+		return durable.ReserveResult{}, nil
+	}
+}
+
+// forbidClaim is a claim hook that fails the test with message if any claim
+// reaches Redis.
+func forbidClaim(t *testing.T, message string) func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
+	return func(context.Context, durable.ClaimRequest) (durable.ClaimReceipt, error) {
+		t.Fatal(message)
+		return durable.ClaimReceipt{}, nil
 	}
 }

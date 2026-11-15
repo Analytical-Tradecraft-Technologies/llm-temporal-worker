@@ -56,7 +56,7 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 	f := boundedCloud(t, false, withParentSnapshotBlob)
 	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
-	p, err := f.runtime.preparation.Load(ctx, llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability})
+	p, err := f.runtime.preparation.Load(ctx, executionRef(v, child.Context))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestCloudExecutionRuntimeReadsParentOncePerStep(t *testing.T) {
 	}
 	parentKey = parentSnapshotBlob(t, f, child, v)
 	f.now = f.now.Add(time.Second)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
+	ref := executionRef(v, child.Context)
 	step("acquire", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.AcquireBudgetV1(ctx, ref) }, llm.ExecutionAcquired)
 	step("generate", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.GenerateStepV1(ctx, child) }, llm.ExecutionProviderCompleted)
 	step("complete", 1, func() (llm.ExecutionResultV1, error) { return f.runtime.CompleteExecutionV1(ctx, ref) }, llm.ExecutionCompleted)
@@ -153,11 +153,9 @@ func TestCloudExecutionRuntimeTurnStillRejectsCorruptParent(t *testing.T) {
 	child, v := loadOnceChild(t, f, "child")
 	ctx := context.Background()
 	parentKey := parentSnapshotBlob(t, f, child, v)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: child.Context, Capability: v.Capability}
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, child)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	ref := executionRef(v, child.Context)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+	v = f.step(t, ctx, child, llm.ExecutionProviderCompleted)
 	f.blobs.mu.Lock()
 	f.blobs.values[parentKey][20] ^= 1
 	f.blobs.mu.Unlock()

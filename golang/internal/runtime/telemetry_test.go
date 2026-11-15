@@ -27,10 +27,7 @@ func TestRuntimeConstructsConfiguredTelemetryAndFlushesOnShutdown(t *testing.T) 
 	var logs bytes.Buffer
 	options.LogOutput = &logs
 	data := []byte(strings.Replace(string(runtimeConfig(t)), "sample_ratio: \"0.05\"", "sample_ratio: \"1\"", 1))
-	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, data, options)
 	if runtime.Metrics == nil || runtime.Tracer == nil || runtime.Logger == nil {
 		t.Fatalf("runtime telemetry = metrics:%v tracer:%v logger:%v", runtime.Metrics != nil, runtime.Tracer != nil, runtime.Logger != nil)
 	}
@@ -64,10 +61,7 @@ func TestRuntimeWithMetricsDisabledConstructsAndRunsLifecycle(t *testing.T) {
 	options := testRuntimeOptions(t, controller, &closed)
 	data := []byte(strings.Replace(string(runtimeConfig(t)), "metrics:\n    enabled: true", "metrics:\n    enabled: false", 1))
 
-	runtime, err := New(context.Background(), data, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, data, options)
 	if runtime.Metrics != nil {
 		t.Fatal("disabled metrics constructed a recording metrics registry")
 	}

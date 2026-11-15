@@ -35,14 +35,12 @@ func TestCloudExecutionRuntimeRenewsAttemptBeforeLeaseExpiry(t *testing.T) {
 	v := f.prepareGenerate(t, ctx)
 	_, scope, first := f.firstAttempt(t, ctx, v)
 	f.now = first.CreatedAt.Add(cache.MaxFillLease - cloudstate.UnusedAttemptRenewMargin)
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	v = f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
 		t.Fatalf("attempt not renewed before expiry: %+v, %v", next, err)
 	}
-	v, err = f.runtime.CompleteExecutionV1(ctx, f.ref(v))
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.complete(t, ctx, f.ref(v), llm.ExecutionCompleted)
 	f.requireCacheOutcome(t, "renewed attempt", v, "miss_populated", 1)
 }
 
@@ -151,17 +149,13 @@ func TestCloudCachedStepAcrossLeaseExpiryStaysRetryable(t *testing.T) {
 					}
 					f.now = f.now.Add(time.Second)
 					if err == nil && v.State == llm.ExecutionFailed {
-						v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-						boundedState(t, v, err, llm.ExecutionAcquired)
+						f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 					}
 					v, err = f.runtime.GenerateStepV1(ctx, f.request)
 				}
 				boundedState(t, v, err, llm.ExecutionProviderCompleted)
-				v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionCompleted)
-				if f.submits.Load() != 1 {
-					t.Fatal("request not submitted exactly once", f.submits.Load())
-				}
+				f.complete(t, ctx, ref, llm.ExecutionCompleted)
+				requireCount(t, &f.submits, 1, "request not submitted exactly once")
 			})
 		}
 	}

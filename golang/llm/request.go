@@ -107,15 +107,21 @@ type Instruction struct {
 	Content []Part
 }
 
-func (instruction Instruction) MarshalJSON() ([]byte, error) {
-	kind := instruction.Kind
-	if kind == "" {
-		if len(instruction.Content) == 0 {
-			kind = InstructionKindText
-		} else {
-			kind = InstructionKindParts
-		}
+// effectiveKind is the instruction's kind, defaulting to text when it has no
+// content and to parts otherwise.
+func (instruction Instruction) effectiveKind() InstructionKind {
+	switch {
+	case instruction.Kind != "":
+		return instruction.Kind
+	case len(instruction.Content) == 0:
+		return InstructionKindText
+	default:
+		return InstructionKindParts
 	}
+}
+
+func (instruction Instruction) MarshalJSON() ([]byte, error) {
+	kind := instruction.effectiveKind()
 	if kind != InstructionKindText && kind != InstructionKindParts {
 		return nil, fmt.Errorf("instruction kind %q is invalid", kind)
 	}
@@ -692,7 +698,7 @@ func (request *Request) UnmarshalJSON(data []byte) error {
 }
 
 // decodeEngineHeader reads the api_version and operation_key the engine
-// Request and Response start with. Unlike decodeContractHeader it reports a
+// Request and Response start with. Unlike decodeContractObject it reports a
 // missing api_version as a missing field.
 func decodeEngineHeader(fields map[string]json.RawMessage) (string, string, error) {
 	apiVersion, err := requiredString(fields, "api_version")
@@ -757,13 +763,13 @@ func decodeFloat64(data []byte) (float64, error) {
 }
 
 func validateReasoning(reasoning ReasoningSpec) error {
-	if reasoning.Mode != "" && reasoning.Mode != ReasoningModeProviderDefault && reasoning.Mode != ReasoningModeDisabled && reasoning.Mode != ReasoningModeAdaptive && reasoning.Mode != ReasoningModeEnabled {
+	if reasoning.Mode != "" && !ValidReasoningModeV1(reasoning.Mode) {
 		return fmt.Errorf("reasoning mode %q is invalid", reasoning.Mode)
 	}
-	if reasoning.Effort != "" && reasoning.Effort != ReasoningEffortProviderDefault && reasoning.Effort != ReasoningEffortMinimal && reasoning.Effort != ReasoningEffortLow && reasoning.Effort != ReasoningEffortMedium && reasoning.Effort != ReasoningEffortHigh && reasoning.Effort != ReasoningEffortExtraHigh && reasoning.Effort != ReasoningEffortMaximum {
+	if reasoning.Effort != "" && !validReasoningEffort(reasoning.Effort) {
 		return fmt.Errorf("reasoning effort %q is invalid", reasoning.Effort)
 	}
-	if reasoning.Summary != "" && reasoning.Summary != ReasoningSummaryProviderDefault && reasoning.Summary != ReasoningSummaryNone && reasoning.Summary != ReasoningSummaryAuto && reasoning.Summary != ReasoningSummaryConcise && reasoning.Summary != ReasoningSummaryDetailed {
+	if reasoning.Summary != "" && !validReasoningSummary(reasoning.Summary) {
 		return fmt.Errorf("reasoning summary %q is invalid", reasoning.Summary)
 	}
 	return nil

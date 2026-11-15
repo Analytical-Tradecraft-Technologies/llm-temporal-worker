@@ -43,7 +43,7 @@ func TestCloudConcurrentFailureFinalization(t *testing.T) {
 			}
 			ctx, v := f.generateStep(t, llm.ExecutionFailed)
 			ref := f.ref(v)
-			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+			scope := testRequestScope
 			f.now = f.now.Add(time.Second)
 			// Force another acquisition to advance the root between this caller's
 			// load of the failed attempt and its idempotent failure finalization.
@@ -99,10 +99,7 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 					return provider.ResumableResult{State: provider.ResumableFailed, Dispatch: provider.DispatchAccepted, ProviderOperationID: id, Failure: failure}, nil
 				}
 			} else {
-				f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
-					f.submits.Add(1)
-					return provider.Result{}, failure
-				}
+				f.adapter.invoke = invokeFailing(&f.submits, failure)
 			}
 			ctx := context.Background()
 			v, err := f.runtime.GenerateStepV1(ctx, f.request)
@@ -116,7 +113,7 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 			if !v.Retryable {
 				t.Fatal("lost retry classification")
 			}
-			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+			scope := testRequestScope
 			first, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 			if err != nil {
 				t.Fatal(err)
@@ -128,13 +125,9 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 			assertCloudStatus(t, f, first.ID, cloudstate.StatusFailed)
 			assertCloudStatus(t, f, first.RootID, cloudstate.StatusRunning)
 			f.restart(t)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionFailed)
-			if f.submits.Load() != 1 {
-				t.Fatal("activity retry submitted")
-			}
-			v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionBudgetWait)
+			f.step(t, ctx, f.request, llm.ExecutionFailed)
+			requireCount(t, &f.submits, 1, "activity retry submitted")
+			v = f.acquire(t, ctx, ref, llm.ExecutionBudgetWait)
 			if v.RetryAfterSeconds != 10 {
 				t.Fatal("provider delay discarded", v)
 			}
@@ -174,17 +167,14 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 				v, err = f.runtime.PollExecutionV1(ctx, ref)
 			}
 			boundedState(t, v, err, llm.ExecutionProviderCompleted)
-			v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionCompleted)
+			f.complete(t, ctx, ref, llm.ExecutionCompleted)
 			paid, err := f.repository.LoadProviderExecution(ctx, scope, second.ID)
 			if err != nil || !paid.Execution.Settled || paid.Execution.Reservation.OperationID == saved.Execution.Reservation.OperationID {
 				t.Fatal("retry reused reservation", err)
 			}
 			assertCloudStatus(t, f, first.ID, cloudstate.StatusFailed)
 			assertCloudStatus(t, f, first.RootID, cloudstate.StatusCompleted)
-			if f.submits.Load() != 2 {
-				t.Fatal("wrong paid submission count")
-			}
+			requireCount(t, &f.submits, 2, "wrong paid submission count")
 		})
 	}
 }
@@ -192,7 +182,7 @@ func TestCloudFailureRetriesUseSettledIndependentAttempts(t *testing.T) {
 func assertCloudStatus(t *testing.T, f *boundedCloudFixture, id cloudstate.RequestID, want cloudstate.Status) {
 	t.Helper()
 	ctx := context.Background()
-	record, err := f.repository.Read(ctx, cloudstate.Scope{Tenant: "tenant", Project: "project"}, id)
+	record, err := f.repository.Read(ctx, testRequestScope, id)
 	if err != nil || record.Status != want {
 		t.Fatal("unexpected durable status", record.Status, want, err)
 	}
@@ -213,12 +203,8 @@ func assertCloudStatus(t *testing.T, f *boundedCloudFixture, id cloudstate.Reque
 func TestCloudPermanentFailureReplaysWithoutParentOrProvider(t *testing.T) {
 	f := boundedCloud(t, false)
 	ctx := context.Background()
-	f.adapter.invoke = func(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
-		f.submits.Add(1)
-		return provider.Result{}, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "private")
-	}
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.adapter.invoke = invokeFailing(&f.submits, provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "private"))
+	v := f.step(t, ctx, f.request, llm.ExecutionFailed)
 	ref, _, first := f.firstAttempt(t, ctx, v)
 	assertCloudStatus(t, f, first.ID, cloudstate.StatusFailed)
 	assertCloudStatus(t, f, first.RootID, cloudstate.StatusFailed)
@@ -240,9 +226,7 @@ func TestCloudPermanentFailureReplaysWithoutParentOrProvider(t *testing.T) {
 			t.Fatalf("failure changed: %+v", result)
 		}
 	}
-	if f.submits.Load() != 1 {
-		t.Fatal("permanent failure resubmitted")
-	}
+	requireCount(t, &f.submits, 1, "permanent failure resubmitted")
 	denied := f.options
 	denied.ResolveScope = func(context.Context, llm.RequestContext) (string, error) { return "", errors.New("denied") }
 	r, err := f.cap.NewCloudExecutionRuntime(ctx, denied)

@@ -30,10 +30,7 @@ func TestCloudGenerationPlan(t *testing.T) {
 			f.request.SettingsPatch.CompactionPolicy.Set = &policy
 			if mode != "root" {
 				parent := f.finish(t)
-				handle := parent.Generate.Checkpoint.Handle
-				f.request.Parent = &handle
-				f.request.OperationKey = "next-turn"
-				f.request.SettingsPatch = llm.SettingsPatchV1{}
+				f.continueTurn(parent.Generate.Checkpoint.Handle, "next-turn")
 				f.now = f.now.Add(time.Second)
 			}
 			if mode == "tokens" || mode == "no-prefix" {
@@ -66,9 +63,7 @@ func TestCloudGenerationPlan(t *testing.T) {
 			if err != nil || decision.CompactBeforeGenerate != want {
 				t.Fatalf("decision=%+v want=%t err=%v", decision, want, err)
 			}
-			if f.submits.Load() != before {
-				t.Fatal("planning performed paid work")
-			}
+			requireCount(t, &f.submits, before, "planning performed paid work")
 		})
 	}
 }
@@ -87,8 +82,7 @@ func TestCloudGenerationPlanRejectsUnauthorizedBeforeRead(t *testing.T) {
 
 func TestCloudGenerationPlanLargeInputAndTokenizerFailure(t *testing.T) {
 	f := boundedCloud(t, false)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	// The large turn is history: the next turn can compact it away.
 	f.request.Append = []llm.Item{llm.HumanText(strings.Repeat("x", 300<<10))}
 	parent := f.finish(t)
@@ -115,13 +109,9 @@ func TestCloudGenerationPlanLargeInputAndTokenizerFailure(t *testing.T) {
 
 func TestCloudGenerationPlanMaterializesOutputCap(t *testing.T) {
 	f := boundedCloud(t, false)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	parent := f.finish(t)
-	handle := parent.Generate.Checkpoint.Handle
-	f.request.Parent = &handle
-	f.request.OperationKey = "next-output-cap"
-	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.continueTurn(parent.Generate.Checkpoint.Handle, "next-output-cap")
 	f.restart(t)
 	providers := f.runtime.execution.admission.planning.providers
 	providers.outputLimit = 1000
@@ -170,14 +160,10 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 		models = append(models, call.Model)
 		return invoke(ctx, call, o)
 	}
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	f.restart(t)
 	parent := f.finish(t)
-	handle := parent.Generate.Checkpoint.Handle
-	f.request.Parent = &handle
-	f.request.OperationKey = "next-turn"
-	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.continueTurn(parent.Generate.Checkpoint.Handle, "next-turn")
 	f.now = f.now.Add(time.Second)
 	f.restart(t)
 	decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request)
@@ -204,9 +190,7 @@ func TestCloudGenerationPlanConsidersEveryCandidateContextWindow(t *testing.T) {
 
 	// A route that fits but that selection would skip at compilation must not
 	// suppress compaction either: generation would end without a route.
-	f.adapter.compile = func(provider.CompileInput) (provider.Call, error) {
-		return provider.Call{}, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNextRoute, "unsupported")
-	}
+	f.adapter.compile = failCompile(provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNextRoute, "unsupported"))
 	f.request.OperationKey = "uncompilable-turn"
 	if decision, err := f.runtime.PlanGenerationV1(context.Background(), f.request); err != nil || !decision.CompactBeforeGenerate {
 		t.Fatalf("uncompilable larger route still counted as usable: %+v %v", decision, err)

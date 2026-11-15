@@ -30,8 +30,7 @@ func TestCloudWorkflowLiveOCaml(t *testing.T) {
 	h := newLiveCloudWorkflow(t, true, false)
 	request := h.fixture.request
 	request.Cache = &llm.CachePolicyV1{Variant: 1}
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&request)
 	dir := t.TempDir()
 	input, saved, output := filepath.Join(dir, "request.json"), filepath.Join(dir, "execution.json"), filepath.Join(dir, "response.json")
 	writeCloudOCamlInput(t, input, request)
@@ -98,10 +97,7 @@ func TestCloudWorkflowLiveOCaml(t *testing.T) {
 
 func writeCloudOCamlInput(t *testing.T, path string, request llm.GenerateRequestV1) {
 	t.Helper()
-	raw, err := json.Marshal(request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := encodeJSON(t, request)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -117,10 +113,7 @@ func runCloudOCaml(t *testing.T, ctx context.Context, binary string, args ...str
 
 func assertCloudOCamlResult(t *testing.T, path string, request llm.GenerateRequestV1) {
 	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := mustReadFile(t, path)
 	var result struct {
 		Generate llm.GenerateResponseV1 `json:"generate"`
 		Compact  llm.CompactResponseV1  `json:"compact"`

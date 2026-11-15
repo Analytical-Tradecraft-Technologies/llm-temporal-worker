@@ -6,7 +6,6 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 )
 
 // A 600 KiB inline image is a few thousand billed tokens, not the ~205k its
@@ -27,11 +26,7 @@ func TestCloudExecutionAdmitsInlineImageOnContextLimitedRoute(t *testing.T) {
 	})
 	ctx := context.Background()
 	prepared := f.prepareGenerate(t, ctx)
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-	attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(prepared.RequestID))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, scope, attempt := f.firstAttempt(t, ctx, prepared)
 	plan, err := f.repository.LoadBudgetPlan(ctx, scope, attempt.ID)
 	if err != nil {
 		t.Fatal(err)

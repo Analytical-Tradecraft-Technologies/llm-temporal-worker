@@ -54,8 +54,7 @@ func cloudMetricTotal(t *testing.T, metrics *observability.Metrics, name string,
 func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 	metrics, ctx := cloudTestMetrics(t)
 	f := boundedCloud(t, false)
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 	for _, name := range []string{"llmtw_budget_admission_total", "llmtw_provider_attempt_total", "llmtw_provider_duration_seconds", "llmtw_service_class_actual_total", "llmtw_cost_status_total"} {
 		if cloudMetricTotal(t, metrics, name) == 0 {
 			t.Errorf("%s was not recorded on the cloud path", name)
@@ -70,8 +69,7 @@ func TestCloudRuntimeRecordsRequestMetrics(t *testing.T) {
 	// A lost paid response is ambiguous.
 	f.adapter.invoke = invokeFailingAfterWrite(nil, errors.New("lost paid response"))
 	f.request.OperationKey = "ambiguous"
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	f.step(t, ctx, f.request, llm.ExecutionPending)
 	if cloudMetricTotal(t, metrics, "llmtw_ambiguous_total") != 1 {
 		t.Fatal("ambiguous dispatch was not recorded")
 	}
@@ -142,14 +140,11 @@ func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
 	metrics, ctx := cloudTestMetrics(t)
 	f := boundedCloud(t, true)
 	f.request.Cache = &llm.CachePolicyV1{}
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	v := f.step(t, ctx, f.request, llm.ExecutionPending)
 	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	f.poll(t, ctx, ref, llm.ExecutionProviderCompleted)
+	v = f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	if got := cloudMetricTotal(t, metrics, "llmtw_provider_poll_total"); got != 2 {
 		t.Fatalf("poll events = %v, want started and completed", got)
 	}
@@ -158,7 +153,7 @@ func TestCloudRuntimeRecordsPollAndCacheMetrics(t *testing.T) {
 	}
 	// An identical request under another key is served from the cache.
 	f.request.OperationKey = "cached-repeat"
-	v, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	if err != nil || v.State != llm.ExecutionCompleted {
 		ref = f.ref(v)
 		v, err = f.runtime.AcquireBudgetV1(ctx, ref)
@@ -182,11 +177,10 @@ func TestCloudRuntimeCountsInvalidPollAsFailed(t *testing.T) {
 		v.ProviderOperationID = "another-job"
 		return v, nil
 	}
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	v := f.step(t, ctx, f.request, llm.ExecutionPending)
 	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
-	if v, err = f.runtime.PollExecutionV1(ctx, ref); err == nil && v.State == llm.ExecutionProviderCompleted {
+	if v, err := f.runtime.PollExecutionV1(ctx, ref); err == nil && v.State == llm.ExecutionProviderCompleted {
 		t.Fatal("invalid poll result completed")
 	}
 	if got := cloudMetricTotal(t, metrics, "llmtw_provider_poll_total", "outcome", "completed"); got != 0 {
@@ -204,8 +198,7 @@ func TestCloudRuntimeRecordsStepAndAttemptSpans(t *testing.T) {
 	tracer := observability.NewTracer(observability.TraceOptions{Enabled: true, Exporter: exporter})
 	ctx := observability.WithTracer(context.Background(), tracer)
 	f := boundedCloud(t, false)
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 	names := map[string]bool{}
 	for _, span := range exporter.GetSpans() {
 		names[span.Name] = true

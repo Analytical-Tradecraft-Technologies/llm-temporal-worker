@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -24,9 +23,7 @@ func (f *boundedCloudFixture) requireLineageLimitRejected(t *testing.T, input ll
 	if !errors.As(err, &failure) || failure.Code != provider.CodeInvalidArgument || failure.Retry != provider.RetryNever || failure.Dispatch != provider.DispatchNotDispatched {
 		t.Fatalf("prepare error = %v", err)
 	}
-	if f.submits.Load() != submits {
-		t.Fatal("rejected request reached the provider")
-	}
+	requireCount(t, &f.submits, submits, "rejected request reached the provider")
 	for shard := range cloudstate.PendingShards {
 		page, err := f.repository.ListPending(context.Background(), shard, 100, "")
 		if err != nil || len(page.Requests) != 0 {
@@ -60,8 +57,7 @@ func TestCloudPrepareRejectsCompactAtMaxDepth(t *testing.T) {
 	f.restart(t)
 	// recent_turns 0 gives the compaction a prefix to summarize, so on master
 	// this scenario paid for the summary before publication refused it.
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	root := f.finish(t)
 	f.continueFrom(root, "child")
 	leaf := f.finish(t)
@@ -69,7 +65,7 @@ func TestCloudPrepareRejectsCompactAtMaxDepth(t *testing.T) {
 		t.Fatalf("depth=%d", leaf.Generate.Checkpoint.Depth)
 	}
 	f.now = f.now.Add(time.Minute)
-	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: leaf.Generate.Checkpoint.Handle}
+	request := f.compactRequest(leaf, nil)
 	f.requireLineageLimitRejected(t, llm.PrepareExecutionV1{Compact: &request})
 }
 

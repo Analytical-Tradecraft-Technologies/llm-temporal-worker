@@ -51,14 +51,8 @@ func compileSettingsPatch(t *testing.T, adapter provider.Adapter, family provide
 	if err != nil {
 		return nil, err
 	}
-	data, err := json.Marshal(call.SDKParams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire map[string]any
-	if err := json.Unmarshal(data, &wire); err != nil {
-		t.Fatal(err)
-	}
+	data := encodeJSON(t, call.SDKParams)
+	wire := decodeJSON[map[string]any](t, data)
 	return wire, nil
 }
 

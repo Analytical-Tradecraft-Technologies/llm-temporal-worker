@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -48,11 +47,10 @@ func TestPublicGenerateReplaysCompletedOperationWithoutCurrentParentOrRoutes(t *
 	for _, changed := range []string{"expired-parent", "removed-routes"} {
 		t.Run(changed, func(t *testing.T) {
 			f := boundedCloud(t, false)
-			policy := json.RawMessage(`{"recent_turns":0}`)
-			f.request.SettingsPatch.CompactionPolicy.Set = &policy
+			keepNoRecentTurns(&f.request)
 			root := f.finish(t)
 			f.now = f.now.Add(time.Minute)
-			f.request = llm.GenerateRequestV1{OperationKey: "public-replay-child", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("follow-up")}}
+			f.request = f.followUp(root.Generate.Checkpoint.Handle, "public-replay-child", "follow-up")
 			original := f.finish(t)
 			before := f.submits.Load()
 			if changed == "expired-parent" {
@@ -61,17 +59,10 @@ func TestPublicGenerateReplaysCompletedOperationWithoutCurrentParentOrRoutes(t *
 				f.runtime.execution.admission.planning.providers.catalog.Models = map[string]routing.Model{}
 			}
 			// The retained result is valid independently of the public preflight.
-			direct, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request})
-			boundedState(t, direct, err, llm.ExecutionCompleted)
+			f.prepare(t, context.Background(), llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionCompleted)
 			env := publicReplayEnvironment(f)
 			env.ExecuteWorkflow(workflows.GenerateWorkflowName, f.request)
-			if err := env.GetWorkflowError(); err != nil {
-				t.Fatalf("public replay failed despite a retained completed operation: %v", err)
-			}
-			var replay llm.GenerateResponseV1
-			if err := env.GetWorkflowResult(&replay); err != nil {
-				t.Fatal(err)
-			}
+			replay := workflowResult[llm.GenerateResponseV1](t, env, "public replay failed despite a retained completed operation")
 			if !reflect.DeepEqual(replay, *original.Generate) || f.submits.Load() != before {
 				t.Fatal("public replay changed the saved result or submitted new provider work")
 			}
@@ -83,21 +74,14 @@ func TestPublicGenerateResumesPreparedOperationAfterParentExpiry(t *testing.T) {
 	f := boundedCloud(t, false)
 	root := f.finish(t)
 	f.now = f.now.Add(time.Minute)
-	f.request = llm.GenerateRequestV1{OperationKey: "prepared-public-child", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("prepared follow-up")}}
-	prepared, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+	f.request = f.followUp(root.Generate.Checkpoint.Handle, "prepared-public-child", "prepared follow-up")
+	f.prepare(t, context.Background(), llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionBudgetRequired)
 	before := f.submits.Load()
 	f.now = f.now.Add(24 * time.Hour)
 	f.restart(t)
 	env := publicReplayEnvironment(f)
 	env.ExecuteWorkflow(workflows.GenerateWorkflowName, f.request)
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatalf("prepared public operation could not resume after parent expiry: %v", err)
-	}
-	var result llm.GenerateResponseV1
-	if err := env.GetWorkflowResult(&result); err != nil {
-		t.Fatal(err)
-	}
+	result := workflowResult[llm.GenerateResponseV1](t, env, "prepared public operation could not resume after parent expiry")
 	if result.OperationKey != f.request.OperationKey || f.submits.Load() != before+1 {
 		t.Fatal("prepared public operation did not complete exactly one provider submission")
 	}
@@ -145,13 +129,7 @@ func TestPublicGenerateReplaysAutomaticCompactionAfterCheckpointExpiry(t *testin
 	}
 	env := publicReplayEnvironment(f)
 	env.ExecuteWorkflow(workflows.GenerateWorkflowName, original)
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatalf("original compacted public Generate: %v", err)
-	}
-	var want llm.GenerateResponseV1
-	if err := env.GetWorkflowResult(&want); err != nil {
-		t.Fatal(err)
-	}
+	want := workflowResult[llm.GenerateResponseV1](t, env, "original compacted public Generate")
 	if calls != 2 || f.submits.Load() != before+2 {
 		t.Fatal("fixture did not execute one Compact and one Generate")
 	}
@@ -167,13 +145,7 @@ func TestPublicGenerateReplaysAutomaticCompactionAfterCheckpointExpiry(t *testin
 	f.runtime.execution.admission.planning.providers.catalog.Models = map[string]routing.Model{}
 	env = publicReplayEnvironment(f)
 	env.ExecuteWorkflow(workflows.GenerateWorkflowName, original)
-	if err := env.GetWorkflowError(); err != nil {
-		t.Fatalf("compacted public replay after checkpoint expiry and route removal: %v", err)
-	}
-	var got llm.GenerateResponseV1
-	if err := env.GetWorkflowResult(&got); err != nil {
-		t.Fatal(err)
-	}
+	got := workflowResult[llm.GenerateResponseV1](t, env, "compacted public replay after checkpoint expiry and route removal")
 	if !reflect.DeepEqual(got, want) || f.submits.Load() != before+2 {
 		t.Fatal("compacted replay changed result or submitted work")
 	}
@@ -182,4 +154,18 @@ func TestPublicGenerateReplaysAutomaticCompactionAfterCheckpointExpiry(t *testin
 	if _, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &changed, OriginalGenerate: &llm.GenerationOriginV1{Parent: original.Parent}}); err == nil {
 		t.Fatal("effective parent substitution accepted")
 	}
+}
+
+// workflowResult returns the result of the workflow env ran, failing the
+// test with what if the workflow failed.
+func workflowResult[T any](t *testing.T, env *testsuite.TestWorkflowEnvironment, what string) T {
+	t.Helper()
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	var result T
+	if err := env.GetWorkflowResult(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

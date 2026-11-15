@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,10 +20,7 @@ func publishedExecutionResultSchema(t *testing.T) *jsonschema.Schema {
 	compiler := jsonschema.NewCompiler()
 	var target string
 	for _, name := range []string{"generate-response", "compact-response", "execution-result"} {
-		data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name+".schema.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := mustReadFile(t, filepath.Join("..", "..", "api", "schema", "v1", name+".schema.json"))
 		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
 		if err != nil {
 			t.Fatal(err)
@@ -43,10 +39,7 @@ func publishedExecutionResultSchema(t *testing.T) *jsonschema.Schema {
 
 func assertPublishedExecutionResult(t *testing.T, compiled *jsonschema.Schema, result llm.ExecutionResultV1) {
 	t.Helper()
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeJSON(t, result)
 	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
 	if err != nil {
 		t.Fatal(err)
@@ -61,8 +54,7 @@ func assertPublishedExecutionResult(t *testing.T, compiled *jsonschema.Schema, r
 func TestCloudExecutionRuntimePublishesSchemaValidAdapterRecords(t *testing.T) {
 	compiled := publishedExecutionResultSchema(t)
 	f := boundedCloud(t, false)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	original := f.adapter.invoke
 	generate := true
 	f.adapter.invoke = func(ctx context.Context, call provider.Call, o provider.Observer) (provider.Result, error) {
@@ -93,7 +85,7 @@ func TestCloudExecutionRuntimePublishesSchemaValidAdapterRecords(t *testing.T) {
 	generate = false
 	f.now = f.now.Add(time.Minute)
 	ctx := context.Background()
-	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
+	request := f.compactRequest(parent, nil)
 	compacted := f.runCompact(t, ctx, request, false)
 	if compacted.Compact == nil || compacted.Compact.Cost.CatalogVersion == "" || compacted.Compact.Usage == nil || len(compacted.Compact.Usage.ProviderRaw) == 0 || len(compacted.Compact.Diagnostics) != 1 {
 		t.Fatalf("priced compaction record was not published unfiltered: %+v", compacted.Compact)

@@ -517,20 +517,16 @@ func TestChatProfileRequiresSpecializedDialect(t *testing.T) {
 }
 
 func TestEndpointFamilyMapsAzureAndBedrock(t *testing.T) {
-	if got := endpointFamily("azure_openai_responses"); got != provider.FamilyOpenAIResponses {
-		t.Fatalf("Azure family = %q, want %q", got, provider.FamilyOpenAIResponses)
-	}
-	if got := endpointFamily("azure_openai_chat"); got != provider.FamilyOpenAIChat {
-		t.Fatalf("Azure Chat family = %q, want %q", got, provider.FamilyOpenAIChat)
-	}
-	if got := endpointFamily("bedrock_anthropic_messages"); got != provider.FamilyBedrockMessages {
-		t.Fatalf("Bedrock family = %q, want %q", got, provider.FamilyBedrockMessages)
-	}
-	if got := endpointFamily("bedrock_converse"); got != provider.FamilyBedrockConverse {
-		t.Fatalf("Bedrock Converse family = %q, want %q", got, provider.FamilyBedrockConverse)
-	}
-	if got := endpointFamily("anthropic_aws_messages"); got != provider.FamilyAnthropicMessages {
-		t.Fatalf("Anthropic AWS family = %q, want %q", got, provider.FamilyAnthropicMessages)
+	for family, want := range map[string]provider.Family{
+		"azure_openai_responses":     provider.FamilyOpenAIResponses,
+		"azure_openai_chat":          provider.FamilyOpenAIChat,
+		"bedrock_anthropic_messages": provider.FamilyBedrockMessages,
+		"bedrock_converse":           provider.FamilyBedrockConverse,
+		"anthropic_aws_messages":     provider.FamilyAnthropicMessages,
+	} {
+		if got := endpointFamily(family); got != want {
+			t.Fatalf("%s family = %q, want %q", family, got, want)
+		}
 	}
 	if !llm.ServiceClassPriority.Valid() {
 		t.Fatal("priority service class is unexpectedly invalid")
@@ -652,3 +648,6 @@ func envSecretFactory(t *testing.T, name string) *ProductionEngineFactory {
 
 // emptySnapshotLoader loads an empty engine snapshot for any configuration.
 var emptySnapshotLoader = SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) { return engine.Snapshot{}, nil })
+
+// nilSecretResolver resolves every secret reference to no bytes.
+var nilSecretResolver = secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) { return nil, nil })

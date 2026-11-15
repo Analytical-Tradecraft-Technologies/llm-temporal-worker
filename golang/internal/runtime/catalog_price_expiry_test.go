@@ -141,7 +141,7 @@ func TestCatalogPriceExpiryGaugeReadsCurrentSnapshotAtScrape(t *testing.T) {
 	second := start.Add(72 * time.Hour)
 	untils := []time.Time{first, second}
 	builds := 0
-	application, err := app.New(context.Background(), app.Options{
+	application := newTestApp(t, app.Options{
 		InitialConfig: localConfigWithBudgetWindows(t, budgetWindowYAML("", "24h", "1h", "100")),
 		Builder:       app.SnapshotBuilder{},
 		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
@@ -150,10 +150,6 @@ func TestCatalogPriceExpiryGaugeReadsCurrentSnapshotAtScrape(t *testing.T) {
 			return &productionClientSet{routes: routing.Catalog{Models: map[string]routing.Model{"model": {Routes: []routing.Route{{PricedWindows: []routing.PriceWindow{{Until: until}}}}}}}}, nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close(context.Background()) })
 	exportCatalogPriceExpiry(metrics, application)
 	if got := priceExpiryGauge(t, metrics); got != float64(first.Unix()) {
 		t.Fatalf("expiry = %v, want %v", got, first.Unix())

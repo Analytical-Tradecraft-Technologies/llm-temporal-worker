@@ -64,10 +64,7 @@ type cloudWithoutFills struct {
 }
 
 func TestCloudFillCapabilitiesRejectIncompleteAndDrainSnapshot(t *testing.T) {
-	verifier, err := state.NewKeyring([]state.Key{{ID: "key", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := testKeyring(t, state.Key{ID: "key", Secret: bytes.Repeat([]byte{7}, 32)})
 	complete := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}}
 	for _, repository := range []CloudRequestRepository{
 		&cloudWithoutFills{complete, complete, complete}, complete,

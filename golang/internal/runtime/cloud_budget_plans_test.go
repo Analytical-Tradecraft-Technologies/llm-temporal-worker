@@ -77,10 +77,7 @@ func TestCloudBudgetPlansProjectBothActivitiesWithoutSDKObjects(t *testing.T) {
 
 func TestCloudBudgetPlansStoredQuoteSurvivesReloadAndUncertainAdmission(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
-	planned, err := f.planning(t).Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	planned := f.plan(t, f.planning(t), false)
 	store := &budgetPlanStoreStub{}
 	f.cap.Requests = store
 	plans, err := f.cap.NewCloudBudgetPlans()
@@ -134,10 +131,7 @@ func TestCloudBudgetPlansStoredQuoteSurvivesReloadAndUncertainAdmission(t *testi
 
 func TestCloudBudgetPlansFailClosedAndSanitizeStoreFailures(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
-	planned, err := f.planning(t).Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	planned := f.plan(t, f.planning(t), false)
 	var missing *budgetPlanStoreStub
 	for _, capabilities := range []V1RuntimeCapabilities{{}, {Requests: missing, ConfigDigest: f.cap.ConfigDigest}, {Requests: &budgetPlanStoreStub{}}} {
 		if _, err := capabilities.NewCloudBudgetPlans(); err == nil {
@@ -148,7 +142,7 @@ func TestCloudBudgetPlansFailClosedAndSanitizeStoreFailures(t *testing.T) {
 	f.cap.Requests = store
 	plans, _ := f.cap.NewCloudBudgetPlans()
 	id, _ := cloudstate.NewRequestID()
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	scope := testRequestScope
 	ctx := context.Background()
 	if _, err := plans.Load(ctx, scope, id); !errors.Is(err, cloudstate.ErrBudgetPlanMissing) {
 		t.Fatal("initial plan miss was lost", err)

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -146,11 +145,7 @@ func replacementTestConfig(t *testing.T, mutate func(*config.Config)) []byte {
 			value.Budgets.Policies[index].Match.Environment = value.Environment
 		}
 	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return encodeJSON(t, value)
 }
 
 // newReplacementApp builds an application from initial that validates
@@ -159,7 +154,7 @@ func replacementTestConfig(t *testing.T, mutate func(*config.Config)) []byte {
 func newReplacementApp(t *testing.T, initial []byte) (*app.App, *atomic.Int32) {
 	t.Helper()
 	clientBuilds := &atomic.Int32{}
-	application, err := app.New(context.Background(), app.Options{
+	application := newTestApp(t, app.Options{
 		InitialConfig: initial,
 		Builder:       app.SnapshotBuilder{},
 		Clients: func(context.Context, *config.Snapshot) (app.ClientSet, error) {
@@ -168,9 +163,5 @@ func newReplacementApp(t *testing.T, initial []byte) (*app.App, *atomic.Int32) {
 		},
 		ReplacementValidator: validateRuntimeReplacement,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close(context.Background()) })
 	return application, clientBuilds
 }

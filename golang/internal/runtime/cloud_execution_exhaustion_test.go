@@ -15,21 +15,17 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	f.restart(t)
 	loseResponsesAfterWrite(f)
 	ctx := context.Background()
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	scope := testRequestScope
 	var ref llm.ExecutionReferenceV1
 	var attempts []cloudstate.RequestAttempt
 	for i := 0; i < 2; i++ {
-		result, err := f.runtime.GenerateStepV1(ctx, f.request)
-		boundedState(t, result, err, llm.ExecutionPending)
+		result := f.step(t, ctx, f.request, llm.ExecutionPending)
 		ref = f.ref(result)
-		attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(result.RequestID))
-		if err != nil {
-			t.Fatal(err)
-		}
+		_, _, attempt := f.firstAttempt(t, ctx, result)
 		attempts = append(attempts, attempt)
 		f.now = f.now.Add(16 * time.Minute)
 		f.restart(t)
-		result, err = f.runtime.AcquireBudgetV1(ctx, ref)
+		result, err := f.runtime.AcquireBudgetV1(ctx, ref)
 		if i == 0 {
 			boundedState(t, result, err, llm.ExecutionAcquired)
 		} else {
@@ -41,12 +37,9 @@ func TestCloudExecutionExhaustionRetainsUnknownPaidWork(t *testing.T) {
 	}
 	f.restart(t)
 	for i := 0; i < 3; i++ {
-		result, err := f.runtime.AcquireBudgetV1(ctx, ref)
-		boundedState(t, result, err, llm.ExecutionFailed)
+		f.acquire(t, ctx, ref, llm.ExecutionFailed)
 	}
-	if f.submits.Load() != 2 {
-		t.Fatal("attempt limit exceeded", f.submits.Load())
-	}
+	requireCount(t, &f.submits, 2, "attempt limit exceeded")
 	for _, attempt := range attempts {
 		saved, err := f.repository.LoadProviderExecution(ctx, scope, attempt.ID)
 		if err != nil {
@@ -81,8 +74,7 @@ func TestCloudExecutionExhaustionAfterRetryableRejection(t *testing.T) {
 	}
 	f.now = f.now.Add(time.Minute)
 	ref := f.ref(result)
-	result, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, result, err, llm.ExecutionFailed)
+	result = f.acquire(t, ctx, ref, llm.ExecutionFailed)
 	if result.Retryable {
 		t.Fatal("limit ignored")
 	}
@@ -95,10 +87,7 @@ func TestCloudExecutionExhaustionAfterRetryableRejection(t *testing.T) {
 	}
 	wantDetails(result)
 	f.restart(t)
-	result, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, result, err, llm.ExecutionFailed)
+	result = f.step(t, ctx, f.request, llm.ExecutionFailed)
 	wantDetails(result)
-	if f.submits.Load() != 1 {
-		t.Fatal("terminal request submitted again")
-	}
+	requireCount(t, &f.submits, 1, "terminal request submitted again")
 }

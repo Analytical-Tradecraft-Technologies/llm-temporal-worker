@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -69,14 +68,8 @@ func TestProviderPlanningRoutesV1ReasoningEffortOnAnthropicMessages(t *testing.T
 			if err != nil {
 				t.Fatalf("v1 reasoning effort is not routable on Anthropic Messages: %v", err)
 			}
-			data, err := json.Marshal(planned.Call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var wire map[string]any
-			if err := json.Unmarshal(data, &wire); err != nil {
-				t.Fatal(err)
-			}
+			data := encodeJSON(t, planned.Call.SDKParams)
+			wire := decodeJSON[map[string]any](t, data)
 			config, _ := wire["output_config"].(map[string]any)
 			if planned.Call.Family != provider.FamilyAnthropicMessages || config["effort"] != "high" {
 				t.Fatalf("effort was not lowered to output_config: %s", data)

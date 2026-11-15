@@ -725,15 +725,9 @@ func marshalObject(fields map[string]any) ([]byte, error) {
 // decodeOptionalField decodes fields[name] into target when the field is
 // present. A decode failure is prefixed with the field name.
 func decodeOptionalField[T any](fields map[string]json.RawMessage, name string, target *T, decode func([]byte) (T, error)) error {
-	raw, ok := fields[name]
-	if !ok {
-		return nil
-	}
-	value, err := decode(raw)
-	if err != nil {
+	if err := decodePresentField(fields, name, target, decode); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
-	*target = value
 	return nil
 }
 

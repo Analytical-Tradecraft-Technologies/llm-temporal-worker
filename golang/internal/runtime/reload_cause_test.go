@@ -24,10 +24,7 @@ import (
 func reloadFailureRecord(t *testing.T, runtime *Runtime, logs *bytes.Buffer, replacement string) map[string]any {
 	t.Helper()
 	old := runtime.App.Current()
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(replacement), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := tempConfigFile(t, replacement)
 	logs.Reset()
 	if err := runtime.ReloadFile(context.Background(), path); err == nil || err.Error() != "reload configuration failed" {
 		t.Fatalf("reload error = %v, want sanitized rejection", err)
@@ -187,10 +184,7 @@ func TestRuntimeReloadFailureLogNamesCatalogDigestMismatch(t *testing.T) {
 func localCatalogConfig(t *testing.T, directory string) string {
 	t.Helper()
 	read := func(name string) []byte {
-		data, err := os.ReadFile(filepath.Join("../../deploy/local", name))
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := mustReadFile(t, filepath.Join("../../deploy/local", name))
 		return data
 	}
 	data := string(read("config.yaml"))
@@ -209,7 +203,7 @@ func TestClassifyReloadFailureIsBounded(t *testing.T) {
 		clients func(context.Context, *config.Snapshot) (app.ClientSet, error), verify func(context.Context, *config.Snapshot, app.ClientSet) error) error {
 		t.Helper()
 		calls := 0
-		application, err := app.New(context.Background(), app.Options{
+		application := newTestApp(t, app.Options{
 			InitialConfig: replacementTestConfig(t, func(*config.Config) {}),
 			Builder: app.SnapshotBuilder{References: config.ReferenceResolverFunc(func(context.Context, *config.Config) error {
 				if calls++; calls > 1 {
@@ -231,11 +225,7 @@ func TestClassifyReloadFailureIsBounded(t *testing.T) {
 				return nil
 			},
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = application.Close(context.Background()) })
-		err = application.Reload(context.Background(), replacementTestConfig(t, func(value *config.Config) { value.Limits.Items++ }))
+		err := application.Reload(context.Background(), replacementTestConfig(t, func(value *config.Config) { value.Limits.Items++ }))
 		if err == nil {
 			t.Fatal("reload unexpectedly succeeded")
 		}

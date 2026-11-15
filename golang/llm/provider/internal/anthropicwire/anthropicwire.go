@@ -273,12 +273,6 @@ func LowerToolPolicy(policy llm.ToolPolicy) (map[string]any, error) {
 	return choice, nil
 }
 
-// EmptyModelMessage reports whether item is a model message with no content.
-func EmptyModelMessage(item llm.Item) bool {
-	message, ok := item.(llm.Message)
-	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
-}
-
 // RequiredFeatures lists the capabilities a request needs from an Anthropic
 // Messages endpoint, in first-use order.
 func RequiredFeatures(request llm.Request) []provider.Feature {

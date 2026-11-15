@@ -67,10 +67,7 @@ func (index *testResponseResultIndex) GetResponseResult(_ context.Context, tenan
 
 func testCompletedRecord(t *testing.T, key string, created time.Time) cloudstate.Record {
 	t.Helper()
-	encoded, err := json.Marshal(testGenerateResponse(key))
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeJSON(t, testGenerateResponse(key))
 	completed, _ := json.Marshal(cloudRuntimeResult{Version: 1, Response: encoded})
 	return cloudstate.Record{Request: cloudstate.CreateRequest{CreatedAt: created}, Status: cloudstate.StatusCompleted, Progress: completed}
 }
@@ -149,10 +146,7 @@ func TestLookupGenerateResultDecodesTheOperationRecord(t *testing.T) {
 		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
 		Cost:       llm.CostV1{Status: "unknown", UnknownReason: "provider_did_not_report_cost"},
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeJSON(t, response)
 	completed, _ := json.Marshal(cloudRuntimeResult{Version: 1, Response: encoded})
 	failed := json.RawMessage(`{"execution_failure":{"request_id":"llmtw_req_5f0c6b2e-8a1d-4c3b-9e7f-2a4d6c8b0e1f","kind":"generate","state":"failed","failure_code":"provider_error","error_code":"budget_denied"}}`)
 	request := cloudstate.CreateRequest{CreatedAt: created}
@@ -195,10 +189,7 @@ func TestLookupGenerateResultDecodesTheOperationRecord(t *testing.T) {
 func TestRuntimeServesTheResponsesAPIOnlyWhenConfigured(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
-	runtime, err := New(context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
 	if runtime.ResponsesServer != nil {
 		t.Fatal("the responses API listener exists without configuration")
 	}
@@ -206,10 +197,7 @@ func TestRuntimeServesTheResponsesAPIOnlyWhenConfigured(t *testing.T) {
 
 	configuration := strings.Replace(string(runtimeConfig(t)), "metrics_address: 127.0.0.1:0", "metrics_address: 127.0.0.1:0\n  responses_api_listen_address: 127.0.0.1:0", 1)
 	closed.Store(false)
-	runtime, err = New(context.Background(), []byte(configuration), testRuntimeOptions(t, &testWorker{}, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime = mustNewRuntime(t, []byte(configuration), testRuntimeOptions(t, &testWorker{}, &closed))
 	startTestRuntime(t, runtime)
 	address := runtime.ResponsesServer.Addr()
 	// An unauthenticated poll proves the listener routes to the API handler.

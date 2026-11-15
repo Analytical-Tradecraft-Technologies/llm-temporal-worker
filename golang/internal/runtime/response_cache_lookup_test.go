@@ -402,10 +402,7 @@ func TestResponseCacheLookupRejectsCorruptOrigins(t *testing.T) {
 					entry.Key.RequestIndex++
 				case "response sample":
 					if compact {
-						var response llm.CompactResponseV1
-						if err := json.Unmarshal(entry.Response, &response); err != nil {
-							t.Fatal(err)
-						}
+						response := decodeJSON[llm.CompactResponseV1](t, entry.Response)
 						response.Cache.Variant = 1
 						var err error
 						entry.Response, err = json.Marshal(response)
@@ -413,10 +410,7 @@ func TestResponseCacheLookupRejectsCorruptOrigins(t *testing.T) {
 							t.Fatal(err)
 						}
 					} else {
-						var response llm.GenerateResponseV1
-						if err := json.Unmarshal(entry.Response, &response); err != nil {
-							t.Fatal(err)
-						}
+						response := decodeJSON[llm.GenerateResponseV1](t, entry.Response)
 						response.Cache.Variant++
 						var err error
 						entry.Response, err = json.Marshal(response)

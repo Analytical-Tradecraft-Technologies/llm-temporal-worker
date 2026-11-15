@@ -57,8 +57,7 @@ func requireTerminalAfterRecoveryDeadline(t *testing.T, ctx context.Context, f *
 	t.Helper()
 	f.now = f.now.Add(16 * time.Minute)
 	f.restart(t)
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.step(t, ctx, f.request, llm.ExecutionFailed)
 	requireOneSubmitAndSettlement(t, f, budgets)
 }
 
@@ -82,7 +81,7 @@ func toolArgumentsResult(call provider.Call, arguments string) provider.Result {
 
 func toolArgumentsExecution(t *testing.T, f *boundedCloudFixture, requestID string) cloudstate.ProviderExecution {
 	t.Helper()
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	scope := testRequestScope
 	attempt, err := f.repository.LoadRequestAttempt(context.Background(), scope, cloudstate.RequestID(requestID))
 	if err != nil {
 		t.Fatal(err)
@@ -105,8 +104,7 @@ func TestCloudExecutionToolArgumentsKeyOrderCompletesFirstAttempt(t *testing.T) 
 	if execution := toolArgumentsExecution(t, f, v.RequestID); execution.Stage != cloudstate.ExecutionSucceeded || !execution.Settled {
 		t.Fatalf("execution stage=%s settled=%t", execution.Stage, execution.Settled)
 	}
-	v, err := f.runtime.CompleteExecutionV1(ctx, f.ref(v))
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.complete(t, ctx, f.ref(v), llm.ExecutionCompleted)
 	// Callers keep receiving the canonical arguments the saved response holds.
 	call, ok := v.Generate.Output[0].(llm.ToolCall)
 	if !ok || string(call.Arguments) != `{"limit":5,"query":"x"}` || f.submits.Load() != 1 || budgets.calls.Load() != 1 {
@@ -184,16 +182,14 @@ func TestCloudPollToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
 	ctx, v := f.generateStep(t, llm.ExecutionPending)
 	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
-	v, err := f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	v = f.poll(t, ctx, ref, llm.ExecutionFailed)
 	execution := toolArgumentsExecution(t, f, v.RequestID)
 	if v.Retryable || execution.Stage != cloudstate.ExecutionFailed || execution.Failure == nil || execution.Failure.Code != provider.CodeProviderInvalidResponse ||
 		execution.Failure.Dispatch != provider.DispatchAccepted || !execution.Settled {
 		t.Fatalf("result=%+v execution stage=%s failure=%+v settled=%t", v, execution.Stage, execution.Failure, execution.Settled)
 	}
 	f.now = f.now.Add(time.Minute)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.poll(t, ctx, ref, llm.ExecutionFailed)
 	if f.submits.Load() != 1 || f.polls.Load() != 1 {
 		t.Fatalf("submits=%d polls=%d, want one each", f.submits.Load(), f.polls.Load())
 	}
@@ -268,8 +264,7 @@ func TestCloudGenerateToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
 				t.Fatalf("execution stage=%s failure=%+v settled=%t reconciles=%d", execution.Stage, execution.Failure, execution.Settled, budgets.calls.Load())
 			}
 			ref := f.ref(v)
-			v, err := f.runtime.CompleteExecutionV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionFailed)
+			v = f.complete(t, ctx, ref, llm.ExecutionFailed)
 			requireTerminalAfterRecoveryDeadline(t, ctx, f, budgets)
 			// A caller echoing such a call is rejected before dispatch.
 			f.request.OperationKey = "echo"
@@ -277,7 +272,7 @@ func TestCloudGenerateToolArgumentsPastDepthLimitFailPaid(t *testing.T) {
 				llm.ToolCall{ID: "call_1", Name: "search", Arguments: nestedToolArguments(llm.MaxToolArgumentsDepth + 1)},
 				llm.ToolResult{CallID: "call_1", Content: []llm.Part{llm.TextPart{Text: "ok"}}},
 			}
-			_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+			_, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || f.submits.Load() != 1 {
 				t.Fatalf("echoed too-deep call: err=%v submits=%d", err, f.submits.Load())

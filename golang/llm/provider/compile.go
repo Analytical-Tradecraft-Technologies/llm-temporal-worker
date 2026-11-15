@@ -213,3 +213,12 @@ func RequestFeatures(request llm.Request, partFeature func(llm.Part) Feature, st
 	}
 	return UniqueFeatures(features)
 }
+
+// EmptyModelMessage reports whether item is a model message with no content,
+// such as a lifted content_filter or empty stop reply. The adapters skip it
+// when replaying history: providers reject an assistant message without
+// content, and it carries no history to preserve.
+func EmptyModelMessage(item llm.Item) bool {
+	message, ok := item.(llm.Message)
+	return ok && message.Actor == llm.ActorModel && len(message.Content) == 0
+}

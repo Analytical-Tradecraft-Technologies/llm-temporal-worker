@@ -10,6 +10,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/anthropicwire"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/awscredentials"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/clientconfig"
 )
@@ -25,12 +26,8 @@ type ClientConfig struct {
 // provider-neutral request or configuration value.
 type Client struct {
 	sdk      anthropic.Client
-	messages messageService
+	messages anthropicwire.MessageService
 	baseURL  string
-}
-
-type messageService interface {
-	New(context.Context, anthropic.MessageNewParams, ...option.RequestOption) (*anthropic.Message, error)
 }
 
 func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
