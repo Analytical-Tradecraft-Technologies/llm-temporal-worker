@@ -68,13 +68,9 @@ func childCheckpoint(parent state.DurableCheckpoint, name string) state.DurableC
 func TestCloudCheckpointRestartAndHandleMaterialization(t *testing.T) {
 	r, table, blobs, root := checkpointFixture(t)
 	ctx := context.Background()
-	if err := publishCheckpoint(ctx, r.Checkpoints(), root); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), root)
 	child := childCheckpoint(root, "child-op")
-	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), child)
 	store := reopen(t, table, blobs).Checkpoints()
 	keyring, err := state.NewKeyring([]state.Key{{ID: "key-1", Secret: bytes.Repeat([]byte{5}, 32)}}, nil)
 	if err != nil {
@@ -92,25 +88,17 @@ func TestCloudCheckpointRestartAndHandleMaterialization(t *testing.T) {
 	if _, err := m.MaterializeHandle(ctx, "another-scope", handle, state.MaterializeLimits{}); err == nil {
 		t.Fatal("cross-scope handle accepted")
 	}
-	if _, err := store.Get(ctx, "another-scope", child.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("scope: %v", err)
-	}
+	requireErrorIs(t, errOf(store.Get(ctx, "another-scope", child.ID)), contracts.ErrNotFound, "scope")
 	m.Now = func() time.Time { return root.ExpiresAt }
-	if _, err := m.MaterializeHandle(ctx, root.ScopeID, handle, state.MaterializeLimits{}); !errors.Is(err, state.ErrExpired) {
-		t.Fatalf("expired replay: %v", err)
-	}
+	requireErrorIs(t, errOf(m.MaterializeHandle(ctx, root.ScopeID, handle, state.MaterializeLimits{})), state.ErrExpired, "expired replay")
 	// Retention is independent from eligibility: history remains readable.
-	if _, err := store.Get(ctx, root.ScopeID, root.ID); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(store.Get(ctx, root.ScopeID, root.ID)))
 }
 
 func TestCloudCheckpointPublicationIsImmutableAndPrivate(t *testing.T) {
 	r, table, blobs, cp := checkpointFixture(t)
 	ctx, store := context.Background(), r.Checkpoints()
-	if err := publishCheckpoint(ctx, store, cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, store, cp)
 	rowCount, blobCount := len(table.rows), len(blobs.values)
 	var writes int
 	table.trace = func(string) { writes++ }
@@ -120,9 +108,7 @@ func TestCloudCheckpointPublicationIsImmutableAndPrivate(t *testing.T) {
 	}
 	conflict := cp
 	conflict.CompilerEpoch = "different"
-	if err := publishCheckpoint(ctx, store, conflict); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("overwrite: %v", err)
-	}
+	requireErrorIs(t, publishCheckpoint(ctx, store, conflict), contracts.ErrConflict, "overwrite")
 	if rowCount != len(table.rows) || blobCount != len(blobs.values) {
 		t.Fatal("duplicate publication")
 	}
@@ -190,9 +176,7 @@ func TestCloudCheckpointConditionalPublicationRaces(t *testing.T) {
 					t.Fatalf("unexpected write error: %v", err)
 				}
 				if err != nil && (mode == "same-operation" || mode == "same-handle") {
-					if _, err := reopen(t, table, blobs).Checkpoints().Get(context.Background(), cp.ScopeID, candidates[i].ID); !errors.Is(err, contracts.ErrNotFound) {
-						t.Fatalf("losing reservation is visible: %v", err)
-					}
+					requireErrorIs(t, errOf(reopen(t, table, blobs).Checkpoints().Get(context.Background(), cp.ScopeID, candidates[i].ID)), contracts.ErrNotFound, "losing reservation is visible")
 				}
 			}
 			want := 1
@@ -233,9 +217,7 @@ func TestCloudCheckpointLostAcknowledgements(t *testing.T) {
 					}
 				}
 				ctx := context.Background()
-				if err := publishCheckpoint(ctx, r.Checkpoints(), cp); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-					t.Fatalf("unknown outcome lost: %v", err)
-				}
+				requireErrorIs(t, publishCheckpoint(ctx, r.Checkpoints(), cp), contracts.ErrOutcomeUnknown, "unknown outcome lost")
 				if !fired {
 					t.Fatal("fault not injected")
 				}
@@ -250,9 +232,7 @@ func TestCloudCheckpointLostAcknowledgements(t *testing.T) {
 				if err := publishCheckpoint(ctx, reopen(t, table, blobs).Checkpoints(), cp); err != nil {
 					t.Fatalf("retry: %v", err)
 				}
-				if _, err := r.Checkpoints().Get(ctx, cp.ScopeID, cp.ID); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, errOf(r.Checkpoints().Get(ctx, cp.ScopeID, cp.ID)))
 			})
 		}
 	}
@@ -265,9 +245,7 @@ func TestCloudCheckpointStagingAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := u.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: cp}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, u.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: cp}))
 	if len(table.rows) != 0 {
 		t.Fatal("PutCheckpoint published before Commit")
 	}
@@ -276,9 +254,7 @@ func TestCloudCheckpointStagingAndRollback(t *testing.T) {
 	if err := u.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: second}); !errors.Is(err, contracts.ErrConflict) {
 		t.Fatal("accepted multiple rows")
 	}
-	if err := u.Rollback(ctx); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, u.Rollback(ctx))
 	if err := u.Commit(ctx); err == nil || len(table.rows) != 0 {
 		t.Fatal("rollback published")
 	}
@@ -286,9 +262,7 @@ func TestCloudCheckpointStagingAndRollback(t *testing.T) {
 	parent := state.CheckpointID("original-parent")
 	staged := cp
 	staged.ParentID, staged.Depth = &parent, 1
-	if err := u.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: staged}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, u.PutCheckpoint(ctx, state.CheckpointWrite{Checkpoint: staged}))
 	parent = "mutated-parent"
 	if u.(*checkpointUnit).value.ParentID == staged.ParentID || *u.(*checkpointUnit).value.ParentID != "original-parent" {
 		t.Fatal("caller mutated staged pointers")
@@ -296,9 +270,7 @@ func TestCloudCheckpointStagingAndRollback(t *testing.T) {
 	if err := u.Commit(ctx); !errors.Is(err, contracts.ErrNotFound) || len(table.rows) != 0 {
 		t.Fatalf("missing parent: %v", err)
 	}
-	if err := publishCheckpoint(ctx, store, cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, store, cp)
 	got, err := store.Get(ctx, cp.ScopeID, cp.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -313,9 +285,7 @@ func TestCloudCheckpointStagingAndRollback(t *testing.T) {
 func TestCloudCheckpointReferencesAndLimits(t *testing.T) {
 	r, _, _, root := checkpointFixture(t)
 	ctx, store := context.Background(), r.Checkpoints()
-	if err := publishCheckpoint(ctx, store, root); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, store, root)
 	for _, test := range []struct {
 		name string
 		edit func(*state.DurableCheckpoint)
@@ -339,12 +309,8 @@ func TestCloudCheckpointReferencesAndLimits(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, err := store.BeginCheckpoint(cancelled); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if _, err := store.Get(cancelled, root.ScopeID, root.ID); !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(store.BeginCheckpoint(cancelled)), context.Canceled, "")
+	requireErrorIs(t, errOf(store.Get(cancelled, root.ScopeID, root.ID)), context.Canceled, "")
 	if _, err := store.BeginCheckpoint(nil); err == nil {
 		t.Fatal("nil context accepted")
 	}
@@ -384,46 +350,32 @@ func TestCloudCheckpointBlobsAreScopedAndAuthenticated(t *testing.T) {
 	} {
 		ref := cp.DeltaBlob
 		edit(&ref)
-		if _, err := store.Read(ctx, cp.ScopeID, ref); !errors.Is(err, contracts.ErrNotFound) {
-			t.Fatalf("forged metadata: %v", err)
-		}
+		requireErrorIs(t, errOf(store.Read(ctx, cp.ScopeID, ref)), contracts.ErrNotFound, "forged metadata")
 	}
-	if _, err := store.Read(ctx, "another-scope", cp.DeltaBlob); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(store.Read(ctx, "another-scope", cp.DeltaBlob)), contracts.ErrNotFound, "")
 	if spy.opens != 0 {
 		t.Fatal("unauthorized reference opened a blob")
 	}
-	if err := publishCheckpoint(ctx, r.Checkpoints(), cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), cp)
 	// Physical tampering is detected, including correctly shaped pointers to
 	// another encrypted object. No decoded partial result is returned.
 	for key, value := range blobs.values {
 		value[len(value)-1] ^= 1
 		blobs.values[key] = value
 	}
-	if _, err := store.Read(ctx, cp.ScopeID, cp.DeltaBlob); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("tampered blob: %v", err)
-	}
-	if _, err := store.Get(ctx, cp.ScopeID, cp.ID); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("tampered checkpoint: %v", err)
-	}
+	requireErrorIs(t, errOf(store.Read(ctx, cp.ScopeID, cp.DeltaBlob)), ErrCorrupt, "tampered blob")
+	requireErrorIs(t, errOf(store.Get(ctx, cp.ScopeID, cp.ID)), ErrCorrupt, "tampered checkpoint")
 }
 
 func TestCloudCheckpointNilEmptyCollectionsAndTimeZonesReplay(t *testing.T) {
 	r, table, blobs, cp := checkpointFixture(t)
 	ctx := context.Background()
-	if err := publishCheckpoint(ctx, r.Checkpoints(), cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), cp)
 	cp.ProviderState = []state.CheckpointProviderState{}
 	cp.Affinities = state.ProviderCacheAffinitySet{}
 	cp.CreatedAt = cp.CreatedAt.In(time.FixedZone("test", 3600))
 	cp.ExpiresAt = cp.ExpiresAt.In(time.FixedZone("test", 3600))
-	if err := publishCheckpoint(ctx, reopen(t, table, blobs).Checkpoints(), cp); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, reopen(t, table, blobs).Checkpoints(), cp)
 	got, err := r.Checkpoints().Get(ctx, cp.ScopeID, cp.ID)
 	if err != nil {
 		t.Fatal(err)

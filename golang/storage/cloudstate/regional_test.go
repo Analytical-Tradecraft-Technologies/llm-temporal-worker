@@ -24,18 +24,12 @@ import (
 func TestRegionalTableRejectsUnrelatedOrEventualReplicas(t *testing.T) {
 	regions := []string{"region-primary", "region-fallback-a", "region-fallback-b"}
 	table := &ddbtypes.TableDescription{MultiRegionConsistency: ddbtypes.MultiRegionConsistencyStrong, Replicas: []ddbtypes.ReplicaDescription{{RegionName: aws.String("region-fallback-a")}, {RegionName: aws.String("region-fallback-b")}}}
-	if err := validateMRSCMembership(table, regions, "region-primary"); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, validateMRSCMembership(table, regions, "region-primary"))
 	table.MultiRegionConsistency = ddbtypes.MultiRegionConsistencyEventual
-	if err := validateMRSCMembership(table, regions, "region-primary"); !errors.Is(err, contracts.ErrUnsupported) {
-		t.Fatalf("MREC accepted: %v", err)
-	}
+	requireErrorIs(t, validateMRSCMembership(table, regions, "region-primary"), contracts.ErrUnsupported, "MREC accepted")
 	table.MultiRegionConsistency = ddbtypes.MultiRegionConsistencyStrong
 	table.Replicas = table.Replicas[:1]
-	if err := validateMRSCMembership(table, regions, "region-primary"); !errors.Is(err, contracts.ErrUnsupported) {
-		t.Fatalf("missing full replica accepted: %v", err)
-	}
+	requireErrorIs(t, validateMRSCMembership(table, regions, "region-primary"), contracts.ErrUnsupported, "missing full replica accepted")
 }
 func TestRegionalRepositoryReconcilesUnknownWriteAfterFailover(t *testing.T) {
 	_, table, blobs, request := fixture(t)
@@ -61,9 +55,7 @@ func TestRegionalRepositoryReconcilesUnknownWriteAfterFailover(t *testing.T) {
 		}
 		return nil, nil
 	}
-	if _, err := repo.Create(context.Background(), request); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-		t.Fatalf("unknown write lost: %v", err)
-	}
+	requireErrorIs(t, errOf(repo.Create(context.Background(), request)), contracts.ErrOutcomeUnknown, "unknown write lost")
 	if opens[1] != 0 {
 		t.Fatal("uncertain write blindly replayed")
 	}
@@ -83,9 +75,7 @@ func TestRegionalRepositoryReconcilesUnknownWriteAfterFailover(t *testing.T) {
 func TestRegionalPaginationPinsCursor(t *testing.T) {
 	store := &memoryTable{rows: map[kv.KeyValueKey]kv.KeyValueRecord{}}
 	for _, key := range []string{"a", "b"} {
-		if _, err := store.Create(context.Background(), kv.KeyValueItem{PartitionKey: "p", SortKey: key}); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, errOf(store.Create(context.Background(), kv.KeyValueItem{PartitionKey: "p", SortKey: key})))
 	}
 	down := false
 	opened := []int{0, 0}
@@ -134,9 +124,7 @@ func TestRegionalPayloadFallback(t *testing.T) {
 	routed.router.Active.Store(0)
 	primary.open = func(blob.BlobKey) error { return contracts.ErrUnavailable }
 	alternate.values = map[blob.BlobKey][]byte{}
-	if _, err := routed.Open(context.Background(), "key"); !errors.Is(err, contracts.ErrUnavailable) || errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("replication lag became a definitive missing payload: %v", err)
-	}
+	requireErrorIsNot(t, errOf(routed.Open(context.Background(), "key")), contracts.ErrUnavailable, contracts.ErrNotFound, "replication lag became a definitive missing payload")
 }
 
 func TestRegionalOpenSurvivesPrimaryFailureAndRevalidatesMRSC(t *testing.T) {
@@ -155,14 +143,7 @@ func TestRegionalOpenSurvivesPrimaryFailureAndRevalidatesMRSC(t *testing.T) {
 		io.WriteString(w, `{"Table":{"MultiRegionConsistency":"`+mode+`","Replicas":[{"RegionName":"region-primary"},{"RegionName":"region-fallback-a"},{"RegionName":"region-fallback-b"}]}}`)
 	}))
 	defer server.Close()
-	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", server.URL)
-	t.Setenv("AWS_ACCESS_KEY_ID", "test")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	t.Setenv("AWS_SESSION_TOKEN", "")
-	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/absent")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/absent")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	useFakeDynamoDB(t, server.URL)
 	_, table, blobs, request := fixture(t)
 	settings := Config{Provider: map[string]any{
 		"type": "aws", "aws": map[string]any{"region": "region-primary", "allow_mrsc": true, "failover": map[string]any{
@@ -199,9 +180,7 @@ func TestRegionalOpenSurvivesPrimaryFailureAndRevalidatesMRSC(t *testing.T) {
 		t.Fatal("mutated caller configuration")
 	}
 	eventual.Store(true)
-	if err := repo.Probe(ctx); !errors.Is(err, contracts.ErrUnsupported) {
-		t.Fatalf("MRSC validation skipped during readiness: %v", err)
-	}
+	requireErrorIs(t, repo.Probe(ctx), contracts.ErrUnsupported, "MRSC validation skipped during readiness")
 }
 
 func TestRegionalPayloadHandlesCachedButProbesRevalidate(t *testing.T) {
@@ -217,21 +196,15 @@ func TestRegionalPayloadHandlesCachedButProbesRevalidate(t *testing.T) {
 		return backend, nil
 	}}
 	fail = true
-	if err := routed.Create(ctx, "key", strings.NewReader("payload"), 7); !errors.Is(err, contracts.ErrUnavailable) {
-		t.Fatalf("failed initialization: %v", err)
-	}
+	requireErrorIs(t, routed.Create(ctx, "key", strings.NewReader("payload"), 7), contracts.ErrUnavailable, "failed initialization")
 	fail = false
-	if err := routed.Create(ctx, "key", strings.NewReader("payload"), 7); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, routed.Create(ctx, "key", strings.NewReader("payload"), 7))
 	opened, err := routed.Open(ctx, "key")
 	if err != nil {
 		t.Fatal(err)
 	}
 	opened.Body.Close()
-	if err := routed.ProbeRead(ctx, "absent-readiness-key"); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, routed.ProbeRead(ctx, "absent-readiness-key"))
 	if opens != 2 {
 		t.Fatalf("operations reopened cached handle: %d opens", opens)
 	}
@@ -253,22 +226,16 @@ func TestRegionalTableProbeToleratesUnavailableStatusOnlyForOpenHandles(t *testi
 	}}
 	// No handle yet: an UPDATING (unavailable) table cannot be proven usable.
 	openErr = contracts.ErrUnavailable
-	if err := routed.probe(ctx); !errors.Is(err, contracts.ErrUnavailable) {
-		t.Fatalf("unopened table reported ready: %v", err)
-	}
+	requireErrorIs(t, routed.probe(ctx), contracts.ErrUnavailable, "unopened table reported ready")
 	openErr = nil
-	if _, err := routed.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: "readiness", PageSize: 1}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(routed.QueryPartition(ctx, kv.KeyValueQuery{PartitionKey: "readiness", PageSize: 1})))
 	// With an open handle the data-plane read decides; other failures still count.
 	openErr = contracts.ErrUnavailable
 	if err := routed.probe(ctx); err != nil {
 		t.Fatalf("UPDATING table reported unready: %v", err)
 	}
 	openErr = contracts.ErrUnsupported
-	if err := routed.probe(ctx); !errors.Is(err, contracts.ErrUnsupported) {
-		t.Fatalf("MRSC revalidation skipped: %v", err)
-	}
+	requireErrorIs(t, routed.probe(ctx), contracts.ErrUnsupported, "MRSC revalidation skipped")
 }
 
 func TestRegionalOpenRejectsMalformedProviderMaps(t *testing.T) {

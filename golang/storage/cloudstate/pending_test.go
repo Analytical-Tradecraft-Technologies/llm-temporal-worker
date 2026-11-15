@@ -37,14 +37,9 @@ func TestPendingPaginationAcrossEveryShard(t *testing.T) {
 	for shard, requests := range byShard {
 		sort.Slice(requests, func(i, j int) bool { return requests[i].ID < requests[j].ID })
 		for i, request := range requests {
-			record, err := r.Create(ctx, request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			record := mustCreate(t, r, request)
 			if i == 0 {
-				if _, err := r.TryUpdate(ctx, request.Scope, request.ID, change(record, StatusCompleted, "cache-hit")); err != nil {
-					t.Fatal(err)
-				}
+				mustTryUpdate(t, r, request.Scope, request.ID, change(record, StatusCompleted, "cache-hit"))
 			}
 		}
 		// A page containing only terminal rows is empty but still has a cursor.
@@ -52,12 +47,8 @@ func TestPendingPaginationAcrossEveryShard(t *testing.T) {
 		if err != nil || len(page.Requests) != 0 || page.NextPageToken == "" {
 			t.Fatalf("terminal page: %+v %v", page, err)
 		}
-		if _, err := r.ListPending(ctx, (shard+1)%PendingShards, 1, page.NextPageToken); !errors.Is(err, contracts.ErrInvalidArgument) {
-			t.Fatalf("cross-shard token: %v", err)
-		}
-		if _, err := r.ListPending(ctx, shard, 2, page.NextPageToken); !errors.Is(err, contracts.ErrInvalidArgument) {
-			t.Fatalf("resized token: %v", err)
-		}
+		requireErrorIs(t, errOf(r.ListPending(ctx, (shard+1)%PendingShards, 1, page.NextPageToken)), contracts.ErrInvalidArgument, "cross-shard token")
+		requireErrorIs(t, errOf(r.ListPending(ctx, shard, 2, page.NextPageToken)), contracts.ErrInvalidArgument, "resized token")
 		var ids []RequestID
 		for page.NextPageToken != "" {
 			page, err = r.ListPending(ctx, shard, 1, page.NextPageToken)
@@ -72,9 +63,7 @@ func TestPendingPaginationAcrossEveryShard(t *testing.T) {
 			t.Fatalf("shard %d: %v, want %v", shard, ids, want)
 		}
 	}
-	if _, err := PendingShard("not-an-id"); !errors.Is(err, ErrInvalid) {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(PendingShard("not-an-id")), ErrInvalid, "")
 }
 
 func TestInitializingAndLaggingIndexRemainDiscoverable(t *testing.T) {
@@ -84,22 +73,15 @@ func TestInitializingAndLaggingIndexRemainDiscoverable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.ensureIndex(ctx, request); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, r.ensureIndex(ctx, request))
 	shard, _ := PendingShard(request.ID)
 	r = reopen(t, table, blobs)
 	page, err := r.ListPending(ctx, shard, 0, "")
 	if err != nil || len(page.Requests) != 1 || !page.Requests[0].Initializing {
 		t.Fatalf("initializing: %+v %v", page, err)
 	}
-	if _, err := r.ReadForRecovery(ctx, request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("unpublished state: %v", err)
-	}
-	record, err := r.Create(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(r.ReadForRecovery(ctx, request.ID)), contracts.ErrNotFound, "unpublished state")
+	record := mustCreate(t, r, request)
 	table.hook = func(op string, _ kv.KeyValueItem) (error, error) {
 		if op == "replace" {
 			return contracts.ErrUnavailable, nil
@@ -107,9 +89,7 @@ func TestInitializingAndLaggingIndexRemainDiscoverable(t *testing.T) {
 		return nil, nil
 	}
 	update := change(record, StatusCompleted, "complete")
-	if _, err := r.TryUpdate(ctx, request.Scope, request.ID, update); !errors.Is(err, ErrIndexPending) {
-		t.Fatalf("lost committed event: %v", err)
-	}
+	requireErrorIs(t, errOf(r.TryUpdate(ctx, request.Scope, request.ID, update)), ErrIndexPending, "lost committed event")
 	page, err = r.ListPending(ctx, shard, 0, "")
 	if err != nil || len(page.Requests) != 1 || page.Requests[0].Revision != 1 {
 		t.Fatalf("lagging index: %+v %v", page, err)
@@ -119,9 +99,7 @@ func TestInitializingAndLaggingIndexRemainDiscoverable(t *testing.T) {
 		t.Fatalf("authoritative recovery: %+v %v", recovered, err)
 	}
 	table.hook = nil
-	if _, err := r.TryUpdate(ctx, request.Scope, request.ID, update); err != nil {
-		t.Fatal(err)
-	}
+	mustTryUpdate(t, r, request.Scope, request.ID, update)
 	page, err = r.ListPending(ctx, shard, 0, "")
 	if err != nil || len(page.Requests) != 0 {
 		t.Fatalf("repair: %+v %v", page, err)
@@ -142,9 +120,7 @@ func TestPendingRejectsMalformedBackendPages(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r, table, blobs, request := fixture(t)
 			ctx := context.Background()
-			if _, err := r.Create(ctx, request); err != nil {
-				t.Fatal(err)
-			}
+			mustCreate(t, r, request)
 			row, err := table.Get(ctx, r.indexKey(request.ID))
 			if err != nil {
 				t.Fatal(err)
@@ -178,12 +154,8 @@ func TestPendingRejectsMalformedBackendPages(t *testing.T) {
 			}
 			r = reopen(t, queryTable{KeyValueStore: table, query: func(kv.KeyValueQuery) (kv.KeyValueQueryPage, error) { return page, nil }}, blobs)
 			shard, _ := PendingShard(request.ID)
-			if _, err := r.ListPending(ctx, shard, 2, "repeated"); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("accepted bad page: %v", err)
-			}
-			if _, err := r.ListBudgetRecovery(ctx, shard, 2, "repeated", time.Time{}); !errors.Is(err, ErrCorrupt) {
-				t.Fatalf("budget recovery accepted bad page: %v", err)
-			}
+			requireErrorIs(t, errOf(r.ListPending(ctx, shard, 2, "repeated")), ErrCorrupt, "accepted bad page")
+			requireErrorIs(t, errOf(r.ListBudgetRecovery(ctx, shard, 2, "repeated", time.Time{})), ErrCorrupt, "budget recovery accepted bad page")
 		})
 	}
 }
@@ -192,10 +164,7 @@ func TestIndexContentionIsBoundedAndUncertaintyIsNotRetried(t *testing.T) {
 	for _, failure := range []error{contracts.ErrConflict, contracts.ErrOutcomeUnknown} {
 		r, table, _, request := fixture(t)
 		ctx := context.Background()
-		record, err := r.Create(ctx, request)
-		if err != nil {
-			t.Fatal(err)
-		}
+		record := mustCreate(t, r, request)
 		attempts := 0
 		table.hook = func(op string, _ kv.KeyValueItem) (error, error) {
 			if op == "replace" {

@@ -23,33 +23,20 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 				t.Helper()
 				keys := liveKeyOptions("budget-initialization")
 				cleanupLivePrefix(t, client, keys.Prefix)
-				initializer, err := NewRedisBudgetInitializer(client, keys, mode, AdmissionFunctionVersion)
-				if err != nil {
-					t.Fatal(err)
-				}
+				initializer := mustBudgetInitializer(t, client, keys, mode, AdmissionFunctionVersion)
 				value := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: "00000000-0000-4000-8000-000000000001", CreatedAt: time.Now().UTC()}
 				return initializer, value
 			}
 			t.Run("initialize and replay preserve existing spending", func(t *testing.T) {
 				i, value := fixture(t)
-				if err := i.Check(ctx, value); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-					t.Fatalf("uninitialized check = %v", err)
-				}
-				if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}); err != nil {
-					t.Fatal(err)
-				}
+				requireErrorIs(t, i.Check(ctx, value), ErrBudgetAuthorityUnavailable, "uninitialized check =")
+				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
 				value.Ready = true
-				if err := i.Check(ctx, value); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, i.Check(ctx, value))
 				spending := i.keys.space.durableBudgetKey("policy", "window")
-				if err := client.HSet(ctx, spending, "sum:42", "250000000").Err(); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, client.HSet(ctx, spending, "sum:42", "250000000").Err())
 				for range 3 {
-					if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}); err != nil {
-						t.Fatal(err)
-					}
+					mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
 				}
 				if got := client.HGet(ctx, spending, "sum:42").Val(); got != "250000000" {
 					t.Fatalf("replay reset spending: %q", got)
@@ -60,10 +47,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 				if ttl := client.PTTL(ctx, i.keys.AuthorityKey()).Val(); ttl != -1 {
 					t.Fatalf("authority expires: %v", ttl)
 				}
-				port, err := NewRedisBudgetEventPort(client, i.keys)
-				if err != nil {
-					t.Fatal(err)
-				}
+				port := mustBudgetEventPort(t, client, i.keys)
 				rows, err := port.Read(ctx, "", 10)
 				if err != nil || len(rows) != 1 || rows[0].Event.Kind != BudgetEventInitialize {
 					t.Fatalf("initialization hint = %#v, %v", rows, err)
@@ -71,18 +55,12 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 			})
 			t.Run("ready receipt never recreates lost authority", func(t *testing.T) {
 				i, value := fixture(t)
-				if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}); err != nil {
-					t.Fatal(err)
-				}
-				if err := client.Del(ctx, i.keys.AuthorityKey(), i.keys.EventsKey()).Err(); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
+				mustNoError(t, client.Del(ctx, i.keys.AuthorityKey(), i.keys.EventsKey()).Err())
 				// Even a stale pending receipt has no creation permission on replay.
 				for _, ready := range []bool{false, true} {
 					value.Ready = ready
-					if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-						t.Fatalf("lost authority was recreated: %v", err)
-					}
+					requireErrorIs(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}), ErrBudgetAuthorityUnavailable, "lost authority was recreated")
 				}
 				if n := client.Exists(ctx, i.keys.AuthorityKey(), i.keys.EventsKey()).Val(); n != 0 {
 					t.Fatal("lost dataset received a new marker")
@@ -94,9 +72,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 				if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}); err == nil {
 					t.Fatal("expected lost reply")
 				}
-				if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
 				if n := client.XLen(ctx, i.keys.EventsKey()).Val(); n != 1 {
 					t.Fatalf("lost reply duplicated events: %d", n)
 				}
@@ -113,9 +89,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 					})
 				}
 				wg.Wait()
-				if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}); err != nil {
-					t.Fatal(err)
-				}
+				mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value}))
 				if n := client.XLen(ctx, i.keys.EventsKey()).Val(); n != 1 {
 					t.Fatalf("concurrent initialization created %d events", n)
 				}
@@ -125,12 +99,8 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 					t.Run(kind, func(t *testing.T) {
 						i, value := fixture(t)
 						key := i.keys.space.admissionPrefix() + kind
-						if err := client.Set(ctx, key, "preserve-me", 0).Err(); err != nil {
-							t.Fatal(err)
-						}
-						if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-							t.Fatalf("initialized occupied namespace: %v", err)
-						}
+						mustNoError(t, client.Set(ctx, key, "preserve-me", 0).Err())
+						requireErrorIs(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}), ErrBudgetAuthorityUnavailable, "initialized occupied namespace")
 						if got := client.Get(ctx, key).Val(); got != "preserve-me" {
 							t.Fatal("existing state overwritten")
 						}
@@ -149,17 +119,13 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 						}
 						t.Run(name, func(t *testing.T) {
 							i, value := fixture(t)
-							if err := i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}); err != nil {
-								t.Fatal(err)
-							}
+							mustNoError(t, i.Initialize(ctx, budget.InitializationPreparation{Receipt: value, Created: true}))
 							value.Ready = true
-							m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: KeyOptions{Prefix: i.keys.space.prefix, HashTag: i.keys.space.tag, KeySecret: i.keys.space.secret}, GenerationID: "redis-budget-v1", IncarnationID: "redis-budget-v1", Initialization: &value, CoordinationStreamEnabled: stream})
-							if err != nil {
-								t.Fatal(err)
-							}
+							m := mustCall(t, NewRedisBudgetMaterializer, RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: KeyOptions{Prefix: i.keys.space.prefix, HashTag: i.keys.space.tag, KeySecret: i.keys.space.secret}, GenerationID: "redis-budget-v1", IncarnationID: "redis-budget-v1", Initialization: &value, CoordinationStreamEnabled: stream})
 							req := durableTestRequest(time.Now().UTC())
 							req.GenerationID = "redis-budget-v1"
 							var reserved durable.ReserveResult
+							var err error
 							if action != "reserve" {
 								reserved, err = m.Accept(ctx, req)
 								if err != nil || !reserved.Accepted {
@@ -168,9 +134,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 							}
 							claim := durable.ClaimRequest{OperationID: req.OperationID, GenerationID: req.GenerationID, IncarnationID: "redis-budget-v1"}
 							if action == "reconcile" {
-								if _, err := m.Claim(ctx, claim); err != nil {
-									t.Fatal(err)
-								}
+								mustNoError(t, errOf(m.Claim(ctx, claim)))
 							}
 							snapshot := func() []string {
 								t.Helper()
@@ -186,9 +150,7 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 							}
 							before := snapshot()
 							key := i.keys.AuthorityKey()
-							if err := client.Del(ctx, key).Err(); err != nil {
-								t.Fatal(err)
-							}
+							mustNoError(t, client.Del(ctx, key).Err())
 							switch failure {
 							case "preparing":
 								err = client.Set(ctx, key, "preparing:"+value.Marker(), 0).Err()
@@ -210,9 +172,8 @@ func TestLiveRedisBudgetInitialization(t *testing.T) {
 							case "claim":
 								_, err = m.Claim(ctx, claim)
 							case "reconcile":
-								e := reserved.Events[0]
-								cost := pricing.MustUSD("0.004")
-								err = m.Reconcile(ctx, durable.ReconcileRequest{OperationID: req.OperationID, GenerationID: req.GenerationID, IncarnationID: "redis-budget-v1", Events: []budget.CompletionEvent{{EventID: "complete", GenerationID: string(req.GenerationID), OperationID: string(req.OperationID), WindowID: e.WindowID, BucketStart: e.BucketStart, ReservationRevision: 2, Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: e.AmountUSD, AccountedIncreaseUSD: cost, ActualCostUSD: &cost, CostStatus: budget.CostExact, OccurredAt: time.Now().UTC()}}})
+								event := exactSettledEvent(reserved, reserved.Events[0], "complete", pricing.MustUSD("0.004"), time.Now().UTC())
+								err = m.Reconcile(ctx, durable.ReconcileRequest{OperationID: req.OperationID, GenerationID: req.GenerationID, IncarnationID: "redis-budget-v1", Events: []budget.CompletionEvent{event}})
 							}
 							if !errors.Is(err, ErrBudgetAuthorityUnavailable) {
 								t.Fatalf("unfenced %s = %v", action, err)

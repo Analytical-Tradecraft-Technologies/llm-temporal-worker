@@ -2,6 +2,7 @@ package cloudstate
 
 import (
 	"strings"
+	"testing"
 
 	contracts "github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts"
 	"github.com/Analytical-Tradecraft-Technologies/cloud-storage/golang/storage/providercontracts/blob"
@@ -22,6 +23,17 @@ func failTableWrites(action, fragment string, before, after error) func(string, 
 			return before, after
 		}
 		return nil, nil
+	}
+}
+
+// forbidWrites reports "<actor> wrote a row" or "<actor> wrote a blob" as a
+// test error for every write to a non-nil table or blob store.
+func forbidWrites(t testing.TB, table *memoryTable, blobs *memoryBlobs, actor string) {
+	if table != nil {
+		table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error(actor + " wrote a row"); return nil, nil }
+	}
+	if blobs != nil {
+		blobs.hook = func(blob.BlobKey) (error, error) { t.Error(actor + " wrote a blob"); return nil, nil }
 	}
 }
 

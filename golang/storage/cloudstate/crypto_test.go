@@ -113,23 +113,17 @@ func TestPayloadBindingRejectsCrossRequestAndNamespaceReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.readBlob(ctx, r.stream(otherID), key); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("cross-request blob: %v", err)
-	}
+	requireErrorIs(t, errOf(r.readBlob(ctx, r.stream(otherID), key)), ErrCorrupt, "cross-request blob")
 	otherKey := strings.Replace(key, r.namespace, "different", 1)
 	blobs.values[blob.BlobKey(otherKey)] = append([]byte(nil), blobs.values[blob.BlobKey(key)]...)
 	r.namespace = "different"
-	if _, err := r.readBlob(ctx, r.stream(request.ID), otherKey); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("cross-namespace blob: %v", err)
-	}
+	requireErrorIs(t, errOf(r.readBlob(ctx, r.stream(request.ID), otherKey)), ErrCorrupt, "cross-namespace blob")
 }
 
 func TestOversizedRecordRejectedBeforeIndex(t *testing.T) {
 	r, table, blobs, request := fixture(t)
 	request.Manifest = []byte(`{"text":"` + strings.Repeat("x", maxPayloadBytes-20) + `"}`)
-	if _, err := r.Create(context.Background(), request); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("oversized envelope: %v", err)
-	}
+	requireErrorIs(t, errOf(r.Create(context.Background(), request)), ErrInvalid, "oversized envelope")
 	if len(table.rows) != 0 || len(blobs.values) != 0 {
 		t.Fatal("oversized record wrote recovery state")
 	}

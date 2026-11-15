@@ -94,14 +94,8 @@ func TestLiveRedisTwoPrefixConformanceAndIsolation(t *testing.T) {
 		t.Fatalf("left continuation read = %v, want not found", err)
 	}
 
-	leftThrottle, err := NewThrottleStore(ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: left})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rightThrottle, err := NewThrottleStore(ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: right})
-	if err != nil {
-		t.Fatal(err)
-	}
+	leftThrottle := mustCall(t, NewThrottleStore, ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: left})
+	rightThrottle := mustCall(t, NewThrottleStore, ThrottleOptions{Client: client, Mode: AdmissionModeFunction, Keys: right})
 	limits := []ThrottleLimit{{Kind: ThrottleRequests, Scope: "shared-prefix-scope", Amount: 1, Limit: 2, Window: time.Minute}}
 	if _, err := leftThrottle.Acquire(ctx, "shared-prefix-throttle", limits); err != nil {
 		t.Fatalf("left throttle = %v", err)
@@ -264,10 +258,7 @@ func TestLiveRedisFunctionAndLuaMismatchFailClosed(t *testing.T) {
 		t.Fatalf("Lua digest mismatch = %v, want unresolved shared state", err)
 	}
 
-	space, err := newKeySpace(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := mustCall(t, newKeySpace, keys)
 	for _, key := range []string{
 		space.scopeKey(request.ScopeKey),
 		space.operationIndexKey(request.ID),
@@ -313,9 +304,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if mode == AdmissionModeLua {
-		if err := client.ScriptLoad(ctx, AdmissionLuaSource()).Err(); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, client.ScriptLoad(ctx, AdmissionLuaSource()).Err())
 	}
 	settings, err := client.ConfigGet(ctx, "appendonly").Result()
 	if err != nil || settings["appendonly"] != "yes" {
@@ -332,14 +321,9 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 
 	now := time.Now().UTC()
 	keys := liveKeyOptions("restart")
-	initializer, err := NewRedisBudgetInitializer(client, keys, mode, AdmissionFunctionVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
+	initializer := mustBudgetInitializer(t, client, keys, mode, AdmissionFunctionVersion)
 	authority := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(), Epoch: "00000000-0000-4000-8000-000000000001", CreatedAt: now}
-	if err := initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: authority, Created: true}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: authority, Created: true}))
 	authority.Ready = true
 	store := openLiveAdmissionStore(t, client, mode, keys, now)
 	request := liveBeginRequest("restart", "restart-policy", 1, 10, now)
@@ -349,24 +333,15 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 
 	// The Redis-only budget authority must survive the same durable restart.
 	budgetOptions := RedisBudgetMaterializerOptions{Client: client, Mode: mode, Keys: keys, GenerationID: "restart-gen", IncarnationID: "restart-inc", Initialization: &authority, CoordinationStreamEnabled: true}
-	budgets, err := NewRedisBudgetMaterializer(budgetOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	budgetRequest := durable.ReserveRequest{OperationID: "paid-before-restart", GenerationID: "restart-gen", Reservations: []admission.WindowReservation{{PolicyID: "restart-budget", WindowID: "hour", Bucket: now.Unix() / 60, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour), AmountUSD: pricing.MustUSD("1"), LimitUSD: pricing.MustUSD("1")}}}
+	budgets := mustCall(t, NewRedisBudgetMaterializer, budgetOptions)
+	budgetRequest := durable.ReserveRequest{OperationID: "paid-before-restart", GenerationID: "restart-gen", Reservations: []admission.WindowReservation{liveMinuteReservation("restart-budget", now, "1", "1")}}
 	accepted, err := budgets.Accept(ctx, budgetRequest)
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("reserve before restart: %#v %v", accepted, err)
 	}
-	if _, err := budgets.Claim(ctx, claimOf(accepted)); err != nil {
-		t.Fatal(err)
-	}
-	reserveEvent := accepted.Events[0]
-	cost := pricing.MustUSD("0.4")
-	completion := durable.ReconcileRequest{OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID, Events: []budget.CompletionEvent{{EventID: "settled-before-restart", OperationID: string(accepted.OperationID), GenerationID: string(accepted.GenerationID), WindowID: reserveEvent.WindowID, BucketStart: reserveEvent.BucketStart, ReservationRevision: 2, Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: reserveEvent.AmountUSD, AccountedIncreaseUSD: cost, ActualCostUSD: &cost, CostStatus: budget.CostExact, OccurredAt: now}}}
-	if err := budgets.Reconcile(ctx, completion); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(budgets.Claim(ctx, claimOf(accepted))))
+	completion := durable.ReconcileRequest{OperationID: accepted.OperationID, GenerationID: accepted.GenerationID, IncarnationID: accepted.IncarnationID, Events: []budget.CompletionEvent{exactSettledEvent(accepted, accepted.Events[0], "settled-before-restart", pricing.MustUSD("0.4"), now)}}
+	mustNoError(t, budgets.Reconcile(ctx, completion))
 	pendingRequest := budgetRequest
 	pendingRequest.OperationID = "pending-before-restart"
 	pendingRequest.Reservations = append([]admission.WindowReservation(nil), budgetRequest.Reservations...)
@@ -376,27 +351,18 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 		t.Fatalf("pending before restart: %#v %v", pending, err)
 	}
 	pendingClaim := claimOf(pending)
-	if _, err := budgets.Claim(ctx, pendingClaim); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(budgets.Claim(ctx, pendingClaim)))
 
 	providerOptions := ProviderStateOptions{Client: client, Keys: keys}
-	providers, err := NewProviderStateStore(providerOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
+	providers := mustCall(t, NewProviderStateStore, providerOptions)
 	incident := providerTestEvent(t, now, "restart-route", func(o *control.StatusObservation) {
 		o.Credit = control.CreditExhausted
 		o.ProviderCode = "insufficient_quota"
 	})
-	if _, err := providers.PersistStatusEvent(ctx, incident); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(providers.PersistStatusEvent(ctx, incident)))
 	inventory := providerTestInventory(now)
 	inventory.Complete, inventory.NextCursor = false, "restart-private-cursor"
-	if _, err := providers.PersistInventorySnapshot(ctx, inventory); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(providers.PersistInventorySnapshot(ctx, inventory)))
 
 	eventsBefore, err := client.XRange(ctx, initializer.keys.EventsKey(), "-", "+").Result()
 	if err != nil {
@@ -415,19 +381,14 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	cleanupLivePrefix(t, restartedClient, keys.Prefix)
 	recoveryContext, recoveryCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer recoveryCancel()
-	recoveredInitializer, err := NewRedisBudgetInitializer(restartedClient, keys, mode, AdmissionFunctionVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
+	recoveredInitializer := mustBudgetInitializer(t, restartedClient, keys, mode, AdmissionFunctionVersion)
 	if mode == AdmissionModeLua {
 		// Redis does not persist EVALSHA's script cache. Missing code must
 		// remain unavailable until the operator provisions the pinned script.
 		if err := recoveredInitializer.Check(recoveryContext, authority); err == nil || !strings.HasPrefix(err.Error(), "NOSCRIPT") {
 			t.Fatalf("Lua cache loss did not fail closed: %v", err)
 		}
-		if err := restartedClient.ScriptLoad(recoveryContext, AdmissionLuaSource()).Err(); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, restartedClient.ScriptLoad(recoveryContext, AdmissionLuaSource()).Err())
 	}
 	if err := recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}); err != nil {
 		t.Fatalf("adopt persisted ready authority: %v", err)
@@ -438,10 +399,7 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	}
 
 	providerOptions.Client = restartedClient
-	providers, err = NewProviderStateStore(providerOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
+	providers = mustCall(t, NewProviderStateStore, providerOptions)
 	status, err := providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID, incident.EndpointID, incident.Model, incident.ProviderTier)
 	if err != nil || status.Credit != control.CreditExhausted {
 		t.Fatalf("provider incident after restart: %#v %v", status, err)
@@ -453,25 +411,16 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	// Redis script caches may disappear on restart; the embedded script must
 	// still accept a new observation without a SQL fallback or manual preload.
 	updated := providerTestEvent(t, now.Add(time.Second), "restart-route", nil)
-	if _, err := providers.PersistStatusEvent(context.Background(), updated); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(providers.PersistStatusEvent(context.Background(), updated)))
 	status, err = providers.GetRouteStatus(context.Background(), incident.ConfigDigest, incident.RouteID, incident.EndpointID, incident.Model, incident.ProviderTier)
 	if err != nil || status.Credit != control.CreditExhausted {
 		t.Fatalf("sticky incident after restart/update: %#v %v", status, err)
 	}
 
 	budgetOptions.Client = restartedClient
-	recovered, err := NewRedisBudgetMaterializer(budgetOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := recovered.Claim(context.Background(), pendingClaim); !errors.Is(err, durable.ErrAlreadyClaimed) {
-		t.Fatalf("pending claim after restart: %v", err)
-	}
-	if err := recovered.Reconcile(context.Background(), completion); err != nil {
-		t.Fatal(err)
-	}
+	recovered := mustCall(t, NewRedisBudgetMaterializer, budgetOptions)
+	requireErrorIs(t, errOf(recovered.Claim(context.Background(), pendingClaim)), durable.ErrAlreadyClaimed, "pending claim after restart")
+	mustNoError(t, recovered.Reconcile(context.Background(), completion))
 	if n := restartedClient.XLen(recoveryContext, initializer.keys.EventsKey()).Val(); n != int64(len(eventsBefore)) {
 		t.Fatalf("authority adoption/paid replay duplicated budget hints: %d", n)
 	}
@@ -490,21 +439,11 @@ func runLiveRedisConfiguredPersistence(t *testing.T, mode AdmissionMode, crash b
 	if result, err := restartedStore.Begin(context.Background(), liveBeginRequest("restart-after", "restart-policy", 1, 10, now)); err != nil || result.Denied != nil {
 		t.Fatalf("Function after Redis restart = %#v, %v", result, err)
 	}
-	if err := restartedClient.Del(recoveryContext, initializer.keys.AuthorityKey()).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if err := recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-		t.Fatalf("ready receipt recreated lost authority after restart: %v", err)
-	}
-	if _, err := recovered.Accept(recoveryContext, extra); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-		t.Fatalf("admission reopened after authority loss: %v", err)
-	}
-	if _, err := recovered.Claim(recoveryContext, pendingClaim); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-		t.Fatalf("claim allowed after authority loss: %v", err)
-	}
-	if err := recovered.Reconcile(recoveryContext, completion); !errors.Is(err, ErrBudgetAuthorityUnavailable) {
-		t.Fatalf("settlement allowed after authority loss: %v", err)
-	}
+	mustNoError(t, restartedClient.Del(recoveryContext, initializer.keys.AuthorityKey()).Err())
+	requireErrorIs(t, recoveredInitializer.Initialize(recoveryContext, budget.InitializationPreparation{Receipt: authority}), ErrBudgetAuthorityUnavailable, "ready receipt recreated lost authority after restart")
+	requireErrorIs(t, errOf(recovered.Accept(recoveryContext, extra)), ErrBudgetAuthorityUnavailable, "admission reopened after authority loss")
+	requireErrorIs(t, errOf(recovered.Claim(recoveryContext, pendingClaim)), ErrBudgetAuthorityUnavailable, "claim allowed after authority loss")
+	requireErrorIs(t, recovered.Reconcile(recoveryContext, completion), ErrBudgetAuthorityUnavailable, "settlement allowed after authority loss")
 	if n := restartedClient.Exists(recoveryContext, initializer.keys.AuthorityKey()).Val(); n != 0 {
 		t.Fatal("lost authority was recreated")
 	}
@@ -685,10 +624,7 @@ func liveRedisStoreFactoryWithKeys(client *redisclient.Client, mode AdmissionMod
 // keys with a clock fixed at now.
 func openLiveAdmissionStore(t testing.TB, client redisclient.Scripter, mode AdmissionMode, keys KeyOptions, now time.Time) *AdmissionStore {
 	t.Helper()
-	store, err := NewAdmissionStore(AdmissionOptions{Client: client, Mode: mode, Keys: keys, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewAdmissionStore, AdmissionOptions{Client: client, Mode: mode, Keys: keys, Clock: func() time.Time { return now }})
 	return store
 }
 
@@ -696,10 +632,7 @@ func openLiveAdmissionStore(t testing.TB, client redisclient.Scripter, mode Admi
 // with a clock fixed at now.
 func openLiveContinuationStore(t testing.TB, client redisclient.Scripter, keys KeyOptions, keyring *state.Keyring, now time.Time) *ContinuationStore {
 	t.Helper()
-	store, err := NewContinuationStore(ContinuationOptions{Client: client, Keys: keys, Keyring: keyring, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewContinuationStore, ContinuationOptions{Client: client, Keys: keys, Keyring: keyring, Clock: func() time.Time { return now }})
 	return store
 }
 

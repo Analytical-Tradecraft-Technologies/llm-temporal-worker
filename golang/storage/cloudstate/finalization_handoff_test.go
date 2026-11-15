@@ -3,7 +3,6 @@ package cloudstate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -18,10 +17,7 @@ func handoffFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Reco
 	t.Helper()
 	r, table, blobs, checkpoint := checkpointFixture(t)
 	op := Operation{Scope: Scope{Tenant: "private-tenant", Project: "private-project"}, Kind: "generate", Key: string(checkpoint.OriginOperationID), Manifest: json.RawMessage(`{"version":1,"operation_key":"private-operation"}`), Now: checkpoint.CreatedAt}
-	record, err := r.BeginOperation(context.Background(), op)
-	if err != nil {
-		t.Fatal(err)
-	}
+	record := mustBeginOperation(t, r, op)
 	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1,"response":"private answer","budget_generation":"generation-1"}`)}
 	return r, table, blobs, record, checkpoint, handoff
 }
@@ -29,40 +25,24 @@ func handoffFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs, Reco
 func TestFinalizationHandoffRequiresCommittedMatchingCheckpoint(t *testing.T) {
 	r, _, _, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("uncommitted checkpoint: %v", err)
-	}
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrNotFound, "uncommitted checkpoint")
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	wrong := handoff
 	wrong.CheckpointScope = "another-scope"
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("cross-scope checkpoint: %v", err)
-	}
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), contracts.ErrNotFound, "cross-scope checkpoint")
 	other := childCheckpoint(checkpoint, "other-operation")
-	if err := publishCheckpoint(ctx, r.Checkpoints(), other); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), other)
 	wrong = handoff
 	wrong.CheckpointID = other.ID
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("other operation checkpoint: %v", err)
-	}
-	if _, err := r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("missing handoff: %v", err)
-	}
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, wrong, checkpoint.CreatedAt), contracts.ErrConflict, "other operation checkpoint")
+	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrNotFound, "missing handoff")
 }
 
 func TestFinalizationHandoffRestartReplayAndImmutableValues(t *testing.T) {
 	r, table, blobs, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
+	mustSaveHandoff(t, r, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt)
 	handoff, _ = normalizeHandoff(handoff)
 	got, err := reopen(t, table, blobs).LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)
 	if err != nil || !equalHandoff(got, handoff) {
@@ -72,36 +52,19 @@ func TestFinalizationHandoffRestartReplayAndImmutableValues(t *testing.T) {
 	if err != nil || before.Revision != record.Revision+1 {
 		t.Fatalf("handoff revision: %v %v", before.Revision, err)
 	}
-	if err := reopen(t, table, blobs).SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveHandoff(t, reopen(t, table, blobs), record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt.Add(time.Hour))
 	after, _ := r.Read(ctx, record.Request.Scope, record.Request.ID)
 	if after.Revision != before.Revision {
 		t.Fatal("identical retry appended another event")
 	}
 	changed := handoff
 	changed.Payload = json.RawMessage(`{"version":1,"response":"other"}`)
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("different handoff replaced committed value: %v", err)
-	}
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, changed, checkpoint.CreatedAt), contracts.ErrConflict, "different handoff replaced committed value")
 	wrongScope := record.Request.Scope
 	wrongScope.Tenant = "someone-else"
-	if _, err := r.LoadFinalizationHandoff(ctx, wrongScope, record.Request.ID); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("cross-tenant load: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, wrongScope, record.Request.ID)), contracts.ErrNotFound, "cross-tenant load")
 	// Progress is an in-process value, but the plaintext must not reach KV.
-	for _, row := range table.rows {
-		for _, field := range row.Item.Fields {
-			if data, ok := field.(kv.KeyValueBytes); ok && strings.Contains(string(data), "private answer") {
-				t.Fatal("handoff leaked in KV")
-			}
-		}
-	}
-	for _, data := range blobs.values {
-		if strings.Contains(string(data), "private answer") {
-			t.Fatal("handoff leaked in blob storage")
-		}
-	}
+	assertNotStoredInPlaintext(t, table, blobs, "private answer", "handoff")
 }
 
 func TestFinalizationHandoffRecoversLostAcknowledgements(t *testing.T) {
@@ -109,9 +72,7 @@ func TestFinalizationHandoffRecoversLostAcknowledgements(t *testing.T) {
 		t.Run(stage, func(t *testing.T) {
 			r, table, blobs, record, checkpoint, handoff := handoffFixture(t)
 			ctx := context.Background()
-			if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-				t.Fatal(err)
-			}
+			mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 			handoff, _ = normalizeHandoff(handoff)
 			fired := false
 			fault := &contracts.StorageError{Kind: contracts.ErrOutcomeUnknown}
@@ -143,9 +104,7 @@ func TestFinalizationHandoffRecoversLostAcknowledgements(t *testing.T) {
 func TestFinalizationHandoffConcurrentSameAndDifferentWrites(t *testing.T) {
 	r, table, blobs, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	var wg sync.WaitGroup
 	errorsFound := make(chan error, 12)
 	for i := 0; i < 12; i++ {
@@ -171,9 +130,7 @@ func TestFinalizationHandoffConcurrentSameAndDifferentWrites(t *testing.T) {
 func TestFinalizationHandoffValidation(t *testing.T) {
 	r, _, _, record, checkpoint, handoff := handoffFixture(t)
 	ctx := context.Background()
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	for _, mutate := range []func(*FinalizationHandoff){
 		func(h *FinalizationHandoff) { h.Mode = "" },
 		func(h *FinalizationHandoff) { h.CheckpointID = "" },
@@ -182,19 +139,11 @@ func TestFinalizationHandoffValidation(t *testing.T) {
 	} {
 		invalid := handoff
 		mutate(&invalid)
-		if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, invalid, checkpoint.CreatedAt); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("invalid handoff accepted: %v", err)
-		}
+		requireErrorIs(t, r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, invalid, checkpoint.CreatedAt), ErrInvalid, "invalid handoff accepted")
 	}
-	if err := r.SaveFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.CompleteOperation(ctx, record.Request.Scope, record.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("terminal handoff still actionable: %v", err)
-	}
+	mustSaveHandoff(t, r, record.Request.Scope, record.Request.ID, handoff, checkpoint.CreatedAt)
+	mustCompleteOperation(t, r, record.Request.Scope, record.Request.ID, json.RawMessage(`{"version":1,"response":{}}`), checkpoint.CreatedAt)
+	requireErrorIs(t, errOf(r.LoadFinalizationHandoff(ctx, record.Request.Scope, record.Request.ID)), contracts.ErrConflict, "terminal handoff still actionable")
 }
 
 func TestFinalizationHandoffCacheAndCompactKinds(t *testing.T) {
@@ -215,17 +164,10 @@ func TestFinalizationHandoffCacheAndCompactKinds(t *testing.T) {
 				checkpoint.OriginCacheEntryID = &entry
 			}
 			op := Operation{Scope: Scope{Tenant: "private-tenant", Project: "private-project"}, Kind: variant.kind, Key: string(checkpoint.OriginOperationID), Manifest: json.RawMessage(`{"operation_key":"private-operation"}`), Now: checkpoint.CreatedAt}
-			record, err := r.BeginOperation(context.Background(), op)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := publishCheckpoint(context.Background(), r.Checkpoints(), checkpoint); err != nil {
-				t.Fatal(err)
-			}
+			record := mustBeginOperation(t, r, op)
+			mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 			handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: variant.mode, CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
-			if err := r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); err != nil {
-				t.Fatal(err)
-			}
+			mustSaveHandoff(t, r, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt)
 			got, err := r.LoadFinalizationHandoff(context.Background(), op.Scope, record.Request.ID)
 			if err != nil || got.Mode != variant.mode {
 				t.Fatalf("load: %+v %v", got, err)
@@ -238,35 +180,37 @@ func TestFinalizationHandoffRejectsManifestOperationMismatch(t *testing.T) {
 	r, _, _, checkpoint := checkpointFixture(t)
 	ctx := context.Background()
 	op := Operation{Scope: Scope{Tenant: "private-tenant", Project: "private-project"}, Kind: "generate", Key: "different-key", Manifest: json.RawMessage(`{"operation_key":"private-operation"}`), Now: checkpoint.CreatedAt}
-	record, err := r.BeginOperation(ctx, op)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := publishCheckpoint(ctx, r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	record := mustBeginOperation(t, r, op)
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
-	if err := r.SaveFinalizationHandoff(ctx, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("manifest key not bound to request ID: %v", err)
-	}
+	requireErrorIs(t, r.SaveFinalizationHandoff(ctx, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "manifest key not bound to request ID")
 }
 
 func TestFinalizationHandoffSeparatesCallerKeyFromInternalOperationID(t *testing.T) {
 	r, _, _, checkpoint := checkpointFixture(t)
 	op := Operation{Scope: Scope{Tenant: "tenant", Project: "project"}, Kind: "generate", Key: "caller-idempotency-key", Manifest: json.RawMessage(`{"operation_key":"caller-idempotency-key"}`), Now: checkpoint.CreatedAt}
-	record, err := r.BeginOperation(context.Background(), op)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := publishCheckpoint(context.Background(), r.Checkpoints(), checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	record := mustBeginOperation(t, r, op)
+	mustPublishCheckpoint(t, r.Checkpoints(), checkpoint)
 	handoff := FinalizationHandoff{OperationID: checkpoint.OriginOperationID, Mode: "provider", CheckpointScope: checkpoint.ScopeID, CheckpointID: checkpoint.ID, Payload: json.RawMessage(`{"version":1}`)}
-	if err := r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); err != nil {
-		t.Fatal(err)
-	}
+	mustSaveHandoff(t, r, op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt)
 	handoff.OperationID = state.OperationID(op.Key)
-	if err := r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("caller key accepted as internal ID: %v", err)
+	requireErrorIs(t, r.SaveFinalizationHandoff(context.Background(), op.Scope, record.Request.ID, handoff, checkpoint.CreatedAt), contracts.ErrConflict, "caller key accepted as internal ID")
+}
+
+// assertNotStoredInPlaintext fails with "<what> leaked in KV" or "<what>
+// leaked in blob storage" when any KV byte field or blob contains secret.
+func assertNotStoredInPlaintext(t *testing.T, table *memoryTable, blobs *memoryBlobs, secret, what string) {
+	t.Helper()
+	for _, row := range table.rows {
+		for _, field := range row.Item.Fields {
+			if data, ok := field.(kv.KeyValueBytes); ok && strings.Contains(string(data), secret) {
+				t.Fatal(what + " leaked in KV")
+			}
+		}
+	}
+	for _, data := range blobs.values {
+		if strings.Contains(string(data), secret) {
+			t.Fatal(what + " leaked in blob storage")
+		}
 	}
 }

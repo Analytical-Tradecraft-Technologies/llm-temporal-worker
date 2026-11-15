@@ -4,7 +4,6 @@ package redis
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -45,15 +44,10 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 	})
 	keys := liveKeyOptions("eviction")
 	cleanupLivePrefix(t, client, keys.Prefix)
-	initializer, err := NewRedisBudgetInitializer(client, keys, AdmissionModeFunction, AdmissionFunctionVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
+	initializer := mustBudgetInitializer(t, client, keys, AdmissionModeFunction, AdmissionFunctionVersion)
 	receipt := budget.Initialization{Schema: budget.InitializationSchema, Identity: initializer.Identity(),
 		Epoch: "00000000-0000-4000-8000-000000000001", CreatedAt: time.Now().UTC()}
-	if err := initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, initializer.Initialize(ctx, budget.InitializationPreparation{Receipt: receipt, Created: true}))
 	receipt.Ready = true
 	m, err := NewRedisBudgetMaterializer(RedisBudgetMaterializerOptions{
 		Client: client, Mode: AdmissionModeFunction, Keys: keys, GenerationID: "eviction-gen", IncarnationID: "eviction-inc",
@@ -64,15 +58,12 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	request := durable.ReserveRequest{OperationID: "protected", GenerationID: "eviction-gen",
-		Reservations: []admission.WindowReservation{{PolicyID: "tenant", WindowID: "hour", Bucket: now.Unix() / 60,
-			BucketNanos: int64(time.Minute), DurationNanos: int64(time.Hour), AmountUSD: pricing.MustUSD("0.8"), LimitUSD: pricing.MustUSD("1")}}}
+		Reservations: []admission.WindowReservation{liveMinuteReservation("tenant", now, "0.8", "1")}}
 	accepted, err := m.Accept(ctx, request)
 	if err != nil || !accepted.Accepted {
 		t.Fatalf("accept = %#v, %v", accepted, err)
 	}
-	if _, err := m.Claim(ctx, claimOf(accepted)); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(m.Claim(ctx, claimOf(accepted))))
 	pending := request
 	pending.OperationID = "not-yet-dispatched"
 	pending.Reservations = append([]admission.WindowReservation(nil), request.Reservations...)
@@ -87,10 +78,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 		t.Fatalf("accounting fixture: %d keys, %v", len(accounting), err)
 	}
 	before := make(map[string]string, len(accounting))
-	space, err := NewBudgetKeySpace(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := mustCall(t, NewBudgetKeySpace, keys)
 	for _, key := range accounting {
 		if key == space.EventsKey() {
 			if ttl := client.TTL(ctx, key).Val(); ttl <= 0 || ttl > 24*time.Hour {
@@ -113,13 +101,9 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 		t.Fatal(err)
 	}
 	limit := evictionInfoNumber(t, memory, "used_memory") + 512*1024
-	if err := client.ConfigSet(ctx, "maxmemory", strconv.FormatInt(limit, 10)).Err(); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, client.ConfigSet(ctx, "maxmemory", strconv.FormatInt(limit, 10)).Err())
 	for i := range 256 {
-		if err := client.Set(ctx, fmt.Sprintf("%s:cache:%d", keys.Prefix, i), strings.Repeat("x", 16*1024), time.Hour).Err(); err != nil {
-			t.Fatal(err)
-		}
+		mustNoError(t, client.Set(ctx, fmt.Sprintf("%s:cache:%d", keys.Prefix, i), strings.Repeat("x", 16*1024), time.Hour).Err())
 	}
 	stats, err = client.Info(ctx, "stats").Result()
 	if err != nil || evictionInfoNumber(t, stats, "evicted_keys") <= evictedBefore {
@@ -130,9 +114,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 			t.Fatalf("eviction modified accounting key %s: %v", key, err)
 		}
 	}
-	if _, err := m.Claim(ctx, claimOf(accepted)); !errors.Is(err, durable.ErrAlreadyClaimed) {
-		t.Fatalf("eviction reopened provider dispatch: %v", err)
-	}
+	requireErrorIs(t, errOf(m.Claim(ctx, claimOf(accepted))), durable.ErrAlreadyClaimed, "eviction reopened provider dispatch")
 	blocked := request
 	blocked.OperationID = "still-over-limit"
 	blocked.Reservations = append([]admission.WindowReservation(nil), request.Reservations...)
@@ -145,9 +127,7 @@ func TestLiveRedisVolatileEvictionProtectsAccounting(t *testing.T) {
 		before[key] = client.Dump(ctx, key).Val()
 	}
 	// If protected data itself fills RAM, fail closed instead of discarding it.
-	if err := client.ConfigSet(ctx, "maxmemory", "1").Err(); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, client.ConfigSet(ctx, "maxmemory", "1").Err())
 	blocked.OperationID = "memory-exhausted"
 	if result, err := m.Accept(ctx, blocked); err == nil || result.Accepted {
 		t.Fatalf("protected-data exhaustion admitted spending: %#v, %v", result, err)

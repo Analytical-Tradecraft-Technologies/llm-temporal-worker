@@ -17,10 +17,7 @@ import (
 
 func testKeySpace(t *testing.T) keySpace {
 	t.Helper()
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := mustCall(t, newKeySpace, testKeyOptions())
 	return space
 }
 
@@ -52,10 +49,7 @@ func (invoker *countingInvoker) Run(_ context.Context, _ string, _ []string, _ .
 // test key space and a clock fixed at now.
 func newTestAdmissionStore(t *testing.T, invoker FunctionInvoker, reader StringReader, now time.Time) *AdmissionStore {
 	t.Helper()
-	store, err := NewAdmissionStore(AdmissionOptions{Invoker: invoker, Reader: reader, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := mustCall(t, NewAdmissionStore, AdmissionOptions{Invoker: invoker, Reader: reader, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
 	return store
 }
 
@@ -306,15 +300,9 @@ func TestAdmissionConformanceReplayConflictAndAmbiguity(t *testing.T) {
 		t.Fatalf("replay = %#v, %v", replay, err)
 	}
 	request.RequestDigest = admission.Digest([]byte("different"))
-	if _, err := store.Begin(context.Background(), request); !errors.Is(err, admission.ErrOperationConflict) {
-		t.Fatalf("digest conflict = %v", err)
-	}
-	if err := store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "route"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Fail(context.Background(), admission.FailRequest{OperationID: "op", DispatchToken: "op", Certainty: admission.Ambiguous, Incurred: 0}); err != nil {
-		t.Fatal(err)
-	}
+	requireErrorIs(t, errOf(store.Begin(context.Background(), request)), admission.ErrOperationConflict, "digest conflict =")
+	mustNoError(t, store.MarkDispatching(context.Background(), admission.DispatchRequest{OperationID: "op", DispatchToken: first.Operation.DispatchToken, Attempt: admission.AttemptFacts{RouteID: "route"}}))
+	mustNoError(t, store.Fail(context.Background(), admission.FailRequest{OperationID: "op", DispatchToken: "op", Certainty: admission.Ambiguous, Incurred: 0}))
 	operation, err := store.Get(context.Background(), "op")
 	if err != nil || operation.State != admission.StateAmbiguous || operation.ReservedMicroUSD != 6 {
 		t.Fatalf("ambiguous operation = %#v, %v", operation, err)

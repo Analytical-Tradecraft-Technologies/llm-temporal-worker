@@ -15,9 +15,7 @@ import (
 func TestCloudCheckpointCompactionAndOptionalMetadataRoundTrip(t *testing.T) {
 	r, table, blobs, root := checkpointFixture(t)
 	ctx, store := context.Background(), r.Checkpoints()
-	if err := publishCheckpoint(ctx, store, root); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, store, root)
 	compacted := childCheckpoint(root, "compaction-op")
 	compacted.Kind = state.CheckpointCompaction
 	policy, prompt := "policy-v1", "prompt-v1"
@@ -31,9 +29,7 @@ func TestCloudCheckpointCompactionAndOptionalMetadataRoundTrip(t *testing.T) {
 	}
 	compacted.ProviderState = []state.CheckpointProviderState{{Provider: "example", EndpointID: "endpoint", EndpointAccountHMAC: [32]byte{7}, Region: "region", EndpointFamily: "family", ModelLineage: "model", StateKind: "context", StateBlob: ref, StateDigest: sha256.Sum256(providerBytes), Required: true, ImmutableForkSafe: true, CreatedAt: root.CreatedAt, ExpiresAt: &expires}}
 	compacted.Affinities = state.ProviderCacheAffinitySet{{Provider: "example", RouteID: "route", EndpointID: "endpoint", EndpointAccountHMAC: [32]byte{7}, Region: "region", EndpointFamily: "family", ModelLineage: "model", RouteModelRevision: "model-v1", CacheEpoch: "epoch", LastSuccessAt: root.CreatedAt, ExpiresAt: &expires}}
-	if err := publishCheckpoint(ctx, store, compacted); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, store, compacted)
 	got, err := reopen(t, table, blobs).Checkpoints().Get(ctx, root.ScopeID, compacted.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -54,9 +50,7 @@ func TestCloudCheckpointCompactionAndOptionalMetadataRoundTrip(t *testing.T) {
 	replay.Kind = state.CheckpointCacheReplay
 	cacheID := state.CacheEntryID("origin-cache-entry")
 	replay.OriginCacheEntryID = &cacheID
-	if err := publishCheckpoint(ctx, store, replay); err != nil {
-		t.Fatal(err)
-	}
+	mustPublishCheckpoint(t, store, replay)
 	if got, err := store.Get(ctx, root.ScopeID, replay.ID); err != nil || got.Kind != state.CheckpointCacheReplay || got.ID == compacted.ID {
 		t.Fatalf("cache replay checkpoint: %v", err)
 	}
@@ -67,16 +61,12 @@ func TestCloudCheckpointCorruptPointersFailClosed(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			r, table, _, cp := checkpointFixture(t)
 			ctx := context.Background()
-			if err := publishCheckpoint(ctx, r.Checkpoints(), cp); err != nil {
-				t.Fatal(err)
-			}
+			mustPublishCheckpoint(t, r.Checkpoints(), cp)
 			s := r.Checkpoints().(*checkpointStore)
 			key := s.key("id", s.identity(cp.ScopeID, "id", string(cp.ID)))
 			row := table.rows[key]
 			var pointer checkpointPointer
-			if err := json.Unmarshal(row.Item.Fields["checkpoint"].(kv.KeyValueBytes), &pointer); err != nil {
-				t.Fatal(err)
-			}
+			mustNoError(t, json.Unmarshal(row.Item.Fields["checkpoint"].(kv.KeyValueBytes), &pointer))
 			switch mode {
 			case "schema":
 				pointer.Version++

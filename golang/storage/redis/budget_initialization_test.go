@@ -36,11 +36,8 @@ func TestBudgetInitializerDisablesRetriesForOneTimeCreation(t *testing.T) {
 }
 
 func TestBudgetMaterializerRequiresReadyReceiptForItsOwnKeys(t *testing.T) {
-	keys := KeyOptions{Prefix: "test", HashTag: "budget", KeySecret: []byte(strings.Repeat("s", 32))}
-	space, err := NewBudgetKeySpace(keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := testBudgetKeyOptions("budget")
+	space := mustCall(t, NewBudgetKeySpace, keys)
 	client := redisclient.NewClient(&redisclient.Options{Addr: "127.0.0.1:0"})
 	defer client.Close()
 	for _, kind := range []string{"pending", "namespace", "fingerprint", "invalid-epoch", "valid"} {
@@ -88,10 +85,7 @@ func (s *initializationScanner) Scan(ctx context.Context, cursor uint64, match s
 }
 
 func TestBudgetInitializationScansEveryPageAndMatchesLiteralNamespace(t *testing.T) {
-	space, err := NewBudgetKeySpace(KeyOptions{Prefix: "test", HashTag: "budget*", KeySecret: []byte(strings.Repeat("s", 32))})
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := mustCall(t, NewBudgetKeySpace, testBudgetKeyOptions("budget*"))
 	scanner := &initializationScanner{pages: [][]string{{space.AuthorityKey(), "other:{budget*}:unrelated", "test:{budgetABC}:other"}, {}, {"test:{budget*}:occupied"}}}
 	if err := scanBudgetNamespace(context.Background(), scanner, space); !errors.Is(err, ErrBudgetAuthorityUnavailable) || scanner.calls != 3 {
 		t.Fatalf("occupied final page was missed: calls=%d err=%v", scanner.calls, err)

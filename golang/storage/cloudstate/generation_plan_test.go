@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -18,15 +17,11 @@ func TestGenerationPlanRestartBindingAndNoPendingRequest(t *testing.T) {
 	r, table, blobs, op := operationFixture(t)
 	ctx := context.Background()
 	want := GenerationPlan{CompactBeforeGenerate: true}
-	if _, err := r.LoadGenerationPlan(ctx, op); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("missing: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LoadGenerationPlan(ctx, op)), contracts.ErrNotFound, "missing")
 	if got, err := r.SaveGenerationPlan(ctx, op, want); err != nil || got != want {
 		t.Fatalf("save: %v %v", got, err)
 	}
-	if _, err := r.LookupOperation(ctx, op); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("plan created a pending request: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LookupOperation(ctx, op)), contracts.ErrNotFound, "plan created a pending request")
 	for key, row := range table.rows {
 		data, _ := row.Item.Fields.MarshalBinary()
 		for _, private := range []string{op.Key, op.Scope.Tenant, op.Scope.Project, "private prompt"} {
@@ -40,8 +35,7 @@ func TestGenerationPlanRestartBindingAndNoPendingRequest(t *testing.T) {
 			t.Fatal("plan blob is plaintext")
 		}
 	}
-	table.hook = func(string, kv.KeyValueItem) (error, error) { t.Error("replay wrote table"); return nil, nil }
-	blobs.hook = func(blob.BlobKey) (error, error) { t.Error("replay wrote blob"); return nil, nil }
+	forbidWrites(t, table, blobs, "replay")
 	if got, err := reopen(t, table, blobs).SaveGenerationPlan(ctx, op, GenerationPlan{}); err != nil || got != want {
 		t.Fatalf("changed decision replaced winner: %v %v", got, err)
 	}
@@ -54,15 +48,11 @@ func TestGenerationPlanRestartBindingAndNoPendingRequest(t *testing.T) {
 	} {
 		changed := op
 		mutate(&changed)
-		if _, err := r.SaveGenerationPlan(ctx, changed, want); !errors.Is(err, contracts.ErrConflict) {
-			t.Fatalf("input conflict lost: %v", err)
-		}
+		requireErrorIs(t, errOf(r.SaveGenerationPlan(ctx, changed, want)), contracts.ErrConflict, "input conflict lost")
 	}
 	other := op
 	other.Scope.Project += "-other"
-	if _, err := r.LoadGenerationPlan(ctx, other); !errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("cross-scope lookup: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LoadGenerationPlan(ctx, other)), contracts.ErrNotFound, "cross-scope lookup")
 }
 
 func TestGenerationPlanConcurrentDifferentDecisionsChooseOneWinner(t *testing.T) {
@@ -104,9 +94,7 @@ func TestGenerationPlanLostAcknowledgementReconcilesWinner(t *testing.T) {
 	r, table, blobs, op := operationFixture(t)
 	table.hook = func(string, kv.KeyValueItem) (error, error) { return nil, contracts.ErrOutcomeUnknown }
 	want := GenerationPlan{CompactBeforeGenerate: true}
-	if _, err := r.SaveGenerationPlan(context.Background(), op, want); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-		t.Fatalf("uncertain write hidden: %v", err)
-	}
+	requireErrorIs(t, errOf(r.SaveGenerationPlan(context.Background(), op, want)), contracts.ErrOutcomeUnknown, "uncertain write hidden")
 	table.hook = nil
 	if got, err := reopen(t, table, blobs).SaveGenerationPlan(context.Background(), op, GenerationPlan{}); err != nil || got != want {
 		t.Fatalf("retry lost committed decision: %v %v", got, err)
@@ -115,41 +103,25 @@ func TestGenerationPlanLostAcknowledgementReconcilesWinner(t *testing.T) {
 
 func TestGenerationPlanReferencedBlobMissingFailsClosed(t *testing.T) {
 	r, _, blobs, op := operationFixture(t)
-	if _, err := r.SaveGenerationPlan(context.Background(), op, GenerationPlan{}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.SaveGenerationPlan(context.Background(), op, GenerationPlan{})))
 	blobs.values = map[blob.BlobKey][]byte{}
-	if _, err := r.LoadGenerationPlan(context.Background(), op); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("missing committed blob allowed fresh planning: %v", err)
-	}
-	if _, err := r.SaveGenerationPlan(context.Background(), op, GenerationPlan{CompactBeforeGenerate: true}); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("corrupt plan overwritten: %v", err)
-	}
+	requireErrorIsNot(t, errOf(r.LoadGenerationPlan(context.Background(), op)), ErrCorrupt, contracts.ErrNotFound, "missing committed blob allowed fresh planning")
+	requireErrorIs(t, errOf(r.SaveGenerationPlan(context.Background(), op, GenerationPlan{CompactBeforeGenerate: true})), ErrCorrupt, "corrupt plan overwritten")
 }
 
 func TestGenerationBindingImmutableEncryptedAndLostAcknowledgement(t *testing.T) {
 	r, table, blobs, op := operationFixture(t)
 	ctx := context.Background()
-	if _, err := r.SaveGenerationPlan(ctx, op, GenerationPlan{CompactBeforeGenerate: true}); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, errOf(r.SaveGenerationPlan(ctx, op, GenerationPlan{CompactBeforeGenerate: true})))
 	want := json.RawMessage(`{"parent":"ckp_v1.compacted-private","append":"private follow-up"}`)
 	table.hook = func(string, kv.KeyValueItem) (error, error) { return nil, contracts.ErrOutcomeUnknown }
-	if err := r.SaveGenerationBinding(ctx, op, want); !errors.Is(err, contracts.ErrOutcomeUnknown) {
-		t.Fatalf("lost binding acknowledgement hidden: %v", err)
-	}
+	requireErrorIs(t, r.SaveGenerationBinding(ctx, op, want), contracts.ErrOutcomeUnknown, "lost binding acknowledgement hidden")
 	table.hook = nil
-	if err := reopen(t, table, blobs).SaveGenerationBinding(ctx, op, want); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.SaveGenerationBinding(ctx, op, json.RawMessage(`{"parent":"ckp_v1.substitute"}`)); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("effective input substitution: %v", err)
-	}
+	mustNoError(t, reopen(t, table, blobs).SaveGenerationBinding(ctx, op, want))
+	requireErrorIs(t, r.SaveGenerationBinding(ctx, op, json.RawMessage(`{"parent":"ckp_v1.substitute"}`)), contracts.ErrConflict, "effective input substitution")
 	changed := op
 	changed.Manifest = json.RawMessage(`{"other":true}`)
-	if _, err := r.LoadGenerationBinding(ctx, changed); !errors.Is(err, contracts.ErrConflict) {
-		t.Fatalf("original input substitution: %v", err)
-	}
+	requireErrorIs(t, errOf(r.LoadGenerationBinding(ctx, changed)), contracts.ErrConflict, "original input substitution")
 	for _, row := range table.rows {
 		data, _ := row.Item.Fields.MarshalBinary()
 		if bytes.Contains(data, []byte("compacted-private")) || bytes.Contains(data, []byte("private follow-up")) {
@@ -165,14 +137,8 @@ func TestGenerationBindingImmutableEncryptedAndLostAcknowledgement(t *testing.T)
 	key.SortKey = "effective-v1"
 	row := table.rows[key]
 	var pointer generationPlanPointer
-	if err := json.Unmarshal(row.Item.Fields["generation_binding"].(kv.KeyValueBytes), &pointer); err != nil {
-		t.Fatal(err)
-	}
+	mustNoError(t, json.Unmarshal(row.Item.Fields["generation_binding"].(kv.KeyValueBytes), &pointer))
 	delete(blobs.values, blob.BlobKey(pointer.Blob))
-	if _, err := r.LoadGenerationBinding(ctx, op); !errors.Is(err, ErrCorrupt) || errors.Is(err, contracts.ErrNotFound) {
-		t.Fatalf("lost effective binding treated as absent: %v", err)
-	}
-	if err := r.SaveGenerationBinding(ctx, op, want); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("lost effective binding regenerated: %v", err)
-	}
+	requireErrorIsNot(t, errOf(r.LoadGenerationBinding(ctx, op)), ErrCorrupt, contracts.ErrNotFound, "lost effective binding treated as absent")
+	requireErrorIs(t, r.SaveGenerationBinding(ctx, op, want), ErrCorrupt, "lost effective binding regenerated")
 }
