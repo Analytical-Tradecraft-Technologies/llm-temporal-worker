@@ -6,7 +6,7 @@ CLOUD_WORKFLOW_TEST_FILTER ?= ^TestCloudWorkflowLive
 # Keep the security scan on the reviewed Go patch release. A moving `go env
 # GOVERSION` default can select an older runner toolchain than the documented
 # baseline and reintroduce fixed standard-library vulnerabilities.
-SECURITY_GO_TOOLCHAIN ?= go1.26.10
+SECURITY_GO_TOOLCHAIN ?= go1.26.11
 SECURITY_BASE_DIR ?=
 # One fresh nonce per make invocation also covers Compose image builds.
 export CA_CERTIFICATES_REFRESH := $(shell date -u +%Y%m%dT%H%M%S)-$(shell uuidgen)
