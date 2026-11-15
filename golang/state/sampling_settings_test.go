@@ -105,7 +105,7 @@ func TestCheckpointBlobCodecRoundTripsSamplingLeaves(t *testing.T) {
 	settings.Seed = &[]int64{0}[0]
 	settings.ReasoningMode = llm.ReasoningModeDisabled
 	settings.ReasoningTokenBudget = &[]int{1024}[0]
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	items := []llm.Item{llm.HumanText("hello")}
 	snapshot := CheckpointSnapshot{Items: items, Settings: settings, Depth: 1, Lineage: []Handle{"root"}}
 	snapshot.Digest = snapshot.digest()
 	encodedSnapshot, err := codec.EncodeSnapshot(snapshot)
@@ -150,7 +150,7 @@ func TestSnapshotDigestAndEncodingUnchangedWithoutSamplingLeaves(t *testing.T) {
 	settings := RootModelState("model")
 	settings.Temperature, settings.TemperatureDecimal = &temperature, &decimal
 	settings.ReasoningEffort = llm.ReasoningEffortHigh
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	items := []llm.Item{llm.HumanText("hello")}
 	snapshot := CheckpointSnapshot{Items: items, Settings: settings, Depth: 1, Lineage: []Handle{"root"}}
 
 	legacy := legacyModelState{Model: settings.Model, ServiceClass: settings.ServiceClass, Portability: settings.Portability,

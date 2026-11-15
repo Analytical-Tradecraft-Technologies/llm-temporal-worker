@@ -52,7 +52,7 @@ func TestPublicGenerateReplaysCompletedOperationWithoutCurrentParentOrRoutes(t *
 			f.request.SettingsPatch.CompactionPolicy.Set = &policy
 			root := f.finish(t)
 			f.now = f.now.Add(time.Minute)
-			f.request = llm.GenerateRequestV1{OperationKey: "public-replay-child", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{preparationMessage("follow-up")}}
+			f.request = llm.GenerateRequestV1{OperationKey: "public-replay-child", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("follow-up")}}
 			original := f.finish(t)
 			before := f.submits.Load()
 			if changed == "expired-parent" {
@@ -83,7 +83,7 @@ func TestPublicGenerateResumesPreparedOperationAfterParentExpiry(t *testing.T) {
 	f := boundedCloud(t, false)
 	root := f.finish(t)
 	f.now = f.now.Add(time.Minute)
-	f.request = llm.GenerateRequestV1{OperationKey: "prepared-public-child", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{preparationMessage("prepared follow-up")}}
+	f.request = llm.GenerateRequestV1{OperationKey: "prepared-public-child", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("prepared follow-up")}}
 	prepared, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request})
 	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
 	before := f.submits.Load()
@@ -110,7 +110,7 @@ func TestPublicGenerateReplayPreservesInputBindingAndAuthorization(t *testing.T)
 			f.finish(t)
 			before := f.submits.Load()
 			if changed == "append" {
-				f.request.Append = []llm.Item{preparationMessage("different input")}
+				f.request.Append = []llm.Item{llm.HumanText("different input")}
 			} else {
 				f.request.Context.Project = "unauthorized"
 			}
@@ -129,7 +129,7 @@ func TestPublicGenerateReplaysAutomaticCompactionAfterCheckpointExpiry(t *testin
 		f.turn(t, "history-"+string(rune('0'+i)), strings.Repeat("history ", 3<<10))
 	}
 	f.request.OperationKey = "compacted-public-generate"
-	f.request.Append = []llm.Item{preparationMessage("fourth")}
+	f.request.Append = []llm.Item{llm.HumanText("fourth")}
 	original := f.request
 	before := f.submits.Load()
 	invoke := f.adapter.invoke

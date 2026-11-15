@@ -27,7 +27,7 @@ func responseCacheFixture(t *testing.T) (*Repository, *memoryTable, *memoryBlobs
 	}
 	cost := "0.12"
 	value := llm.GenerateResponseV1{OperationKey: "private-key", OperationID: string(cp.OriginOperationID), Status: llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "private answer"}}}},
+		Output:     []llm.Item{llm.ModelText("private answer")},
 		Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.origin", Kind: "generation"},
 		Cache:      llm.CacheDispositionV1{Disposition: "miss_populated"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: &cost, Method: "provider_reported"}}
 	response, err := json.Marshal(value)

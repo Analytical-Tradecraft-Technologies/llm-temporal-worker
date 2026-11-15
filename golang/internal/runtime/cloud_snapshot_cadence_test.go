@@ -60,7 +60,7 @@ func (f *snapshotCadenceFixture) turn(t *testing.T, parent *llm.CheckpointHandle
 	t.Helper()
 	f.now = f.now.Add(time.Second)
 	f.request.OperationKey, f.request.Parent = text, parent
-	f.request.Append = []llm.Item{preparationMessage(text)}
+	f.request.Append = []llm.Item{llm.HumanText(text)}
 	var inherited []string
 	if parent != nil {
 		f.request.SettingsPatch = llm.SettingsPatchV1{}
@@ -188,7 +188,7 @@ func TestCloudRuntimeLineageWalkIsBoundedBySnapshotCadence(t *testing.T) {
 		t.Helper()
 		f.now = f.now.Add(time.Second)
 		f.request.OperationKey, f.request.Parent, f.request.SettingsPatch = "next", &parent, llm.SettingsPatchV1{}
-		f.request.Append = []llm.Item{preparationMessage("next")}
+		f.request.Append = []llm.Item{llm.HumanText("next")}
 		f.store.gets.Store(0)
 		f.store.reads.Store(0)
 		v, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request})

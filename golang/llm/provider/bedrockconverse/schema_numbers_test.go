@@ -27,7 +27,7 @@ func TestInvokePreservesExactSchemaNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	params, err := lowerRequest(llm.Request{Model: bedrockFixtureModel, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "lookup"}}}}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(schema)}}}, mustBedrockConverseProfile(t), "default", false)
+	params, err := lowerRequest(llm.Request{Model: bedrockFixtureModel, Input: []llm.Item{llm.HumanText("lookup")}, Tools: []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(schema)}}}, mustBedrockConverseProfile(t), "default", false)
 	if err != nil {
 		t.Fatal(err)
 	}

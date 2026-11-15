@@ -15,9 +15,7 @@ func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
 		OperationKey: "fixture-op",
 		Model:        "chat-contract",
 		ServiceClass: llm.ServiceClassStandard,
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-			llm.TextPart{Text: "hello"},
-		}}},
+		Input:        []llm.Item{llm.HumanText("hello")},
 	}, testProfile(), "default")
 	if err != nil {
 		t.Fatal(err)

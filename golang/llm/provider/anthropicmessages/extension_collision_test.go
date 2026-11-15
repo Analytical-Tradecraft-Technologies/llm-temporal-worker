@@ -47,7 +47,7 @@ func newExtensionCompiler(t *testing.T, fields adaptertest.ExtensionFields, vali
 			Request: llm.Request{
 				OperationKey: "extension-collision",
 				Model:        "claude-contract",
-				Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+				Input:        []llm.Item{llm.HumanText("hello")},
 				Extensions:   extensions,
 			},
 			Query:  provider.CapabilityQuery{EndpointID: "anthropic-test", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},

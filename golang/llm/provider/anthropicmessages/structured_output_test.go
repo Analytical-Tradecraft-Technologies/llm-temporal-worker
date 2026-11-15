@@ -52,7 +52,7 @@ func structuredOutputInput(schema string, strict bool) provider.CompileInput {
 	return provider.CompileInput{
 		Request: llm.Request{
 			OperationKey: "structured", Model: "claude-contract",
-			Input:  []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "extract"}}}},
+			Input:  []llm.Item{llm.HumanText("extract")},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Strict: true, Schema: json.RawMessage(schema)}},
 		},
 		Query:  provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},

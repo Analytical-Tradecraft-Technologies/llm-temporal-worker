@@ -251,7 +251,7 @@ func mapInput(raw json.RawMessage) ([]llm.Item, []llm.Instruction, *apiError) {
 		if text == "" {
 			return nil, nil, invalidParam("input", "input must not be empty")
 		}
-		return []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}}, nil, nil
+		return []llm.Item{llm.HumanText(text)}, nil, nil
 	}
 	var values []json.RawMessage
 	if err := json.Unmarshal(raw, &values); err != nil {

@@ -107,7 +107,7 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 	adapter := newExaTestAdapter(t, exaBody(body))
 	query := provider.CapabilityQuery{EndpointID: "exa-a", Family: provider.FamilyOpenAIChat, Model: "exa"}
 	human := func(text string) llm.Message {
-		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
+		return llm.HumanText(text)
 	}
 	first := llm.Request{OperationKey: "exa-turn-1", Model: "exa", Input: []llm.Item{human("question")}}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: first, Query: query, Strict: true})
@@ -154,8 +154,8 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 // the assistant message it belongs to or from its result.
 func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 	request := llm.Request{OperationKey: "reference-tools", Model: "chat-contract", Input: []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "question"}}},
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}}},
+		llm.HumanText("question"),
+		llm.ModelText("looking"),
 		llm.Reference{URI: "https://example.com/first-source"},
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 		llm.Reference{URI: "https://example.com/second-source"},

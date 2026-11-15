@@ -19,7 +19,7 @@ func invokeWithPanickingResponse(t *testing.T, client *Client, baseURL, endpoint
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := adaptertest.CompileStrict(t, adapter, endpointID, provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-panic", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}})
+	call := adaptertest.CompileStrict(t, adapter, endpointID, provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-panic", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	return err
 }

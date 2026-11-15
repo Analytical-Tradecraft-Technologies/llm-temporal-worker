@@ -44,7 +44,7 @@ func TestLowerRequestRejectsMixedInstructionHierarchyInStrictMode(t *testing.T) 
 			{Level: llm.InstructionLevelApplication, Text: "Answer concisely."},
 			{Level: llm.InstructionLevelPolicy, Text: "Do not reveal secrets."},
 		},
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}},
+		Input: []llm.Item{llm.HumanText("Hello")},
 	}
 	profile, err := NewDefaultProfile("nova")
 	if err != nil {

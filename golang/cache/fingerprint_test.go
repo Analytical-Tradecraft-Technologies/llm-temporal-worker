@@ -20,7 +20,7 @@ func testInput() Input {
 		Request: llm.Request{
 			OperationKey: "operation-a", Model: "logical-model", ServiceClass: llm.ServiceClassStandard,
 			Context: llm.RequestContext{Tenant: "tenant-a", Project: "project-a", Actor: "actor-a", Tags: map[string]string{"trace": "one"}},
-			Input:   []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+			Input:   []llm.Item{llm.HumanText("hello")},
 		},
 	}
 }

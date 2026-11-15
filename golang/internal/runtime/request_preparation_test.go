@@ -21,10 +21,6 @@ import (
 
 func preparationPointer[T any](value T) *T { return &value }
 
-func preparationMessage(text string) llm.Item {
-	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
-}
-
 func preparationFixture() (llm.GenerateRequestV1, durable.GenerateReplay, llm.CompactRequestV1) {
 	parent := llm.CheckpointHandle("cp1.opaque.parent")
 	caller := llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "current-actor"}
@@ -46,10 +42,10 @@ func preparationFixture() (llm.GenerateRequestV1, durable.GenerateReplay, llm.Co
 	settings.CompactionPolicy, _ = json.Marshal(policy)
 	replay := durable.GenerateReplay{State: state.MaterializedState{
 		Handle: state.Handle(parent), Tenant: caller.Tenant, Project: caller.Project,
-		Depth: 2, Items: []llm.Item{preparationMessage("older"), preparationMessage("recent")}, Settings: settings,
+		Depth: 2, Items: []llm.Item{llm.HumanText("older"), llm.HumanText("recent")}, Settings: settings,
 	}}
 	generate := llm.GenerateRequestV1{OperationKey: "new-operation", Context: caller, Parent: &parent,
-		Append: []llm.Item{preparationMessage("delta")}, Cache: &llm.CachePolicyV1{MaxAgeSeconds: 60, Variant: 3}}
+		Append: []llm.Item{llm.HumanText("delta")}, Cache: &llm.CachePolicyV1{MaxAgeSeconds: 60, Variant: 3}}
 	compact := llm.CompactRequestV1{OperationKey: "compact-operation", Context: caller, Parent: parent}
 	return generate, replay, compact
 }
@@ -208,7 +204,7 @@ func TestPreparedInputCopiesMutableApplicationAndTranscriptValues(t *testing.T) 
 func TestPrepareCompactInputUsesVersionedBoundedSummarizerAndRetainsToolFrontier(t *testing.T) {
 	_, generation, request := preparationFixture()
 	parent := generation.State
-	parent.Items = []llm.Item{preparationMessage("old"),
+	parent.Items = []llm.Item{llm.HumanText("old"),
 		llm.ToolCall{ID: "closed", Name: "lookup", Arguments: json.RawMessage(`{}`)},
 		llm.ToolResult{CallID: "closed", Content: []llm.Part{llm.TextPart{Text: "tool result"}}},
 		llm.ToolCall{ID: "pending", Name: "lookup", Arguments: json.RawMessage(`{}`)}}
@@ -231,7 +227,7 @@ func TestPrepareCompactInputUsesVersionedBoundedSummarizerAndRetainsToolFrontier
 		t.Fatalf("summarizer input = %+v", got.Input)
 	}
 	got.Instructions[2].Text = "changed"
-	prepared.Selection.Retained[0] = preparationMessage("changed")
+	prepared.Selection.Retained[0] = llm.HumanText("changed")
 	if prepared.Selection.Prefix[1].(llm.ToolCall).Arguments[0] != '{' || parent.Items[1].(llm.ToolCall).Arguments[0] != '{' || parent.Items[3].(llm.ToolCall).ID != "pending" || parent.Settings.Instructions[0].Text != "application instructions" {
 		t.Fatal("compaction values alias the source checkpoint or each other")
 	}
@@ -242,7 +238,7 @@ func TestPrepareCompactInputUsesVersionedBoundedSummarizerAndRetainsToolFrontier
 func TestPrepareCompactInputRoutesSummarizerOnRequestOverrides(t *testing.T) {
 	_, generation, request := preparationFixture()
 	parent := generation.State
-	parent.Items = []llm.Item{preparationMessage("old"), preparationMessage("older"), preparationMessage("recent")}
+	parent.Items = []llm.Item{llm.HumanText("old"), llm.HumanText("older"), llm.HumanText("recent")}
 	parent.Settings.ServiceClass = llm.ServiceClassStandard
 	parent.Settings.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassPriority}
 	request.Policy = json.RawMessage(`{"target_tokens":1000}`)

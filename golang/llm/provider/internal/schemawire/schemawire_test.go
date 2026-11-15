@@ -42,9 +42,9 @@ func TestPointerHelpers(t *testing.T) {
 
 func TestFirstModelText(t *testing.T) {
 	output := []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "user"}}},
+		llm.HumanText("user"),
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.RefusalPart{}}},
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "model"}}},
+		llm.ModelText("model"),
 	}
 	if got, ok := FirstModelText(output); !ok || got != "model" {
 		t.Fatalf("FirstModelText() = %q, %t", got, ok)

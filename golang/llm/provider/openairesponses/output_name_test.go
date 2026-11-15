@@ -30,7 +30,7 @@ func TestJSONSchemaOutputWithoutNameSendsValidDefaultName(t *testing.T) {
 	for range 2 {
 		call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: llm.Request{
 			OperationKey: "op-name", Model: "gpt-contract",
-			Input:  []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "extract"}}}},
+			Input:  []llm.Item{llm.HumanText("extract")},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)}},
 		}})
 		if err != nil {

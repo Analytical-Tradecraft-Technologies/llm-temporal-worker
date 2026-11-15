@@ -19,7 +19,7 @@ func TestCompileRejectsHostedToolFlags(t *testing.T) {
 		"code_execution": func(r *llm.Request) { r.CodeExecution = true },
 	} {
 		for _, strict := range []bool{true, false} {
-			request := llm.Request{Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}}
+			request := llm.Request{Input: []llm.Item{llm.HumanText("hi")}}
 			mutate(&request)
 			_, err := adapter.Compile(context.Background(), bedrockCompileInput(request, strict))
 			var mapped *provider.Error

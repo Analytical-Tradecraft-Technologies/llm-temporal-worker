@@ -66,7 +66,7 @@ func TestLiftOmitsReasoningContentWithADiagnostic(t *testing.T) {
 }
 
 func TestLoweringRejectsReasoningAndExtensionsItCannotSend(t *testing.T) {
-	base := llm.Request{Model: "nova", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}}
+	base := llm.Request{Model: "nova", Input: []llm.Item{llm.HumanText("hi")}}
 	budget := 4000
 	for _, test := range []struct {
 		name    string

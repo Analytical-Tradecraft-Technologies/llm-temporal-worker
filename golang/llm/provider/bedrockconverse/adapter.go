@@ -370,7 +370,7 @@ func liftOutput(output types.ConverseOutput, rawToolUses []rawToolUse) ([]llm.It
 	var text strings.Builder
 	flushText := func() {
 		if text.Len() > 0 {
-			items = append(items, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text.String()}}})
+			items = append(items, llm.ModelText(text.String()))
 			text.Reset()
 		}
 	}

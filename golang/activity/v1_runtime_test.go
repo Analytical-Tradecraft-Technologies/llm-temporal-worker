@@ -39,7 +39,7 @@ func (runtime *v1RuntimeStub) GenerateV1(_ context.Context, request llm.Generate
 	return llm.GenerateResponseV1{
 		APIVersion: llm.APIVersion, OperationKey: request.OperationKey, OperationID: "op-generate",
 		Status:     llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "ok"}}}},
+		Output:     []llm.Item{llm.ModelText("ok")},
 		Checkpoint: llm.CheckpointMetadata{Handle: "ckp-generate", Kind: "generation"},
 		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
 		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
@@ -90,7 +90,7 @@ func validGenerateV1Request() llm.GenerateRequestV1 {
 	return llm.GenerateRequestV1{
 		APIVersion: llm.APIVersion, OperationKey: "generate-1",
 		Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "workflow"},
-		Append:  []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Append:  []llm.Item{llm.HumanText("hello")},
 	}
 }
 
@@ -253,7 +253,7 @@ func TestV1ActivityRejectsOversizedPayloadBeforeDispatch(t *testing.T) {
 	runtime := &v1RuntimeStub{}
 	activities := &Activities{V1Runtime: runtime, PayloadLimits: PayloadLimits{MaxInlineBytes: 64}}
 	request := validGenerateV1Request()
-	request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("x", 256)}}}}
+	request.Append = []llm.Item{llm.HumanText(strings.Repeat("x", 256))}
 	_, err := activities.GenerateV1(context.Background(), request)
 	if err == nil {
 		t.Fatal("GenerateV1 unexpectedly accepted oversized payload")

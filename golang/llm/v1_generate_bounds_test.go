@@ -144,7 +144,7 @@ func validGenerateBoundsWire() map[string]any {
 }
 
 func repeatedGenerateItems(count int) []llm.Item {
-	item := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "x"}}}
+	item := llm.HumanText("x")
 	items := make([]llm.Item, count)
 	for index := range items {
 		items[index] = item

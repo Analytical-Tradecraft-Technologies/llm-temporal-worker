@@ -69,7 +69,7 @@ func TestGenerateActivityCreatesAnIsolatedHeartbeaterPerInvocation(t *testing.T)
 			return heartbeater
 		},
 	}
-	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}}
+	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
 	if _, err := activities.Generate(context.Background(), payload); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestGenerateActivityMapsPayloadAndHeartbeats(t *testing.T) {
 	heartbeater := &fakeHeartbeater{}
 	value := &fakeEngine{response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
 	activities := Activities{Engine: value, Heartbeater: heartbeater}
-	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}})
+	response, err := activities.Generate(context.Background(), GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}})
 	if err != nil {
 		t.Fatal(err)
 	}

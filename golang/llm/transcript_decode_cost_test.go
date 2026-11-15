@@ -24,10 +24,10 @@ func tinyTranscript(tb testing.TB, items int) []llm.Item {
 	for index := 0; len(transcript) < items; index++ {
 		callID := fmt.Sprintf("call-%d", index)
 		for _, item := range []llm.Item{
-			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "next"}}},
+			llm.HumanText("next"),
 			llm.ToolCall{ID: callID, Name: "lookup", Arguments: json.RawMessage(`{"q":"a"}`)},
 			llm.ToolResult{CallID: callID, Name: "lookup", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"hits":1}`)}}},
-			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "ok"}}},
+			llm.ModelText("ok"),
 		} {
 			if len(transcript) < items {
 				transcript = append(transcript, item)

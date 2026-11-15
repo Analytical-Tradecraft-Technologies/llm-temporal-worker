@@ -18,7 +18,7 @@ import (
 func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	codec := CheckpointBlobCodec{}
 	items := []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}},
+		llm.HumanText("hello"),
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{"q":"x"}`)},
 	}
 	delta, err := codec.EncodeDelta(items)
@@ -29,7 +29,7 @@ func TestCheckpointBlobCodecRoundTripsEveryKind(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(gotDelta, items) {
 		t.Fatalf("delta round trip = %#v, %v; want %#v", gotDelta, err, items)
 	}
-	response, err := codec.EncodeResponse([]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "world"}}}})
+	response, err := codec.EncodeResponse([]llm.Item{llm.ModelText("world")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestCheckpointBlobCodecRejectsVersionKindAndEnvelopeTampering(t *testing.T)
 
 func FuzzCheckpointBlobCodecDecodeDeltaNeverPanics(f *testing.F) {
 	codec := CheckpointBlobCodec{}
-	seed, err := codec.EncodeDelta([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "seed"}}}})
+	seed, err := codec.EncodeDelta([]llm.Item{llm.HumanText("seed")})
 	if err != nil {
 		f.Fatal(err)
 	}

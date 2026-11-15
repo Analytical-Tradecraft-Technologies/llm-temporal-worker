@@ -22,7 +22,7 @@ func compileResponsesExtension(t *testing.T, extension string, strict bool, opti
 		Request: llm.Request{
 			OperationKey: "extension-allowlist",
 			Model:        "gpt-contract",
-			Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+			Input:        []llm.Item{llm.HumanText("hello")},
 			Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(extension)},
 		},
 		Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},

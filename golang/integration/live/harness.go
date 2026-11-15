@@ -159,10 +159,7 @@ func requestFor(profile Profile) llm.Request {
 			Actor:   "protected-release",
 		},
 		Model: profile.Model,
-		Input: []llm.Item{llm.Message{
-			Actor:   llm.ActorHuman,
-			Content: []llm.Part{llm.TextPart{Text: profile.Prompt}},
-		}},
+		Input: []llm.Item{llm.HumanText(profile.Prompt)},
 		Output: &llm.OutputSpec{
 			MaxTokens: &maxTokens,
 			Format:    llm.OutputFormat{Kind: llm.OutputKindText},

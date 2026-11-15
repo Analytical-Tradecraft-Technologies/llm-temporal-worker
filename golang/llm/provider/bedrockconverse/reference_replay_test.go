@@ -17,17 +17,17 @@ import (
 func TestCompileSkipsReplayedReferenceAnnotations(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: DefaultProfile("nova")}
 	human := func(text string) llm.Message {
-		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
+		return llm.HumanText(text)
 	}
 	// The second response splits one model turn into text and a tool call and
 	// carries a citation between the call and its result.
 	request := llm.Request{OperationKey: "reference-replay", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{
 		human("question"),
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}},
+		llm.ModelText("answer"),
 		llm.Reference{URI: "https://example.com/cited-source", Metadata: map[string]json.RawMessage{"title": json.RawMessage(`"Cited source"`)}},
 		llm.Reference{URI: "https://example.com/second-source"},
 		human("follow-up"),
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "looking"}}},
+		llm.ModelText("looking"),
 		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 		llm.Reference{URI: "https://example.com/third-source"},
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "found"}}},

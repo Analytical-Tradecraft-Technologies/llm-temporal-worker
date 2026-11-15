@@ -19,7 +19,7 @@ func TestPlannerEvaluatesPriceAvailabilityAtPlanTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := llm.Request{OperationKey: "op", Model: "model", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}}
+	request := llm.Request{OperationKey: "op", Model: "model", ServiceClass: llm.ServiceClassStandard, Input: []llm.Item{llm.HumanText("hi")}}
 	for now, want := range map[time.Time]bool{start.Add(-time.Minute): false, start.Add(time.Minute): true} {
 		plan, err := DeterministicPlanner{}.Plan(context.Background(), Input{Request: request, Catalog: catalog, Now: now})
 		if err != nil {

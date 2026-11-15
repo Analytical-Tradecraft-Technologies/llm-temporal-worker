@@ -226,17 +226,17 @@ func (adapter *fakeAdapter) recordedCalls() []provider.Call {
 }
 
 func baseRequest(operationKey string) llm.Request {
-	return llm.Request{OperationKey: operationKey, Context: llm.RequestContext{Tenant: "tenant-1"}, Model: "logical-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}
+	return llm.Request{OperationKey: operationKey, Context: llm.RequestContext{Tenant: "tenant-1"}, Model: "logical-model", Input: []llm.Item{llm.HumanText("hello")}}
 }
 
 func successfulResponse() llm.Response {
-	return llm.Response{Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "world"}}}}, Usage: llm.Usage{OutputTokens: 1}, Provider: llm.ProviderFacts{RequestID: "provider-request-1"}}
+	return llm.Response{Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.ModelText("world")}, Usage: llm.Usage{OutputTokens: 1}, Provider: llm.ProviderFacts{RequestID: "provider-request-1"}}
 }
 
 func TestLoadContinuationRequiresRequestTenant(t *testing.T) {
 	harness := newHarness(t, &fakeAdapter{name: "continuation-tenant", response: successfulResponse()})
 	store := harness.useMemoryContinuations(t, 7)
-	items := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	items := []llm.Item{llm.HumanText("hello")}
 	_, digest, err := state.CanonicalTranscript(items)
 	if err != nil {
 		t.Fatal(err)

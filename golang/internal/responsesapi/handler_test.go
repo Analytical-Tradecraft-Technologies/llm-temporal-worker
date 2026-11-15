@@ -141,7 +141,7 @@ func generateResponse(key, text string) *llm.GenerateResponseV1 {
 	actual := llm.ServiceClassEconomy
 	return &llm.GenerateResponseV1{
 		OperationKey: key, OperationID: "op-1", Status: llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}},
+		Output:     []llm.Item{llm.ModelText(text)},
 		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-" + llm.CheckpointHandle(key), Kind: "generation", Depth: 1},
 		Route:      &llm.RouteFacts{RequestedModel: "fast", ResolvedModel: "gpt-test"},
 		Service:    &llm.ServiceFacts{Requested: llm.ServiceClassEconomy, Actual: &actual},

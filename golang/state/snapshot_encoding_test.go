@@ -29,7 +29,7 @@ func encodingTestItems() []llm.Item {
 	}
 	message := llm.Message{Actor: llm.ActorModel, Content: parts}
 	return []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}},
+		llm.HumanText(text),
 		message,
 		&message,
 		llm.Message{Actor: llm.ActorHuman},
@@ -212,7 +212,7 @@ func TestCheckpointBlobEnvelopeMatchesLegacyEncode(t *testing.T) {
 func BenchmarkCheckpointSnapshotCodec(b *testing.B) {
 	snapshot := CheckpointSnapshot{Settings: RootModelState("m"), Depth: 1, Lineage: []Handle{"root"}}
 	for i := 0; i < 10; i++ {
-		snapshot.Items = append(snapshot.Items, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)}}})
+		snapshot.Items = append(snapshot.Items, llm.HumanText(strings.Repeat(fmt.Sprintf("parent %d ", i), 100<<10/9)))
 	}
 	snapshot.Digest = snapshot.digest()
 	codec := CheckpointBlobCodec{MaxBytes: 4 << 20}

@@ -30,7 +30,7 @@ func TestCompactionSummaryIgnoresLiftedReasoning(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			adapter := newFixtureAdapter(t, []byte(test.body))
-			input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "a long conversation"}}}}
+			input := []llm.Item{llm.HumanText("a long conversation")}
 			request, err := compaction.PrepareRequest(llm.Request{OperationKey: "op", Model: "gpt-contract", Input: input}, "op/compact", input, compaction.DefaultPolicy())
 			if err != nil {
 				t.Fatal(err)

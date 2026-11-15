@@ -21,7 +21,7 @@ func TestBlobResultStoreRewritingAStoredResultReturnsItsReference(t *testing.T) 
 	ctx := context.Background()
 	now, admissions, begin, store := beginStoredResult(t, "operation-rewrite", "request-1")
 	actual := pricing.MustUSD("0.000002000000000001")
-	response := llm.Response{OperationKey: "request-1", Status: llm.ResponseStatusCompleted, Output: []llm.Item{modelMessage("world")}, Usage: llm.Usage{InputTokens: 3, OutputTokens: 1}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &actual, Method: "usage"}, Diagnostics: []llm.Diagnostic{}}
+	response := llm.Response{OperationKey: "request-1", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.ModelText("world")}, Usage: llm.Usage{InputTokens: 3, OutputTokens: 1}, Cost: llm.Cost{Status: llm.CostStatusKnown, ActualCostUSD: &actual, Method: "usage"}, Diagnostics: []llm.Diagnostic{}}
 	first, err := store.Put(ctx, begin.Operation.ID, response)
 	if err != nil {
 		t.Fatal(err)

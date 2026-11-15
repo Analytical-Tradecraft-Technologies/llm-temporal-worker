@@ -93,7 +93,7 @@ func TestCloudPrepareRejectsGenerateAtMaxItems(t *testing.T) {
 	f.options.Limits = state.MaterializeLimits{MaxItems: 4}
 	f.restart(t)
 	user := func(text string) llm.Item {
-		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
+		return llm.HumanText(text)
 	}
 	f.request.Append = []llm.Item{user("a"), user("b"), user("c")}
 	if parent := f.finish(t); len(parent.Generate.Output) != 1 {

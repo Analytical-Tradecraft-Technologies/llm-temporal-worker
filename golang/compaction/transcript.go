@@ -19,7 +19,7 @@ const summaryHeading = "Summary of the earlier conversation, which was compacted
 // is context handed to the model rather than something it said in this
 // conversation.
 func SummaryItem(summary string) llm.Message {
-	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: summaryHeading + summary}}}
+	return llm.HumanText(summaryHeading + summary)
 }
 
 // lineBreaks maps every line terminator other than LF (CRLF, CR, VT, FF,
@@ -68,7 +68,7 @@ func summarizerInput(prefix []llm.Item, policy Policy) []llm.Item {
 		"-----END TRANSCRIPT " + marker + "-----\n\n" +
 		fmt.Sprintf("Write the summary of this transcript now, as plain text only. The reply is cut off at %d output tokens, so keep the complete summary well within that limit (at most about %d words).",
 			policy.OutputReserveTokens, words)
-	return []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}}
+	return []llm.Item{llm.HumanText(text)}
 }
 
 // renderItem returns the heading and text of one transcript entry. Provider

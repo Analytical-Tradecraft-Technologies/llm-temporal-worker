@@ -65,7 +65,7 @@ func TestCloudWorkflowLiveHistoricalGenerationRecovery(t *testing.T) {
 	f.request.SettingsPatch.CompactionPolicy.Set = &policy
 	f.restart(t)
 	root := f.finish(t)
-	original := llm.GenerateRequestV1{OperationKey: "legacy-history-recovery", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{preparationMessage("historical follow-up")}}
+	original := llm.GenerateRequestV1{OperationKey: "legacy-history-recovery", Context: f.request.Context, Parent: &root.Generate.Checkpoint.Handle, Append: []llm.Item{llm.HumanText("historical follow-up")}}
 	value := codecConfig(codecKey("history", "KEY", true))
 	value.Server.InlinePayloadBytes = 1 << 20
 	value.Temporal.Target, value.Temporal.Namespace = os.Getenv("LLMTW_TEMPORAL_ADDRESS"), "default"

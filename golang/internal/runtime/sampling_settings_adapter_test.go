@@ -41,7 +41,7 @@ func compileSettingsPatch(t *testing.T, adapter provider.Adapter, family provide
 	}
 	settings.Portability.Set = &portability
 	request := llm.GenerateRequestV1{OperationKey: "operation", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"},
-		Append: []llm.Item{preparationMessage("hello")}, SettingsPatch: settings}
+		Append: []llm.Item{llm.HumanText("hello")}, SettingsPatch: settings}
 	prepared, err := PrepareGenerateInput(context.Background(), request, durable.GenerateReplay{})
 	if err != nil {
 		t.Fatalf("PrepareGenerateInput: %v", err)

@@ -12,7 +12,7 @@ import (
 )
 
 func TestEstimatePlanUsesMaximumAuthorizedCandidate(t *testing.T) {
-	request := llm.Request{OperationKey: "estimate", Model: "logical", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}, Output: &llm.OutputSpec{MaxTokens: intPointer(10)}}
+	request := llm.Request{OperationKey: "estimate", Model: "logical", Input: []llm.Item{llm.HumanText("hello")}, Output: &llm.OutputSpec{MaxTokens: intPointer(10)}}
 	plan := routing.Plan{Candidates: []routing.Candidate{{ID: "economy", AttemptedClass: llm.ServiceClassEconomy}, {ID: "priority", AttemptedClass: llm.ServiceClassPriority}}}
 	entries := map[string]pricing.Entry{
 		"economy":  {Version: "e", Prices: pricing.UnitPrices{OutputPerMillion: pricing.MustDecimalUSD("1")}},
@@ -32,7 +32,7 @@ func TestEstimatePlanIdentifiesAllFreeMaximumCandidate(t *testing.T) {
 	request := llm.Request{
 		OperationKey: "free-estimate",
 		Model:        "logical",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Input:        []llm.Item{llm.HumanText("hello")},
 		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
 	}
 	plan := routing.Plan{Candidates: []routing.Candidate{{ID: "free-first"}, {ID: "free-second"}}}
@@ -57,7 +57,7 @@ func TestEstimateCandidateChargesPerRequestInUSD(t *testing.T) {
 	request := llm.Request{
 		OperationKey: "estimate",
 		Model:        "logical",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Input:        []llm.Item{llm.HumanText("hello")},
 		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
 	}
 	estimate, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "candidate"}, pricing.Entry{
@@ -75,7 +75,7 @@ func TestEstimateCandidateRejectsUnknownCatalogComponent(t *testing.T) {
 	request := llm.Request{
 		OperationKey: "estimate",
 		Model:        "logical",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Input:        []llm.Item{llm.HumanText("hello")},
 		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
 	}
 	entry := pricing.Entry{
@@ -93,7 +93,7 @@ func TestEstimateCandidateUsesExactCandidateAwareTokenizer(t *testing.T) {
 	request := llm.Request{
 		OperationKey: "estimate-tokenizer",
 		Model:        "logical",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "tokenizer"}}}},
+		Input:        []llm.Item{llm.HumanText("tokenizer")},
 		Output:       &llm.OutputSpec{MaxTokens: intPointer(1)},
 	}
 	candidate := routing.Candidate{ID: "provider-b", Provider: "provider-b", Model: "model-b"}
@@ -189,7 +189,7 @@ func TestEstimateRejectsOverlappingReasoningPrices(t *testing.T) {
 }
 
 func TestHostedToolAllowanceAndKnownContext(t *testing.T) {
-	request := llm.Request{OperationKey: "hosted", Model: "logical", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "calculate"}}}}, Output: &llm.OutputSpec{MaxTokens: intPointer(100)}}
+	request := llm.Request{OperationKey: "hosted", Model: "logical", Input: []llm.Item{llm.HumanText("calculate")}, Output: &llm.OutputSpec{MaxTokens: intPointer(100)}}
 	candidate := routing.Candidate{ID: "openai", Family: "openai_responses", ContextTokens: 1000}
 	entry := pricing.Entry{Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("1"), OutputPerMillion: pricing.MustDecimalUSD("2")}}
 	estimator := Estimator{SafetyRatio: big.NewRat(1, 1)}
@@ -212,7 +212,7 @@ func TestHostedToolAllowanceAndKnownContext(t *testing.T) {
 }
 
 func TestResearchReservationUsesTaskSizeNotModelContext(t *testing.T) {
-	request := llm.Request{OperationKey: "research", Model: "anthropic/claude-opus-5.5", WebSearch: true, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Find research questions about an election."}}}}, Output: &llm.OutputSpec{MaxTokens: intPointer(4096)}}
+	request := llm.Request{OperationKey: "research", Model: "anthropic/claude-opus-5.5", WebSearch: true, Input: []llm.Item{llm.HumanText("Find research questions about an election.")}, Output: &llm.OutputSpec{MaxTokens: intPointer(4096)}}
 	candidate := routing.Candidate{ID: "anthropic", Family: "anthropic_messages", ContextTokens: 1_000_000}
 	entry := pricing.Entry{Prices: pricing.UnitPrices{InputPerMillion: pricing.MustDecimalUSD("4"), OutputPerMillion: pricing.MustDecimalUSD("20"), CacheWritePerMillion: pricing.MustDecimalUSD("5")}}
 	estimator := Estimator{SafetyRatio: big.NewRat(135, 100)}

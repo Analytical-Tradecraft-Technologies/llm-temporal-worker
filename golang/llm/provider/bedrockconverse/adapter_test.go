@@ -52,7 +52,7 @@ func TestCompileAndInvokeConverse(t *testing.T) {
 	// Nova Lite is Standard-only in Bedrock.  Use Nova Pro for the priority
 	// contract so this fixture exercises a tier the documented model supports.
 	request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0", ServiceClass: llm.ServiceClassPriority,
-		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}}
+		Input: []llm.Item{llm.HumanText("Hello")}}
 	call := adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockConverse, request)
 	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
 	if !ok {
@@ -117,7 +117,7 @@ func TestCompileRejectsNonFunctionToolKinds(t *testing.T) {
 	for _, kind := range []llm.ToolKind{llm.ToolKindProvider, llm.ToolKindRemoteMCP} {
 		for _, strict := range []bool{true, false} {
 			request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0",
-				Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}},
+				Input: []llm.Item{llm.HumanText("Hello")},
 				Tools: []llm.Tool{{Kind: kind, Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Parallel: true}}
 			_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{Family: provider.FamilyBedrockConverse, EndpointID: "bedrock-prod", Model: request.Model}, Strict: strict})
 			var mapped *provider.Error

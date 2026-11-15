@@ -151,7 +151,7 @@ func TestExecutionCompletedResponseCannotEscapeItsRequest(t *testing.T) {
 	if err != nil || got == nil || got.Generate == nil {
 		t.Fatalf("valid completion failed: %v", err)
 	}
-	response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("secret-provider-output", 1000)}}}}
+	response.Output = []llm.Item{llm.ModelText(strings.Repeat("secret-provider-output", 1000))}
 	a.PayloadLimits.MaxInlineBytes = 2048
 	// A paid response too large to return inline fails as incomplete_response
 	// on every replay, never as an internal not_dispatched error.

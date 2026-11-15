@@ -31,7 +31,7 @@ func LiftContent(blocks []anthropic.ContentBlockUnion, stateProvider string, opa
 					continue
 				}
 			}
-			output = append(output, llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: block.Text}}})
+			output = append(output, llm.ModelText(block.Text))
 		case slices.Contains(opaqueTypes, block.Type):
 			raw, err := contentBlockRaw(block)
 			if err != nil {

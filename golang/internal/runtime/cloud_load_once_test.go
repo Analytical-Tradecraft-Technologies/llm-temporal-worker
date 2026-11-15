@@ -22,7 +22,7 @@ func loadOnceChild(t *testing.T, f *boundedCloudFixture, key string) (llm.Genera
 	t.Helper()
 	parent := f.finish(t)
 	handle := parent.Generate.Checkpoint.Handle
-	child := llm.GenerateRequestV1{OperationKey: key, Context: f.request.Context, Parent: &handle, Append: []llm.Item{preparationMessage("next")}}
+	child := llm.GenerateRequestV1{OperationKey: key, Context: f.request.Context, Parent: &handle, Append: []llm.Item{llm.HumanText("next")}}
 	v, err := f.runtime.PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &child})
 	return child, boundedState(t, v, err, llm.ExecutionBudgetRequired)
 }
@@ -72,7 +72,7 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 		t.Fatalf("reused input differs from a fresh preparation: %v", err)
 	}
 	// A caller changing its copy changes no other copy.
-	first.Request.Input[0] = preparationMessage("changed")
+	first.Request.Input[0] = llm.HumanText("changed")
 	first.Request.Instructions = append(first.Request.Instructions, llm.Instruction{Kind: llm.InstructionKindText, Text: "changed"})
 	second, err := p.generateInput(ctx)
 	if err != nil || !reflect.DeepEqual(second, want) {
@@ -80,7 +80,7 @@ func TestCloudPreparedInputMatchesPreparation(t *testing.T) {
 	}
 	// Another manifest is prepared afresh, never answered from this input.
 	other := *p.Generate
-	other.Append = []llm.Item{preparationMessage("other")}
+	other.Append = []llm.Item{llm.HumanText("other")}
 	manifest, _ := json.Marshal(other)
 	wantOther, err := PrepareGenerateInput(ctx, other, p.GenerateReplay)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestCandidateResolutionMatchesResolveCandidateRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := llm.Request{APIVersion: llm.APIVersion, OperationKey: "op", Model: "logical", ServiceClass: llm.ServiceClassStandard,
-		Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Text: "be brief"}}, Input: []llm.Item{preparationMessage("hello")}}
+		Instructions: []llm.Instruction{{Kind: llm.InstructionKindText, Text: "be brief"}}, Input: []llm.Item{llm.HumanText("hello")}}
 	summarizer := plain
 	summarizer.Instructions = []llm.Instruction{
 		{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: prompt},

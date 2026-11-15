@@ -18,7 +18,7 @@ func TestExaCompactionSummaryIgnoresCitations(t *testing.T) {
 		for finish, want := range map[string]string{"stop": "the summary", "length": ""} {
 			t.Run(fmt.Sprintf("strict=%v/%s", strict, finish), func(t *testing.T) {
 				payload := fmt.Sprintf(body, finish)
-				input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "a long conversation"}}}}
+				input := []llm.Item{llm.HumanText("a long conversation")}
 				request, err := compaction.PrepareRequest(llm.Request{OperationKey: "exa-op", Model: "exa", Input: input}, "exa-op/compact", input, compaction.DefaultPolicy())
 				if err != nil {
 					t.Fatal(err)

@@ -18,7 +18,7 @@ func TestCompileRejectsHostedToolFlags(t *testing.T) {
 		"code_execution": func(r *llm.Request) { r.CodeExecution = true },
 	} {
 		for _, strict := range []bool{true, false} {
-			request := llm.Request{OperationKey: "op-hosted", Model: bedrockFixtureModel, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}}
+			request := llm.Request{OperationKey: "op-hosted", Model: bedrockFixtureModel, Input: []llm.Item{llm.HumanText("hi")}}
 			mutate(&request)
 			_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict,
 				Query: provider.CapabilityQuery{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: bedrockFixtureModel}})

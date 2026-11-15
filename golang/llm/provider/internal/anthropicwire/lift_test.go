@@ -48,7 +48,7 @@ func TestLiftContentKeepsBlockOrder(t *testing.T) {
 
 func TestValidateFinalJSONOnlyChecksCompletedText(t *testing.T) {
 	call := provider.Call{OutputSchema: json.RawMessage(`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`)}
-	invalid := []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: `{}`}}}}
+	invalid := []llm.Item{llm.ModelText(`{}`)}
 	if err := ValidateFinalJSON(call, invalid, llm.ResponseStatusCompleted, false, false); err == nil || !strings.Contains(err.Error(), "does not satisfy schema") {
 		t.Fatalf("ValidateFinalJSON(invalid) = %v", err)
 	}

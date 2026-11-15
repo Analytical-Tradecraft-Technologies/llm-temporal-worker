@@ -60,7 +60,7 @@ func TestChatRejectsUnsupportedChoiceCountsBeforeDispatch(t *testing.T) {
 }
 
 func boundedChatRequest() llm.Request {
-	return llm.Request{OperationKey: "bounded", Model: "chat-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}}
+	return llm.Request{OperationKey: "bounded", Model: "chat-model", Input: []llm.Item{llm.HumanText("hello")}}
 }
 
 func TestChatSingleChoicePreservesBudgetedExplicitAndDefaultCap(t *testing.T) {

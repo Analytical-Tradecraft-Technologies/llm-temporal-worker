@@ -93,7 +93,7 @@ func planningFixture() (V1RuntimeCapabilities, *planningSource, *planningAdapter
 	capabilities := V1RuntimeCapabilities{ConfigDigest: source.value.ConfigDigest, Snapshot: source,
 		Planner: routing.DeterministicPlanner{}, Adapters: engine.AdapterMap{"endpoint": adapter}}
 	request := llm.GenerateRequestV1{OperationKey: "operation", Context: llm.RequestContext{Tenant: "tenant", Project: "project", Actor: "actor"},
-		Append: []llm.Item{preparationMessage("sensitive prompt")}, SettingsPatch: llm.SettingsPatchV1{}}
+		Append: []llm.Item{llm.HumanText("sensitive prompt")}, SettingsPatch: llm.SettingsPatchV1{}}
 	request.SettingsPatch.Model.Set = preparationPointer("alias")
 	request.SettingsPatch.ServiceClass.Set = preparationPointer(llm.ServiceClassPriority)
 	request.SettingsPatch.ServiceClassFallbacks.Set = preparationPointer([]llm.ServiceClass{llm.ServiceClassStandard})
@@ -104,7 +104,7 @@ func planningFixture() (V1RuntimeCapabilities, *planningSource, *planningAdapter
 	policy.RecentTurns = 0
 	settings.CompactionPolicy, _ = json.Marshal(policy)
 	replay := durable.CompactReplay{State: state.MaterializedState{Handle: "cp1.parent", Tenant: "tenant", Project: "project",
-		Settings: settings, Items: []llm.Item{preparationMessage("sensitive history")}}}
+		Settings: settings, Items: []llm.Item{llm.HumanText("sensitive history")}}}
 	compact := llm.CompactRequestV1{OperationKey: "compact-operation", Context: request.Context, Parent: "cp1.parent"}
 	return capabilities, source, adapter, request, replay, compact
 }

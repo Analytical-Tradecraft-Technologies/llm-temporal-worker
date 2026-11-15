@@ -10,7 +10,7 @@ import (
 
 func TestAssemblerBuildsTerminalResponseInOrder(t *testing.T) {
 	assembler := provider.NewAssembler("operation-1")
-	message := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "hello"}}}
+	message := llm.ModelText("hello")
 	for _, event := range []provider.Event{
 		provider.OutputStarted{Index: 0},
 		provider.TextDelta{Index: 0, Text: "he"},
@@ -37,8 +37,8 @@ func TestAssemblerBuildsTerminalResponseInOrder(t *testing.T) {
 
 func TestAssemblerKeepsResponseOutputOrderWhenCompletionsAreInterleaved(t *testing.T) {
 	assembler := provider.NewAssembler("operation-interleaved")
-	first := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "first"}}}
-	second := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "second"}}}
+	first := llm.ModelText("first")
+	second := llm.ModelText("second")
 	for _, event := range []provider.Event{
 		provider.OutputStarted{Index: 0},
 		provider.OutputStarted{Index: 1},

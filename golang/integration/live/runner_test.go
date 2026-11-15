@@ -227,7 +227,7 @@ func TestChatProfilesRequireReportedActualTier(t *testing.T) {
 			capabilities.Features[provider.FeatureToolCall] = provider.Capability{State: provider.CapabilityNative}
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Capability: capabilities,
-				Request:    llm.Request{OperationKey: "live-profile", Model: liveProfile.Model, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}},
+				Request:    llm.Request{OperationKey: "live-profile", Model: liveProfile.Model, Input: []llm.Item{llm.HumanText("hello")}},
 				Query:      provider.CapabilityQuery{EndpointID: liveProfile.ID, Family: provider.FamilyOpenAIChat, Model: liveProfile.Model},
 			})
 			if err != nil {

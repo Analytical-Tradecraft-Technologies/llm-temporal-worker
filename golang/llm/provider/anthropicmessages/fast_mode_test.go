@@ -49,7 +49,7 @@ func TestPriorityInvokesFastMode(t *testing.T) {
 				t.Fatal(err)
 			}
 			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: llm.Request{OperationKey: "fast-" + string(tc.class), Model: "claude-contract", ServiceClass: tc.class, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hi"}}}}},
+				Request: llm.Request{OperationKey: "fast-" + string(tc.class), Model: "claude-contract", ServiceClass: tc.class, Input: []llm.Item{llm.HumanText("hi")}},
 				Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
 			})
 			if err != nil {

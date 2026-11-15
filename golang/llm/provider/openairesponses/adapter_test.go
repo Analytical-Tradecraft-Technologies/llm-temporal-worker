@@ -53,7 +53,7 @@ func TestCompileRejectsUnusableCapabilitiesBeforeDispatch(t *testing.T) {
 			capabilitySet.Features[provider.FeatureText] = provider.Capability{State: test.state, Reason: "test capability state"}
 			_, err := adapter.Compile(context.Background(), provider.CompileInput{
 				Request: llm.Request{OperationKey: "op-capability", Model: "gpt-contract", Input: []llm.Item{
-					llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}},
+					llm.HumanText("hello"),
 				}},
 				Query: provider.CapabilityQuery{
 					EndpointID: "openai-prod",
@@ -143,7 +143,7 @@ func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 	first := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
 		OperationKey: "op-first",
 		Model:        "gpt-contract",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "first turn"}}}},
+		Input:        []llm.Item{llm.HumanText("first turn")},
 		Extensions:   map[string]json.RawMessage{"openai.responses": json.RawMessage(`{"store":true}`)},
 	})
 	firstResult, err := adapter.Invoke(context.Background(), first, provider.NopObserver{})
@@ -156,7 +156,7 @@ func TestStrictStoredResponseContinuationCompilesFollowUp(t *testing.T) {
 	followUp := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{
 		OperationKey: "op-follow-up",
 		Model:        "gpt-contract",
-		Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
+		Input:        []llm.Item{llm.HumanText("second turn")},
 		Continuation: firstResult.Response.Continuation,
 	})
 	params, ok := followUp.SDKParams.(responses.ResponseNewParams)
@@ -335,7 +335,7 @@ func TestCompileRejectsForeignOrMistypedContinuations(t *testing.T) {
 				Request: llm.Request{
 					OperationKey: "op-follow-up",
 					Model:        "gpt-contract",
-					Input:        []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "second turn"}}}},
+					Input:        []llm.Item{llm.HumanText("second turn")},
 					Continuation: continuation,
 				},
 				Query:  provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},

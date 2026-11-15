@@ -213,7 +213,7 @@ func TestCloudGenerateToolArgumentsAtDepthLimitContinue(t *testing.T) {
 			arguments := nestedToolArguments(llm.MaxToolArgumentsDepth)
 			f.answerWith(
 				[]llm.Item{llm.ToolCall{ID: "call_1", Name: "lookup", Arguments: arguments}},
-				[]llm.Item{modelMessage("done")},
+				[]llm.Item{llm.ModelText("done")},
 			)
 			first := f.finish(t)
 			call, ok := first.Generate.Output[0].(llm.ToolCall)

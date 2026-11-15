@@ -144,7 +144,7 @@ func TestRegisteredV1GenerateRejectsOversizeInputThroughBoundedConverter(t *test
 	runtime := &executionRuntimeStub{result: pendingExecution()}
 	activities := &Activities{V1Runtime: runtime, PayloadLimits: limits}
 	request := validGenerateV1Request()
-	request.Append = []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "secret-" + strings.Repeat("x", 1024)}}}}
+	request.Append = []llm.Item{llm.HumanText("secret-" + strings.Repeat("x", 1024))}
 	var suite testsuite.WorkflowTestSuite
 	environment := suite.NewTestActivityEnvironment()
 	environment.SetDataConverter(unboundedEncodeConverter{DataConverter: BoundedDataConverter(limits)})

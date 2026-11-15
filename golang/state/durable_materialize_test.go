@@ -29,7 +29,7 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 	repository := &durableMaterializeRepository{scope: "scope-a", rows: make(map[CheckpointID]DurableCheckpoint)}
 	rootID := CheckpointID("root")
 	childID := CheckpointID("child")
-	rootDelta, err := codec.EncodeDelta([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "root"}}}})
+	rootDelta, err := codec.EncodeDelta([]llm.Item{llm.HumanText("root")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,11 +41,11 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childDelta, err := codec.EncodeDelta([]llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "child"}}}})
+	childDelta, err := codec.EncodeDelta([]llm.Item{llm.HumanText("child")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	childResponse, err := codec.EncodeResponse([]llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "answer"}}}})
+	childResponse, err := codec.EncodeResponse([]llm.Item{llm.ModelText("answer")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,7 +61,7 @@ func (malformedItem) MarshalJSON() ([]byte, error) { return []byte("{"), nil }
 // still accept and reject exactly what json.Marshal does, with the same error.
 func TestCheckItemEncodingMatchesJSONMarshal(t *testing.T) {
 	for _, item := range []llm.Item{
-		llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "<ok>"}}},
+		llm.HumanText("<ok>"),
 		llm.Message{Actor: "system"},
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{MediaType: "image/png"}}},
 		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},

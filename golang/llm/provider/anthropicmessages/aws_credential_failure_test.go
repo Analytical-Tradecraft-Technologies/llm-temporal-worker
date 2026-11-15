@@ -62,7 +62,7 @@ echo '{"Version":1,"AccessKeyId":"AKIDFIXTURE","SecretAccessKey":"fixture-secret
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-credentials", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}})
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-credentials", Model: "claude-contract", Input: []llm.Item{llm.HumanText("hello")}})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute || !errors.Is(err, provider.ErrProviderPreDispatch) {

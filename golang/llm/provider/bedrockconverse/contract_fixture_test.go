@@ -82,7 +82,7 @@ func TestBedrockConverseContractFixturesCoverUsageAndServiceClass(t *testing.T) 
 			}
 			response := bedrockConverseResponseForTier(text, inputTokens, outputTokens, fixture.providerTier)
 			assertBedrockConverseCanonicalFixture(t, contract.MarshalJSON(t, response), fixture.wire)
-			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fixture"}}}}}
+			request := llm.Request{OperationKey: fixture.operation, Model: bedrockFixtureModel, ServiceClass: fixture.requested, Input: []llm.Item{llm.HumanText("fixture")}}
 			call := provider.Call{EndpointID: bedrockFixtureEndpoint, Family: provider.FamilyBedrockConverse, Model: request.Model, OperationKey: fixture.operation, ServiceClass: fixture.requested}
 			lifted, err := adapter.liftResponse(call, &response, bedrockFixtureRequestID, nil)
 			if err != nil {

@@ -14,7 +14,7 @@ import (
 func TestCompilePreservesStopSequences(t *testing.T) {
 	adapter := &Adapter{endpointID: "test", profile: DefaultProfile("nova")}
 	for _, strict := range []bool{false, true} {
-		request := llm.Request{OperationKey: "test-operation", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}, Sampling: &llm.SamplingSpec{StopSequences: []string{"END", "\nSTOP"}}}
+		request := llm.Request{OperationKey: "test-operation", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Hello")}, Sampling: &llm.SamplingSpec{StopSequences: []string{"END", "\nSTOP"}}}
 		call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
 		if err != nil {
 			t.Fatal(err)
@@ -27,7 +27,7 @@ func TestCompilePreservesStopSequences(t *testing.T) {
 }
 func TestExplicitNoToolsNeverCompilesToAuto(t *testing.T) {
 	adapter := &Adapter{endpointID: "test", profile: DefaultProfile("nova")}
-	request := llm.Request{OperationKey: "test-operation", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Answer without tools"}}}}, Tools: []llm.Tool{{Name: "lookup", InputSchema: []byte(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}
+	request := llm.Request{OperationKey: "test-operation", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Answer without tools")}, Tools: []llm.Tool{{Name: "lookup", InputSchema: []byte(`{"type":"object"}`)}}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}
 	for _, strict := range []bool{false, true} {
 		_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
 		if err == nil || !strings.Contains(err.Error(), "none") {
@@ -53,7 +53,7 @@ func TestCompileRejectsUnimplementedStructuredOutput(t *testing.T) {
 				format.Name = "answer"
 				format.Schema = []byte(`{"type":"object"}`)
 			}
-			request := llm.Request{OperationKey: "structured", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}, Output: &llm.OutputSpec{Format: format}}
+			request := llm.Request{OperationKey: "structured", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Hello")}, Output: &llm.OutputSpec{Format: format}}
 			for _, strict := range []bool{false, true} {
 				_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
 				if err == nil || !strings.Contains(err.Error(), "structured") {
@@ -72,7 +72,7 @@ func TestCompileRejectsUnimplementedSamplingControls(t *testing.T) {
 		"presence_penalty": {PresencePenalty: &penalty}, "frequency_penalty": {FrequencyPenalty: &penalty},
 	} {
 		t.Run(name, func(t *testing.T) {
-			request := llm.Request{OperationKey: "sampling", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}, Sampling: sampling}
+			request := llm.Request{OperationKey: "sampling", Model: "amazon.nova-pro-v1:0", Input: []llm.Item{llm.HumanText("Hello")}, Sampling: sampling}
 			for _, strict := range []bool{false, true} {
 				_, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Strict: strict})
 				if err == nil || !strings.Contains(err.Error(), "sampling") {

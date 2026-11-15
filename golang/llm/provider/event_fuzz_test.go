@@ -190,7 +190,7 @@ func decodeAssemblerFuzzEvent(record []byte) provider.Event {
 	case 5:
 		var item llm.Item
 		if record[2]&1 != 0 {
-			item = llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: semanticText}}}
+			item = llm.ModelText(semanticText)
 		}
 		return provider.OutputFinished{Index: index, Item: item}
 	case 6:

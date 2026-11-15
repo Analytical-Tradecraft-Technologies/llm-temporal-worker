@@ -287,7 +287,7 @@ func invokeProductionAdapter(t *testing.T, family tierTestFamily, body string, h
 	}
 	call, err := adapter.Compile(context.Background(), provider.CompileInput{
 		Request: llm.Request{OperationKey: "tier-test", Model: family.model, ServiceClass: family.class, Input: []llm.Item{
-			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}},
+			llm.HumanText("hello"),
 		}},
 		Query:  provider.CapabilityQuery{EndpointID: endpointID, Family: family.family, Model: family.model},
 		Strict: true,

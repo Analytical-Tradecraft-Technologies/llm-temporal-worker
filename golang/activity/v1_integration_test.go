@@ -94,7 +94,7 @@ func validMaterializedState(handle state.Handle) state.MaterializedState {
 		Handle:   handle,
 		Tenant:   "scope-id",
 		Depth:    2,
-		Items:    []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "replayed"}}}},
+		Items:    []llm.Item{llm.HumanText("replayed")},
 		Settings: state.RootModelState("logical-model"),
 		Lineage:  []state.Handle{"root", handle},
 	}
@@ -114,7 +114,7 @@ func validMaterializedGenerateResponse(operationKey string) llm.GenerateResponse
 	return llm.GenerateResponseV1{
 		APIVersion: llm.APIVersion, OperationKey: operationKey, OperationID: "operation-generate",
 		Status:     llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "ok"}}}},
+		Output:     []llm.Item{llm.ModelText("ok")},
 		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-generate", Kind: "generation", Depth: 2},
 		Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
 		Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
@@ -321,10 +321,7 @@ func TestV1ActivityPayloadDoesNotScaleWithAncestorLineage(t *testing.T) {
 		materializer := &materializingMaterializerProbe{events: &events, result: validMaterializedState("parent")}
 		materializer.result.Items = make([]llm.Item, turns)
 		for index := range materializer.result.Items {
-			materializer.result.Items[index] = llm.Message{
-				Actor:   llm.ActorHuman,
-				Content: []llm.Part{llm.TextPart{Text: fmt.Sprintf("ancestor-%05d", index)}},
-			}
+			materializer.result.Items[index] = llm.HumanText(fmt.Sprintf("ancestor-%05d", index))
 		}
 		wrapped := &MaterializingV1Runtime{
 			Runtime: runtime, Materializer: materializer,

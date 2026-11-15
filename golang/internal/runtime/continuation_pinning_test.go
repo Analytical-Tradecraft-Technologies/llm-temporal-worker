@@ -26,7 +26,7 @@ func servingPin(endpoint, account string) state.Pinning {
 
 func TestProviderStatePinsStripOnlyOtherLineages(t *testing.T) {
 	thinking := llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ProviderStatePart{Provider: "anthropic", EndpointFamily: "messages", MediaType: "thinking", Opaque: []byte("a")}, llm.TextPart{Text: "kept"}}}
-	items := []llm.Item{preparationMessage("q"), pinningState("a"), thinking, pinningState("unrecorded"), pinningState("b")}
+	items := []llm.Item{llm.HumanText("q"), pinningState("a"), thinking, pinningState("unrecorded"), pinningState("b")}
 	pins, ok := newProviderStatePins(items, []state.ProviderStateProvenance{pinningProvenance(1, "a"), pinningProvenance(2, "a"), pinningProvenance(4, "b")})
 	if !ok || pins.latest.EndpointID != "b" {
 		t.Fatalf("pins = %+v ok=%v", pins, ok)
@@ -79,7 +79,7 @@ func TestProviderStatePinsStripOnlyOtherLineages(t *testing.T) {
 
 func TestCompactedProvenanceFollowsRetainedItems(t *testing.T) {
 	reference := llm.Reference{URI: "https://example.com"}
-	items := []llm.Item{preparationMessage("q1"), pinningState("a"), reference, preparationMessage("a1"), preparationMessage("q2"), pinningState("a"), preparationMessage("a2")}
+	items := []llm.Item{llm.HumanText("q1"), pinningState("a"), reference, llm.HumanText("a1"), llm.HumanText("q2"), pinningState("a"), llm.HumanText("a2")}
 	parent := state.MaterializedState{Items: items, ProviderStateProvenance: []state.ProviderStateProvenance{pinningProvenance(1, "a"), pinningProvenance(5, "a")}}
 	// Retain the second exchange: the first one's state is summarized away,
 	// and the reference before the boundary moves to the head of the suffix.
@@ -88,7 +88,7 @@ func TestCompactedProvenanceFollowsRetainedItems(t *testing.T) {
 	if err != nil || fmt.Sprint(got) != fmt.Sprint([]state.ProviderStateProvenance{pinningProvenance(3, "a")}) {
 		t.Fatalf("got %+v err=%v", got, err)
 	}
-	child := append([]llm.Item{preparationMessage("summary")}, selection.Retained...)
+	child := append([]llm.Item{llm.HumanText("summary")}, selection.Retained...)
 	if !itemHasProviderState(child[got[0].Ordinal]) {
 		t.Fatal("remapped ordinal does not name the retained state")
 	}
@@ -103,7 +103,7 @@ func TestCompactedProvenanceFollowsRetainedItems(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		child := append([]llm.Item{preparationMessage("summary")}, selection.Retained...)
+		child := append([]llm.Item{llm.HumanText("summary")}, selection.Retained...)
 		retained := 0
 		for _, item := range child {
 			if itemHasProviderState(item) {
@@ -125,8 +125,8 @@ func TestCompactedProvenanceFollowsRetainedItems(t *testing.T) {
 }
 
 func TestReplayedProvenanceKeepsOnlyTheOriginOutput(t *testing.T) {
-	input := []llm.Item{preparationMessage("q"), pinningState("a"), preparationMessage("next")}
-	output := []llm.Item{pinningState("b"), preparationMessage("answer")}
+	input := []llm.Item{llm.HumanText("q"), pinningState("a"), llm.HumanText("next")}
+	output := []llm.Item{pinningState("b"), llm.HumanText("answer")}
 	// A snapshot origin repeats its inherited entry (ordinal 1); only the
 	// entry inside the output belongs to the replayed response.
 	origin := []state.ProviderStateProvenance{pinningProvenance(1, "a"), pinningProvenance(3, "b")}

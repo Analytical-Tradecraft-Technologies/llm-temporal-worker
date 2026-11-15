@@ -35,7 +35,7 @@ func TestPrepareRequestIsolatesApplicationSettings(t *testing.T) {
 		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceRequired, Name: "lookup"},
 		Output:     &llm.OutputSpec{MaxTokens: &max, Format: llm.OutputFormat{Kind: llm.OutputKindJSON}},
 		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeEnabled, TokenBudget: &max},
-		Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}},
+		Input:      []llm.Item{llm.HumanText("hello")},
 	}
 	original := request
 	compact, err := PrepareRequest(request, "generate-1/compact", request.Input, policy)
@@ -80,7 +80,7 @@ func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.
 			{Kind: llm.InstructionKindText, Level: llm.InstructionLevelApplication, Text: "preserve this"},
 			{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "policy"},
 		},
-		Input:      []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "prefix"}}}},
+		Input:      []llm.Item{llm.HumanText("prefix")},
 		Tools:      []llm.Tool{{Name: "lookup", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
 		Output: &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{
@@ -129,7 +129,7 @@ func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.
 	// below must remain available after replacing only the operation and input.
 	following := source
 	following.OperationKey = "generate-settings/after-compact"
-	following.Input = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "summary"}}}}
+	following.Input = []llm.Item{llm.ModelText("summary")}
 	if following.Model != source.Model || following.ServiceClass != source.ServiceClass ||
 		!reflect.DeepEqual(following.ServiceClassFallbacks, source.ServiceClassFallbacks) ||
 		following.Portability != source.Portability || !reflect.DeepEqual(following.Instructions, source.Instructions) ||
@@ -146,7 +146,7 @@ func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.
 
 func TestPlainTextSummaryRejectsToolAndBoundsOutput(t *testing.T) {
 	response := llm.Response{Status: llm.ResponseStatusCompleted, Output: []llm.Item{
-		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "summary"}}},
+		llm.ModelText("summary"),
 	}}
 	if got, err := PlainTextSummary(response, 64); err != nil || got != "summary" {
 		t.Fatalf("summary = %q, err=%v", got, err)
@@ -176,7 +176,7 @@ func TestPlainTextSummaryRejectsToolAndBoundsOutput(t *testing.T) {
 	if _, err := PlainTextSummary(response, 64); err == nil {
 		t.Fatal("tool call accepted as compaction output")
 	}
-	response.Output = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: strings.Repeat("x", 65)}}}}
+	response.Output = []llm.Item{llm.ModelText(strings.Repeat("x", 65))}
 	if _, err := PlainTextSummary(response, 64); err == nil {
 		t.Fatal("oversized summary accepted")
 	}
@@ -193,7 +193,7 @@ func TestPromptVersionIsPinned(t *testing.T) {
 }
 
 func TestFlattenSummarizerInstructionsOnlyForApplicationCallers(t *testing.T) {
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}
+	input := []llm.Item{llm.HumanText("hello")}
 	for _, test := range []struct {
 		name    string
 		levels  []llm.InstructionLevel
@@ -249,7 +249,7 @@ func TestFlattenSummarizerInstructionsOnlyForApplicationCallers(t *testing.T) {
 
 func TestPrepareRequestOmitsSamplingWithOnlyStopSequencesAndSeed(t *testing.T) {
 	seed := int64(3)
-	input := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "prefix"}}}}
+	input := []llm.Item{llm.HumanText("prefix")}
 	source := llm.Request{OperationKey: "generate", Model: "model-1", Input: input,
 		Sampling: &llm.SamplingSpec{Seed: &seed, StopSequences: []string{"END"}}}
 	compact, err := PrepareRequest(source, "generate/compact", input, DefaultPolicy())

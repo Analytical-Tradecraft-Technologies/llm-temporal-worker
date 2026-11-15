@@ -184,7 +184,7 @@ func TestProviderExecutionOversizedResponseIsRefusedBySize(t *testing.T) {
 			next.UpdatedAt = next.UpdatedAt.Add(time.Second)
 			next.CompletedAt = next.UpdatedAt
 			response := func(text string) *llm.Response {
-				return &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}}
+				return &llm.Response{OperationKey: "operation", Status: llm.ResponseStatusCompleted, Output: []llm.Item{llm.ModelText(text)}}
 			}
 			size := maxPayloadBytes
 			if mode == "record" {

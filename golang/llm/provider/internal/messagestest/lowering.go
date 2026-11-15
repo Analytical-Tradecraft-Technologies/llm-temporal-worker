@@ -54,7 +54,7 @@ func lowerToJSON(t *testing.T, lower Lower, request llm.Request) []byte {
 // NoToolsPolicyOmitsTools checks that a request with the none tool policy
 // and no tools, as compaction sends, lowers without tools or tool_choice.
 func NoToolsPolicyOmitsTools(t *testing.T, lower Lower) {
-	request := llm.Request{Model: "contract-model", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Summarize this conversation"}}}}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}
+	request := llm.Request{Model: "contract-model", Input: []llm.Item{llm.HumanText("Summarize this conversation")}, ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNone}}
 	raw := lowerToJSON(t, lower, request)
 	var wire map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &wire); err != nil {

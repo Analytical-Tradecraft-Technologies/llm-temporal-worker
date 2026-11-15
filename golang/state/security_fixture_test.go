@@ -54,7 +54,7 @@ func TestContinuationSecurityRecordFixturesFailClosed(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	for _, fixture := range fixtures {
 		t.Run(fixture.Name, func(t *testing.T) {
-			transcript := []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "safe"}}}}
+			transcript := []llm.Item{llm.HumanText("safe")}
 			_, digest, err := CanonicalTranscript(transcript)
 			if err != nil {
 				t.Fatal(err)

@@ -42,6 +42,16 @@ type Message struct {
 	Content []Part
 }
 
+// HumanText returns a human message whose only content is text.
+func HumanText(text string) Message {
+	return Message{Actor: ActorHuman, Content: []Part{TextPart{Text: text}}}
+}
+
+// ModelText returns a model message whose only content is text.
+func ModelText(text string) Message {
+	return Message{Actor: ActorModel, Content: []Part{TextPart{Text: text}}}
+}
+
 func (Message) item()              {}
 func (Message) ItemKind() ItemKind { return ItemKindMessage }
 

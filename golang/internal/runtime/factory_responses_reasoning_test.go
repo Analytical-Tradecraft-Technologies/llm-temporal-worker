@@ -39,9 +39,9 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 		}},
 	}}}
 	human := func(text string) llm.Message {
-		return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
+		return llm.HumanText(text)
 	}
-	answer := modelMessage("answer")
+	answer := llm.ModelText("answer")
 	reasoning := func(opaque string) llm.ProviderState {
 		return llm.ProviderState{Provider: "openai", EndpointFamily: "responses", MediaType: "application/vnd.openai.reasoning+json", Opaque: []byte(opaque)}
 	}

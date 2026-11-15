@@ -39,7 +39,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 			OperationKey: fmt.Sprintf("lineage-%05d", turn),
 			Context:      context,
 			Parent:       parent,
-			Append:       []llm.Item{lineageMessage(fmt.Sprintf("turn-%05d", turn))},
+			Append:       []llm.Item{llm.HumanText(fmt.Sprintf("turn-%05d", turn))},
 		}
 		payload, err := activity.MarshalGenerateV1(request, limits)
 		if err != nil {
@@ -62,7 +62,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 			OperationKey: fmt.Sprintf("lineage-%05d", turn),
 			OperationID:  fmt.Sprintf("operation-%05d", turn),
 			Status:       llm.ResponseStatusCompleted,
-			Output:       []llm.Item{lineageMessage(fmt.Sprintf("turn-%05d", turn))},
+			Output:       []llm.Item{llm.HumanText(fmt.Sprintf("turn-%05d", turn))},
 			Checkpoint:   llm.CheckpointMetadata{Handle: checkpoint, Parent: previous, Kind: "generation", Depth: int32(turn)},
 			Cache:        llm.CacheDispositionV1{Disposition: "disabled", Variant: 0},
 			Cost:         llm.CostV1{Status: "exact", ActualCostUSD: &actualCost, Method: "provider_reported"},
@@ -128,7 +128,7 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 					OperationKey: fmt.Sprintf("fork-%05d-%d", turn, branch),
 					Context:      context,
 					Parent:       &forkParent,
-					Append:       []llm.Item{lineageMessage(fmt.Sprintf("fork-%05d-%d", turn, branch))},
+					Append:       []llm.Item{llm.HumanText(fmt.Sprintf("fork-%05d-%d", turn, branch))},
 				}
 				forkPayload, err := activity.MarshalGenerateV1(forkRequest, limits)
 				if err != nil {
@@ -151,8 +151,4 @@ func TestV1SyntheticLineageKeepsActivityPayloadBounded(t *testing.T) {
 	if maximum >= maxPayloadBytes {
 		t.Fatalf("maximum lineage payload = %d, want comfortably below %d", maximum, maxPayloadBytes)
 	}
-}
-
-func lineageMessage(text string) llm.Item {
-	return llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: text}}}
 }

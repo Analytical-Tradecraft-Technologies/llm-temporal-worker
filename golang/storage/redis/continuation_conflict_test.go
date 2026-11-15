@@ -50,7 +50,7 @@ func assertChildRetryConflicts(t *testing.T, store *ContinuationStore, parent st
 	t.Helper()
 	child := func(text string) state.Continuation {
 		value := testChildContinuation(t, now, parent)
-		value.Transcript = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}
+		value.Transcript = []llm.Item{llm.ModelText(text)}
 		var err error
 		_, value.TranscriptDigest, err = state.CanonicalTranscript(value.Transcript)
 		if err != nil {

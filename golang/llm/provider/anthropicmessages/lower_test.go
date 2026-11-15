@@ -34,7 +34,7 @@ func TestCompileLowersOrderedMessagesMultimodalToolsAndThinking(t *testing.T) {
 				llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png"},
 				llm.DocumentPart{Bytes: []byte("plain document"), MediaType: "text/plain", Title: "notes"},
 			}},
-			llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: "prior"}}},
+			llm.ModelText("prior"),
 			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
 			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
 		},

@@ -292,7 +292,7 @@ func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 	}
 	candidate := func(model string) routing.Candidate {
 		t.Helper()
-		request := llm.Request{OperationKey: "operation", Model: model, ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "local", Project: "project", Actor: "actor"}, Input: []llm.Item{preparationMessage("hello")},
+		request := llm.Request{OperationKey: "operation", Model: model, ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "local", Project: "project", Actor: "actor"}, Input: []llm.Item{llm.HumanText("hello")},
 			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindText}, MaxTokens: preparationPointer(16)}}
 		plan, err := routing.DeterministicPlanner{}.Plan(context.Background(), routing.Input{Request: request, Catalog: loaded.Routes, Health: loaded.Health, Now: now})
 		if err != nil || len(plan.Candidates) == 0 {

@@ -12,7 +12,7 @@ import (
 
 func TestHostedToolsAndPausedContinuation(t *testing.T) {
 	profile := mustProfile(t, testProfile())
-	request := llm.Request{OperationKey: "hosted", Model: "claude-contract", WebSearch: true, WebFetch: true, CodeExecution: true, Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "fetch and calculate"}}}}}
+	request := llm.Request{OperationKey: "hosted", Model: "claude-contract", WebSearch: true, WebFetch: true, CodeExecution: true, Input: []llm.Item{llm.HumanText("fetch and calculate")}}
 	params, err := lowerRequest(request, profile, "")
 	if err != nil {
 		t.Fatal(err)
