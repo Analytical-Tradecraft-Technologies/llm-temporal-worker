@@ -35,18 +35,7 @@ func TestStreamRejectsAdapterWithoutRealStreamBeforeDispatch(t *testing.T) {
 	if providerErr.Code != provider.CodeUnsupportedCapability || providerErr.Dispatch != provider.DispatchNotDispatched {
 		t.Fatalf("Stream error = %#v, want pre-admission streaming rejection", providerErr)
 	}
-	normalized, normalizeErr := llm.NormalizeRequest(request)
-	if normalizeErr != nil {
-		t.Fatal(normalizeErr)
-	}
-	digest, digestErr := llm.RequestDigest(normalized)
-	if digestErr != nil {
-		t.Fatal(digestErr)
-	}
-	operationID, _ := operationIdentity(normalized, digest)
-	if _, operationErr := harness.admission.Get(context.Background(), operationID); !errors.Is(operationErr, admission.ErrOperationNotFound) {
-		t.Fatalf("admission operation error = %v, want no operation", operationErr)
-	}
+	requireNoOperation(t, harness, request)
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
 	if adapter.capabilities != 0 || adapter.compiles != 0 || adapter.invokes != 0 {
@@ -56,26 +45,22 @@ func TestStreamRejectsAdapterWithoutRealStreamBeforeDispatch(t *testing.T) {
 
 func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *testing.T) {
 	native := &fakeAdapter{name: "native-only", response: successfulResponse()}
-	streaming := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "streaming", response: successfulResponse()}}
+	streaming := newStreamingAdapter("streaming")
 	harness := newHarness(t, streaming)
 	harness.engine.dependencies.Adapters = AdapterMap{"native": native, "streaming": streaming}
+	candidate := func(endpointID, model, priceVersion string, amount pricing.MicroUSD) quotedCandidate {
+		return quotedCandidate{
+			candidate: routing.Candidate{EndpointID: endpointID, Family: string(provider.FamilyOpenAIResponses), Model: model, AttemptedClass: llm.ServiceClassStandard},
+			entry:     &pricing.Entry{Version: priceVersion},
+			estimate:  budget.Estimate{MicroUSD: amount},
+			reservations: []admission.WindowReservation{{
+				PolicyID: "policy", WindowID: "window", Amount: amount, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),
+			}},
+		}
+	}
 	quoted := quotedPlan{candidates: []quotedCandidate{
-		{
-			candidate: routing.Candidate{EndpointID: "native", Family: string(provider.FamilyOpenAIResponses), Model: "native-model", AttemptedClass: llm.ServiceClassStandard},
-			entry:     &pricing.Entry{Version: "native-price"},
-			estimate:  budget.Estimate{MicroUSD: 99},
-			reservations: []admission.WindowReservation{{
-				PolicyID: "policy", WindowID: "window", Amount: 99, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),
-			}},
-		},
-		{
-			candidate: routing.Candidate{EndpointID: "streaming", Family: string(provider.FamilyOpenAIResponses), Model: "stream-model", AttemptedClass: llm.ServiceClassStandard},
-			entry:     &pricing.Entry{Version: "stream-price"},
-			estimate:  budget.Estimate{MicroUSD: 7},
-			reservations: []admission.WindowReservation{{
-				PolicyID: "policy", WindowID: "window", Amount: 7, Limit: 1_000, BucketNanos: int64(time.Minute), DurationNanos: int64(time.Minute),
-			}},
-		},
+		candidate("native", "native-model", "native-price", 99),
+		candidate("streaming", "stream-model", "stream-price", 7),
 	}, maximum: 99}
 	request := baseRequest("filtered-stream-admission")
 	filtered, err := harness.engine.preflightStreamingPlan(context.Background(), request, quoted)
@@ -92,16 +77,8 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationID, scopeKey := operationIdentity(normalized, digest)
-	operation, existing, err := harness.engine.beginOrResume(context.Background(), normalized, snapshot, operationID, scopeKey, digest, filtered, harness.clock)
+	identity := normalizedIdentityForTest(t, request)
+	operation, existing, err := harness.engine.beginOrResume(context.Background(), identity.normalized, snapshot, identity.id, identity.scopeKey, identity.digest, filtered, harness.clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,25 +94,15 @@ func TestPreflightStreamingPlanRebuildsAdmissionInputsFromEligibleCandidates(t *
 }
 
 func TestStreamDeliversProviderDeltasInOrderBeforeFinalResponse(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "streaming", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.TextDelta{Index: 0, Text: "wo"},
-			provider.TextDelta{Index: 0, Text: "rld"},
-			provider.OutputFinished{Index: 0},
-			provider.UsageUpdated{Usage: llm.Usage{OutputTokens: 1}},
-			provider.StreamCompleted{},
-		},
-	}
-	harness := newHarness(t, adapter)
-
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("ordered-stream"))
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	defer stream.Close()
-	events := readTerminalStream(t, stream)
+	harness := newHarness(t, newStreamingAdapter("streaming",
+		provider.OutputStarted{Index: 0},
+		provider.TextDelta{Index: 0, Text: "wo"},
+		provider.TextDelta{Index: 0, Text: "rld"},
+		provider.OutputFinished{Index: 0},
+		provider.UsageUpdated{Usage: llm.Usage{OutputTokens: 1}},
+		provider.StreamCompleted{},
+	))
+	events := streamEvents(t, harness, baseRequest("ordered-stream"))
 
 	gotKinds := make([]string, 0, len(events))
 	for _, event := range events {
@@ -153,23 +120,13 @@ func TestStreamDeliversProviderDeltasInOrderBeforeFinalResponse(t *testing.T) {
 
 func TestStreamPreservesOpaqueProviderStateByteForByte(t *testing.T) {
 	opaque := []byte{0x00, 0xff, 0x7f}
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "opaque-stream", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.ProviderStateDelta{Index: 0, State: llm.ProviderState{Provider: "provider-1", EndpointFamily: "openai_responses", MediaType: "application/octet-stream", Opaque: opaque}},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-		},
-	}
-	harness := newHarness(t, adapter)
-
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("opaque-stream"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	events := readTerminalStream(t, stream)
+	harness := newHarness(t, newStreamingAdapter("opaque-stream",
+		provider.OutputStarted{Index: 0},
+		provider.ProviderStateDelta{Index: 0, State: llm.ProviderState{Provider: "provider-1", EndpointFamily: "openai_responses", MediaType: "application/octet-stream", Opaque: opaque}},
+		provider.OutputFinished{Index: 0},
+		provider.StreamCompleted{},
+	))
+	events := streamEvents(t, harness, baseRequest("opaque-stream"))
 
 	var delta llm.ProviderStateDelta
 	found := false
@@ -182,7 +139,7 @@ func TestStreamPreservesOpaqueProviderStateByteForByte(t *testing.T) {
 	if !found || !bytes.Equal(delta.State.Opaque, opaque) {
 		t.Fatalf("provider state delta = %#v, want exact opaque bytes %#v", delta, opaque)
 	}
-	response := events[len(events)-1].(llm.ResponseCompleted).Response
+	response := completedStreamResponse(events)
 	message, ok := response.Output[0].(llm.Message)
 	if !ok || len(message.Content) != 1 {
 		t.Fatalf("final stream response = %#v", response)
@@ -194,24 +151,12 @@ func TestStreamPreservesOpaqueProviderStateByteForByte(t *testing.T) {
 }
 
 func TestStreamDeliversExactlyOneTerminalError(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "stream-error", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.StreamErrored{Err: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseStream, provider.DispatchAccepted, provider.RetryNever, "safe provider failure")},
-		},
-	}
-	harness := newHarness(t, adapter)
-
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("stream-error"))
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	defer stream.Close()
-	events := readTerminalStream(t, stream)
-	if _, ok := events[len(events)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
+	harness := newHarness(t, newStreamingAdapter("stream-error",
+		provider.OutputStarted{Index: 0},
+		provider.StreamErrored{Err: provider.NewError(provider.CodeProviderUnavailable, provider.PhaseStream, provider.DispatchAccepted, provider.RetryNever, "safe provider failure")},
+	))
+	events := streamEvents(t, harness, baseRequest("stream-error"))
+	requireStreamErrored(t, events, "terminal event")
 	for _, event := range events[:len(events)-1] {
 		if llm.IsTerminalEvent(event) {
 			t.Fatalf("non-final event %T was terminal", event)
@@ -220,29 +165,17 @@ func TestStreamDeliversExactlyOneTerminalError(t *testing.T) {
 }
 
 func TestStreamRejectsToolFragmentWithoutIdentityAtProviderBoundary(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "deferred-tool-identity", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			// provider.Assembler accepts this intermediate shape, but a streaming
-			// adapter must not expose it until tool identity is known.
-			provider.ToolArgumentsDelta{Index: 0, Fragment: `{"argument":`},
-			provider.ToolArgumentsDelta{Index: 0, CallID: "call-1", Name: "lookup", Fragment: "true}"},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-		},
-	}
-	harness := newHarness(t, adapter)
-
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("deferred-tool-identity"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	events := readTerminalStream(t, stream)
-	if _, ok := events[len(events)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
+	harness := newHarness(t, newStreamingAdapter("deferred-tool-identity",
+		provider.OutputStarted{Index: 0},
+		// provider.Assembler accepts this intermediate shape, but a streaming
+		// adapter must not expose it until tool identity is known.
+		provider.ToolArgumentsDelta{Index: 0, Fragment: `{"argument":`},
+		provider.ToolArgumentsDelta{Index: 0, CallID: "call-1", Name: "lookup", Fragment: "true}"},
+		provider.OutputFinished{Index: 0},
+		provider.StreamCompleted{},
+	))
+	events := streamEvents(t, harness, baseRequest("deferred-tool-identity"))
+	requireStreamErrored(t, events, "terminal event")
 	for _, event := range events {
 		switch event.(type) {
 		case llm.ToolCallStarted, llm.ToolArgumentsDelta:
@@ -252,27 +185,9 @@ func TestStreamRejectsToolFragmentWithoutIdentityAtProviderBoundary(t *testing.T
 }
 
 func TestStreamRejectsDuplicateProviderTerminal(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "duplicate-terminal", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.TextDelta{Index: 0, Text: "world"},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-			provider.StreamCompleted{},
-		},
-	}
-	harness := newHarness(t, adapter)
-
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("duplicate-terminal"))
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
-	defer stream.Close()
-	events := readTerminalStream(t, stream)
-	if _, ok := events[len(events)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
+	harness := newHarness(t, newStreamingAdapter("duplicate-terminal", append(worldStreamEvents(), provider.StreamCompleted{})...))
+	events := streamEvents(t, harness, baseRequest("duplicate-terminal"))
+	requireStreamErrored(t, events, "terminal event")
 	for _, event := range events {
 		if _, ok := event.(llm.ResponseCompleted); ok {
 			t.Fatalf("duplicate provider terminal leaked successful terminal %#v", event)
@@ -281,202 +196,91 @@ func TestStreamRejectsDuplicateProviderTerminal(t *testing.T) {
 }
 
 func TestStreamReplaysCompletedTerminalWithoutProviderCall(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "replay-stream", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.TextDelta{Index: 0, Text: "world"},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-		},
-	}
+	adapter := newStreamingAdapter("replay-stream", worldStreamEvents()...)
 	harness := newHarness(t, adapter)
 	request := baseRequest("stream-replay")
 
-	first, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstEvents := readTerminalStream(t, first)
-	_ = first.Close()
-	second, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondEvents := readTerminalStream(t, second)
-	_ = second.Close()
-	firstResponse := firstEvents[len(firstEvents)-1].(llm.ResponseCompleted).Response
-	secondResponse := secondEvents[len(secondEvents)-1].(llm.ResponseCompleted).Response
+	firstResponse := completedStreamResponse(streamEvents(t, harness, request))
+	secondResponse := completedStreamResponse(streamEvents(t, harness, request))
 	if firstResponse.OperationID == "" || firstResponse.OperationID != secondResponse.OperationID {
 		t.Fatalf("replayed response identity differs: first=%#v second=%#v", firstResponse, secondResponse)
 	}
-	adapter.mu.Lock()
-	defer adapter.mu.Unlock()
-	if adapter.invokes != 1 {
-		t.Fatalf("provider stream opens = %d, want one", adapter.invokes)
-	}
+	adapter.requireInvokes(t, 1, "provider stream opens = %d, want one")
 }
 
 func TestStreamRetriesPreWriteRejectionOnFallback(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "retry-stream", rejectFirst: true, response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.TextDelta{Index: 0, Text: "world"},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-		},
-	}
+	adapter := newStreamingAdapter("retry-stream", worldStreamEvents()...)
+	adapter.rejectFirst = true
 	harness := newHarness(t, adapter)
-	request := priorityWithStandardFallback("stream-retry")
 
-	stream, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	events := readTerminalStream(t, stream)
-	response := events[len(events)-1].(llm.ResponseCompleted).Response
+	response := completedStreamResponse(streamEvents(t, harness, priorityWithStandardFallback("stream-retry")))
 	if response.Service.Requested != llm.ServiceClassPriority || response.Service.Attempted != llm.ServiceClassStandard || response.Service.FallbackIndex != 1 {
 		t.Fatalf("fallback response service = %#v", response.Service)
 	}
-	adapter.mu.Lock()
-	defer adapter.mu.Unlock()
-	if adapter.invokes != 2 {
-		t.Fatalf("provider stream opens = %d, want two", adapter.invokes)
-	}
+	adapter.requireInvokes(t, 2, "provider stream opens = %d, want two")
 }
 
 func TestStreamRefusesAmbiguousPostWriteReplay(t *testing.T) {
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "ambiguous-stream", ambiguous: true, response: successfulResponse()}}
+	adapter := newStreamingAdapter("ambiguous-stream")
+	adapter.ambiguous = true
 	harness := newHarness(t, adapter)
 	request := baseRequest("stream-ambiguous")
 
-	first, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
+	requireStreamErrored(t, streamEvents(t, harness, request), "first terminal")
+	if mapped, failure := streamFailure(t, harness, request, "second terminal"); mapped == nil || mapped.Code != provider.CodeAmbiguousDispatch {
+		t.Fatalf("second terminal error = %#v, want ambiguous dispatch", failure)
 	}
-	firstEvents := readTerminalStream(t, first)
-	_ = first.Close()
-	if _, ok := firstEvents[len(firstEvents)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("first terminal = %T, want StreamErrored", firstEvents[len(firstEvents)-1])
-	}
-	second, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondEvents := readTerminalStream(t, second)
-	_ = second.Close()
-	failure, ok := secondEvents[len(secondEvents)-1].(llm.StreamErrored)
-	if !ok {
-		t.Fatalf("second terminal = %T, want StreamErrored", secondEvents[len(secondEvents)-1])
-	}
-	var providerErr *provider.Error
-	if !errors.As(failure.Err, &providerErr) || providerErr.Code != provider.CodeAmbiguousDispatch {
-		t.Fatalf("second terminal error = %#v, want ambiguous dispatch", failure.Err)
-	}
-	adapter.mu.Lock()
-	defer adapter.mu.Unlock()
-	if adapter.invokes != 1 {
-		t.Fatalf("provider stream opens = %d, want one", adapter.invokes)
-	}
+	adapter.requireInvokes(t, 1, "provider stream opens = %d, want one")
 }
 
 func TestStreamRejectsAcceptedResultWithoutDispatchObservation(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter:  &fakeAdapter{name: "unobserved-stream", response: successfulResponse()},
-		skipObserver: true,
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-		},
-	}
+	adapter := newStreamingAdapter("unobserved-stream", provider.OutputStarted{Index: 0}, provider.OutputFinished{Index: 0}, provider.StreamCompleted{})
+	adapter.skipObserver = true
 	harness := newHarness(t, adapter)
 	request := baseRequest("unobserved-stream")
 
-	first, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
+	if mapped, failure := streamFailure(t, harness, request, "first terminal"); mapped == nil || mapped.Dispatch != provider.DispatchAmbiguous {
+		t.Fatalf("first terminal error = %#v, want ambiguous dispatch", failure)
 	}
-	firstEvents := readTerminalStream(t, first)
-	_ = first.Close()
-	firstFailure, ok := firstEvents[len(firstEvents)-1].(llm.StreamErrored)
-	if !ok {
-		t.Fatalf("first terminal = %T, want StreamErrored", firstEvents[len(firstEvents)-1])
+	if mapped, failure := streamFailure(t, harness, request, "second terminal"); mapped == nil || mapped.Code != provider.CodeAmbiguousDispatch {
+		t.Fatalf("second terminal error = %#v, want ambiguous replay refusal", failure)
 	}
-	var firstProviderErr *provider.Error
-	if !errors.As(firstFailure.Err, &firstProviderErr) || firstProviderErr.Dispatch != provider.DispatchAmbiguous {
-		t.Fatalf("first terminal error = %#v, want ambiguous dispatch", firstFailure.Err)
-	}
-
-	second, err := harness.engine.Stream(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondEvents := readTerminalStream(t, second)
-	_ = second.Close()
-	secondFailure, ok := secondEvents[len(secondEvents)-1].(llm.StreamErrored)
-	if !ok {
-		t.Fatalf("second terminal = %T, want StreamErrored", secondEvents[len(secondEvents)-1])
-	}
-	var secondProviderErr *provider.Error
-	if !errors.As(secondFailure.Err, &secondProviderErr) || secondProviderErr.Code != provider.CodeAmbiguousDispatch {
-		t.Fatalf("second terminal error = %#v, want ambiguous replay refusal", secondFailure.Err)
-	}
-	adapter.mu.Lock()
-	defer adapter.mu.Unlock()
-	if adapter.invokes != 1 {
-		t.Fatalf("provider stream opens = %d, want one", adapter.invokes)
-	}
+	adapter.requireInvokes(t, 1, "provider stream opens = %d, want one")
 }
 
 func TestStreamCancellationClosesProviderSourceAndTerminates(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	source := newBlockingProviderSource()
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "cancel-stream", response: successfulResponse()}, source: source}
-	harness := newHarness(t, adapter)
-
-	stream, err := harness.engine.Stream(ctx, baseRequest("stream-cancel"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Close()
-	waitChannel(t, source.entered, "provider source read")
-	cancel()
-	events := readTerminalStream(t, stream)
-	if _, ok := events[len(events)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
-	waitChannel(t, source.closed, "provider source close")
+	assertCancellationClosesProviderSource(t, "cancel-stream", "stream-cancel", source, &source.providerSourceSignals, "provider source close")
 }
 
 func TestStreamParentCancellationClosesProviderSourceThatIgnoresContext(t *testing.T) {
+	source := newCloseDrivenProviderSource()
+	assertCancellationClosesProviderSource(t, "parent-cancel-close-driven", "stream-parent-cancel-close-driven", source, &source.providerSourceSignals, "provider source close after parent cancellation")
+}
+
+// assertCancellationClosesProviderSource cancels the parent context once the
+// engine is reading source and requires an errored terminal and a closed
+// provider source.
+func assertCancellationClosesProviderSource(t *testing.T, adapterName, operationKey string, source provider.EventSource, signals *providerSourceSignals, closeDescription string) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	source := newCloseDrivenProviderSource()
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "parent-cancel-close-driven", response: successfulResponse()}, source: source}
-	harness := newHarness(t, adapter)
+	harness := newHarness(t, sourceStreamingAdapter(adapterName, source))
 
-	stream, err := harness.engine.Stream(ctx, baseRequest("stream-parent-cancel-close-driven"))
+	stream, err := harness.engine.Stream(ctx, baseRequest(operationKey))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stream.Close()
-	waitChannel(t, source.entered, "provider source read")
+	waitChannel(t, signals.entered, "provider source read")
 	cancel()
-	events := readTerminalStream(t, stream)
-	if _, ok := events[len(events)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
-	waitChannel(t, source.closed, "provider source close after parent cancellation")
+	requireStreamErrored(t, readTerminalStream(t, stream), "terminal event")
+	waitChannel(t, signals.closed, closeDescription)
 }
 
 func TestStreamCloseClosesProviderSourceThatIgnoresContext(t *testing.T) {
 	source := newCloseDrivenProviderSource()
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "explicit-close-stream", response: successfulResponse()}, source: source}
-	harness := newHarness(t, adapter)
+	harness := newHarness(t, sourceStreamingAdapter("explicit-close-stream", source))
 
 	stream, err := harness.engine.Stream(context.Background(), baseRequest("stream-explicit-close"))
 	if err != nil {
@@ -497,7 +301,7 @@ func TestStreamCloseClosesProviderSourceThatIgnoresContext(t *testing.T) {
 func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "pre-dispatch-cancel", response: successfulResponse()}}
+	adapter := newStreamingAdapter("pre-dispatch-cancel")
 	harness := newHarness(t, adapter)
 	heartbeat := &cancelOnAdmissionHeartbeat{entered: make(chan struct{})}
 	harness.engine.dependencies.Heartbeat = heartbeat
@@ -509,11 +313,7 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 	defer stream.Close()
 	waitChannel(t, heartbeat.entered, "admission heartbeat")
 	cancel()
-	events := readTerminalStream(t, stream)
-	failure, ok := events[len(events)-1].(llm.StreamErrored)
-	if !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
+	failure := requireStreamErrored(t, readTerminalStream(t, stream), "terminal event")
 	var providerErr *provider.Error
 	if !errors.As(failure.Err, &providerErr) || providerErr.Code != provider.CodeCanceled || providerErr.OperationID == "" {
 		t.Fatalf("cancellation terminal error = %#v, want classified operation cancellation", failure.Err)
@@ -527,8 +327,7 @@ func TestStreamCancellationBeforeDispatchClosesReservationWithoutProviderCall(t 
 
 func TestStreamAppliesBackpressureBeforePullingMoreProviderEvents(t *testing.T) {
 	source := newGatedProviderSource(streamBufferCapacity)
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "backpressure-stream", response: successfulResponse()}, source: source}
-	harness := newHarness(t, adapter)
+	harness := newHarness(t, sourceStreamingAdapter("backpressure-stream", source))
 	stream, err := harness.engine.Stream(context.Background(), baseRequest("stream-backpressure"))
 	if err != nil {
 		t.Fatal(err)
@@ -550,8 +349,7 @@ func TestStreamParentCancellationWithFullBufferReleasesProducerAndKeepsTerminal(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	source := newGatedProviderSource(streamBufferCapacity)
-	adapter := &streamingAdapter{fakeAdapter: &fakeAdapter{name: "cancel-full-buffer", response: successfulResponse()}, source: source}
-	harness := newHarness(t, adapter)
+	harness := newHarness(t, sourceStreamingAdapter("cancel-full-buffer", source))
 	stream, err := harness.engine.Stream(ctx, baseRequest("cancel-full-buffer"))
 	if err != nil {
 		t.Fatal(err)
@@ -570,34 +368,18 @@ func TestStreamParentCancellationWithFullBufferReleasesProducerAndKeepsTerminal(
 	if pending == nil {
 		t.Fatal("full-buffer cancellation did not retain a terminal outcome")
 	}
-	events := readTerminalStream(t, stream)
-	if _, ok := events[len(events)-1].(llm.StreamErrored); !ok {
-		t.Fatalf("terminal event = %T, want StreamErrored", events[len(events)-1])
-	}
+	requireStreamErrored(t, readTerminalStream(t, stream), "terminal event")
 }
 
 func TestStreamAndGenerateFinalizeEquivalentResponses(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "equivalent-stream", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.TextDelta{Index: 0, Text: "world"},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{Response: successfulResponse()},
-		},
-	}
-	harness := newHarness(t, adapter)
+	events := worldStreamEvents()
+	events[len(events)-1] = provider.StreamCompleted{Response: successfulResponse()}
+	harness := newHarness(t, newStreamingAdapter("equivalent-stream", events...))
 	nonStream, err := harness.engine.Generate(context.Background(), baseRequest("equivalent-generate"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, err := harness.engine.Stream(context.Background(), baseRequest("equivalent-stream"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	streamEvents := readTerminalStream(t, stream)
-	_ = stream.Close()
-	streamResponse := streamEvents[len(streamEvents)-1].(llm.ResponseCompleted).Response
+	streamResponse := completedStreamResponse(streamEvents(t, harness, baseRequest("equivalent-stream")))
 	nonStream.OperationKey, nonStream.OperationID = "", ""
 	streamResponse.OperationKey, streamResponse.OperationID = "", ""
 	if !reflect.DeepEqual(nonStream, streamResponse) {
@@ -611,6 +393,33 @@ type streamingAdapter struct {
 	source       provider.EventSource
 	metadata     provider.ResponseMetadata
 	skipObserver bool
+}
+
+// newStreamingAdapter streams events over a successful fake adapter.
+func newStreamingAdapter(name string, events ...provider.Event) *streamingAdapter {
+	return &streamingAdapter{fakeAdapter: &fakeAdapter{name: name, response: successfulResponse()}, events: events}
+}
+
+// sourceStreamingAdapter streams from source over a successful fake adapter.
+func sourceStreamingAdapter(name string, source provider.EventSource) *streamingAdapter {
+	adapter := newStreamingAdapter(name)
+	adapter.source = source
+	return adapter
+}
+
+// worldStreamEvents is a complete provider stream of one "world" message.
+func worldStreamEvents() []provider.Event { return textStreamEvents("world") }
+
+// okStreamEvents is a complete provider stream of one "ok" message.
+func okStreamEvents() []provider.Event { return textStreamEvents("ok") }
+
+func textStreamEvents(text string) []provider.Event {
+	return []provider.Event{
+		provider.OutputStarted{Index: 0},
+		provider.TextDelta{Index: 0, Text: text},
+		provider.OutputFinished{Index: 0},
+		provider.StreamCompleted{},
+	}
 }
 
 func (adapter *streamingAdapter) OpenStream(ctx context.Context, call provider.Call, observer provider.Observer) (provider.StreamResult, error) {
@@ -668,50 +477,52 @@ func (source *providerSliceSource) Next(ctx context.Context) (provider.Event, er
 
 func (*providerSliceSource) Close() error { return nil }
 
-type blockingProviderSource struct {
+// providerSourceSignals reports when a provider source is first read and
+// when it is closed.
+type providerSourceSignals struct {
 	entered   chan struct{}
 	closed    chan struct{}
 	enterOnce sync.Once
 	closeOnce sync.Once
 }
 
+func (signals *providerSourceSignals) markEntered() {
+	signals.enterOnce.Do(func() { close(signals.entered) })
+}
+
+func (signals *providerSourceSignals) Close() error {
+	signals.closeOnce.Do(func() { close(signals.closed) })
+	return nil
+}
+
+type blockingProviderSource struct {
+	providerSourceSignals
+}
+
 func newBlockingProviderSource() *blockingProviderSource {
-	return &blockingProviderSource{entered: make(chan struct{}), closed: make(chan struct{})}
+	return &blockingProviderSource{providerSourceSignals{entered: make(chan struct{}), closed: make(chan struct{})}}
 }
 
 func (source *blockingProviderSource) Next(ctx context.Context) (provider.Event, error) {
-	source.enterOnce.Do(func() { close(source.entered) })
+	source.markEntered()
 	<-ctx.Done()
 	return nil, ctx.Err()
-}
-
-func (source *blockingProviderSource) Close() error {
-	source.closeOnce.Do(func() { close(source.closed) })
-	return nil
 }
 
 // closeDrivenProviderSource deliberately ignores the read context. Closing
 // the public stream must still release this provider body.
 type closeDrivenProviderSource struct {
-	entered   chan struct{}
-	closed    chan struct{}
-	enterOnce sync.Once
-	closeOnce sync.Once
+	providerSourceSignals
 }
 
 func newCloseDrivenProviderSource() *closeDrivenProviderSource {
-	return &closeDrivenProviderSource{entered: make(chan struct{}), closed: make(chan struct{})}
+	return &closeDrivenProviderSource{providerSourceSignals{entered: make(chan struct{}), closed: make(chan struct{})}}
 }
 
 func (source *closeDrivenProviderSource) Next(context.Context) (provider.Event, error) {
-	source.enterOnce.Do(func() { close(source.entered) })
+	source.markEntered()
 	<-source.closed
 	return nil, errors.New("provider source was closed")
-}
-
-func (source *closeDrivenProviderSource) Close() error {
-	source.closeOnce.Do(func() { close(source.closed) })
-	return nil
 }
 
 type cancelOnAdmissionHeartbeat struct {
@@ -774,6 +585,46 @@ func (source *gatedProviderSource) Next(ctx context.Context) (provider.Event, er
 func (source *gatedProviderSource) Close() error {
 	source.closeOnce.Do(func() { close(source.closed) })
 	return nil
+}
+
+// streamEvents opens a stream for request, reads it to its terminal event,
+// and closes it.
+func streamEvents(t *testing.T, harness testHarness, request llm.Request) []llm.Event {
+	t.Helper()
+	stream, err := harness.engine.Stream(context.Background(), request)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer stream.Close()
+	return readTerminalStream(t, stream)
+}
+
+// requireStreamErrored requires the last event to be StreamErrored; label
+// names the terminal in the failure message.
+func requireStreamErrored(t *testing.T, events []llm.Event, label string) llm.StreamErrored {
+	t.Helper()
+	failure, ok := events[len(events)-1].(llm.StreamErrored)
+	if !ok {
+		t.Fatalf("%s = %T, want StreamErrored", label, events[len(events)-1])
+	}
+	return failure
+}
+
+// streamFailure streams request, requires an errored terminal, and returns
+// the provider error it wraps (nil when it wraps none) and the raw error.
+func streamFailure(t *testing.T, harness testHarness, request llm.Request, label string) (*provider.Error, error) {
+	t.Helper()
+	failure := requireStreamErrored(t, streamEvents(t, harness, request), label)
+	var mapped *provider.Error
+	if !errors.As(failure.Err, &mapped) {
+		return nil, failure.Err
+	}
+	return mapped, failure.Err
+}
+
+// completedStreamResponse is the final response of a successful stream.
+func completedStreamResponse(events []llm.Event) llm.Response {
+	return events[len(events)-1].(llm.ResponseCompleted).Response
 }
 
 func readTerminalStream(t *testing.T, stream llm.EventStream) []llm.Event {

@@ -75,16 +75,7 @@ func TestGenerateDoesNotExposeProviderStreamingPhase(t *testing.T) {
 }
 
 func TestStreamRetainsStreamingHeartbeat(t *testing.T) {
-	adapter := &streamingAdapter{
-		fakeAdapter: &fakeAdapter{name: "stream-heartbeat", response: successfulResponse()},
-		events: []provider.Event{
-			provider.OutputStarted{Index: 0},
-			provider.TextDelta{Index: 0, Text: "ok"},
-			provider.OutputFinished{Index: 0},
-			provider.StreamCompleted{},
-		},
-	}
-	harness := newHarness(t, adapter)
+	harness := newHarness(t, newStreamingAdapter("stream-heartbeat", okStreamEvents()...))
 	bound := &recordedHeartbeat{}
 
 	stream, err := harness.engine.Stream(WithHeartbeat(context.Background(), bound), baseRequest("stream-heartbeat"))

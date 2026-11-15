@@ -17,14 +17,10 @@ import (
 func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
-	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
-	snapshot.BudgetPolicies = []budget.Policy{{
-		ID:      "priority-only",
-		Match:   budget.Matcher{Tenant: "tenant-1", ServiceClass: llm.ServiceClassPriority},
-		Windows: []budget.Window{{ID: "priority-only/hour", Duration: time.Hour, Bucket: time.Minute, Limit: 1_000}},
-	}}
-	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+	harness.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
+		snapshot.BudgetPolicies = []budget.Policy{tenantClassBudgetPolicy("priority-only", llm.ServiceClassPriority)}
+	})
 
 	request := priorityWithStandardFallback("skip-budgeted-unpriced")
 	response, err := harness.engine.Generate(context.Background(), request)
@@ -34,19 +30,16 @@ func TestGenerateSkipsBudgetedUnpricedCandidateAndUsesPricedFallback(t *testing.
 	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
 		t.Fatalf("response = %#v, want priced standard fallback", response)
 	}
-	calls := adapter.recordedCalls()
-	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
-		t.Fatalf("provider calls = %#v, want only priced standard fallback", calls)
-	}
+	adapter.requireOnlyStandardCall(t, "only priced standard fallback")
 }
 
 func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
-	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
-	snapshot.RequirePriceWhenBudgeted = true
-	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+	harness.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
+		snapshot.RequirePriceWhenBudgeted = true
+	})
 
 	request := baseRequest("allow-unbudgeted-unpriced")
 	request.ServiceClass = llm.ServiceClassPriority
@@ -57,10 +50,7 @@ func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) 
 	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ReservedCostUSD != nil || response.Cost.ActualCostUSD != nil || response.Cost.Method != "" || response.Cost.CatalogVersion != "" {
 		t.Fatalf("unpriced response cost = %#v, want unknown zero-value monetary facts", response.Cost)
 	}
-	operation, err := harness.admission.Get(context.Background(), response.OperationID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := harness.operation(t, response.OperationID)
 	if operation.ReservedMicroUSD != 0 || operation.IncurredMicroUSD != 0 || operation.PriceVersion != "" {
 		t.Fatalf("unpriced operation = %#v, want zero unknown-price accounting", operation)
 	}
@@ -69,11 +59,11 @@ func TestGenerateAllowsUnbudgetedUnpricedCandidateWithUnknownCost(t *testing.T) 
 func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
 	partial := priceEntryForTier("priority-tier")
 	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentInput}
-	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, priceEntryForTier("standard-tier")))
-	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+	harness.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, priceEntryForTier("standard-tier")))
+	})
 
 	request := priorityWithStandardFallback("skip-active-partial-price")
 	response, err := harness.engine.Generate(context.Background(), request)
@@ -83,16 +73,12 @@ func TestGenerateSkipsActivePartialPriceAndUsesCompleteFallback(t *testing.T) {
 	if response.Service.Attempted != llm.ServiceClassStandard || response.Cost.Status != llm.CostStatusKnown {
 		t.Fatalf("response = %#v, want complete standard fallback", response)
 	}
-	calls := adapter.recordedCalls()
-	if len(calls) != 1 || calls[0].ServiceClass != llm.ServiceClassStandard {
-		t.Fatalf("provider calls = %#v, want only standard fallback", calls)
-	}
+	adapter.requireOnlyStandardCall(t, "only standard fallback")
 }
 
 func TestGenerateReturnsNoRouteWhenAllCandidatePricesAreUnusable(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
 	partial := priceEntryForTier("priority-tier")
 	partial.UnknownComponents = []pricing.PriceComponent{pricing.PriceComponentInput}
 	overflow := priceEntryForTier("standard-tier")
@@ -100,28 +86,15 @@ func TestGenerateReturnsNoRouteWhenAllCandidatePricesAreUnusable(t *testing.T) {
 	// cannot represent it. The candidate must not abort planning for the route
 	// that follows it, nor can it be admitted itself.
 	overflow.Prices.PerRequest = pricing.MustDecimalUSD("99999999999999999999")
-	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, overflow))
-	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+	harness.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, partial, overflow))
+	})
 
 	request := priorityWithStandardFallback("all-unusable-prices")
 	_, err := harness.engine.Generate(context.Background(), request)
-	if err == nil {
-		t.Fatal("all unusable candidates unexpectedly dispatched")
-	}
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-		t.Fatalf("error = %#v, want no-route price failure", err)
-	}
-	if mapped.SafeDetails["reason"] != "no_eligible_price" {
-		t.Fatalf("safe details = %#v, want no_eligible_price", mapped.SafeDetails)
-	}
+	requireNoEligiblePrice(t, err, "all unusable candidates unexpectedly dispatched")
 	requireNoOperation(t, harness, request)
-	adapter.mu.Lock()
-	invokes := adapter.invokes
-	adapter.mu.Unlock()
-	if invokes != 0 {
-		t.Fatalf("provider invoke count = %d, want zero", invokes)
-	}
+	adapter.requireInvokes(t, 0, "provider invoke count = %d, want zero")
 }
 
 func TestGenerateKeepsTokenizerErrorsFatal(t *testing.T) {
@@ -136,8 +109,7 @@ func TestGenerateKeepsTokenizerErrorsFatal(t *testing.T) {
 	if err == nil {
 		t.Fatal("tokenizer error unexpectedly fell back")
 	}
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) || mapped.Code != provider.CodeInvalidArgument || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
+	if _, ok := isNotDispatchedFailure(err, provider.CodeInvalidArgument, provider.PhasePrice); !ok {
 		t.Fatalf("error = %#v, want fatal price-estimate failure", err)
 	}
 	requireNoOperation(t, harness, request)
@@ -158,36 +130,18 @@ func TestGenerateRejectsUnavailablePriceWhenPolicyRequiresIt(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 			harness := newHarness(t, adapter)
-			snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
-			snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, test.entries...))
-			snapshot.RequirePriceWhenBudgeted = true
-			snapshot.BudgetPolicies = []budget.Policy{{
-				ID:      "priority-only",
-				Match:   budget.Matcher{Tenant: "tenant-1", ServiceClass: llm.ServiceClassPriority},
-				Windows: []budget.Window{{ID: "priority-only/hour", Duration: time.Hour, Bucket: time.Minute, Limit: 1_000}},
-			}}
-			harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+			harness.updateSnapshot(func(snapshot *Snapshot) {
+				snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, test.entries...))
+				snapshot.RequirePriceWhenBudgeted = true
+				snapshot.BudgetPolicies = []budget.Policy{tenantClassBudgetPolicy("priority-only", llm.ServiceClassPriority)}
+			})
 
 			request := baseRequest("reject-budgeted-unpriced-" + test.name)
 			request.ServiceClass = llm.ServiceClassPriority
 			_, err := harness.engine.Generate(context.Background(), request)
-			if err == nil {
-				t.Fatal("budgeted unpriced request unexpectedly dispatched")
-			}
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute || mapped.Phase != provider.PhasePrice || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNever {
-				t.Fatalf("error = %#v, want no-route price failure", err)
-			}
-			if mapped.SafeDetails["reason"] != "no_eligible_price" {
-				t.Fatalf("safe details = %#v, want no_eligible_price", mapped.SafeDetails)
-			}
+			requireNoEligiblePrice(t, err, "budgeted unpriced request unexpectedly dispatched")
 			requireNoOperation(t, harness, request)
-			adapter.mu.Lock()
-			invokes := adapter.invokes
-			adapter.mu.Unlock()
-			if invokes != 0 {
-				t.Fatalf("provider invoke count = %d, want zero", invokes)
-			}
+			adapter.requireInvokes(t, 0, "provider invoke count = %d, want zero")
 		})
 	}
 }
@@ -195,10 +149,10 @@ func TestGenerateRejectsUnavailablePriceWhenPolicyRequiresIt(t *testing.T) {
 func TestGenerateRejectsUnbudgetedUnpricedCandidateWhenPolicyIsStrict(t *testing.T) {
 	adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
 	harness := newHarness(t, adapter)
-	snapshot := harness.engine.dependencies.Snapshots.(StaticSnapshot).Value
-	snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
-	snapshot.RequirePriceWhenBudgeted = false
-	harness.engine.dependencies.Snapshots = StaticSnapshot{Value: snapshot}
+	harness.updateSnapshot(func(snapshot *Snapshot) {
+		snapshot.Prices = pricing.NewResolver(testPriceCatalog(t, priceEntryForTier("standard-tier")))
+		snapshot.RequirePriceWhenBudgeted = false
+	})
 
 	request := baseRequest("reject-strict-unpriced")
 	request.ServiceClass = llm.ServiceClassPriority
@@ -234,15 +188,7 @@ func priceEntryForTier(tier string) pricing.Entry {
 
 func requireNoOperation(t *testing.T, harness testHarness, request llm.Request) {
 	t.Helper()
-	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := llm.RequestDigest(normalized)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationID, _ := operationIdentity(normalized, digest)
+	operationID := normalizedIdentityForTest(t, request).id
 	if _, err := harness.admission.Get(context.Background(), operationID); !errors.Is(err, admission.ErrOperationNotFound) {
 		t.Fatalf("admission Get(%q) error = %v, want ErrOperationNotFound", operationID, err)
 	}
@@ -271,10 +217,7 @@ func TestGenerateRejectsContextOverflowBeforePricedOrUnpricedDispatch(t *testing
 		if !errors.As(err, &mapped) || mapped.Code != provider.CodeNoRoute || mapped.SafeDetails["reason"] != "context_limit" {
 			t.Fatalf("unpriced=%t: %v", unpriced, err)
 		}
-		adapter.mu.Lock()
-		calls := len(adapter.calls)
-		adapter.mu.Unlock()
-		if calls != 0 {
+		if calls := len(adapter.recordedCalls()); calls != 0 {
 			t.Fatalf("unpriced=%t: dispatched %d calls", unpriced, calls)
 		}
 	}
@@ -292,10 +235,7 @@ func TestGenerateKeepsUnknownProviderChargeReserved(t *testing.T) {
 	if response.Cost.Status != llm.CostStatusUnknown || response.Cost.ActualCostUSD != nil || response.Cost.ReservedCostUSD == nil {
 		t.Fatalf("unknown charge lost its reservation: %#v", response.Cost)
 	}
-	operation, err := harness.admission.Get(context.Background(), response.OperationID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	operation := harness.operation(t, response.OperationID)
 	if operation.IncurredCostUSD == nil || operation.IncurredCostUSD.Cmp(*response.Cost.ReservedCostUSD) != 0 {
 		t.Fatalf("unknown paid work released its reserve: %#v", operation)
 	}
