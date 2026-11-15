@@ -54,9 +54,8 @@ func TestRegisterForTaskQueueUsesTheV1SetWhenConfigured(t *testing.T) {
 	if err := activities.RegisterForTaskQueue(registry, "queue-a"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{GenerateActivityName, CompactActivityName, QueryActivityName, PrepareActivityName, AcquireBudgetActivityName, PollActivityName, CompleteActivityName, PlanGenerationActivityName, ResolveGenerationActivityName, ExportLangfuseActivityName}
-	if !reflect.DeepEqual(registry.names, want) {
-		t.Fatalf("registered names = %v, want %v", registry.names, want)
+	if !reflect.DeepEqual(registry.names, v1ActivityNames) {
+		t.Fatalf("registered names = %v, want %v", registry.names, v1ActivityNames)
 	}
 }
 

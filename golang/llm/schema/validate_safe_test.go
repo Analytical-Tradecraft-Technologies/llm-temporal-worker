@@ -14,10 +14,7 @@ import (
 // (#1661).
 func TestValidationErrorsAreContentFree(t *testing.T) {
 	const secret = "SECRETXYZ"
-	enum := make([]string, 2000)
-	for i := range enum {
-		enum[i] = fmt.Sprintf(`"member-%d"`, i)
-	}
+	enum := joined(2000, func(i int) string { return fmt.Sprintf(`"member-%d"`, i) })
 	for name, test := range map[string]struct {
 		schema, instance, keyword, path string
 		leaks                           []string
@@ -47,7 +44,7 @@ func TestValidationErrorsAreContentFree(t *testing.T) {
 			keyword: "propertyNames", leaks: []string{secret},
 		},
 		"enum": {
-			schema: `{"enum":[` + strings.Join(enum, ",") + `]}`, instance: `"` + secret + `"`,
+			schema: `{"enum":[` + enum + `]}`, instance: `"` + secret + `"`,
 			keyword: "enum", leaks: []string{secret, "member-1"},
 		},
 		"const": {

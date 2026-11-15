@@ -102,9 +102,7 @@ func TestQueryV1MapsStateOutageToRetryableSanitizedTemporalError(t *testing.T) {
 		t.Fatalf("response = %#v, want nil on error", response)
 	}
 	applicationErr, details := safeApplicationError(t, err)
-	if applicationErr.Type() != ErrorTypeProviderTransient || applicationErr.NonRetryable() {
-		t.Fatalf("application error = type %q non_retryable=%v", applicationErr.Type(), applicationErr.NonRetryable())
-	}
+	assertApplicationType(t, applicationErr, ErrorTypeProviderTransient, false)
 	if details.Code != string(provider.CodeStateUnavailable) || details.Phase != string(provider.PhaseStateLoad) || details.Dispatch != string(provider.DispatchNotDispatched) {
 		t.Fatalf("safe details = %#v", details)
 	}

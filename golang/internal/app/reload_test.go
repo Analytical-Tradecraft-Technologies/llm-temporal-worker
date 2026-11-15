@@ -41,17 +41,32 @@ func (clients *fakeClients) Count() int {
 	return clients.closed
 }
 
+// mustNewApp builds an App from options, failing the test on an error.
+func mustNewApp(t *testing.T, options Options) *App {
+	t.Helper()
+	application, err := New(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return application
+}
+
+// mustCloseApp closes application, failing the test on an error.
+func mustCloseApp(t *testing.T, application *App) {
+	t.Helper()
+	if err := application.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
 	initial := exampleConfig(t)
 	created := make(chan *fakeClients, 2)
-	application, err := New(context.Background(), Options{
+	application := mustNewApp(t, Options{
 		InitialConfig: initial,
 		Builder:       SnapshotBuilder{},
 		Clients:       sendFakeClients(created),
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	oldClients := <-created
 	oldVersion := application.Current().Config.ConfigVersion()
 	if err := application.Reload(context.Background(), []byte("version: invalid\n")); err == nil {
@@ -78,9 +93,7 @@ func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
 	if err := old.WaitClosed(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustCloseApp(t, application)
 	if oldClients.Count() != 1 || newClients.Count() != 1 {
 		t.Fatalf("closed counts = %d, %d; want one each", oldClients.Count(), newClients.Count())
 	}
@@ -89,7 +102,7 @@ func TestReloadRejectsInvalidConfigAndDrainsOldClients(t *testing.T) {
 func TestReloadClientConstructionFailureKeepsOldSnapshot(t *testing.T) {
 	failure := errors.New("client construction failed")
 	count := 0
-	application, err := New(context.Background(), Options{
+	application := mustNewApp(t, Options{
 		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
 		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) {
 			count++
@@ -99,9 +112,6 @@ func TestReloadClientConstructionFailureKeepsOldSnapshot(t *testing.T) {
 			return ClientSetFunc(func(context.Context) error { return nil }), nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	before := application.Current().Config.ConfigVersion()
 	if err := application.Reload(context.Background(), exampleConfig(t)); !errors.Is(err, failure) {
 		t.Fatalf("reload error = %v", err)
@@ -115,7 +125,7 @@ func TestReloadRunsReplacementValidatorBeforeConstructingClients(t *testing.T) {
 	initial := exampleConfig(t)
 	created := 0
 	rejected := errors.New("replacement requires process restart")
-	application, err := New(context.Background(), Options{
+	application := mustNewApp(t, Options{
 		InitialConfig: initial,
 		Builder:       SnapshotBuilder{},
 		ReplacementValidator: func(current, replacement *config.Snapshot) error {
@@ -132,9 +142,6 @@ func TestReloadRunsReplacementValidatorBeforeConstructingClients(t *testing.T) {
 			return ClientSetFunc(func(context.Context) error { return nil }), nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	changed := strings.Replace(string(initial), "key_prefix: llmtw", "key_prefix: worker-b", 1)
 	if err := application.Reload(context.Background(), []byte(changed)); !errors.Is(err, rejected) {
 		t.Fatalf("reload error = %v, want replacement rejection", err)
@@ -145,16 +152,14 @@ func TestReloadRunsReplacementValidatorBeforeConstructingClients(t *testing.T) {
 	if got := application.Current().Config.Config().State.Redis.KeyPrefix; got != "llmtw" {
 		t.Fatalf("active key prefix = %q, want llmtw", got)
 	}
-	if err := application.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustCloseApp(t, application)
 }
 
 func TestDependencyVerificationFailureNeverPublishesOrLeaksClients(t *testing.T) {
 	failure := errors.New("required dependency is unavailable")
 	created := make(chan *fakeClients, 2)
 	verificationCalls := 0
-	application, err := New(context.Background(), Options{
+	application := mustNewApp(t, Options{
 		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
 		Clients: sendFakeClients(created),
 		Verify: func(context.Context, *config.Snapshot, ClientSet) error {
@@ -165,9 +170,6 @@ func TestDependencyVerificationFailureNeverPublishesOrLeaksClients(t *testing.T)
 			return nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	oldClients := <-created
 	before := application.Current().Config.ConfigVersion()
 	if err := application.Reload(context.Background(), exampleConfig(t)); !errors.Is(err, failure) {
@@ -190,7 +192,7 @@ func TestReloadCannotPublishAfterConcurrentClose(t *testing.T) {
 	verificationStarted := make(chan struct{})
 	releaseVerification := make(chan struct{})
 	verificationCalls := 0
-	application, err := New(context.Background(), Options{
+	application := mustNewApp(t, Options{
 		InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{},
 		Clients: sendFakeClients(created),
 		Verify: func(context.Context, *config.Snapshot, ClientSet) error {
@@ -202,18 +204,13 @@ func TestReloadCannotPublishAfterConcurrentClose(t *testing.T) {
 			return nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	initialClients := <-created
 	reloaded := make(chan error, 1)
 	go func() { reloaded <- application.Reload(context.Background(), exampleConfig(t)) }()
 	replacementClients := <-created
 	<-verificationStarted
 
-	if err := application.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustCloseApp(t, application)
 	if current := application.Current(); current != nil {
 		t.Fatal("Close left an active snapshot")
 	}
@@ -224,9 +221,7 @@ func TestReloadCannotPublishAfterConcurrentClose(t *testing.T) {
 	if current := application.Current(); current != nil {
 		t.Fatal("reload resurrected the application after Close")
 	}
-	if err := application.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustCloseApp(t, application)
 	if initialClients.Count() != 1 || replacementClients.Count() != 1 {
 		t.Fatalf("closed counts = %d, %d; want one each", initialClients.Count(), replacementClients.Count())
 	}
@@ -252,16 +247,13 @@ func TestInitialDependencyVerificationFailureClosesClients(t *testing.T) {
 }
 
 func TestReloadFileRejectsOversizedReplacementWithoutPublishingIt(t *testing.T) {
-	application, err := New(context.Background(), Options{InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	application := mustNewApp(t, Options{InitialConfig: exampleConfig(t), Builder: SnapshotBuilder{}})
 	before := application.Current().Config.ConfigVersion()
 	path := filepath.Join(t.TempDir(), "oversized.yaml")
 	if err := os.WriteFile(path, make([]byte, maxReloadFileBytes+1), 0600); err != nil {
 		t.Fatal(err)
 	}
-	err = application.ReloadFile(context.Background(), path)
+	err := application.ReloadFile(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "exceeds safe size") {
 		t.Fatalf("reload error = %v", err)
 	}
@@ -272,13 +264,10 @@ func TestReloadFileRejectsOversizedReplacementWithoutPublishingIt(t *testing.T) 
 
 func TestAcquireDuringRepeatedReloadKeepsClientsAlive(t *testing.T) {
 	initial := exampleConfig(t)
-	application, err := New(context.Background(), Options{
+	application := mustNewApp(t, Options{
 		InitialConfig: initial, Builder: SnapshotBuilder{},
 		Clients: func(context.Context, *config.Snapshot) (ClientSet, error) { return &fakeClients{}, nil },
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer func() {
 		if err := application.Close(context.Background()); err != nil {
 			t.Error(err)
@@ -329,9 +318,7 @@ func TestAcquireDuringRepeatedReloadKeepsClientsAlive(t *testing.T) {
 		t.Fatal(err)
 	default:
 	}
-	if err := application.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	mustCloseApp(t, application)
 	if lease, err := application.Acquire(); err == nil {
 		lease.Release()
 		t.Fatal("acquired after close")

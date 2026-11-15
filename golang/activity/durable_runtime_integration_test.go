@@ -26,50 +26,7 @@ func TestDurableV1RuntimeGenerateActivityRunsEveryPhaseInOrder(t *testing.T) {
 		OperationID: "operation-id", GenerationID: "generation-id",
 		RouteID: "route", EndpointID: "endpoint", Provider: "provider", Model: "model",
 	}
-	reservation := durableTestReservation(route)
-	ports := durable.GeneratePorts{
-		Replay: func(context.Context, llm.GenerateRequestV1) (durable.GenerateReplay, error) {
-			events = append(events, "replay")
-			return durable.GenerateReplay{}, nil
-		},
-		CacheLookup: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (durable.CacheDecision, error) {
-			events = append(events, "cache")
-			return durable.CacheDecision{Disposition: durable.CacheMiss}, nil
-		},
-		CompactionDecision: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CacheDecision) (durable.CompactionDecision, error) {
-			events = append(events, "compaction")
-			return durable.CompactionDecision{}, nil
-		},
-		Route: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CompactionDecision) (durable.RoutePlan, error) {
-			events = append(events, "route")
-			return route, nil
-		},
-		Reserve: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
-			events = append(events, "reserve")
-			return reservation, nil
-		},
-		Claim: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
-			events = append(events, "claim")
-			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation"}, nil
-		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
-			events = append(events, "dispatch")
-			return durable.DispatchResult{}, nil
-		},
-		Finalize: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ReserveResult, durable.DispatchResult) (durable.GenerateFinalization, error) {
-			events = append(events, "finalize")
-			return durable.GenerateFinalization{Response: durableGenerateResponse(request)}, nil
-		},
-		FinalizeCache: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CacheDecision) (durable.GenerateFinalization, error) {
-			events = append(events, "cache-finalize")
-			return durable.GenerateFinalization{}, nil
-		},
-		Reconcile: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult, durable.GenerateFinalization) error {
-			events = append(events, "reconcile")
-			return nil
-		},
-	}
-	runtime := &DurableV1Runtime{Generate: ports}
+	runtime := &DurableV1Runtime{Generate: recordingGeneratePorts(&events, request, route)}
 	response, err := (&Activities{V1Runtime: runtime}).GenerateV1(context.Background(), request)
 	if err != nil {
 		t.Fatalf("GenerateV1 error = %v", err)
@@ -90,46 +47,7 @@ func TestDurableV1RuntimeCompactActivityUsesDistinctCompactionPath(t *testing.T)
 		OperationID: "compact-operation", GenerationID: "compact-generation",
 		RouteID: "compact-route", EndpointID: "compact-endpoint", Provider: "provider", Model: "model",
 	}
-	reservation := durableTestReservation(route)
-	ports := durable.CompactPorts{
-		Replay: func(context.Context, llm.CompactRequestV1) (durable.CompactReplay, error) {
-			events = append(events, "replay")
-			return durable.CompactReplay{State: durableTestMaterializedState(request)}, nil
-		},
-		CacheLookup: func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.CompactCacheDecision, error) {
-			events = append(events, "cache")
-			return durable.CompactCacheDecision{Disposition: durable.CacheMiss}, nil
-		},
-		Route: func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.RoutePlan, error) {
-			events = append(events, "route")
-			return route, nil
-		},
-		Reserve: func(context.Context, llm.CompactRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
-			events = append(events, "reserve")
-			return reservation, nil
-		},
-		Claim: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
-			events = append(events, "claim")
-			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation"}, nil
-		},
-		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.CompactDispatchResult, error) {
-			events = append(events, "dispatch")
-			return durable.CompactDispatchResult{}, nil
-		},
-		Finalize: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ReserveResult, durable.CompactDispatchResult) (durable.CompactFinalization, error) {
-			events = append(events, "finalize")
-			return durable.CompactFinalization{Response: durableCompactResponse(request)}, nil
-		},
-		FinalizeCache: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.CompactCacheDecision) (durable.CompactFinalization, error) {
-			events = append(events, "cache-finalize")
-			return durable.CompactFinalization{}, nil
-		},
-		Reconcile: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult, durable.CompactFinalization) error {
-			events = append(events, "reconcile")
-			return nil
-		},
-	}
-	runtime := &DurableV1Runtime{Compact: ports}
+	runtime := &DurableV1Runtime{Compact: recordingCompactPorts(&events, request, route)}
 	response, err := (&Activities{V1Runtime: runtime}).CompactV1(context.Background(), request)
 	if err != nil {
 		t.Fatalf("CompactV1 error = %v", err)
@@ -140,6 +58,100 @@ func TestDurableV1RuntimeCompactActivityUsesDistinctCompactionPath(t *testing.T)
 	want := []string{"replay", "cache", "route", "reserve", "claim", "dispatch", "finalize", "reconcile"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("CompactV1 phase order = %v, want %v", events, want)
+	}
+}
+
+// recordingGeneratePorts is a complete Generate port set whose callbacks
+// append their phase name to events; Finalize answers request on route.
+func recordingGeneratePorts(events *[]string, request llm.GenerateRequestV1, route durable.RoutePlan) durable.GeneratePorts {
+	record := func(phase string) { *events = append(*events, phase) }
+	reservation := durableTestReservation(route)
+	return durable.GeneratePorts{
+		Replay: func(context.Context, llm.GenerateRequestV1) (durable.GenerateReplay, error) {
+			record("replay")
+			return durable.GenerateReplay{}, nil
+		},
+		CacheLookup: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (durable.CacheDecision, error) {
+			record("cache")
+			return durable.CacheDecision{Disposition: durable.CacheMiss}, nil
+		},
+		CompactionDecision: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CacheDecision) (durable.CompactionDecision, error) {
+			record("compaction")
+			return durable.CompactionDecision{}, nil
+		},
+		Route: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CompactionDecision) (durable.RoutePlan, error) {
+			record("route")
+			return route, nil
+		},
+		Reserve: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
+			record("reserve")
+			return reservation, nil
+		},
+		Claim: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			record("claim")
+			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation"}, nil
+		},
+		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
+			record("dispatch")
+			return durable.DispatchResult{}, nil
+		},
+		Finalize: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ReserveResult, durable.DispatchResult) (durable.GenerateFinalization, error) {
+			record("finalize")
+			return durable.GenerateFinalization{Response: durableGenerateResponse(request)}, nil
+		},
+		FinalizeCache: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CacheDecision) (durable.GenerateFinalization, error) {
+			record("cache-finalize")
+			return durable.GenerateFinalization{}, nil
+		},
+		Reconcile: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult, durable.GenerateFinalization) error {
+			record("reconcile")
+			return nil
+		},
+	}
+}
+
+// recordingCompactPorts is a complete Compact port set whose callbacks append
+// their phase name to events; Finalize answers request on route.
+func recordingCompactPorts(events *[]string, request llm.CompactRequestV1, route durable.RoutePlan) durable.CompactPorts {
+	record := func(phase string) { *events = append(*events, phase) }
+	reservation := durableTestReservation(route)
+	return durable.CompactPorts{
+		Replay: func(context.Context, llm.CompactRequestV1) (durable.CompactReplay, error) {
+			record("replay")
+			return durable.CompactReplay{State: durableTestMaterializedState(request)}, nil
+		},
+		CacheLookup: func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.CompactCacheDecision, error) {
+			record("cache")
+			return durable.CompactCacheDecision{Disposition: durable.CacheMiss}, nil
+		},
+		Route: func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.RoutePlan, error) {
+			record("route")
+			return route, nil
+		},
+		Reserve: func(context.Context, llm.CompactRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
+			record("reserve")
+			return reservation, nil
+		},
+		Claim: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
+			record("claim")
+			return durable.ClaimReceipt{OperationID: route.OperationID, GenerationID: route.GenerationID, IncarnationID: "incarnation"}, nil
+		},
+		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.CompactDispatchResult, error) {
+			record("dispatch")
+			return durable.CompactDispatchResult{}, nil
+		},
+		Finalize: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ReserveResult, durable.CompactDispatchResult) (durable.CompactFinalization, error) {
+			record("finalize")
+			return durable.CompactFinalization{Response: durableCompactResponse(request)}, nil
+		},
+		FinalizeCache: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.CompactCacheDecision) (durable.CompactFinalization, error) {
+			record("cache-finalize")
+			return durable.CompactFinalization{}, nil
+		},
+		Reconcile: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult, durable.CompactFinalization) error {
+			record("reconcile")
+			return nil
+		},
 	}
 }
 
@@ -155,21 +167,12 @@ func durableTestReservation(route durable.RoutePlan) durable.ReserveResult {
 }
 
 func durableGenerateResponse(request llm.GenerateRequestV1) llm.GenerateResponseV1 {
-	return llm.GenerateResponseV1{
-		APIVersion: llm.APIVersion, OperationKey: request.OperationKey, OperationID: "operation-id", Status: llm.ResponseStatusCompleted,
-		Output:     []llm.Item{llm.ModelText("ok")},
-		Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint", Kind: "generation"},
-		Cache:      llm.CacheDispositionV1{Disposition: "disabled"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-	}
+	return completedGenerateResponseV1(request.OperationKey, "operation-id", llm.CheckpointMetadata{Handle: "checkpoint", Kind: "generation"}, "disabled")
 }
 
 func durableCompactResponse(request llm.CompactRequestV1) llm.CompactResponseV1 {
 	parent := request.Parent
-	return llm.CompactResponseV1{
-		APIVersion: llm.CompactAPIVersion, OperationKey: request.OperationKey, OperationID: "compact-operation",
-		Checkpoint: llm.CheckpointMetadata{Handle: "compacted", Parent: &parent, Kind: "compaction"},
-		Cache:      llm.CacheDispositionV1{Disposition: "miss_populated"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-	}
+	return compactResponseV1(request.OperationKey, "compact-operation", llm.CheckpointMetadata{Handle: "compacted", Parent: &parent, Kind: "compaction"}, "miss_populated")
 }
 
 func durableTestMaterializedState(request llm.CompactRequestV1) state.MaterializedState {

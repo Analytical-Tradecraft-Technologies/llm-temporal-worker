@@ -444,14 +444,10 @@ func TestV1OCamlEncodingsMatchSchemaAndCodec(t *testing.T) {
 func TestV1SchemasShareDefinitions(t *testing.T) {
 	definitions := func(name string) map[string]any {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
-		if err != nil {
-			t.Fatal(err)
-		}
 		var document struct {
 			Defs map[string]any `json:"$defs"`
 		}
-		if err := json.Unmarshal(data, &document); err != nil {
+		if err := json.Unmarshal(readV1SchemaFile(t, name), &document); err != nil {
 			t.Fatal(err)
 		}
 		return document.Defs
@@ -506,11 +502,7 @@ func compileV1ExecutionSchema(t *testing.T, name string) func([]byte) error {
 	compiler := jsonschema.NewCompiler()
 	var target string
 	for _, resource := range []string{"generate-request", "compact-request", "generate-response", "compact-response", "prepare-execution", "execution-result"} {
-		data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", resource+".schema.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(data))
+		document, err := jsonschema.UnmarshalJSON(bytes.NewReader(readV1SchemaFile(t, resource+".schema.json")))
 		if err != nil {
 			t.Fatal(err)
 		}

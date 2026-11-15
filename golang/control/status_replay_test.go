@@ -15,21 +15,22 @@ func persistedEvent(t *testing.T, id int64, value StatusObservation) PersistedSt
 	return PersistedStatusEvent{EventID: id, Event: event}
 }
 
+// replayInput returns a replay of events for the test route under digest(1).
+func replayInput(horizon time.Time, complete bool, events ...PersistedStatusEvent) StatusReplayInput {
+	return StatusReplayInput{ConfigDigest: digest(1), RouteID: "route", Horizon: horizon, Complete: complete, Events: events}
+}
+
 func TestReplayRouteStatusUsesLedgerOrderAndHorizonCoverage(t *testing.T) {
 	base := time.Unix(100, 0).UTC()
-	incident := observation(base.Add(20 * time.Second))
-	incident.Source, incident.Credit, incident.Billing, incident.ProviderCode = SourceManagementAPI, CreditExhausted, BillingIssue, "insufficient_quota"
+	incident := creditIncident(base.Add(20 * time.Second))
 	stale := observation(base.Add(10 * time.Second))
 	later := observation(base.Add(40 * time.Second))
 
-	result, err := ReplayRouteStatus(StatusReplayInput{
-		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(30 * time.Second), Complete: false,
-		Events: []PersistedStatusEvent{
-			persistedEvent(t, 10, incident),
-			persistedEvent(t, 11, stale),
-			persistedEvent(t, 12, later),
-		},
-	})
+	result, err := ReplayRouteStatus(replayInput(base.Add(30*time.Second), false,
+		persistedEvent(t, 10, incident),
+		persistedEvent(t, 11, stale),
+		persistedEvent(t, 12, later),
+	))
 	if err != nil {
 		t.Fatalf("ReplayRouteStatus: %v", err)
 	}
@@ -50,15 +51,11 @@ func TestReplayRouteStatusUsesLedgerOrderAndHorizonCoverage(t *testing.T) {
 
 func TestReplayRouteStatusAllowsEpochTransition(t *testing.T) {
 	base := time.Unix(200, 0).UTC()
-	incident := observation(base)
-	incident.Source, incident.Credit, incident.Billing, incident.ProviderCode = SourceManagementAPI, CreditExhausted, BillingIssue, "insufficient_quota"
+	incident := creditIncident(base)
 	nextEpoch := observation(base.Add(time.Second))
 	nextEpoch.ConfigEpoch = "epoch-2"
 
-	result, err := ReplayRouteStatus(StatusReplayInput{
-		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Complete: true,
-		Events: []PersistedStatusEvent{persistedEvent(t, 1, incident), persistedEvent(t, 2, nextEpoch)},
-	})
+	result, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), true, persistedEvent(t, 1, incident), persistedEvent(t, 2, nextEpoch)))
 	if err != nil {
 		t.Fatalf("ReplayRouteStatus: %v", err)
 	}
@@ -73,10 +70,7 @@ func TestReplayRouteStatusAllowsEpochTransition(t *testing.T) {
 func TestReplayRouteStatusIncludesEventAtHorizon(t *testing.T) {
 	horizon := time.Unix(250, 0).UTC()
 	value := observation(horizon)
-	result, err := ReplayRouteStatus(StatusReplayInput{
-		ConfigDigest: digest(1), RouteID: "route", Horizon: horizon, Complete: true,
-		Events: []PersistedStatusEvent{persistedEvent(t, 1, value)},
-	})
+	result, err := ReplayRouteStatus(replayInput(horizon, true, persistedEvent(t, 1, value)))
 	if err != nil {
 		t.Fatalf("ReplayRouteStatus: %v", err)
 	}
@@ -105,10 +99,7 @@ func TestReplayRouteStatusRejectsMixedKeysWithoutApplying(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			event := persistedEvent(t, 1, test.value)
-			result, err := ReplayRouteStatus(StatusReplayInput{
-				ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Complete: true,
-				Events: []PersistedStatusEvent{event},
-			})
+			result, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), true, event))
 			if !errors.Is(err, ErrStatusReplayKey) {
 				t.Fatalf("error = %v, want ErrStatusReplayKey", err)
 			}
@@ -125,9 +116,7 @@ func TestReplayRouteStatusRejectsNonascendingEventIDs(t *testing.T) {
 		persistedEvent(t, 2, observation(base)),
 		persistedEvent(t, 1, observation(base.Add(time.Second))),
 	}
-	_, err := ReplayRouteStatus(StatusReplayInput{
-		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Events: events,
-	})
+	_, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), false, events...))
 	if !errors.Is(err, ErrStatusReplayOrder) {
 		t.Fatalf("error = %v, want ErrStatusReplayOrder", err)
 	}
@@ -137,9 +126,7 @@ func TestReplayRouteStatusRejectsMissingDigest(t *testing.T) {
 	base := time.Unix(500, 0).UTC()
 	event := persistedEvent(t, 1, observation(base))
 	event.Event.EventDigest = [32]byte{}
-	_, err := ReplayRouteStatus(StatusReplayInput{
-		ConfigDigest: digest(1), RouteID: "route", Horizon: base.Add(time.Minute), Events: []PersistedStatusEvent{event},
-	})
+	_, err := ReplayRouteStatus(replayInput(base.Add(time.Minute), false, event))
 	if !errors.Is(err, ErrStatusReplayEvent) {
 		t.Fatalf("error = %v, want ErrStatusReplayEvent for missing digest", err)
 	}
@@ -151,10 +138,7 @@ func TestReplayRouteStatusAcceptsMicrosecondRoundedTimestamps(t *testing.T) {
 	event := persistedEvent(t, 1, original)
 	event.Event.ObservedAt = event.Event.ObservedAt.Round(time.Microsecond)
 	event.Event.ExpiresAt = event.Event.ExpiresAt.Round(time.Microsecond)
-	result, err := ReplayRouteStatus(StatusReplayInput{
-		ConfigDigest: digest(1), RouteID: "route", Horizon: event.Event.ObservedAt, Complete: true,
-		Events: []PersistedStatusEvent{event},
-	})
+	result, err := ReplayRouteStatus(replayInput(event.Event.ObservedAt, true, event))
 	if err != nil {
 		t.Fatalf("rounded persisted event rejected: %v", err)
 	}

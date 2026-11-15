@@ -1,7 +1,6 @@
 package llm_test
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -15,10 +14,7 @@ func TestCostExactUSDJSONPreservesUnknownAndKnownFree(t *testing.T) {
 	if string(encoded) != `{"actual_cost_usd":"0.000000000000000000","catalog_version":"","cost_status":"known","method":"catalog_usage","reserved_cost_usd":"0.000000000000000000"}` {
 		t.Fatalf("exact cost JSON = %s", encoded)
 	}
-	var decoded llm.Cost
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
+	decoded := mustUnmarshal[llm.Cost](t, encoded, "decode known cost")
 	if decoded.ActualCostUSD == nil || !decoded.ActualCostUSD.IsZero() || decoded.ReservedCostUSD == nil || !decoded.ReservedCostUSD.IsZero() {
 		t.Fatalf("known zero cost did not round trip: %#v", decoded)
 	}
@@ -27,10 +23,7 @@ func TestCostExactUSDJSONPreservesUnknownAndKnownFree(t *testing.T) {
 	if string(unknownJSON) != `{"actual_cost_usd":null,"catalog_version":"","cost_status":"unknown","method":"","reserved_cost_usd":null}` {
 		t.Fatalf("unknown cost JSON = %s", unknownJSON)
 	}
-	var unknownDecoded llm.Cost
-	if err := json.Unmarshal(unknownJSON, &unknownDecoded); err != nil {
-		t.Fatal(err)
-	}
+	unknownDecoded := mustUnmarshal[llm.Cost](t, unknownJSON, "decode unknown cost")
 	if unknownDecoded.ReservedCostUSD != nil || unknownDecoded.ActualCostUSD != nil {
 		t.Fatalf("unknown cost was coalesced to zero: %s", unknownJSON)
 	}

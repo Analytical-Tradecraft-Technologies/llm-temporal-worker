@@ -11,10 +11,7 @@ import (
 
 func TestCompileAndSnapshotSourceAreAtomicAndRedacted(t *testing.T) {
 	data := exampleYAML(t)
-	first, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustCompile(t, data)
 	if len(first.ConfigVersion()) != 64 || first.APIVersion() != config.APIVersion {
 		t.Fatalf("snapshot identity = %q, %q", first.ConfigVersion(), first.APIVersion())
 	}
@@ -30,9 +27,7 @@ func TestCompileAndSnapshotSourceAreAtomicAndRedacted(t *testing.T) {
 		t.Fatal("invalid reload replaced the prior snapshot")
 	}
 	copyOfConfig := first.Config()
-	endpoint := copyOfConfig.Endpoints["openai-prod"]
-	endpoint.ServiceClasses = nil
-	copyOfConfig.Endpoints["openai-prod"] = endpoint
+	editEndpoint(&copyOfConfig, "openai-prod", func(endpoint *config.EndpointConfig) { endpoint.ServiceClasses = nil })
 	if len(first.Config().Endpoints["openai-prod"].ServiceClasses) != 3 {
 		t.Fatal("snapshot configuration was mutable through Config copy")
 	}

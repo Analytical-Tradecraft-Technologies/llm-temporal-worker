@@ -71,11 +71,7 @@ func TestCeilMicroUSDExact(t *testing.T) {
 		{"0.0000000001", 3, 1},
 	}
 	for _, test := range tests {
-		price, err := ParseDecimalUSD(test.price)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := CeilMicroUSD(price, test.units, 1)
+		got, err := CeilMicroUSD(mustDecimalUSD(t, test.price), test.units, 1)
 		if err != nil || got != test.want {
 			t.Fatalf("%s * %d = %d, want %d (err=%v)", test.price, test.units, got, test.want, err)
 		}

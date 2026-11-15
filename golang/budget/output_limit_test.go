@@ -20,10 +20,7 @@ func TestPreparedOutputLimitMatchesEstimate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			estimate, err := estimator.EstimateCandidate(request, routing.Candidate{}, pricing.Entry{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			estimate := mustEstimateCandidate(t, estimator, request, routing.Candidate{}, pricing.Entry{})
 			want := configured
 			if want == 0 {
 				want = 1000

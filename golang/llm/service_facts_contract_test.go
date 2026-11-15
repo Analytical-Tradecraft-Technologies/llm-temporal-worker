@@ -15,10 +15,7 @@ func TestGenerateResponseV1RequiresServiceFallbackIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var valid GenerateResponseV1
-	if err := json.Unmarshal(data, &valid); err != nil {
-		t.Fatalf("decode fixture: %v", err)
-	}
+	mustUnmarshalJSON[GenerateResponseV1](t, data, "decode fixture")
 	missing := bytes.Replace(data, []byte(`, "fallback_index": 0}`), []byte(`}`), 1)
 	if bytes.Equal(missing, data) {
 		t.Fatal("fixture no longer contains the service fallback_index")

@@ -14,43 +14,18 @@ import (
 
 func TestV1GenerateAndCompactFixturesRoundTrip(t *testing.T) {
 	for _, name := range []string{"generate-root.json", "generate-delta.json", "generate-cache-any-age.json"} {
-		data := readV1Fixture(t, name)
-		var request llm.GenerateRequestV1
-		if err := json.Unmarshal(data, &request); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
+		request := mustUnmarshal[llm.GenerateRequestV1](t, readV1Fixture(t, name), name)
 		encoded, err := json.Marshal(request)
 		if err != nil {
 			t.Fatalf("%s marshal: %v", name, err)
 		}
-		var again llm.GenerateRequestV1
-		if err := json.Unmarshal(encoded, &again); err != nil {
-			t.Fatalf("%s second decode: %v", name, err)
-		}
+		mustUnmarshal[llm.GenerateRequestV1](t, encoded, name+" second decode")
 		if string(encoded) != string(mustCanonicalJSON(t, encoded)) {
 			t.Fatalf("%s was not deterministic", name)
 		}
 	}
-	for _, name := range []string{"generate-response.json", "compact-response.json"} {
-		data := readV1Fixture(t, name)
-		if name == "generate-response.json" {
-			var value llm.GenerateResponseV1
-			if err := json.Unmarshal(data, &value); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := json.Marshal(value); err != nil {
-				t.Fatal(err)
-			}
-		} else {
-			var value llm.CompactResponseV1
-			if err := json.Unmarshal(data, &value); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := json.Marshal(value); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
+	mustMarshal(t, mustUnmarshal[llm.GenerateResponseV1](t, readV1Fixture(t, "generate-response.json"), "generate-response.json"))
+	mustMarshal(t, mustUnmarshal[llm.CompactResponseV1](t, readV1Fixture(t, "compact-response.json"), "compact-response.json"))
 }
 
 func TestV1RequestContextRejectsTags(t *testing.T) {
@@ -182,10 +157,7 @@ func TestCompactV1RequestContextRejectsMissingOrEmptyMembers(t *testing.T) {
 // its settings_patch (#1348).
 func TestCompactV1SummarizerOverrides(t *testing.T) {
 	const prefix = `{"api_version":"llm.temporal/compact/v1","operation_key":"compact","context":{"tenant":"tenant","project":"project","actor":"actor"},"parent":"ckp_v1.parent"`
-	var request llm.CompactRequestV1
-	if err := json.Unmarshal([]byte(prefix+`,"model":"alias2","service_class":"priority"}`), &request); err != nil {
-		t.Fatal(err)
-	}
+	request := mustUnmarshal[llm.CompactRequestV1](t, []byte(prefix+`,"model":"alias2","service_class":"priority"}`), "decode overrides")
 	if request.Model != "alias2" || request.ServiceClass != llm.ServiceClassPriority {
 		t.Fatalf("decoded overrides = %q/%q", request.Model, request.ServiceClass)
 	}
@@ -194,13 +166,9 @@ func TestCompactV1SummarizerOverrides(t *testing.T) {
 		t.Fatalf("encoded = %s, %v", encoded, err)
 	}
 	long := strings.Repeat("é", llm.MaxCompactModelLengthV1)
-	if err := json.Unmarshal([]byte(prefix+`,"model":"`+long+`"}`), new(llm.CompactRequestV1)); err != nil {
-		t.Fatalf("a %d code point model was rejected: %v", llm.MaxCompactModelLengthV1, err)
-	}
+	mustUnmarshal[llm.CompactRequestV1](t, []byte(prefix+`,"model":"`+long+`"}`), fmt.Sprintf("a %d code point model was rejected", llm.MaxCompactModelLengthV1))
 	for _, field := range []string{`"model":""`, `"model":1`, `"model":"` + long + `x"`, `"service_class":"turbo"`} {
-		if err := json.Unmarshal([]byte(prefix+","+field+"}"), new(llm.CompactRequestV1)); err == nil {
-			t.Fatalf("%s was accepted", field)
-		}
+		requireUnmarshalRejected[llm.CompactRequestV1](t, []byte(prefix+","+field+"}"), "%s was accepted", field)
 	}
 	request.ServiceClass = "turbo"
 	if _, err := request.MarshalJSON(); err == nil {
@@ -231,42 +199,21 @@ func TestCompactV1SummarizerOverrides(t *testing.T) {
 }
 
 func TestV1RejectsUnknownTranscriptAndMismatchedQueryResult(t *testing.T) {
-	var request llm.GenerateRequestV1
-	if err := json.Unmarshal(readV1Fixture(t, "negative-unknown-field.json"), &request); err == nil {
-		t.Fatal("unknown transcript field was accepted")
-	}
+	requireUnmarshalRejected[llm.GenerateRequestV1](t, readV1Fixture(t, "negative-unknown-field.json"), "unknown transcript field was accepted")
 	query := llm.QueryResponseV1{OperationKey: "q", QueryExecutionID: "id", Kind: llm.QueryProviderStatus, Result: llm.SpendSummary{}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "control_query_zero"}}
 	if _, err := json.Marshal(query); err == nil {
 		t.Fatal("mismatched query result was accepted")
 	}
-	var queryRequest llm.QueryRequestV1
-	unknown := []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"provider_status","query":{"page_size":1001}}`)
-	if err := json.Unmarshal(unknown, &queryRequest); err == nil {
-		t.Fatal("oversized query page accepted")
-	}
-	unknown = []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"provider_status","query":{"unknown":true}}`)
-	if err := json.Unmarshal(unknown, &queryRequest); err == nil {
-		t.Fatal("unknown query field accepted")
-	}
-	unknown = []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p"},"kind":"provider_status","query":{}}`)
-	if err := json.Unmarshal(unknown, &queryRequest); err == nil {
-		t.Fatal("incomplete query context accepted")
-	}
+	requireUnmarshalRejected[llm.QueryRequestV1](t, queryRequestPayload("provider_status", `{"page_size":1001}`), "oversized query page accepted")
+	requireUnmarshalRejected[llm.QueryRequestV1](t, queryRequestPayload("provider_status", `{"unknown":true}`), "unknown query field accepted")
+	requireUnmarshalRejected[llm.QueryRequestV1](t, []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p"},"kind":"provider_status","query":{}}`), "incomplete query context accepted")
 }
 
 func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
 	value := mustMarshal(t, llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("10.500000000000"), Method: "provider_reported"})
-	if !bytes.Contains(value, []byte(`"actual_cost_usd":"10.5"`)) {
-		t.Fatalf("cost was not canonicalized: %s", value)
-	}
-	var cost llm.CostV1
-	if err := json.Unmarshal([]byte(`{"status":"exact","actual_cost_usd":"0.1000","method":"provider_reported"}`), &cost); err != nil {
-		t.Fatal(err)
-	}
-	value, err := json.Marshal(cost)
-	if err != nil || !bytes.Contains(value, []byte(`"actual_cost_usd":"0.1"`)) {
-		t.Fatalf("round-trip cost was not canonicalized: %s (%v)", value, err)
-	}
+	requireEncodedContains(t, value, `"actual_cost_usd":"10.5"`, "cost was not canonicalized")
+	cost := mustUnmarshal[llm.CostV1](t, []byte(`{"status":"exact","actual_cost_usd":"0.1000","method":"provider_reported"}`), "decode cost")
+	requireEncodedContains(t, mustMarshal(t, cost), `"actual_cost_usd":"0.1"`, "round-trip cost was not canonicalized")
 	if _, err := json.Marshal(llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "estimate"}); err == nil {
 		t.Fatal("unknown exact cost method accepted")
 	}
@@ -274,19 +221,12 @@ func TestV1CostCanonicalizationAndVariantFields(t *testing.T) {
 		t.Fatal("unknown cost with catalog version accepted")
 	}
 	request := llm.GenerateRequestV1{OperationKey: "nil-arrays", Context: llm.RequestContext{Tenant: "t", Project: "p", Actor: "a"}}
-	value, err = json.Marshal(request)
-	if err != nil || !bytes.Contains(value, []byte(`"append":[]`)) {
-		t.Fatalf("nil append was not normalized: %s (%v)", value, err)
-	}
+	requireEncodedContains(t, mustMarshal(t, request), `"append":[]`, "nil append was not normalized")
 	response := llm.GenerateResponseV1{OperationKey: "nil-output", OperationID: "id", Status: llm.ResponseStatusCompleted, Checkpoint: llm.CheckpointMetadata{Handle: "ckp_v1.nil", Kind: "generation", Depth: 0}, Cache: llm.CacheDispositionV1{Disposition: "disabled"}, Cost: llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"}}
-	value, err = json.Marshal(response)
-	if err != nil || !bytes.Contains(value, []byte(`"output":[]`)) {
-		t.Fatalf("nil output was not normalized: %s (%v)", value, err)
-	}
+	requireEncodedContains(t, mustMarshal(t, response), `"output":[]`, "nil output was not normalized")
 }
 
 func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
-	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"provider_status","query":%s}`
 	for _, test := range []struct {
 		name  string
 		query string
@@ -301,20 +241,14 @@ func TestQueryContractRejectsUnknownEnumsAndMalformedTimes(t *testing.T) {
 		{name: "duplicate operation kind", query: `{"start_time":"2026-07-18T00:00:00Z","end_time":"2026-07-19T00:00:00Z","operation_kinds":["query","query"]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			payload := fmt.Sprintf(base, test.query)
-			if test.name == "availability" || test.name == "lifecycle" {
-				kind := "provider_status"
-				if test.name == "lifecycle" {
-					kind = "model_inventory"
-				}
-				payload = fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":%q,"query":%s}`, kind, test.query)
-			} else {
-				payload = fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":"spend_summary","query":%s}`, test.query)
+			kind := "spend_summary"
+			switch test.name {
+			case "availability":
+				kind = "provider_status"
+			case "lifecycle":
+				kind = "model_inventory"
 			}
-			var request llm.QueryRequestV1
-			if err := json.Unmarshal([]byte(payload), &request); err == nil {
-				t.Fatalf("invalid query %s was accepted", test.name)
-			}
+			requireUnmarshalRejected[llm.QueryRequestV1](t, queryRequestPayload(kind, test.query), "invalid query %s was accepted", test.name)
 		})
 	}
 
@@ -369,11 +303,7 @@ func TestQueryContractRejectsNullOptionalStrings(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			payload := fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":%q,"query":%s}`, test.kind, test.query)
-			var request llm.QueryRequestV1
-			if err := json.Unmarshal([]byte(payload), &request); err == nil {
-				t.Fatalf("query with null optional string was accepted: %s", test.query)
-			}
+			requireUnmarshalRejected[llm.QueryRequestV1](t, queryRequestPayload(test.kind, test.query), "query with null optional string was accepted: %s", test.query)
 		})
 	}
 }
@@ -448,36 +378,34 @@ func TestQueryResponseV1RequiresExplicitActualCost(t *testing.T) {
 	})
 
 	t.Run("explicit null unknown actual cost", func(t *testing.T) {
-		var response llm.QueryResponseV1
-		if err := json.Unmarshal(unknownPayload(`,"actual_cost_usd":null`), &response); err != nil {
-			t.Fatalf("explicit null actual_cost_usd was rejected: %v", err)
-		}
+		mustUnmarshal[llm.QueryResponseV1](t, unknownPayload(`,"actual_cost_usd":null`), "explicit null actual_cost_usd was rejected")
 	})
 
 	t.Run("unknown marshal emits null actual cost", func(t *testing.T) {
 		response := validQueryResponse(llm.QueryProviderStatus)
 		response.Cost = llm.CostV1{Status: "unknown", UnknownReason: "state_unavailable"}
-		encoded := mustMarshal(t, response)
-		if !bytes.Contains(encoded, []byte(`"actual_cost_usd":null`)) {
-			t.Fatalf("unknown query response omitted explicit null actual cost: %s", encoded)
-		}
+		requireEncodedContains(t, mustMarshal(t, response), `"actual_cost_usd":null`, "unknown query response omitted explicit null actual cost")
 	})
 
 	t.Run("exact actual cost remains canonical", func(t *testing.T) {
 		payload := []byte(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":{"routes":[]},"cost_status":"exact","actual_cost_usd":"0.1000","cost_method":"provider_reported"}`)
-		var response llm.QueryResponseV1
-		if err := json.Unmarshal(payload, &response); err != nil {
-			t.Fatalf("exact actual cost was rejected: %v", err)
-		}
-		encoded := mustMarshal(t, response)
-		if !bytes.Contains(encoded, []byte(`"actual_cost_usd":"0.1"`)) {
-			t.Fatalf("exact actual cost was not canonicalized: %s", encoded)
-		}
+		response := mustUnmarshal[llm.QueryResponseV1](t, payload, "exact actual cost was rejected")
+		requireEncodedContains(t, mustMarshal(t, response), `"actual_cost_usd":"0.1"`, "exact actual cost was not canonicalized")
 	})
 }
 
+// queryRequestPayload is a v1 query request of kind with the given query JSON.
+func queryRequestPayload(kind, query string) []byte {
+	return []byte(fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","context":{"tenant":"t","project":"p","actor":"a"},"kind":%q,"query":%s}`, kind, query))
+}
+
+// queryResponsePayload is a complete, persisted, zero-cost v1 query response
+// of kind with the given result JSON.
+func queryResponsePayload(kind, result string) []byte {
+	return []byte(fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":%q,"observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`, kind, result))
+}
+
 func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
-	base := `{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":"provider_status","observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`
 	for _, test := range []struct {
 		name   string
 		result string
@@ -488,10 +416,7 @@ func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
 		{name: "null route row", result: `{"routes":[null]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			var response llm.QueryResponseV1
-			if err := json.Unmarshal([]byte(fmt.Sprintf(base, test.result)), &response); err == nil {
-				t.Fatalf("invalid query result %s was accepted", test.name)
-			}
+			requireUnmarshalRejected[llm.QueryResponseV1](t, queryResponsePayload("provider_status", test.result), "invalid query result %s was accepted", test.name)
 		})
 	}
 	response := llm.QueryResponseV1{
@@ -512,21 +437,14 @@ func TestQueryResultBoundaryRejectsOpenNestedRows(t *testing.T) {
 		{name: "spend unknown page field", kind: "spend_summary", result: `{"start_time":"2026-07-18T00:00:00Z","end_time":"2026-07-19T00:00:00Z","buckets":[],"unexpected":true}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			payload := fmt.Sprintf(`{"api_version":"llm.temporal/query/v1","operation_key":"q","query_execution_id":"query-id","kind":%q,"observed_at":"2026-07-19T00:00:00Z","source":"persisted","freshness":"current","complete":true,"result":%s,"cost_status":"exact","actual_cost_usd":"0","cost_method":"control_query_zero"}`, test.kind, test.result)
-			var response llm.QueryResponseV1
-			if err := json.Unmarshal([]byte(payload), &response); err == nil {
-				t.Fatalf("invalid query result %s was accepted", test.name)
-			}
+			requireUnmarshalRejected[llm.QueryResponseV1](t, queryResponsePayload(test.kind, test.result), "invalid query result %s was accepted", test.name)
 		})
 	}
 }
 
 func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 	requestData := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"instructions":{"set":[{"kind":"parts","content":[{"kind":"text","text":"hello"}]}]},"tools":{"set":[{"name":"lookup","description":"lookup data","input_schema":{"type":"object"}}]},"output":{"set":{"max_tokens":32,"format":{"kind":"text"}}}}}`)
-	var request llm.GenerateRequestV1
-	if err := json.Unmarshal(requestData, &request); err != nil {
-		t.Fatal(err)
-	}
+	request := mustUnmarshal[llm.GenerateRequestV1](t, requestData, "decode settings patch")
 	if request.SettingsPatch.Instructions.Set == nil || len(*request.SettingsPatch.Instructions.Set) != 1 || len((*request.SettingsPatch.Instructions.Set)[0].Content) != 1 {
 		t.Fatalf("parts instruction was not decoded: %#v", request.SettingsPatch.Instructions)
 	}
@@ -537,35 +455,17 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 		t.Fatalf("output max_tokens was not decoded: %#v", request.SettingsPatch.Output)
 	}
 	canonicalTemperature := []byte(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":"0.7000"}}}`)
-	var decimalRequest llm.GenerateRequestV1
-	if err := json.Unmarshal(canonicalTemperature, &decimalRequest); err != nil {
-		t.Fatalf("decimal temperature was not decoded: %v", err)
-	}
-	encodedDecimal := mustMarshal(t, decimalRequest)
-	if !bytes.Contains(encodedDecimal, []byte(`"temperature":{"set":"0.7"}`)) {
-		t.Fatalf("temperature was not canonically re-encoded as a string: %s", encodedDecimal)
-	}
+	decimalRequest := mustUnmarshal[llm.GenerateRequestV1](t, canonicalTemperature, "decimal temperature was not decoded")
+	requireEncodedContains(t, mustMarshal(t, decimalRequest), `"temperature":{"set":"0.7"}`, "temperature was not canonically re-encoded as a string")
 	legacyNumeric := bytes.Replace(canonicalTemperature, []byte(`"0.7000"`), []byte(`0.7`), 1)
-	var legacyRequest llm.GenerateRequestV1
-	if err := json.Unmarshal(legacyNumeric, &legacyRequest); err != nil {
-		t.Fatalf("legacy numeric temperature was not accepted during compatibility window: %v", err)
-	}
+	mustUnmarshal[llm.GenerateRequestV1](t, legacyNumeric, "legacy numeric temperature was not accepted during compatibility window")
 	invalidDecimal := bytes.Replace(canonicalTemperature, []byte(`"0.7000"`), []byte(`"1.0000000000000000001"`), 1)
-	if err := json.Unmarshal(invalidDecimal, &legacyRequest); err == nil {
-		t.Fatal("temperature with excessive precision was accepted")
-	}
+	requireUnmarshalRejected[llm.GenerateRequestV1](t, invalidDecimal, "temperature with excessive precision was accepted")
 
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(readV1Fixture(t, "generate-response.json"), &envelope); err != nil {
-		t.Fatal(err)
-	}
+	envelope := mustUnmarshal[map[string]json.RawMessage](t, readV1Fixture(t, "generate-response.json"), "decode generate-response.json")
 	envelope["route"] = json.RawMessage(`{"route_id":"route-1","endpoint_id":"endpoint-1","api_family":"responses","requested_model":"gpt-test","resolved_model":"gpt-test-2026"}`)
 	envelope["usage"] = json.RawMessage(`{"input_tokens":10,"output_tokens":20,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5}`)
-	data := mustMarshal(t, envelope)
-	var response llm.GenerateResponseV1
-	if err := json.Unmarshal(data, &response); err != nil {
-		t.Fatal(err)
-	}
+	response := mustUnmarshal[llm.GenerateResponseV1](t, mustMarshal(t, envelope), "decode response metadata")
 	if response.Route == nil || response.Route.RouteID != "route-1" || response.Route.ResolvedModel != "gpt-test-2026" {
 		t.Fatalf("route metadata was not decoded: %#v", response.Route)
 	}
@@ -576,30 +476,18 @@ func TestV1SettingsPatchAndResponseMetadataUseWireDecoders(t *testing.T) {
 
 func TestV1TemperaturePreservesAllEighteenFractionalDigits(t *testing.T) {
 	const input = `{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":"0.123456789012345678"}}}`
-	var request llm.GenerateRequestV1
-	if err := json.Unmarshal([]byte(input), &request); err != nil {
-		t.Fatal(err)
-	}
+	request := mustUnmarshal[llm.GenerateRequestV1](t, []byte(input), "decode exact decimal")
 	if request.SettingsPatch.Temperature.Set == nil || request.SettingsPatch.Temperature.Set.String() != "0.123456789012345678" {
 		t.Fatalf("exact decimal was not retained: %#v", request.SettingsPatch.Temperature.Set)
 	}
-	encoded := mustMarshal(t, request)
-	if !bytes.Contains(encoded, []byte(`"temperature":{"set":"0.123456789012345678"}`)) {
-		t.Fatalf("exact decimal was rounded during re-encoding: %s", encoded)
-	}
+	requireEncodedContains(t, mustMarshal(t, request), `"temperature":{"set":"0.123456789012345678"}`, "exact decimal was rounded during re-encoding")
 
 	trailingZeros := bytes.Replace([]byte(input), []byte("0.123456789012345678"), []byte("12.340000000000000000"), 1)
-	if err := json.Unmarshal(trailingZeros, &request); err != nil {
-		t.Fatal(err)
-	}
-	encoded = mustMarshal(t, request)
-	if !bytes.Contains(encoded, []byte(`"temperature":{"set":"12.34"}`)) {
-		t.Fatalf("decimal was not normalized on output: %s", encoded)
-	}
+	request = mustUnmarshal[llm.GenerateRequestV1](t, trailingZeros, "decode trailing zeros")
+	requireEncodedContains(t, mustMarshal(t, request), `"temperature":{"set":"12.34"}`, "decimal was not normalized on output")
 }
 
 func TestV1TemperatureRejectsBeyondContractPrecision(t *testing.T) {
-	var request llm.GenerateRequestV1
 	for _, value := range []string{
 		"0.1234567890123456789",
 		"1e-3",
@@ -607,9 +495,7 @@ func TestV1TemperatureRejectsBeyondContractPrecision(t *testing.T) {
 		"-0.1",
 	} {
 		payload := fmt.Sprintf(`{"api_version":"llm.temporal/v1","operation_key":"op","context":{"tenant":"t","project":"p","actor":"a"},"append":[],"settings_patch":{"temperature":{"set":%q}}}`, value)
-		if err := json.Unmarshal([]byte(payload), &request); err == nil {
-			t.Fatalf("invalid temperature %q was accepted", value)
-		}
+		requireUnmarshalRejected[llm.GenerateRequestV1](t, []byte(payload), "invalid temperature %q was accepted", value)
 	}
 }
 
@@ -699,18 +585,12 @@ func TestV1FixtureMatrixCoversForkPatchesCacheVariantsAndQueries(t *testing.T) {
 }
 
 func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
-	var unknown llm.GenerateRequestV1
-	if err := json.Unmarshal(readV1Fixture(t, "generate-variant-unknown-temperature.json"), &unknown); err != nil {
-		t.Fatal(err)
-	}
+	unknown := readV1GenerateFixture(t, "generate-variant-unknown-temperature.json")
 	if err := llm.ValidateVariantTemperature(unknown.Cache.Variant, nil); err != nil {
 		t.Fatalf("positive variant with inherited temperature rejected: %v", err)
 	}
 
-	var positive llm.GenerateRequestV1
-	if err := json.Unmarshal(readV1Fixture(t, "generate-variant-positive-temperature.json"), &positive); err != nil {
-		t.Fatal(err)
-	}
+	positive := readV1GenerateFixture(t, "generate-variant-positive-temperature.json")
 	if positive.SettingsPatch.Temperature.Set == nil {
 		t.Fatal("positive-temperature fixture omitted the temperature patch")
 	}
@@ -718,10 +598,7 @@ func TestV1VariantFixturesApplyMaterializedTemperatureRules(t *testing.T) {
 		t.Fatalf("positive temperature variant rejected: %v", err)
 	}
 
-	var zero llm.GenerateRequestV1
-	if err := json.Unmarshal(readV1Fixture(t, "generate-variant-zero-temperature.json"), &zero); err != nil {
-		t.Fatal(err)
-	}
+	zero := readV1GenerateFixture(t, "generate-variant-zero-temperature.json")
 	if zero.SettingsPatch.Temperature.Set == nil {
 		t.Fatal("zero-temperature fixture omitted the temperature patch")
 	}
@@ -808,15 +685,17 @@ func readV1Fixture(t *testing.T, name string) []byte {
 	}
 	return data
 }
+
+// readV1GenerateFixture decodes the named testdata/v1 Generate request.
+func readV1GenerateFixture(t *testing.T, name string) llm.GenerateRequestV1 {
+	t.Helper()
+	return mustUnmarshal[llm.GenerateRequestV1](t, readV1Fixture(t, name), name)
+}
+
 func stringPointer(value string) *string { return &value }
 func mustCanonicalJSON(t *testing.T, data []byte) []byte {
 	t.Helper()
-	var value any
-	if err := json.Unmarshal(data, &value); err != nil {
-		t.Fatal(err)
-	}
-	canonical := mustMarshal(t, value)
-	return canonical
+	return mustMarshal(t, mustUnmarshal[any](t, data, "decode canonical JSON"))
 }
 
 func TestCacheAgeOmissionIsUnrestrictedButZeroAndNullAreInvalid(t *testing.T) {
@@ -829,32 +708,19 @@ func TestCacheAgeOmissionIsUnrestrictedButZeroAndNullAreInvalid(t *testing.T) {
 		t.Fatalf("unrestricted encoding: %s %v", encoded, err)
 	}
 	for _, input := range []string{`{"max_age_seconds":0}`, `{"max_age_seconds":null}`, `{"max_age_seconds":-1}`, `{"max_age_seconds":31536001}`} {
-		if err := json.Unmarshal([]byte(input), &policy); err == nil {
-			t.Fatalf("accepted %s", input)
-		}
+		requireUnmarshalRejected[llm.CachePolicyV1](t, []byte(input), "accepted %s", input)
 	}
 }
 
 func TestV1CompactResponseUsagePreservedAndValidated(t *testing.T) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(readV1Fixture(t, "compact-response.json"), &fields); err != nil {
-		t.Fatal(err)
-	}
+	fields := mustUnmarshal[map[string]json.RawMessage](t, readV1Fixture(t, "compact-response.json"), "decode compact-response.json")
 	valid := `{"input_tokens":9007199254740993,"output_tokens":12,"reasoning_tokens":3,"cache_read_tokens":4,"cache_write_tokens":5,"provider_raw":{"tokens":9007199254740993}}`
 	fields["usage"] = json.RawMessage(valid)
-	data := mustMarshal(t, fields)
-	var response llm.CompactResponseV1
-	if err := json.Unmarshal(data, &response); err != nil {
-		t.Fatal(err)
-	}
+	response := mustUnmarshal[llm.CompactResponseV1](t, mustMarshal(t, fields), "decode valid usage")
 	if response.Usage == nil || response.Usage.InputTokens != 9007199254740993 || response.Usage.OutputTokens != 12 || response.Usage.ReasoningTokens != 3 || response.Usage.CacheReadTokens != 4 || response.Usage.CacheWriteTokens != 5 || string(response.Usage.ProviderRaw["tokens"]) != "9007199254740993" {
 		t.Fatalf("usage lost on decode: %+v", response.Usage)
 	}
-	encoded := mustMarshal(t, response)
-	var again llm.CompactResponseV1
-	if err := json.Unmarshal(encoded, &again); err != nil {
-		t.Fatal(err)
-	}
+	again := mustUnmarshal[llm.CompactResponseV1](t, mustMarshal(t, response), "decode round-tripped usage")
 	first, _ := json.Marshal(response.Usage)
 	second, _ := json.Marshal(again.Usage)
 	if !bytes.Equal(first, second) {
@@ -863,8 +729,6 @@ func TestV1CompactResponseUsagePreservedAndValidated(t *testing.T) {
 	for _, invalid := range []string{`{"input_tokens":-1}`, `{"output_tokens":1.5}`, `{"reasoning_tokens":9223372036854775808}`, `{"unknown":1}`, `null`} {
 		fields["usage"] = json.RawMessage(invalid)
 		data, _ := json.Marshal(fields)
-		if err := json.Unmarshal(data, &response); err == nil {
-			t.Fatalf("accepted invalid usage %s", invalid)
-		}
+		requireUnmarshalRejected[llm.CompactResponseV1](t, data, "accepted invalid usage %s", invalid)
 	}
 }

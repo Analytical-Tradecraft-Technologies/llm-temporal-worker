@@ -38,7 +38,7 @@ func TestGenerateActivityRecordsTerminalMetrics(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			metrics := newActivityTestMetrics(t)
-			activities := Activities{Metrics: metrics, Engine: &fakeEngine{err: test.engineErr, response: llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}}
+			activities := Activities{Metrics: metrics, Engine: &fakeEngine{err: test.engineErr, response: completedEngineResponse()}}
 			_, _ = activities.Generate(context.Background(), validGeneratePayload())
 			assertActivityMetricCounter(t, metrics, "llmtw_activity_total", map[string]string{"status": test.status, "error_class": test.errorClass}, 1)
 			assertActivityMetricHistogramCount(t, metrics, "llmtw_activity_duration_seconds", map[string]string{"phase": "total"}, 1)

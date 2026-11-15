@@ -1,9 +1,7 @@
 package routing
 
 import (
-	"bytes"
 	"context"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -62,16 +60,7 @@ func FuzzPlannerCanonicalizesServiceClassFallbacks(f *testing.F) {
 			}
 		}
 
-		again, err := planner.Plan(context.Background(), Input{Request: request, Catalog: catalog})
-		if err != nil {
-			t.Fatalf("repeat plan: %v", err)
-		}
-		if !reflect.DeepEqual(plan, again) || plan.Digest != again.Digest || plan.DigestHex != again.DigestHex {
-			t.Fatalf("planning was not deterministic:\nfirst:  %#v\nsecond: %#v", plan, again)
-		}
-		if firstBytes, secondBytes := canonicalPlanJSON(t, plan), canonicalPlanJSON(t, again); !bytes.Equal(firstBytes, secondBytes) {
-			t.Fatalf("repeat plan changed canonical bytes:\nfirst:  %s\nsecond: %s", firstBytes, secondBytes)
-		}
+		assertEquivalentPlans(t, "repeat planning", plan, mustPlan(t, Input{Request: request, Catalog: catalog}))
 	})
 }
 

@@ -44,10 +44,7 @@ func TestAuthorizationPolicyValidation(t *testing.T) {
 
 func TestAuthorizationPolicyStrictLoadAndSnapshotIsolation(t *testing.T) {
 	data := exampleYAML(t)
-	snapshot, err := config.Compile(context.Background(), data, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := mustCompile(t, data)
 	copy := snapshot.Config()
 	if copy.Authorization == nil {
 		t.Fatal("missing example authorization")
@@ -61,9 +58,7 @@ func TestAuthorizationPolicyStrictLoadAndSnapshotIsolation(t *testing.T) {
 		t.Fatalf("policy omitted from digest: %v", err)
 	}
 	for _, replacement := range []string{"mode: allow_all", "mode: trusted_temporal\n  unknown: true", "mode: trusted_temporal\n  mode: trusted_temporal"} {
-		if _, err := config.Load([]byte(strings.Replace(string(data), "mode: trusted_temporal", replacement, 1))); err == nil {
-			t.Fatal("accepted invalid strict policy")
-		}
+		requireLoadRejected(t, []byte(strings.Replace(string(data), "mode: trusted_temporal", replacement, 1)), "accepted invalid strict policy")
 	}
 	// Embeddings may deliberately supply their own scope resolver; omission
 	// must not silently enable the trusted Temporal policy.

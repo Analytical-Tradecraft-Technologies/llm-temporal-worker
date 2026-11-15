@@ -8,10 +8,11 @@ import (
 )
 
 func TestCatalogResolveExactEntryAndReload(t *testing.T) {
-	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "default", Version: "entry-v1", EffectiveFrom: time.Unix(1, 0), Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	entry := gptEntry()
+	entry.ProviderTier, entry.Version, entry.EffectiveFrom = "default", "entry-v1", time.Unix(1, 0)
 	catalog := mustCompileUSD(t, "catalog-v1", []Entry{entry})
 	resolver := NewResolver(catalog)
-	quote, err := resolver.Resolve(Query{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "default", At: time.Unix(2, 0)})
+	quote, err := resolver.Resolve(entryQuery(entry, time.Unix(2, 0)))
 	if err != nil || quote.Entry.Version != "entry-v1" {
 		t.Fatalf("quote = %#v %v", quote, err)
 	}
@@ -25,13 +26,14 @@ func TestCatalogResolveExactEntryAndReload(t *testing.T) {
 }
 
 func TestCatalogReloadRejectsUnverifiedReplacementAndRetainsSnapshot(t *testing.T) {
-	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Region: "global", Model: "gpt", ProviderTier: "standard", Version: "catalog-v1", Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	entry := gptEntry()
+	entry.Region, entry.Version = "global", "catalog-v1"
 	valid := mustCompileUSD(t, "catalog-v1", []Entry{entry})
 	resolver := NewResolver(valid)
 	// Publishing owns the entry slice: mutating the source value after reload
 	// must not mutate the resolver's active snapshot.
 	valid.Entries[0].Prices.InputPerMillion = MustDecimalUSD("9")
-	quote, err := resolver.Resolve(Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Now()})
+	quote, err := resolver.Resolve(entryQuery(entry, time.Now()))
 	if err != nil || quote.Entry.Prices.InputPerMillion.String() != "1" {
 		t.Fatalf("resolver retained caller-owned catalog storage: quote=%#v err=%v", quote, err)
 	}
@@ -43,25 +45,21 @@ func TestCatalogReloadRejectsUnverifiedReplacementAndRetainsSnapshot(t *testing.
 	if err := resolver.ReloadValidated(invalid); err == nil {
 		t.Fatal("ReloadValidated accepted a replacement with a stale compiled digest")
 	}
-	quote, err = resolver.Resolve(Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Now()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := quote.Entry.Prices.InputPerMillion.String(); got != "1" {
+	if got := mustResolve(t, resolver, entryQuery(entry, time.Now())).Entry.Prices.InputPerMillion.String(); got != "1" {
 		t.Fatalf("failed replacement changed active price to %q", got)
 	}
 
 	// The compatibility method has the same fail-closed behavior even when a
 	// caller cannot consume an error return.
 	resolver.Reload(invalid)
-	quote, err = resolver.Resolve(Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Region: entry.Region, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Now()})
+	quote, err = resolver.Resolve(entryQuery(entry, time.Now()))
 	if err != nil || quote.Entry.Prices.InputPerMillion.String() != "1" {
 		t.Fatalf("Reload compatibility path replaced the valid snapshot: quote=%#v err=%v", quote, err)
 	}
 }
 
 func TestCatalogValidateRequiresCompiledDigest(t *testing.T) {
-	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard", Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	entry := gptEntry()
 	withoutDigest := Catalog{Version: "catalog-v1", Entries: []Entry{entry}}
 	if err := withoutDigest.Validate(); err == nil {
 		t.Fatal("Validate accepted a catalog without a compiled digest")
@@ -69,8 +67,8 @@ func TestCatalogValidateRequiresCompiledDigest(t *testing.T) {
 }
 
 func TestPriceResolverSnapshotIsDetachedAndSurvivesReload(t *testing.T) {
-	entry := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard",
-		Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}, UnknownComponents: []PriceComponent{PriceComponentOutput}}
+	entry := gptEntry()
+	entry.UnknownComponents = []PriceComponent{PriceComponentOutput}
 	catalog := mustCompileUSD(t, "v1", []Entry{entry})
 	resolver := NewResolver(catalog)
 	pinned := resolver.Snapshot()
@@ -84,7 +82,7 @@ func TestPriceResolverSnapshotIsDetachedAndSurvivesReload(t *testing.T) {
 	if err := resolver.ReloadValidated(replacement); err != nil {
 		t.Fatal(err)
 	}
-	query := Query{Provider: entry.Provider, Family: entry.Family, EndpointID: entry.EndpointID, Model: entry.Model, ProviderTier: entry.ProviderTier, At: time.Unix(2, 0)}
+	query := entryQuery(entry, time.Unix(2, 0))
 	old, err := pinned.Resolve(query)
 	if err != nil || old.Entry.Prices.InputPerMillion.String() != "1" || !old.Entry.ComponentUnknown(PriceComponentOutput) {
 		t.Fatalf("snapshot changed after reload: %#v, %v", old, err)
@@ -134,15 +132,8 @@ func TestCompileUSDRejectsUnknownComponentWithNonZeroPrice(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			entry := Entry{
-				Provider:          "openai",
-				Family:            "responses",
-				EndpointID:        "prod",
-				Model:             "gpt",
-				ProviderTier:      "standard",
-				Prices:            test.prices,
-				UnknownComponents: []PriceComponent{test.component},
-			}
+			entry := gptEntry()
+			entry.Prices, entry.UnknownComponents = test.prices, []PriceComponent{test.component}
 			_, err := CompileUSD("catalog-v1", []Entry{entry})
 			if err == nil {
 				t.Fatal("CompileUSD accepted an unknown component with a non-zero price")
@@ -156,17 +147,9 @@ func TestCompileUSDRejectsUnknownComponentWithNonZeroPrice(t *testing.T) {
 
 func TestCompileUSDRejectsDuplicatePricingIdentity(t *testing.T) {
 	from := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
-	base := Entry{
-		Provider:       "openai",
-		Family:         "openai_responses",
-		EndpointID:     "openai-production",
-		Region:         "global",
-		Model:          "gpt-example",
-		ProviderTier:   "standard",
-		EffectiveFrom:  from,
-		EffectiveUntil: from.Add(time.Hour),
-		Prices:         UnitPrices{InputPerMillion: MustDecimalUSD("1")},
-	}
+	base := exampleEntry()
+	base.EffectiveFrom, base.EffectiveUntil = from, from.Add(time.Hour)
+	base.Prices = UnitPrices{InputPerMillion: MustDecimalUSD("1")}
 	duplicate := base
 	// Different end times and prices must not make two entries with the same
 	// effective start look like distinct resolvable identities.
@@ -179,7 +162,8 @@ func TestCompileUSDRejectsDuplicatePricingIdentity(t *testing.T) {
 
 func TestCompileUSDPriceIntervals(t *testing.T) {
 	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	base := Entry{Provider: "openai", Family: "responses", EndpointID: "prod", Model: "gpt", ProviderTier: "standard", EffectiveFrom: start, Prices: UnitPrices{InputPerMillion: MustDecimalUSD("1")}}
+	base := gptEntry()
+	base.EffectiveFrom = start
 	for _, test := range []struct {
 		name                                           string
 		firstFrom, firstUntil, secondFrom, secondUntil time.Time
@@ -204,7 +188,7 @@ func TestCompileUSDPriceIntervals(t *testing.T) {
 					t.Fatalf("overlap=%v, error=%v", test.overlap, err)
 				}
 				if err == nil {
-					quote, err := catalog.Resolve(Query{Provider: base.Provider, Family: base.Family, EndpointID: base.EndpointID, Model: base.Model, ProviderTier: base.ProviderTier, At: b.EffectiveFrom})
+					quote, err := catalog.Resolve(entryQuery(base, b.EffectiveFrom))
 					if err != nil || quote.Entry.Prices.InputPerMillion.String() != "10" {
 						t.Fatalf("boundary quote=%+v err=%v", quote, err)
 					}

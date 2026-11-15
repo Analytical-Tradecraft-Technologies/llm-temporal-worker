@@ -16,12 +16,7 @@ func TestToolBatchAcceptsModelTurnContent(t *testing.T) {
 	thinking := llm.ProviderState{Provider: "provider", EndpointFamily: "family", MediaType: "application/json", Opaque: []byte("{}")}
 	citation := llm.Reference{URI: "https://example.com/source"}
 	text := llm.ModelText("checking")
-	for _, test := range []struct {
-		name    string
-		items   []llm.Item
-		pending []string
-		invalid bool
-	}{
+	runTranscriptPendingCases(t, []transcriptPendingCase{
 		{"call then state", []llm.Item{call("a"), thinking}, []string{"a"}, false},
 		{"state call state call", []llm.Item{thinking, call("a"), thinking, call("b")}, []string{"a", "b"}, false},
 		{"call then reference", []llm.Item{call("a"), citation}, []string{"a"}, false},
@@ -34,7 +29,22 @@ func TestToolBatchAcceptsModelTurnContent(t *testing.T) {
 		{"reused ID after state", []llm.Item{call("a"), thinking, call("a")}, nil, true},
 		{"reused ID in a later turn", []llm.Item{call("a"), result("a"), call("a")}, nil, true},
 		{"unmatched result after state", []llm.Item{call("a"), thinking, result("b")}, nil, true},
-	} {
+	})
+}
+
+// transcriptPendingCase is one ValidateTranscript expectation: invalid
+// transcripts are rejected, others report pending as the open tool calls.
+type transcriptPendingCase struct {
+	name    string
+	items   []llm.Item
+	pending []string
+	invalid bool
+}
+
+// runTranscriptPendingCases runs each case as a subtest.
+func runTranscriptPendingCases(t *testing.T, cases []transcriptPendingCase) {
+	t.Helper()
+	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			assertTranscriptPending(t, test.items, test.pending, test.invalid)
 		})

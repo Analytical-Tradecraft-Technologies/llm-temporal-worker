@@ -40,13 +40,11 @@ func TestServiceClassPoliciesLoadAndKeepStandard(t *testing.T) {
 }
 
 func TestServiceClassPolicyDefault(t *testing.T) {
-	data := strings.Replace(string(exampleYAML(t)), "    classes: [economy, standard]\n", "    classes: [economy, standard]\n    default_class: economy\n", 1)
+	data := string(replaceExample(t, "    classes: [economy, standard]\n", "    classes: [economy, standard]\n    default_class: economy\n"))
 	if _, err := config.Load([]byte(data)); err != nil {
 		t.Fatalf("valid project default rejected: %v", err)
 	}
 	for _, value := range []string{"turbo", "priority"} {
-		if _, err := config.Load([]byte(strings.Replace(data, "default_class: economy", "default_class: "+value, 1))); err == nil {
-			t.Fatalf("accepted invalid or disabled default %q", value)
-		}
+		requireLoadRejected(t, []byte(strings.Replace(data, "default_class: economy", "default_class: "+value, 1)), "accepted invalid or disabled default %q", value)
 	}
 }

@@ -60,7 +60,7 @@ func TestTypedQueryRequestRejectsTags(t *testing.T) {
 
 func TestTypedQueryRequestAcceptsPointerFilters(t *testing.T) {
 	filter := &ProviderStatusQuery{}
-	wire, err := EncodeQueryRequest(QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: filter})
+	wire, err := EncodeQueryRequest(scopedQuery(llm.QueryProviderStatus, filter))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestTypedQueryRequestAcceptsPointerFilters(t *testing.T) {
 
 func TestTypedQueryAPIsRejectTypedNilPointers(t *testing.T) {
 	var filter *ProviderStatusQuery
-	if _, err := EncodeQueryRequest(QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: filter}); err == nil {
+	if _, err := EncodeQueryRequest(scopedQuery(llm.QueryProviderStatus, filter)); err == nil {
 		t.Fatal("typed nil filter was accepted")
 	}
 	var result *ProviderStatusResult
@@ -104,7 +104,7 @@ func TestTypedQueryRequestSupportsAllWireKinds(t *testing.T) {
 
 func TestTypedQueryRequestRejectsInvalidRefreshDuration(t *testing.T) {
 	for _, refresh := range []time.Duration{500 * time.Millisecond, -time.Second, 86401 * time.Second} {
-		_, err := EncodeQueryRequest(QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{RefreshIfOlderThan: refresh}})
+		_, err := EncodeQueryRequest(scopedQuery(llm.QueryProviderStatus, ProviderStatusQuery{RefreshIfOlderThan: refresh}))
 		if err == nil {
 			t.Fatalf("refresh %s was accepted", refresh)
 		}
@@ -115,7 +115,8 @@ func TestTypedQueryResponseRoundTrip(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
 	credit := QueryCreditLow
 	billing := QueryBillingBlocked
-	response := QueryResponse{OperationKey: "credit-op", ExecutionID: "execution-1", Kind: llm.QueryCreditStatus, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: CreditStatusResult{Endpoints: []CreditStatusRow{{Provider: "openai", Endpoint: "primary", Credit: credit, Billing: billing, EvidenceSource: QueryEvidenceProviderAPI}}}, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}}
+	response := persistedQueryResponse("credit-op", llm.QueryCreditStatus, now, CreditStatusResult{Endpoints: []CreditStatusRow{{Provider: "openai", Endpoint: "primary", Credit: credit, Billing: billing, EvidenceSource: QueryEvidenceProviderAPI}}})
+	response.ExecutionID = "execution-1"
 	wire, err := EncodeQueryResponse(response)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +151,9 @@ func TestTypedQueryResponseRejectsNonPaginatedCursor(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cursor := QueryCursor("unexpected-page-2")
-			_, err := EncodeQueryResponse(QueryResponse{OperationKey: OperationKey(test.name), ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, NextCursor: &cursor, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
+			response := persistedQueryResponse(OperationKey(test.name), test.kind, now, test.result)
+			response.NextCursor = &cursor
+			_, err := EncodeQueryResponse(response)
 			if err == nil {
 				t.Fatal("non-paginated query response with a cursor was accepted")
 			}
@@ -208,7 +211,7 @@ func TestTypedQueryResponseRequiresStableResultOrdering(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := EncodeQueryResponse(QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
+			_, err := EncodeQueryResponse(persistedQueryResponse("op", test.kind, now, test.result))
 			if err == nil || !strings.Contains(err.Error(), "sorted and unique") {
 				t.Fatalf("unordered result error = %v, want stable-order rejection", err)
 			}
@@ -219,10 +222,10 @@ func TestTypedQueryResponseRequiresStableResultOrdering(t *testing.T) {
 func TestTypedQueryResponseAcceptsStableSpendGroupingWithNilDimensions(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
 	provider := ProviderID("provider")
-	response := QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: llm.QuerySpendSummary, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: SpendSummaryResult{StartTime: now, EndTime: now.Add(time.Hour), Buckets: []SpendBucket{
+	response := persistedQueryResponse("op", llm.QuerySpendSummary, now, SpendSummaryResult{StartTime: now, EndTime: now.Add(time.Hour), Buckets: []SpendBucket{
 		{Group: nil, KnownActualCostUSD: "0", ExactOperationCount: 0, Completeness: "complete"},
 		{Group: &SpendGroup{Provider: &provider}, KnownActualCostUSD: "1", ExactOperationCount: 1, Completeness: "complete"},
-	}}, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}}
+	}})
 	if _, err := EncodeQueryResponse(response); err != nil {
 		t.Fatalf("stable spend result with nil dimensions rejected: %v", err)
 	}
@@ -230,16 +233,10 @@ func TestTypedQueryResponseAcceptsStableSpendGroupingWithNilDimensions(t *testin
 
 func TestTypedQueryResponseRejectsDuplicateResultKey(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
-	response := QueryResponse{
-		OperationKey: "op", ExecutionID: "execution", Kind: llm.QueryProviderStatus,
-		Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now},
-		Complete:   true,
-		Result: ProviderStatusResult{Routes: []ProviderStatusRow{
-			{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
-			{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
-		}},
-		Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero},
-	}
+	response := persistedQueryResponse("op", llm.QueryProviderStatus, now, ProviderStatusResult{Routes: []ProviderStatusRow{
+		{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
+		{RouteID: "route-a", Provider: "provider", Endpoint: "endpoint", Availability: QueryAvailable, ObservedAt: now, StaleAfter: now.Add(time.Hour)},
+	}})
 	if _, err := EncodeQueryResponse(response); err == nil || !strings.Contains(err.Error(), "sorted and unique") {
 		t.Fatalf("duplicate result key error = %v, want stable-order rejection", err)
 	}
@@ -260,6 +257,22 @@ func TestBudgetWindowRetryDurationUsesWireSeconds(t *testing.T) {
 	}
 	if decoded.RetryAfter == nil || *decoded.RetryAfter != 30*time.Second {
 		t.Fatalf("retry duration round-trip mismatch: %#v", decoded.RetryAfter)
+	}
+}
+
+// scopedQuery returns the "op" request of kind under testScope.
+func scopedQuery(kind llm.QueryKind, filter QueryFilter) QueryRequest {
+	return QueryRequest{OperationKey: "op", Scope: testScope(), Kind: kind, Filter: filter}
+}
+
+// persistedQueryResponse returns a complete, current, persisted response
+// with the exact zero control-query cost.
+func persistedQueryResponse(key OperationKey, kind llm.QueryKind, observedAt time.Time, result QueryResult) QueryResponse {
+	return QueryResponse{
+		OperationKey: key, ExecutionID: "execution", Kind: kind,
+		Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: observedAt},
+		Complete:   true, Result: result,
+		Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero},
 	}
 }
 
@@ -295,7 +308,7 @@ func TestTypedQueryResponseEncodesEmptyResultListsAsArrays(t *testing.T) {
 		{name: "credit status", kind: llm.QueryCreditStatus, result: CreditStatusResult{}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			wire, err := EncodeQueryResponse(QueryResponse{OperationKey: "op", ExecutionID: "execution", Kind: test.kind, Provenance: QueryProvenance{Source: QuerySourcePersisted, Freshness: QueryFreshCurrent, ObservedAt: now}, Complete: true, Result: test.result, Cost: QueryCost{Status: QueryCostExact, ActualUSD: decimalPointer("0"), Method: QueryCostControlZero}})
+			wire, err := EncodeQueryResponse(persistedQueryResponse("op", test.kind, now, test.result))
 			if err != nil {
 				t.Fatalf("EncodeQueryResponse() error = %v", err)
 			}

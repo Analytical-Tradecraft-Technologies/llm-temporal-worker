@@ -2,7 +2,6 @@ package activity
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -10,7 +9,6 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 	sdkactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -31,6 +29,35 @@ func rawJSONArgument(t *testing.T, data []byte) converter.RawValue {
 		Metadata: map[string][]byte{converter.MetadataEncoding: []byte(converter.MetadataEncodingJSON)},
 		Data:     data,
 	})
+}
+
+// executeTestActivity registers function as name in a fresh Temporal test
+// Activity environment, using dataConverter when it is not nil, and executes
+// it with args.
+func executeTestActivity(dataConverter converter.DataConverter, function any, name string, args ...any) (converter.EncodedValue, error) {
+	var suite testsuite.WorkflowTestSuite
+	environment := suite.NewTestActivityEnvironment()
+	if dataConverter != nil {
+		environment.SetDataConverter(dataConverter)
+	}
+	environment.RegisterActivityWithOptions(function, sdkactivity.RegisterOptions{Name: name})
+	return environment.ExecuteActivity(name, args...)
+}
+
+// assertPendingExecutionResult checks a registered bounded Activity returned
+// the stub's pending result after exactly one runtime call.
+func assertPendingExecutionResult(t *testing.T, runtime *executionRuntimeStub, result converter.EncodedValue, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response llm.ExecutionResultV1
+	if err := result.Get(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.State != llm.ExecutionPending || runtime.calls != 1 {
+		t.Fatalf("result=%#v calls=%d", response, runtime.calls)
+	}
 }
 
 func generateV1JSON(t *testing.T, mutate func(map[string]any)) []byte {
@@ -56,13 +83,7 @@ func assertTypedInvalidV1Input(t *testing.T, err error, secrets ...string) {
 	if err == nil {
 		t.Fatal("Activity unexpectedly accepted invalid input")
 	}
-	var applicationErr *temporal.ApplicationError
-	if !errors.As(err, &applicationErr) {
-		t.Fatalf("error = %T %v, want ApplicationError", err, err)
-	}
-	if applicationErr.Type() != ErrorTypeInvalidArgument || !applicationErr.NonRetryable() {
-		t.Fatalf("error type=%q nonRetryable=%v (%v), want non-retryable %q", applicationErr.Type(), applicationErr.NonRetryable(), err, ErrorTypeInvalidArgument)
-	}
+	applicationErr := assertApplicationError(t, err, ErrorTypeInvalidArgument, true)
 	if !applicationErr.HasDetails() {
 		t.Fatalf("error %v has no SafeErrorDetails", err)
 	}
@@ -111,10 +132,7 @@ func TestRegisteredV1GenerateRejectsMalformedInputAsTypedNonRetryable(t *testing
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := &executionRuntimeStub{result: pendingExecution()}
 			activities := &Activities{V1Runtime: runtime}
-			var suite testsuite.WorkflowTestSuite
-			environment := suite.NewTestActivityEnvironment()
-			environment.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
-			_, err := environment.ExecuteActivity(GenerateActivityName, rawJSONArgument(t, tc.payload))
+			_, err := executeTestActivity(nil, activities.generateV1Temporal, GenerateActivityName, rawJSONArgument(t, tc.payload))
 			assertTypedInvalidV1Input(t, err, tc.secrets...)
 			if runtime.calls != 0 {
 				t.Fatalf("runtime calls = %d, want zero for undecodable input", runtime.calls)
@@ -130,10 +148,7 @@ func TestRegisteredV1ActivitiesRejectUndecodableInputAsTypedNonRetryable(t *test
 	for index, registered := range registry.funcs {
 		name := registry.names[index]
 		t.Run(name, func(t *testing.T) {
-			var suite testsuite.WorkflowTestSuite
-			environment := suite.NewTestActivityEnvironment()
-			environment.RegisterActivityWithOptions(registered, sdkactivity.RegisterOptions{Name: name})
-			_, err := environment.ExecuteActivity(name, rawJSONArgument(t, []byte(`{"secret-json-value"`)))
+			_, err := executeTestActivity(nil, registered, name, rawJSONArgument(t, []byte(`{"secret-json-value"`)))
 			assertTypedInvalidV1Input(t, err, "secret-json-value")
 		})
 	}
@@ -145,11 +160,7 @@ func TestRegisteredV1GenerateRejectsOversizeInputThroughBoundedConverter(t *test
 	activities := &Activities{V1Runtime: runtime, PayloadLimits: limits}
 	request := validGenerateV1Request()
 	request.Append = []llm.Item{llm.HumanText("secret-" + strings.Repeat("x", 1024))}
-	var suite testsuite.WorkflowTestSuite
-	environment := suite.NewTestActivityEnvironment()
-	environment.SetDataConverter(unboundedEncodeConverter{DataConverter: BoundedDataConverter(limits)})
-	environment.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
-	_, err := environment.ExecuteActivity(GenerateActivityName, request)
+	_, err := executeTestActivity(unboundedEncodeConverter{DataConverter: BoundedDataConverter(limits)}, activities.generateV1Temporal, GenerateActivityName, request)
 	assertTypedInvalidV1Input(t, err, "secret-")
 	if runtime.calls != 0 {
 		t.Fatalf("runtime calls = %d, want zero for oversize input", runtime.calls)
@@ -160,19 +171,6 @@ func TestRegisteredV1GenerateAcceptsValidInputThroughBoundedConverter(t *testing
 	limits := PayloadLimits{MaxInlineBytes: 4096}
 	runtime := &executionRuntimeStub{result: pendingExecution()}
 	activities := &Activities{V1Runtime: runtime, PayloadLimits: limits}
-	var suite testsuite.WorkflowTestSuite
-	environment := suite.NewTestActivityEnvironment()
-	environment.SetDataConverter(BoundedDataConverter(limits))
-	environment.RegisterActivityWithOptions(activities.generateV1Temporal, sdkactivity.RegisterOptions{Name: GenerateActivityName})
-	result, err := environment.ExecuteActivity(GenerateActivityName, validGenerateV1Request())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var response llm.ExecutionResultV1
-	if err := result.Get(&response); err != nil {
-		t.Fatal(err)
-	}
-	if response.State != llm.ExecutionPending || runtime.calls != 1 {
-		t.Fatalf("result=%#v calls=%d", response, runtime.calls)
-	}
+	result, err := executeTestActivity(BoundedDataConverter(limits), activities.generateV1Temporal, GenerateActivityName, validGenerateV1Request())
+	assertPendingExecutionResult(t, runtime, result, err)
 }

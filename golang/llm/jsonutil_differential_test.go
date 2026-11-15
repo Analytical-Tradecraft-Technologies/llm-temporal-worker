@@ -181,11 +181,7 @@ func differentialCorpus(t testing.TB) map[string][]byte {
 	t.Helper()
 	corpus := differentialFixtures(t)
 	corpus["rich-request"] = []byte(richTranscriptRequest)
-	var request map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(richTranscriptRequest), &request); err != nil {
-		t.Fatal(err)
-	}
-	corpus["rich-items"] = request["input"]
+	corpus["rich-items"] = []byte(richTranscriptItems(t))
 	corpus["rich-generate-request"] = []byte(richGenerateRequest(t))
 	for name, data := range map[string]string{
 		"empty":             ``,
@@ -539,25 +535,13 @@ func TestNestedDuplicateKeysAreRejectedAtNamedLevels(t *testing.T) {
 // leaf, with a non-empty append.
 func richGenerateRequest(t testing.TB) string {
 	t.Helper()
-	fixture, err := os.ReadFile("testdata/v1/generate-fork-patch-set.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	const appended = `"append": [{"kind": "message", "actor": "human", "content": [{"kind": "text", "text": "Continue."}, {"kind": "json", "value": {"leaf": {"x": 1}}}]}]`
-	request := strings.Replace(string(fixture), `"append": []`, appended, 1)
-	if request == string(fixture) {
-		t.Fatal("fork fixture no longer has an empty append")
-	}
-	return request
+	return strings.Replace(readFixtureContaining(t, "testdata/v1/generate-fork-patch-set.json", `"append": []`), `"append": []`, appended, 1)
 }
 
 func richTranscriptItems(t testing.TB) string {
 	t.Helper()
-	var request map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(richTranscriptRequest), &request); err != nil {
-		t.Fatal(err)
-	}
-	return string(request["input"])
+	return string(mustUnmarshalJSON[map[string]json.RawMessage](t, []byte(richTranscriptRequest), "decode rich transcript request")["input"])
 }
 
 // JSON carried inside a string is text, not structure: it was never scanned
@@ -611,4 +595,28 @@ func mustMarshalJSON(t testing.TB, value any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// mustUnmarshalJSON decodes data into a new T, failing with what as context.
+func mustUnmarshalJSON[T any](t testing.TB, data []byte, what string) T {
+	t.Helper()
+	var value T
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	return value
+}
+
+// readFixtureContaining reads the file at path and fails unless it contains
+// text, the anchor a test is about to replace.
+func readFixtureContaining(t testing.TB, path, text string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), text) {
+		t.Fatalf("fixture does not contain %q", text)
+	}
+	return string(data)
 }

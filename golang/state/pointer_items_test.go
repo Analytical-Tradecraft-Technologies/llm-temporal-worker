@@ -10,12 +10,7 @@ import (
 func TestPointerToolFrontiers(t *testing.T) {
 	call := &llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")}
 	result := &llm.ToolResult{CallID: "a"}
-	for _, test := range []struct {
-		name    string
-		items   []llm.Item
-		pending []string
-		invalid bool
-	}{
+	runTranscriptPendingCases(t, []transcriptPendingCase{
 		{"open", []llm.Item{call}, []string{"a"}, false},
 		{"resolved", []llm.Item{call, result}, []string{}, false},
 		{"orphan", []llm.Item{result}, nil, true},
@@ -26,11 +21,7 @@ func TestPointerToolFrontiers(t *testing.T) {
 		{"typed nil message", []llm.Item{(*llm.Message)(nil)}, nil, true},
 		{"typed nil state", []llm.Item{(*llm.ProviderState)(nil)}, nil, true},
 		{"typed nil reference", []llm.Item{(*llm.Reference)(nil)}, nil, true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			assertTranscriptPending(t, test.items, test.pending, test.invalid)
-		})
-	}
+	})
 }
 
 func TestCheckpointCopiesPointerToolItems(t *testing.T) {
@@ -64,8 +55,8 @@ func TestCheckItemEncodingMatchesJSONMarshal(t *testing.T) {
 		llm.HumanText("<ok>"),
 		llm.Message{Actor: "system"},
 		llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.ImagePart{MediaType: "image/png"}}},
-		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
-		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{")},
+		lookupCall("a", "{}"),
+		lookupCall("a", "{"),
 		llm.ToolResult{CallID: "a", Content: []llm.Part{llm.JSONPart{Value: []byte("[1]")}}},
 		llm.ToolResult{},
 		llm.ProviderState{Provider: "p", EndpointFamily: "f", MediaType: "m"},

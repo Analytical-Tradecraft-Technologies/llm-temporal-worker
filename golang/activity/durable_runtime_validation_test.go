@@ -1,10 +1,8 @@
 package activity
 
 import (
-	"context"
 	"testing"
 
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
 
@@ -23,70 +21,8 @@ func TestDurableV1RuntimeValidateRejectsNilRuntime(t *testing.T) {
 }
 
 func TestNewDurableV1RuntimeAllowsIndependentQueryComposition(t *testing.T) {
-	generate := durable.GeneratePorts{
-		Replay: func(context.Context, llm.GenerateRequestV1) (durable.GenerateReplay, error) {
-			return durable.GenerateReplay{}, nil
-		},
-		CacheLookup: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (durable.CacheDecision, error) {
-			return durable.CacheDecision{}, nil
-		},
-		CompactionDecision: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CacheDecision) (durable.CompactionDecision, error) {
-			return durable.CompactionDecision{}, nil
-		},
-		Compact: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay) (durable.GenerateReplay, error) {
-			return durable.GenerateReplay{}, nil
-		},
-		Route: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CompactionDecision) (durable.RoutePlan, error) {
-			return durable.RoutePlan{}, nil
-		},
-		Reserve: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
-			return durable.ReserveResult{}, nil
-		},
-		Claim: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
-			return durable.ClaimReceipt{}, nil
-		},
-		Dispatch: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.DispatchResult, error) {
-			return durable.DispatchResult{}, nil
-		},
-		Finalize: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.RoutePlan, durable.ReserveResult, durable.DispatchResult) (durable.GenerateFinalization, error) {
-			return durable.GenerateFinalization{}, nil
-		},
-		FinalizeCache: func(context.Context, llm.GenerateRequestV1, durable.GenerateReplay, durable.CacheDecision) (durable.GenerateFinalization, error) {
-			return durable.GenerateFinalization{}, nil
-		},
-		Reconcile: func(context.Context, llm.GenerateRequestV1, durable.RoutePlan, durable.ReserveResult, durable.GenerateFinalization) error {
-			return nil
-		},
-	}
-	compact := durable.CompactPorts{
-		Replay: func(context.Context, llm.CompactRequestV1) (durable.CompactReplay, error) {
-			return durable.CompactReplay{}, nil
-		},
-		CacheLookup: func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.CompactCacheDecision, error) {
-			return durable.CompactCacheDecision{}, nil
-		},
-		Route: func(context.Context, llm.CompactRequestV1, durable.CompactReplay) (durable.RoutePlan, error) {
-			return durable.RoutePlan{}, nil
-		},
-		Reserve: func(context.Context, llm.CompactRequestV1, durable.RoutePlan) (durable.ReserveResult, error) {
-			return durable.ReserveResult{}, nil
-		},
-		Claim: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult) (durable.ClaimReceipt, error) {
-			return durable.ClaimReceipt{}, nil
-		},
-		Dispatch: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ClaimReceipt) (durable.CompactDispatchResult, error) {
-			return durable.CompactDispatchResult{}, nil
-		},
-		Finalize: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.RoutePlan, durable.ReserveResult, durable.CompactDispatchResult) (durable.CompactFinalization, error) {
-			return durable.CompactFinalization{}, nil
-		},
-		FinalizeCache: func(context.Context, llm.CompactRequestV1, durable.CompactReplay, durable.CompactCacheDecision) (durable.CompactFinalization, error) {
-			return durable.CompactFinalization{}, nil
-		},
-		Reconcile: func(context.Context, llm.CompactRequestV1, durable.RoutePlan, durable.ReserveResult, durable.CompactFinalization) error {
-			return nil
-		},
-	}
+	generate := recordingGeneratePorts(new([]string), validGenerateV1Request(), durable.RoutePlan{})
+	compact := recordingCompactPorts(new([]string), validCompactV1Request(), durable.RoutePlan{})
 	runtime, err := NewDurableV1Runtime(generate, compact, nil)
 	if err != nil {
 		t.Fatalf("NewDurableV1Runtime() error = %v", err)

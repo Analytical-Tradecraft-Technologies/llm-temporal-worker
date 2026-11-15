@@ -56,7 +56,7 @@ func TestAppendItemsJSONMatchesJSONMarshal(t *testing.T) {
 		"nil item":       {items[0], nil},
 		"typed nil item": {(*llm.Message)(nil)},
 		"invalid actor":  {items[0], llm.Message{Actor: "system"}},
-		"invalid call":   {llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{")}},
+		"invalid call":   {lookupCall("a", "{")},
 		"invalid result": {llm.ToolResult{}},
 		"invalid state":  {llm.ProviderState{}},
 		"invalid ref":    {llm.Reference{}},
@@ -160,11 +160,7 @@ func nestedArray(depth int) json.RawMessage {
 
 func TestCheckpointBlobEnvelopeMatchesLegacyEncode(t *testing.T) {
 	items := encodingTestItems()[:2]
-	snapshotItems, err := json.Marshal(items)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot := checkpointSnapshotPayload{Items: snapshotItems, Settings: settingsPatchToWire(settingsPatchFromModel(RootModelState("m"))), Depth: 3, Lineage: []string{"a", "b<c>"}}
+	snapshot := checkpointSnapshotPayload{Items: mustJSON(t, items), Settings: settingsPatchToWire(settingsPatchFromModel(RootModelState("m"))), Depth: 3, Lineage: []string{"a", "b<c>"}}
 	payloads := map[string]any{
 		"items":    items,
 		"no items": []llm.Item{},

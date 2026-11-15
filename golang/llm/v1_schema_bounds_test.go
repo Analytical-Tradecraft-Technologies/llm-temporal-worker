@@ -2,7 +2,6 @@ package llm_test
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -56,25 +55,15 @@ func TestV1SettingsPatchDecodesTheCompactionPolicyShape(t *testing.T) {
 			t.Fatalf("policy %s: Unmarshal = %v, want a field error naming %s", policy, err, want)
 		}
 	}
-	var patch llm.SettingsPatchV1
 	valid := `{"compaction_policy":{"set":{"version":"generic-2026-07-18","prompt_version":"v1","summary_style":"concise","trigger_tokens":20000,"target_tokens":9000,"recent_turns":4,"output_reserve_tokens":2048,"materialization_threshold_bytes":0}}}`
-	if err := json.Unmarshal([]byte(valid), &patch); err != nil {
-		t.Fatalf("a complete valid policy was rejected: %v", err)
-	}
+	patch := mustUnmarshal[llm.SettingsPatchV1](t, []byte(valid), "a complete valid policy was rejected")
 	if _, err := patch.MarshalJSON(); err != nil {
 		t.Fatalf("a complete valid policy does not encode: %v", err)
 	}
 }
 
 func TestV1GenerateResponseRejectsANullActualClass(t *testing.T) {
-	data, err := os.ReadFile("testdata/v1/generate-response-disabled-cache.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fixture map[string]any
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		t.Fatal(err)
-	}
+	fixture := mustUnmarshal[map[string]any](t, readV1Fixture(t, "generate-response-disabled-cache.json"), "decode fixture")
 	service := fixture["service"].(map[string]any)
 	delete(service, "actual")
 	omitted, _ := json.Marshal(fixture)

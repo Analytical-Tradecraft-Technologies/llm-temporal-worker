@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gpt54DefaultEntry is OpenAI's direct gpt-5.4 standard price: 2x input and
@@ -32,13 +33,7 @@ func assertUsageCosts(t *testing.T, entry Entry, tests map[string]usageCost) {
 	t.Helper()
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			cost, err := CostFromUsage(entry, test.usage)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cost.USD.Cmp(MustUSD(test.want)) != 0 {
-				t.Fatalf("cost = %s, want %s", cost.USD.String(), test.want)
-			}
+			assertCostUSD(t, name, entry, test.usage, test.want)
 		})
 	}
 }
@@ -78,27 +73,18 @@ func TestLongPromptPriceIsDetachedFromCatalogCopies(t *testing.T) {
 	catalog := mustCompileUSD(t, "v", []Entry{source})
 	source.LongPrompt.MinPromptTokens = 1
 	resolver := NewResolver(catalog)
-	query := Query{Provider: "openai", Family: "openai_responses", EndpointID: "openai", Model: "gpt-5.4", ProviderTier: "default"}
-	quote, err := resolver.Resolve(query)
-	if err != nil {
-		t.Fatal(err)
-	}
+	query := entryQuery(gpt54DefaultEntry(), time.Time{})
+	quote := mustResolve(t, resolver, query)
 	quote.Entry.LongPrompt.MinPromptTokens = 2
 	resolver.Snapshot().Entries[0].LongPrompt.MinPromptTokens = 3
-	again, err := resolver.Resolve(query)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := again.Entry.LongPrompt.MinPromptTokens; got != 272_000 {
+	if got := mustResolve(t, resolver, query).Entry.LongPrompt.MinPromptTokens; got != 272_000 {
 		t.Fatalf("long-prompt threshold = %d after mutating copies, want 272000", got)
 	}
 }
 
 func TestLongPromptPriceIsValidatedAndOmittedWhenUnset(t *testing.T) {
 	entry := gpt54DefaultEntry()
-	if _, err := CompileUSD("v", []Entry{entry}); err != nil {
-		t.Fatal(err)
-	}
+	mustCompileUSD(t, "v", []Entry{entry})
 	invalid := gpt54DefaultEntry()
 	invalid.LongPrompt.MinPromptTokens = 0
 	if _, err := CompileUSD("v", []Entry{invalid}); err == nil {

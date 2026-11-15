@@ -45,11 +45,18 @@ func TestGenerateRequestV1AcceptsSchemaBoundaries(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Marshal() rejected a valid boundary: %v", err)
 			}
-			var decoded llm.GenerateRequestV1
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatalf("Unmarshal() rejected a valid boundary: %v", err)
-			}
+			mustUnmarshal[llm.GenerateRequestV1](t, encoded, "Unmarshal() rejected a valid boundary")
 		})
+	}
+}
+
+// overlongContextField sets one context member to 257 code points on both the
+// typed request (through set) and its wire form (under field).
+func overlongContextField(field string, set func(*llm.RequestContext, string)) func(*llm.GenerateRequestV1, map[string]any) {
+	return func(request *llm.GenerateRequestV1, wire map[string]any) {
+		value := strings.Repeat("界", 257)
+		set(&request.Context, value)
+		wire["context"].(map[string]any)[field] = value
 	}
 }
 
@@ -78,21 +85,9 @@ func TestGenerateRequestV1RejectsValuesBeyondSchemaBounds(t *testing.T) {
 			request.Append = items
 			wire["append"] = items
 		}},
-		{name: "tenant 257", mutate: func(request *llm.GenerateRequestV1, wire map[string]any) {
-			value := strings.Repeat("界", 257)
-			request.Context.Tenant = value
-			wire["context"].(map[string]any)["tenant"] = value
-		}},
-		{name: "project 257", mutate: func(request *llm.GenerateRequestV1, wire map[string]any) {
-			value := strings.Repeat("界", 257)
-			request.Context.Project = value
-			wire["context"].(map[string]any)["project"] = value
-		}},
-		{name: "actor 257", mutate: func(request *llm.GenerateRequestV1, wire map[string]any) {
-			value := strings.Repeat("界", 257)
-			request.Context.Actor = value
-			wire["context"].(map[string]any)["actor"] = value
-		}},
+		{name: "tenant 257", mutate: overlongContextField("tenant", func(context *llm.RequestContext, value string) { context.Tenant = value })},
+		{name: "project 257", mutate: overlongContextField("project", func(context *llm.RequestContext, value string) { context.Project = value })},
+		{name: "actor 257", mutate: overlongContextField("actor", func(context *llm.RequestContext, value string) { context.Actor = value })},
 		{name: "empty model set", mutate: func(request *llm.GenerateRequestV1, wire map[string]any) {
 			value := ""
 			request.SettingsPatch.Model.Set = &value
@@ -114,11 +109,7 @@ func TestGenerateRequestV1RejectsValuesBeyondSchemaBounds(t *testing.T) {
 			if _, err := json.Marshal(request); err == nil {
 				t.Fatal("Marshal() accepted a value beyond the schema bound")
 			}
-			encoded := mustMarshal(t, wire)
-			var decoded llm.GenerateRequestV1
-			if err := json.Unmarshal(encoded, &decoded); err == nil {
-				t.Fatal("Unmarshal() accepted a value beyond the schema bound")
-			}
+			requireUnmarshalRejected[llm.GenerateRequestV1](t, mustMarshal(t, wire), "Unmarshal() accepted a value beyond the schema bound")
 		})
 	}
 }

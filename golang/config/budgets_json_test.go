@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,10 +11,7 @@ import (
 
 func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 	original := exampleYAML(t)
-	yamlSnapshot, err := config.Compile(context.Background(), original, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	yamlSnapshot := mustCompile(t, original)
 	encoded := mustMarshalJSON(t, yamlSnapshot.Config().Budgets)
 	start := strings.Index(string(original), "\nbudgets:\n")
 	end := strings.Index(string(original), "\ncontinuation:\n")
@@ -23,10 +19,7 @@ func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 		t.Fatal("example budget block missing")
 	}
 	asJSON := string(original[:start]) + "\nbudgets_json: |\n  " + string(encoded) + "\n" + string(original[end:])
-	jsonSnapshot, err := config.Compile(context.Background(), []byte(asJSON), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jsonSnapshot := mustCompile(t, []byte(asJSON))
 	if !reflect.DeepEqual(yamlSnapshot.Config().Budgets, jsonSnapshot.Config().Budgets) || yamlSnapshot.Digest() != jsonSnapshot.Digest() {
 		t.Fatal("JSON and YAML must yield the same effective policy and snapshot identity")
 	}
@@ -34,18 +27,12 @@ func TestBudgetsJSONMatchesYAMLAndSnapshotIdentity(t *testing.T) {
 	if changed == asJSON {
 		t.Fatal("expected limit missing")
 	}
-	changedSnapshot, err := config.Compile(context.Background(), []byte(changed), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	changedSnapshot := mustCompile(t, []byte(changed))
 	if changedSnapshot.Digest() == jsonSnapshot.Digest() {
 		t.Fatal("budget change omitted from configuration digest")
 	}
-	if _, err := config.Load(append(original, []byte("\nbudgets_json: '{}'")...)); err == nil {
-		t.Fatal("accepted two budget sources")
-	}
-	withoutLease := strings.Replace(string(original), "  reservation_lease: 15m\n", "", 1)
-	loaded := mustLoadConfig(t, []byte(withoutLease))
+	requireLoadRejected(t, append(original, []byte("\nbudgets_json: '{}'")...), "accepted two budget sources")
+	loaded := loadExampleWith(t, "  reservation_lease: 15m\n", "")
 	if time.Duration(loaded.State.ReservationLease) != 15*time.Minute {
 		t.Fatalf("lease default = %v", loaded.State.ReservationLease)
 	}

@@ -12,13 +12,8 @@ import (
 )
 
 func TestGenerateActivityKeepsHeartbeatAliveDuringBlockedGenerate(t *testing.T) {
-	ticker := newManualHeartbeatTicker()
 	heartbeater := newRecordingHeartbeater()
-	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := keepaliveActivities(value, heartbeater, ticker)
-
-	done := startKeepaliveGenerate(context.Background(), activities)
-	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	ticker, value, done := startBlockedKeepaliveGenerate(t, context.Background(), heartbeater)
 
 	// Keepalive facts bypass lifecycle de-duplication, so two identical
 	// provider-wait facts remain two Temporal heartbeats while Generate blocks.
@@ -28,13 +23,7 @@ func TestGenerateActivityKeepsHeartbeatAliveDuringBlockedGenerate(t *testing.T) 
 	heartbeater.WaitForPhase(t, heartbeatProviderWaitPhase, 2)
 
 	close(value.release)
-	result := waitForGenerateActivityResult(t, done)
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	if result.response.Metadata.OperationID != "operation-id" {
-		t.Fatalf("Activity response = %#v", result.response)
-	}
+	assertKeepaliveGenerateSucceeded(t, done, "blocked Generate")
 	waitForKeepaliveEvent(t, ticker.stopped, "keepalive ticker to stop before Generate returns")
 
 	for _, progress := range heartbeater.Snapshot() {
@@ -48,24 +37,14 @@ func TestGenerateActivityKeepsHeartbeatAliveDuringBlockedGenerate(t *testing.T) 
 }
 
 func TestGenerateActivityMapsKeepaliveFailureToAmbiguousAndJoins(t *testing.T) {
-	ticker := newManualHeartbeatTicker()
-	keepaliveErr := errors.New("heartbeat transport unavailable")
 	heartbeater := newRecordingHeartbeater()
 	heartbeater.failurePhase = heartbeatProviderWaitPhase
-	heartbeater.failure = keepaliveErr
-	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := keepaliveActivities(value, heartbeater, ticker)
-
-	done := startKeepaliveGenerate(context.Background(), activities)
-	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	heartbeater.failure = errors.New("heartbeat transport unavailable")
+	ticker, value, done := startBlockedKeepaliveGenerate(t, context.Background(), heartbeater)
 	ticker.Tick()
 	heartbeater.WaitForPhase(t, heartbeatProviderWaitPhase, 1)
 
-	result := waitForGenerateActivityResult(t, done)
-	if result.response.Metadata.OperationID != "" || result.response.Response.OperationID != "" {
-		t.Fatalf("Activity response after keepalive failure = %#v, want zero response", result.response)
-	}
-	assertAmbiguousActivityError(t, result.err)
+	assertKeepaliveGenerateAmbiguous(t, done, "keepalive failure")
 	if !errors.Is(value.ContextError(), context.Canceled) {
 		t.Fatalf("Generate context error = %v, want context cancellation after keepalive failure", value.ContextError())
 	}
@@ -73,14 +52,8 @@ func TestGenerateActivityMapsKeepaliveFailureToAmbiguousAndJoins(t *testing.T) {
 }
 
 func TestGenerateActivityDoesNotReturnSuccessWhenInFlightKeepaliveFails(t *testing.T) {
-	ticker := newManualHeartbeatTicker()
-	keepaliveErr := errors.New("heartbeat transport failed after Generate completed")
-	heartbeater := newGatedFailureHeartbeater(keepaliveErr)
-	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := keepaliveActivities(value, heartbeater, ticker)
-
-	done := startKeepaliveGenerate(context.Background(), activities)
-	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	heartbeater := newGatedFailureHeartbeater(errors.New("heartbeat transport failed after Generate completed"))
+	ticker, value, done := startBlockedKeepaliveGenerate(t, context.Background(), heartbeater)
 	ticker.Tick()
 	waitForKeepaliveEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
 
@@ -90,22 +63,13 @@ func TestGenerateActivityDoesNotReturnSuccessWhenInFlightKeepaliveFails(t *testi
 	close(value.release)
 	close(heartbeater.release)
 
-	result := waitForGenerateActivityResult(t, done)
-	if result.response.Metadata.OperationID != "" || result.response.Response.OperationID != "" {
-		t.Fatalf("Activity response after in-flight keepalive failure = %#v, want zero response", result.response)
-	}
-	assertAmbiguousActivityError(t, result.err)
+	assertKeepaliveGenerateAmbiguous(t, done, "in-flight keepalive failure")
 	waitForKeepaliveEvent(t, ticker.stopped, "in-flight keepalive ticker to stop before Generate returns")
 }
 
 func TestGenerateActivityIgnoresSelfStopCancellationFromInFlightKeepalive(t *testing.T) {
-	ticker := newManualHeartbeatTicker()
 	heartbeater := newGatedCancellationHeartbeater()
-	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := keepaliveActivities(value, heartbeater, ticker)
-
-	done := startKeepaliveGenerate(context.Background(), activities)
-	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	ticker, value, done := startBlockedKeepaliveGenerate(t, context.Background(), heartbeater)
 	ticker.Tick()
 	waitForKeepaliveEvent(t, heartbeater.entered, "keepalive heartbeat to begin")
 
@@ -113,25 +77,13 @@ func TestGenerateActivityIgnoresSelfStopCancellationFromInFlightKeepalive(t *tes
 	waitForKeepaliveEvent(t, heartbeater.canceled, "self-stop cancellation to reach in-flight heartbeat")
 	close(heartbeater.release)
 
-	result := waitForGenerateActivityResult(t, done)
-	if result.err != nil {
-		t.Fatalf("Generate error after self-stop heartbeat cancellation = %v", result.err)
-	}
-	if result.response.Metadata.OperationID != "operation-id" {
-		t.Fatalf("Activity response after self-stop heartbeat cancellation = %#v", result.response)
-	}
+	assertKeepaliveGenerateSucceeded(t, done, "Generate after self-stop heartbeat cancellation")
 	waitForKeepaliveEvent(t, ticker.stopped, "self-stopped keepalive ticker to stop before Generate returns")
 }
 
 func TestGenerateActivityCancellationStopsKeepalive(t *testing.T) {
-	ticker := newManualHeartbeatTicker()
-	heartbeater := newRecordingHeartbeater()
-	value := newBlockingGenerateEngine(testKeepaliveResponse())
-	activities := keepaliveActivities(value, heartbeater, ticker)
-
 	ctx, cancel := context.WithCancel(context.Background())
-	done := startKeepaliveGenerate(ctx, activities)
-	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	ticker, _, done := startBlockedKeepaliveGenerate(t, ctx, newRecordingHeartbeater())
 	cancel()
 
 	result := waitForGenerateActivityResult(t, done)
@@ -185,6 +137,42 @@ func keepaliveActivities(engine llm.Engine, heartbeater Heartbeater, ticker hear
 			return ticker
 		},
 	}
+}
+
+// startBlockedKeepaliveGenerate runs Generate in the background on a blocking
+// engine wired to heartbeater and a manual keepalive ticker, and waits until
+// the engine blocks.
+func startBlockedKeepaliveGenerate(t *testing.T, ctx context.Context, heartbeater Heartbeater) (*manualHeartbeatTicker, *blockingGenerateEngine, <-chan generateActivityResult) {
+	t.Helper()
+	ticker := newManualHeartbeatTicker()
+	value := newBlockingGenerateEngine(completedEngineResponse())
+	done := startKeepaliveGenerate(ctx, keepaliveActivities(value, heartbeater, ticker))
+	waitForKeepaliveEvent(t, value.started, "blocked Generate to start")
+	return ticker, value, done
+}
+
+// assertKeepaliveGenerateSucceeded waits for scenario's Generate result and
+// checks it returned the engine's completed response.
+func assertKeepaliveGenerateSucceeded(t *testing.T, done <-chan generateActivityResult, scenario string) {
+	t.Helper()
+	result := waitForGenerateActivityResult(t, done)
+	if result.err != nil {
+		t.Fatalf("%s error = %v", scenario, result.err)
+	}
+	if result.response.Metadata.OperationID != "operation-id" {
+		t.Fatalf("%s Activity response = %#v", scenario, result.response)
+	}
+}
+
+// assertKeepaliveGenerateAmbiguous waits for the Generate result after
+// scenario and checks it is a zero response with an ambiguous error.
+func assertKeepaliveGenerateAmbiguous(t *testing.T, done <-chan generateActivityResult, scenario string) {
+	t.Helper()
+	result := waitForGenerateActivityResult(t, done)
+	if result.response.Metadata.OperationID != "" || result.response.Response.OperationID != "" {
+		t.Fatalf("Activity response after %s = %#v, want zero response", scenario, result.response)
+	}
+	assertAmbiguousActivityError(t, result.err)
 }
 
 // startKeepaliveGenerate runs Generate with the keepalive payload in the
@@ -376,10 +364,6 @@ var _ Heartbeater = (*gatedCancellationHeartbeater)(nil)
 
 func testKeepalivePayload() GenerateRequest {
 	return GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
-}
-
-func testKeepaliveResponse() llm.Response {
-	return llm.Response{OperationKey: "operation-1", OperationID: "operation-id", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}
 }
 
 func waitForKeepaliveEvent(t *testing.T, event <-chan struct{}, description string) {
