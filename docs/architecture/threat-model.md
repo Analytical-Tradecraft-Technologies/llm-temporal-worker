@@ -200,8 +200,10 @@ routes use only the prices compiled into the built-in rules.
 
 **Controls.**
 
-- Every adapter is built with the guarded HTTP client
-  (`buildAdapter` in [`internal/runtime/factory.go`](../../golang/internal/runtime/factory.go)).
+- Every adapter, and the model-sync fetcher, is built with the guarded HTTP
+  client (`providerEgressClient`, called from `buildAdapter` and
+  `startModelSync` in
+  [`internal/runtime/factory.go`](../../golang/internal/runtime/factory.go)).
   It allows only the endpoint's `outbound_hosts` and ports, disables proxies
   and redirects, resolves DNS at dial time and refuses loopback, private,
   link-local, multicast, carrier-grade NAT and metadata addresses
