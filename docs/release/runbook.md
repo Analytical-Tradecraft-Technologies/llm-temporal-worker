@@ -547,3 +547,6 @@ new Activity execution applies the worker's current limit, so an open request
 whose next Activity argument exceeds the new limit fails with
 `llm_invalid_argument`. See the
 [configuration reference](../reference/configuration.md) for details.
+
+The [fleet upgrade and rollback runbook](../runbooks/fleet-upgrade-and-rollback.md)
+lists this rule with the other pre-rollout checks and the no-rollback gates.
