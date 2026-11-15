@@ -27,7 +27,7 @@ import sys
 
 def read_weights(path):
     weights = {}
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         for number, raw in enumerate(handle, 1):
             line = raw.rstrip("\n")
             if not line.strip() or line.startswith("#"):

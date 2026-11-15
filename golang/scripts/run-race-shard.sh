@@ -36,7 +36,7 @@ fi
 script_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 weights="${RACE_WEIGHTS:-$script_dir/race-weights.tsv}"
 balancer="$script_dir/../../scripts/ci/balance-shards.py"
-cd -- "$(dirname -- "$script_dir")"
+cd -- "$(dirname -- "$script_dir")" || exit 1
 
 # carved: "<package> <Test>" lines for every carved-out test.
 carved="$(awk -F '\t' '$0 !~ /^#/ && $1 ~ /^[^ ]+ [A-Za-z_][A-Za-z0-9_]*$/ { print $1 }' "$weights")"
