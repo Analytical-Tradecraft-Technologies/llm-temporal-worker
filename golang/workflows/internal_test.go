@@ -53,8 +53,7 @@ func workflowJSON(t *testing.T, name string, target any) {
 }
 func workflowTest(t *testing.T, kind string, steps ...workflowStep) *workflowFixture {
 	t.Helper()
-	var suite testsuite.WorkflowTestSuite
-	f := &workflowFixture{env: suite.NewTestWorkflowEnvironment(), steps: steps}
+	f := &workflowFixture{env: newWorkflowEnv(), steps: steps}
 	f.completed = llm.ExecutionResultV1{RequestID: testRequestID, Kind: kind, State: llm.ExecutionCompleted}
 	if kind == "generate" {
 		f.input.Generate = new(llm.GenerateRequestV1)
@@ -137,19 +136,51 @@ func (f *workflowFixture) next(name string) (*llm.ExecutionResultV1, error) {
 func (f *workflowFixture) run(t *testing.T) {
 	t.Helper()
 	f.env.ExecuteWorkflow(RequestWorkflowName, f.input)
-	if err := f.env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
 	var result llm.ExecutionResultV1
-	if err := f.env.GetWorkflowResult(&result); err != nil {
-		t.Fatal(err)
-	}
+	requireWorkflowResult(t, f.env, &result)
 	if !reflect.DeepEqual(result, f.completed) || len(f.steps) != 0 {
 		t.Fatalf("unexpected result or remaining steps: %#v, %d", result, len(f.steps))
 	}
 }
 func step(name string, state llm.ExecutionStateV1) workflowStep {
 	return workflowStep{name: name, state: state}
+}
+
+// pendingPollCompleteSteps finds dispatched work at Preparation, polls it to
+// provider completion and completes it.
+func pendingPollCompleteSteps() []workflowStep {
+	return []workflowStep{step(activity.PrepareActivityName, llm.ExecutionPending), step(activity.PollActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted)}
+}
+
+// reference is the capability-bearing reference every reference step expects.
+func (f *workflowFixture) reference() llm.ExecutionReferenceV1 {
+	return llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}
+}
+
+func (f *workflowFixture) budgetRequest() BudgetRequest {
+	return BudgetRequest{Reference: f.reference(), Kind: "generate"}
+}
+
+func newWorkflowEnv() *testsuite.TestWorkflowEnvironment {
+	var suite testsuite.WorkflowTestSuite
+	return suite.NewTestWorkflowEnvironment()
+}
+
+func requireNoWorkflowError(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
+	t.Helper()
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// requireWorkflowResult requires the workflow to have succeeded and decodes
+// its result into result.
+func requireWorkflowResult(t *testing.T, env *testsuite.TestWorkflowEnvironment, result any) {
+	t.Helper()
+	requireNoWorkflowError(t, env)
+	if err := env.GetWorkflowResult(result); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestExecuteRequestRoutesBoundedSteps(t *testing.T) {
@@ -197,7 +228,7 @@ func TestExecuteRequestRoutesBoundedSteps(t *testing.T) {
 	}
 }
 func TestExecuteRequestRecoversAlreadyDispatchedWork(t *testing.T) {
-	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionPending), step(activity.PollActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
+	f := workflowTest(t, "generate", pendingPollCompleteSteps()...)
 	f.run(t)
 	f = workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
 	f.run(t)
@@ -232,7 +263,7 @@ func TestExecuteRequestRejectsFailureAndIdentityMismatch(t *testing.T) {
 	}
 }
 func TestExecuteRequestCancellationDoesNotAbandonPaidWork(t *testing.T) {
-	f := workflowTest(t, "generate", step(activity.PrepareActivityName, llm.ExecutionPending), step(activity.PollActivityName, llm.ExecutionProviderCompleted), step(activity.CompleteActivityName, llm.ExecutionCompleted))
+	f := workflowTest(t, "generate", pendingPollCompleteSteps()...)
 	f.env.RegisterDelayedCallback(func() { f.env.CancelWorkflow() }, time.Second)
 	f.run(t)
 }
@@ -244,7 +275,7 @@ func TestInternalWorkflowsContinueAsNew(t *testing.T) {
 		if budget {
 			f.steps = []workflowStep{step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait)}
 			name = BudgetWorkflowName
-			input = BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"}
+			input = f.budgetRequest()
 		}
 		f.env.ExecuteWorkflow(name, input)
 		var continued *workflow.ContinueAsNewError
@@ -256,10 +287,8 @@ func TestInternalWorkflowsContinueAsNew(t *testing.T) {
 func TestBudgetWorkflowReturnsExistingWork(t *testing.T) {
 	for _, state := range []llm.ExecutionStateV1{llm.ExecutionAcquired, llm.ExecutionPending, llm.ExecutionProviderCompleted, llm.ExecutionCompleted, llm.ExecutionOutcomeUnknown, llm.ExecutionFailed} {
 		f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, state))
-		f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
-		if err := f.env.GetWorkflowError(); err != nil {
-			t.Fatal(err)
-		}
+		f.env.ExecuteWorkflow(BudgetWorkflowName, f.budgetRequest())
+		requireNoWorkflowError(t, f.env)
 		var result llm.ExecutionResultV1
 		if err := f.env.GetWorkflowResult(&result); err != nil || result.State != state || result.Capability != "" {
 			t.Fatalf("wrong budget result: %+v %v", result, err)
@@ -268,7 +297,7 @@ func TestBudgetWorkflowReturnsExistingWork(t *testing.T) {
 }
 func TestBudgetWorkflowRejectsNonProgressingAcquisition(t *testing.T) {
 	f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetRequired))
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, f.budgetRequest())
 	if f.env.GetWorkflowError() == nil {
 		t.Fatal("nonprogressing acquisition accepted")
 	}
@@ -280,7 +309,7 @@ func TestBudgetWorkflowBoundsHistoryWithoutServerHint(t *testing.T) {
 		steps[i] = step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait)
 	}
 	f := workflowTest(t, "generate", steps...)
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, f.budgetRequest())
 	var continued *workflow.ContinueAsNewError
 	if !errors.As(f.env.GetWorkflowError(), &continued) || len(f.calls) != maxStepsPerRun {
 		t.Fatal("unbounded budget history")
@@ -312,10 +341,8 @@ func TestBudgetWorkflowBacksOffConsecutiveDenials(t *testing.T) {
 	f.env.SetOnTimerScheduledListener(func(_ string, duration time.Duration) {
 		timers = append(timers, duration)
 	})
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate"})
-	if err := f.env.GetWorkflowError(); err != nil {
-		t.Fatal(err)
-	}
+	f.env.ExecuteWorkflow(BudgetWorkflowName, f.budgetRequest())
+	requireNoWorkflowError(t, f.env)
 	// The fixture hints three seconds, which wins over the first two backoffs.
 	want := []time.Duration{3 * time.Second, 3 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, 64 * time.Second, 128 * time.Second, 256 * time.Second, maxBudgetBackoff, maxBudgetBackoff}
 	if !reflect.DeepEqual(timers, want) {
@@ -337,7 +364,7 @@ func TestBudgetBackoffHonoursLongerHintAndCarriedWaits(t *testing.T) {
 
 func TestBudgetWorkflowRejectsNegativeWaits(t *testing.T) {
 	f := workflowTest(t, "generate", step(activity.AcquireBudgetActivityName, llm.ExecutionBudgetWait))
-	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: llm.ExecutionReferenceV1{RequestID: testRequestID, Context: f.caller(), Capability: testCapability}, Kind: "generate", Waits: -1})
+	f.env.ExecuteWorkflow(BudgetWorkflowName, BudgetRequest{Reference: f.reference(), Kind: "generate", Waits: -1})
 	if f.env.GetWorkflowError() == nil {
 		t.Fatal("negative denial count accepted")
 	}

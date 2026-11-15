@@ -94,14 +94,8 @@ func TestFetchedCatalogRetainsPrecisionAndScheduledPrices(t *testing.T) {
 	if err != nil || len(document.Models) != 2 {
 		t.Fatalf("Fetch = %d models, %v; want both priced text models", len(document.Models), err)
 	}
-	encoded, err := document.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := DecodeDocument(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeDocument(t, document)
+	decoded := decodeDocument(t, encoded)
 	for _, model := range decoded.Models {
 		if _, err := maxPrices(model.Endpoints); err != nil {
 			t.Fatalf("price fetched model %q: %v", model.ID, err)

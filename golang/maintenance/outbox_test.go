@@ -20,6 +20,15 @@ func testBlobEvent(t *testing.T, id string, at time.Time) Event {
 	return event
 }
 
+func newTestOutbox(t *testing.T, events ...Event) *InMemoryOutbox {
+	t.Helper()
+	store, err := NewInMemoryOutbox(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 func TestNormalizeSafePayloadBoundsAndCanonicalizes(t *testing.T) {
 	canonical, err := NormalizeSafePayload(json.RawMessage(`{"z":2,"a":{"b":1,"a":0}}`))
 	if err != nil || string(canonical) != `{"a":{"a":0,"b":1},"z":2}` {
@@ -101,10 +110,7 @@ func TestDeleteBlobPayloadIsTypedAndBoundToAggregate(t *testing.T) {
 func TestInMemoryOutboxDedupeAndBoundedConcurrentClaim(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	event := testBlobEvent(t, "event-1", at)
-	store, err := NewInMemoryOutbox([]Event{event})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestOutbox(t, event)
 	if err := store.Publish(context.Background(), event); err != nil {
 		t.Fatalf("idempotent publish failed: %v", err)
 	}
@@ -164,10 +170,7 @@ func TestDispatcherMakesMissingObjectSuccessAndRetriesFailures(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	missing := testBlobEvent(t, "missing", at)
 	failing := testBlobEvent(t, "failing", at)
-	store, err := NewInMemoryOutbox([]Event{missing, failing})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestOutbox(t, missing, failing)
 	dispatcher := Dispatcher{Store: store, Delete: func(_ context.Context, event Event) error {
 		if event.ID == missing.ID {
 			return ErrObjectNotFound
@@ -213,10 +216,7 @@ func TestDispatcherMakesMissingObjectSuccessAndRetriesFailures(t *testing.T) {
 func TestOutboxLeaseRecovery(t *testing.T) {
 	at := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	event := testBlobEvent(t, "lease", at)
-	store, err := NewInMemoryOutbox([]Event{event})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestOutbox(t, event)
 	first, err := store.Claim(context.Background(), ClaimOptions{Now: at, Limit: 1, Lease: time.Minute})
 	if err != nil {
 		t.Fatal(err)

@@ -1,22 +1,19 @@
 package openaichat
 
 import (
-	"encoding/json"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func liftOpenRouterUsage(t *testing.T, usage string) *llm.Response {
 	t.Helper()
-	var response openai.ChatCompletion
 	body := `{"id":"gen-1","model":"router-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":` + usage + `}`
-	if err := json.Unmarshal([]byte(body), &response); err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 	lifted := &llm.Response{}
 	if err := augmentOpenRouter(provider.Call{}, &response, lifted); err != nil {
 		t.Fatal(err)

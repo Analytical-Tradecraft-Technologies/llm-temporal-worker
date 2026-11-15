@@ -1,10 +1,10 @@
 package bedrockconverse
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -36,9 +36,6 @@ func TestDuplicateKeyToolInputIsAnAcceptedInvalidResponse(t *testing.T) {
 			}
 			continue
 		}
-		var mapped *provider.Error
-		if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Phase != provider.PhaseLift || mapped.Dispatch != provider.DispatchAccepted {
-			t.Fatalf("duplicate-key tool input error = %#v", err)
-		}
+		adaptertest.RequireLiftInvalidResponse(t, err, "duplicate-key tool input error")
 	}
 }

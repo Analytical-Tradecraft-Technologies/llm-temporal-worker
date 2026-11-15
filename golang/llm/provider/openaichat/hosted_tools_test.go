@@ -6,6 +6,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
 	openai "github.com/openai/openai-go/v3"
 )
@@ -61,10 +62,7 @@ func TestOpenRouterSearchReportedTotalIncludesTools(t *testing.T) {
 			body += `,"cost":0.0123`
 		}
 		body += `}}`
-		var raw openai.ChatCompletion
-		if err := json.Unmarshal([]byte(body), &raw); err != nil {
-			t.Fatal(err)
-		}
+		raw := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 		got := llm.Response{}
 		if err := augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got); err != nil {
 			t.Fatal(err)
@@ -109,10 +107,7 @@ func TestOpenRouterSearchCountReadsBothServerToolUseShapes(t *testing.T) {
 					body += `,"cost":0.060018`
 				}
 				body += `}}`
-				var raw openai.ChatCompletion
-				if err := json.Unmarshal([]byte(body), &raw); err != nil {
-					t.Fatal(err)
-				}
+				raw := contract.DecodeJSON[openai.ChatCompletion](t, []byte(body))
 				got := llm.Response{}
 				if err := augmentOpenRouter(provider.Call{Model: "openai/gpt-test", Metadata: provider.CallMetadata{WebSearch: true}}, &raw, &got); err != nil {
 					t.Fatal(err)

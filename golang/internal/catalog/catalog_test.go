@@ -19,7 +19,7 @@ import (
 )
 
 func TestLoadCapabilitiesConvertsStrictEntries(t *testing.T) {
-	ref := writeCatalog(t, `version: llmtw-capabilities/v1
+	catalog := loadCapabilities(t, `version: llmtw-capabilities/v1
 entries:
   - id: openai-prod
     family: openai_responses
@@ -51,11 +51,6 @@ entries:
       context_tokens: 400000
       output_tokens: 32768
 `)
-
-	catalog, err := LoadCapabilities(ref)
-	if err != nil {
-		t.Fatalf("LoadCapabilities() error = %v", err)
-	}
 	profile, ok := catalog.Profiles["openai-prod"]
 	if profile.OutputTokens != 32768 {
 		t.Fatalf("output ceiling = %d", profile.OutputTokens)
@@ -87,7 +82,7 @@ entries:
 }
 
 func TestLoadCapabilitiesAcceptsLocalProfilesAndClosedClasses(t *testing.T) {
-	ref := writeCatalog(t, `version: local-mock-v1
+	catalog := loadCapabilities(t, `version: local-mock-v1
 profiles:
   local-mock-v1:
     family: openai_chat
@@ -98,10 +93,6 @@ profiles:
     max_context_tokens: 32768
     max_output_tokens: 4096
 `)
-	catalog, err := LoadCapabilities(ref)
-	if err != nil {
-		t.Fatalf("LoadCapabilities() error = %v", err)
-	}
 	profile := catalog.Profiles["local-mock-v1"]
 	if profile.OutputTokens != 4096 {
 		t.Fatalf("output ceiling = %d", profile.OutputTokens)
@@ -118,7 +109,7 @@ profiles:
 }
 
 func TestLoadCapabilitiesPreservesAbsentAndExplicitlyEmptyServiceClasses(t *testing.T) {
-	ref := writeCatalog(t, `version: local-mock-v1
+	catalog := loadCapabilities(t, `version: local-mock-v1
 profiles:
   absent:
     family: openai_chat
@@ -130,10 +121,6 @@ profiles:
     input: [text]
     service_classes: []
 `)
-	catalog, err := LoadCapabilities(ref)
-	if err != nil {
-		t.Fatalf("LoadCapabilities() error = %v", err)
-	}
 	if catalog.Profiles["absent"].ServiceClassesDeclared {
 		t.Fatal("omitted service_classes should remain undeclared")
 	}
@@ -143,7 +130,7 @@ profiles:
 }
 
 func TestLoadPricingCompilesExactDecimalEntries(t *testing.T) {
-	ref := writeCatalog(t, `version: llmtw-prices/v1
+	catalog := loadPricing(t, `version: llmtw-prices/v1
 id: catalog-2026-07-13
 entries:
   - provider: openai
@@ -157,11 +144,6 @@ entries:
     cache_read_per_million: "0.125000"
     source: operator-verified
 `)
-
-	catalog, err := LoadPricing(ref)
-	if err != nil {
-		t.Fatalf("LoadPricing() error = %v", err)
-	}
 	if catalog.ID != "catalog-2026-07-13" {
 		t.Fatalf("catalog identity = %#v", catalog)
 	}
@@ -197,7 +179,7 @@ entries:
 }
 
 func TestLoadPricingPreservesOmittedComponentsAsUnknown(t *testing.T) {
-	ref := writeCatalog(t, `version: llmtw-prices/v1
+	catalog := loadPricing(t, `version: llmtw-prices/v1
 id: catalog-partial
 entries:
   - provider: openai
@@ -209,10 +191,6 @@ entries:
     input_per_million: "1.250000"
     output_per_million: "10.000000"
 `)
-	catalog, err := LoadPricing(ref)
-	if err != nil {
-		t.Fatal(err)
-	}
 	entry := catalog.Catalog.Entries[0]
 	want := []pricing.PriceComponent{pricing.PriceComponentCacheRead, pricing.PriceComponentCacheWrite, pricing.PriceComponentPerRequest, pricing.PriceComponentReasoning}
 	if !reflect.DeepEqual(entry.UnknownComponents, want) {
@@ -226,7 +204,7 @@ entries:
 // A direct long-context route priced in YAML is billed at its long-prompt
 // tier above the threshold, as the model-sync path already was (#1502).
 func TestLoadPricingAppliesALongPromptTier(t *testing.T) {
-	ref := writeCatalog(t, `version: llmtw-prices/v1
+	catalog := loadPricing(t, `version: llmtw-prices/v1
 id: catalog-long-prompt
 entries:
   - provider: anthropic
@@ -250,10 +228,6 @@ entries:
       reasoning_per_million: "0"
       per_request: "0"
 `)
-	catalog, err := LoadPricing(ref)
-	if err != nil {
-		t.Fatal(err)
-	}
 	entry := catalog.Catalog.Entries[0]
 	if entry.LongPrompt == nil || entry.LongPrompt.MinPromptTokens != 200000 {
 		t.Fatalf("long prompt = %#v", entry.LongPrompt)
@@ -337,10 +311,7 @@ entries:
 	if _, err := LoadPricing(writeCatalog(t, overlapping)); err == nil {
 		t.Fatal("YAML loader accepted overlapping price periods")
 	}
-	loaded, err := LoadPricing(writeCatalog(t, body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	loaded := loadPricing(t, body)
 	if loaded.Digest == ([32]byte{}) || loaded.Catalog.Digest == ([32]byte{}) {
 		t.Fatal("source and compiled digests must be recorded")
 	}
@@ -539,6 +510,24 @@ func writeCatalog(t *testing.T, body string) config.CatalogRef {
 	}
 	digest := sha256.Sum256([]byte(body))
 	return config.CatalogRef{File: path, SHA256: hex.EncodeToString(digest[:])}
+}
+
+func loadCapabilities(t *testing.T, body string) CapabilityCatalog {
+	t.Helper()
+	catalog, err := LoadCapabilities(writeCatalog(t, body))
+	if err != nil {
+		t.Fatalf("LoadCapabilities() error = %v", err)
+	}
+	return catalog
+}
+
+func loadPricing(t *testing.T, body string) PricingCatalog {
+	t.Helper()
+	catalog, err := LoadPricing(writeCatalog(t, body))
+	if err != nil {
+		t.Fatalf("LoadPricing() error = %v", err)
+	}
+	return catalog
 }
 
 func TestLoadCapabilitiesRejectsUnenforcedFeatureByteLimits(t *testing.T) {

@@ -27,10 +27,7 @@ func TestAzureChatUsesDeploymentPathAndApiKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, "azure-a", provider.FamilyOpenAIChat, llm.Request{OperationKey: "azure-op", Model: "deployment-a", ServiceClass: llm.ServiceClassPriority})
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil || got.URL.Path != "/openai/deployments/deployment-a/chat/completions" || got.URL.Query().Get("api-version") != "2025-01-01" {
 		t.Fatalf("azure request = %#v", got.URL)
 	}

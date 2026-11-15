@@ -2,7 +2,6 @@ package anthropicmessages
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
@@ -72,10 +72,7 @@ func TestAWSGatewayUsesOfficialMessagesClientExactlyOnce(t *testing.T) {
 func TestAWSConfigAndCallsDoNotSerializeCredentialValues(t *testing.T) {
 	const secret = "aws-secret-must-not-cross-boundary"
 	config := AWSClientConfig{AWSConfig: anthropicaws.ClientConfig{AWSAccessKey: "access", AWSSecretAccessKey: secret, AWSRegion: "us-east-1", SkipAuth: true}}
-	encodedConfig, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encodedConfig := contract.MarshalJSON(t, config)
 	if strings.Contains(string(encodedConfig), secret) {
 		t.Fatal("resolved credential value appeared in AWS client configuration serialization")
 	}
@@ -85,10 +82,7 @@ func TestAWSConfigAndCallsDoNotSerializeCredentialValues(t *testing.T) {
 		return profile
 	}())}
 	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "aws-credentials", Model: "claude-contract"})
-	encodedCall, err := json.Marshal(call)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encodedCall := contract.MarshalJSON(t, call)
 	if strings.Contains(string(encodedCall), secret) {
 		t.Fatal("credential value appeared in provider call serialization")
 	}
@@ -151,15 +145,9 @@ func TestAWSGatewayClassifiesAuthenticationFixture(t *testing.T) {
 }
 
 func TestAWSGatewayFixtureTextOnlyResponseDoesNotLiftContinuation(t *testing.T) {
-	var response anthropic.Message
-	if err := json.Unmarshal(anthropicAWSFixture.read(t, "response.completed.json"), &response); err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[anthropic.Message](t, anthropicAWSFixture.read(t, "response.completed.json"))
 	call := provider.Call{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "aws-fixture", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := mustProfile(t, testProfile()).liftResponse(call, &response, "aws-fixture-request")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, mustProfile(t, testProfile()), call, &response, "aws-fixture-request")
 	if lifted.Route.APIFamily != string(provider.FamilyAnthropicMessages) || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassStandard || lifted.Continuation != nil {
 		t.Fatalf("AWS fixture response = %#v", lifted)
 	}

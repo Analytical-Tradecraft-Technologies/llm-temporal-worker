@@ -2,7 +2,6 @@ package bedrockmessages
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -125,10 +124,7 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 func TestBedrockCallSerializationDoesNotContainResolvedCredentials(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
 	call := adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockMessages, llm.Request{OperationKey: "bedrock-credentials", Model: "claude-contract"})
-	encoded, err := json.Marshal(call)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, call)
 	if strings.Contains(string(encoded), "contract-secret") || strings.Contains(string(encoded), "contract-access") {
 		t.Fatalf("credential value appeared in call serialization: %s", encoded)
 	}

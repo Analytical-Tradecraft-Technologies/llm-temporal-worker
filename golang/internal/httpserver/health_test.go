@@ -131,24 +131,13 @@ func TestServerNilAndDuplicateStartErrors(t *testing.T) {
 		t.Fatalf("nil server Shutdown() error = %v", err)
 	}
 
-	preStartServer, err := httpserver.New(httpserver.Options{Address: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	preStartServer := newServer(t, httpserver.Options{Address: "127.0.0.1:0"})
 	if err := preStartServer.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown before Start() error = %v", err)
 	}
 
-	server, err := httpserver.New(httpserver.Options{Address: "127.0.0.1:0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skip("sandbox does not permit binding a TCP listener")
-		}
-		t.Fatal(err)
-	}
+	server := newServer(t, httpserver.Options{Address: "127.0.0.1:0"})
+	requireListening(t, server.Start())
 	defer server.Shutdown(t.Context())
 	if err := server.Start(); err == nil {
 		t.Fatal("duplicate Start returned nil")
@@ -157,17 +146,9 @@ func TestServerNilAndDuplicateStartErrors(t *testing.T) {
 
 func TestServerReportsBindFailure(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skip("sandbox does not permit binding a TCP listener")
-		}
-		t.Fatal(err)
-	}
+	requireListening(t, err)
 
-	server, err := httpserver.New(httpserver.Options{Address: listener.Addr().String()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := newServer(t, httpserver.Options{Address: listener.Addr().String()})
 	testassert.ErrorContains(t, server.Start(), "listen for health server")
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
@@ -182,16 +163,8 @@ func TestServerReportsBindFailure(t *testing.T) {
 
 func TestServerBindsAndShutsDown(t *testing.T) {
 	state := httpserver.NewHealthState()
-	server, err := httpserver.New(httpserver.Options{Address: "127.0.0.1:0", Health: state})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.Start(); err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skip("sandbox does not permit binding a TCP listener")
-		}
-		t.Fatal(err)
-	}
+	server := newServer(t, httpserver.Options{Address: "127.0.0.1:0", Health: state})
+	requireListening(t, server.Start())
 	if server.Addr() == "" {
 		t.Fatal("server did not expose a bound address")
 	}
@@ -212,6 +185,27 @@ func TestServerBindsAndShutsDown(t *testing.T) {
 		t.Fatalf("live probe body = %q, want %q", body, "ok\n")
 	}
 	if err := server.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newServer(t *testing.T, options httpserver.Options) *httpserver.Server {
+	t.Helper()
+	server, err := httpserver.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
+}
+
+// requireListening fails on a bind error, or skips the test where the sandbox
+// forbids binding a TCP listener.
+func requireListening(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skip("sandbox does not permit binding a TCP listener")
+		}
 		t.Fatal(err)
 	}
 }

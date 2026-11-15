@@ -2,11 +2,11 @@ package bedrockconverse
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -35,10 +35,7 @@ func TestMalformedToolOutputReturnsAcceptedErrorWithoutPanic(t *testing.T) {
 	for name, output := range tests {
 		t.Run(name, func(t *testing.T) {
 			_, err := adapter.liftResponse(provider.Call{}, &bedrockruntime.ConverseOutput{Output: output, StopReason: types.StopReasonMalformedToolUse, ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeDefault}}, "request-id", nil)
-			var mapped *provider.Error
-			if !errors.As(err, &mapped) || mapped.Code != provider.CodeProviderInvalidResponse || mapped.Dispatch != provider.DispatchAccepted {
-				t.Fatalf("malformed output lost paid dispatch: %v", err)
-			}
+			adaptertest.RequireAcceptedInvalidResponse(t, err, "malformed output lost paid dispatch")
 		})
 	}
 }

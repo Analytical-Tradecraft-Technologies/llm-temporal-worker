@@ -50,13 +50,19 @@ func (f *fixture) blob(mediaType string, data []byte) descriptor {
 	return d
 }
 
-func (f *fixture) jsonBlob(mediaType string, value any) descriptor {
+// marshal encodes value as JSON, failing the test on an error.
+func (f *fixture) marshal(value any) []byte {
 	f.t.Helper()
 	data, err := json.Marshal(value)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return f.blob(mediaType, data)
+	return data
+}
+
+func (f *fixture) jsonBlob(mediaType string, value any) descriptor {
+	f.t.Helper()
+	return f.blob(mediaType, f.marshal(value))
 }
 
 func (f *fixture) manifest(config, layer descriptor) descriptor {
@@ -85,11 +91,7 @@ func (f *fixture) image(configPlatform platform) builtImage {
 
 func (f *fixture) raw(d descriptor) json.RawMessage {
 	f.t.Helper()
-	data, err := json.Marshal(d)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	return data
+	return f.marshal(d)
 }
 
 // root writes the inner image index and an index.json that references it.
@@ -103,11 +105,21 @@ func (f *fixture) root(entries ...json.RawMessage) descriptor {
 func (f *fixture) writeIndexJSON(top descriptor) {
 	f.t.Helper()
 	top.Annotations = map[string]string{"org.opencontainers.image.created": "2026-10-07T00:00:00Z"}
-	data, err := json.Marshal(imageIndex{SchemaVersion: 2, MediaType: mediaTypeImageIndex, Manifests: []json.RawMessage{f.raw(top)}})
+	f.writeFile("index.json", f.marshal(imageIndex{SchemaVersion: 2, MediaType: mediaTypeImageIndex, Manifests: []json.RawMessage{f.raw(top)}}))
+}
+
+// readManifest decodes the image manifest blob with digest from the layout.
+func (f *fixture) readManifest(digest string) imageManifest {
+	f.t.Helper()
+	data, err := os.ReadFile(blobPath(f.dir, digest))
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.writeFile("index.json", data)
+	var manifest imageManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		f.t.Fatal(err)
+	}
+	return manifest
 }
 
 var (
@@ -275,12 +287,7 @@ func TestMergeRejectsUnsafeInputs(t *testing.T) {
 			name: "corrupted layer",
 			setup: func(t *testing.T) []platformInput {
 				f, image := buildxLayout(t, linuxAMD64)
-				var manifest imageManifest
-				data, _ := os.ReadFile(blobPath(f.dir, image.manifest.Digest))
-				if err := json.Unmarshal(data, &manifest); err != nil {
-					t.Fatal(err)
-				}
-				layer := manifest.Layers[0]
+				layer := f.readManifest(image.manifest.Digest).Layers[0]
 				corrupt := bytes.Repeat([]byte{'x'}, int(layer.Size))
 				if err := os.WriteFile(blobPath(f.dir, layer.Digest), corrupt, 0o644); err != nil {
 					t.Fatal(err)
@@ -408,14 +415,7 @@ func TestVerifyRejectsWrongPlatformSet(t *testing.T) {
 
 func TestConfigDigestBindsTheScannedPlatformImage(t *testing.T) {
 	f, image := buildxLayout(t, linuxARM64)
-	data, err := os.ReadFile(blobPath(f.dir, image.manifest.Digest))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var manifest imageManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatal(err)
-	}
+	manifest := f.readManifest(image.manifest.Digest)
 	var stdout bytes.Buffer
 	if err := run([]string{"config-digest", "-layout", f.dir, "-platform", "linux/arm64"}, &stdout); err != nil {
 		t.Fatal(err)

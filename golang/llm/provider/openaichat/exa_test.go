@@ -31,10 +31,7 @@ func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var wire map[string]any
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatal(err)
-	}
+	wire := contract.DecodeJSON[map[string]any](t, body)
 	if wire["text"] != true {
 		t.Fatalf("exa text = %#v", wire["text"])
 	}
@@ -91,10 +88,7 @@ func assertExaCitationLifted(t *testing.T, body string) {
 
 func mustMarshal(t *testing.T, value any) string {
 	t.Helper()
-	data, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := contract.MarshalJSON(t, value)
 	return string(data)
 }
 
@@ -113,10 +107,7 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if len(result.Response.Output) != 3 {
 		t.Fatalf("exa output = %#v", result.Response.Output)
 	}
@@ -232,9 +223,6 @@ func invokeExa(t *testing.T, adapter *Adapter, request llm.Request, strict bool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	return result
 }

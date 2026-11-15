@@ -176,6 +176,21 @@ func serve(handler http.Handler, method, path, key, body string, headers ...stri
 	return recorder
 }
 
+// createOK posts body to /v1/responses with testKey and requires 200 OK.
+func createOK(t *testing.T, handler http.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := serve(handler, http.MethodPost, "/v1/responses", testKey, body)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	return recorder
+}
+
+// blockedRunningStart starts every workflow as running and never finishes it.
+func blockedRunningStart(string) *fakeExecution {
+	return &fakeExecution{status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING, block: true}
+}
+
 func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var body map[string]any
@@ -192,10 +207,7 @@ func TestCreateWaitsForTheGenerateWorkflow(t *testing.T) {
 		return &fakeExecution{status: enums.WORKFLOW_EXECUTION_STATUS_COMPLETED, response: generateResponse(key, "hello")}
 	}
 	handler := newTestHandler(t, fake, nil)
-	recorder := serve(handler, http.MethodPost, "/v1/responses", testKey, `{"model":"fast","input":"hi","service_tier":"flex"}`)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
-	}
+	recorder := createOK(t, handler, `{"model":"fast","input":"hi","service_tier":"flex"}`)
 	body := decodeBody(t, recorder)
 	if body["status"] != "completed" || body["model"] != "gpt-test" || body["service_tier"] != "flex" {
 		t.Fatalf("unexpected response: %v", body)
@@ -227,14 +239,9 @@ func TestCreateWaitsForTheGenerateWorkflow(t *testing.T) {
 
 func TestCreateInBackgroundReturnsQueuedImmediately(t *testing.T) {
 	fake := newFakeClient()
-	fake.onStart = func(string) *fakeExecution {
-		return &fakeExecution{status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING, block: true}
-	}
+	fake.onStart = blockedRunningStart
 	handler := newTestHandler(t, fake, nil)
-	recorder := serve(handler, http.MethodPost, "/v1/responses", testKey, `{"model":"fast","input":"hi","background":true}`)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
-	}
+	recorder := createOK(t, handler, `{"model":"fast","input":"hi","background":true}`)
 	body := decodeBody(t, recorder)
 	if body["status"] != "queued" || body["background"] != true || body["model"] != "fast" {
 		t.Fatalf("unexpected response: %v", body)
@@ -313,10 +320,7 @@ func TestPreviousResponseResumesItsCheckpoint(t *testing.T) {
 	}}
 	fake := newFakeClient()
 	handler := newTestHandler(t, fake, store)
-	recorder := serve(handler, http.MethodPost, "/v1/responses", testKey, `{"input":"again","previous_response_id":"resp_first","background":true}`)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
-	}
+	recorder := createOK(t, handler, `{"input":"again","previous_response_id":"resp_first","background":true}`)
 	args := fake.args[0]
 	if args.Parent == nil || *args.Parent != "checkpoint-resp_first" || !args.SettingsPatch.Instructions.Clear || args.SettingsPatch.Model.Set != nil {
 		t.Fatalf("unexpected continuation: %+v", args)
@@ -396,9 +400,7 @@ func TestRetrieveUsesTemporalWhenTheStoreFails(t *testing.T) {
 
 func TestDrainEndsWaitingCreateRequests(t *testing.T) {
 	fake := newFakeClient()
-	fake.onStart = func(string) *fakeExecution {
-		return &fakeExecution{status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING, block: true}
-	}
+	fake.onStart = blockedRunningStart
 	handler := newTestHandler(t, fake, nil)
 	done := make(chan *httptest.ResponseRecorder)
 	go func() {

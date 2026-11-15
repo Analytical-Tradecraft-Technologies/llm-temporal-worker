@@ -2,7 +2,6 @@ package architecturetest
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,31 +24,20 @@ func TestOCamlTemporalPinCheckerRejectsMismatchedPrefetchHelperCommit(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(destination, contents, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		makeDirectory(t, 0o755, filepath.Dir(destination))
+		writeFile(t, destination, contents, 0o755)
 	}
 
 	helper := filepath.Join(fixtureRoot, "scripts", "ci", "prefetch-temporal-sdk-cargo.sh")
-	helperContents, err := os.ReadFile(helper)
-	if err != nil {
-		t.Fatal(err)
-	}
+	helperContents := readText(t, helper)
 	const approvedCommit = "ddaea320cd5a7817ad679dda6603aad59448c2ba"
-	mutated := strings.Replace(string(helperContents), approvedCommit, strings.Repeat("0", 40), 1)
-	if mutated == string(helperContents) {
+	mutated := strings.Replace(helperContents, approvedCommit, strings.Repeat("0", 40), 1)
+	if mutated == helperContents {
 		t.Fatal("prefetch helper fixture does not contain the approved Temporal SDK commit")
 	}
-	if err := os.WriteFile(helper, []byte(mutated), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, helper, []byte(mutated), 0o755)
 
-	command := exec.Command("bash", filepath.Join(fixtureRoot, "scripts", "check-ocaml-temporal-pin.sh"))
-	command.Dir = fixtureRoot
-	output, err := command.CombinedOutput()
+	output, err := combinedOutputIn(fixtureRoot, "bash", filepath.Join(fixtureRoot, "scripts", "check-ocaml-temporal-pin.sh"))
 	if err == nil {
 		t.Fatal("OCaml Temporal pin checker accepted a mismatched prefetch helper commit")
 	}

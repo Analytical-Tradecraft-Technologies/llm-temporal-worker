@@ -121,7 +121,7 @@ func TestPrepareRejectsInvalidOrCancelledBeforeIO(t *testing.T) {
 	now := time.Now()
 	lease := FillLease{Key: ResponseKey{ScopeID: "scope"}, AcquiredAt: now, ExpiresAt: now.Add(time.Minute)}
 	lookup := ResponseLookup{Key: lease.Key, Now: now}
-	responses := prepareResponses{lookup: func(ResponseLookup) (*ResponseEntry, error) { t.Fatal("unexpected IO"); return nil, nil }}
+	responses := noIOResponses(t)
 	fills := prepareFills{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -233,7 +233,7 @@ func TestPrepareAfterMissSkipsOnlyTheRepeatedLookup(t *testing.T) {
 			}
 		})
 	}
-	responses := prepareResponses{lookup: func(ResponseLookup) (*ResponseEntry, error) { t.Fatal("unexpected IO"); return nil, nil }}
+	responses := noIOResponses(t)
 	bad := lease
 	bad.Key.ScopeID = "other"
 	if _, err := PrepareAfterMiss(context.Background(), responses, prepareFills{}, lookup, bad); err == nil {
@@ -244,4 +244,9 @@ func TestPrepareAfterMissSkipsOnlyTheRepeatedLookup(t *testing.T) {
 	if _, err := PrepareAfterMiss(ctx, responses, prepareFills{}, lookup, lease); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+}
+
+// noIOResponses fails the test on any response lookup.
+func noIOResponses(t *testing.T) prepareResponses {
+	return prepareResponses{lookup: func(ResponseLookup) (*ResponseEntry, error) { t.Fatal("unexpected IO"); return nil, nil }}
 }

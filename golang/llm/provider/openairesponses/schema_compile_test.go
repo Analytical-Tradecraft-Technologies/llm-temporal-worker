@@ -31,7 +31,7 @@ func TestCompileRejectsAnUnsupportedOutputSchemaBeforeDispatch(t *testing.T) {
 func TestCompileRejectsAnExponentialOutputSchemaBeforeDispatch(t *testing.T) {
 	for name, schema := range map[string]string{
 		"recursive allOf": `{"properties":{"x":{"allOf":[{"$ref":"#"},{"$ref":"#"}]}}}`,
-		"DAG fan-out":     `{"$ref":"#/$defs/l0","$defs":{"l0":{"allOf":[{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"},{"$ref":"#/$defs/l1"}]},"l1":{"allOf":[{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"},{"$ref":"#/$defs/l2"}]},"l2":{"type":"number"}}}`,
+		"DAG fan-out":     adaptertest.ExponentialDAGSchema,
 	} {
 		started := time.Now()
 		_, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
@@ -56,10 +56,7 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(requestMap["text"])
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, requestMap["text"])
 	want := `{"format":{"name":"invoice","schema":{"additionalProperties":false,"properties":{"note":{"description":"{minLength: 1}","type":"string"},"total":{"type":"number"}},"required":["total","note"],"type":"object"},"strict":true,"type":"json_schema"}}`
 	if string(got) != want {
 		t.Fatalf("text format\n got: %s\nwant: %s", got, want)
@@ -69,11 +66,8 @@ func TestStrictOutputSchemaIsLoweredForOpenAI(t *testing.T) {
 // Constraints moved out of the wire schema are still enforced by the lift.
 func TestStrictOutputValidatesAgainstCallerSchema(t *testing.T) {
 	adaptertest.StrictOutputValidation(t, func(t *testing.T, schema, text string) error {
-		call, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
-			Request: llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
-				Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}},
-			Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-		})
+		call, err := adaptertest.Compile(newFixtureAdapter(t, []byte(`{"id":"unused"}`)), "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "op-strict", Model: "gpt-contract", Input: contract.WireAuditUserText("hi"),
+			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(schema)}}}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,10 +84,7 @@ func TestCompileRejectsUnrepresentableOpenAIStructuredOutput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			request.OperationKey = "op-structured"
 			request.Model = "gpt-contract"
-			_, err := newFixtureAdapter(t, []byte(`{"id":"unused"}`)).Compile(context.Background(), provider.CompileInput{
-				Request: request,
-				Query:   provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-			})
+			_, err := adaptertest.Compile(newFixtureAdapter(t, []byte(`{"id":"unused"}`)), "openai-prod", provider.FamilyOpenAIResponses, request, false)
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched {
 				t.Fatalf("compile = %#v, want an unsupported compile rejection", err)

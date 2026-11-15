@@ -33,10 +33,7 @@ func TestCompileEmulatesToolResultErrorWithTextPrefix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("strict=%t is_error=%t: %v", strict, isError, err)
 			}
-			encoded, err := json.Marshal(call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
+			encoded := contract.MarshalJSON(t, call.SDKParams)
 			want := `{"output":"upstream timed out","call_id":"call-1","type":"function_call_output"}`
 			if isError {
 				want = `{"output":"[is_error=true] The tool call failed; its output follows.\nupstream timed out","call_id":"call-1","type":"function_call_output"}`

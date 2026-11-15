@@ -14,10 +14,7 @@ import (
 
 func TestTemporalLoggerUsesSlogAndFiltersSDKFields(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Level: "debug"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Output: &output, Level: "debug"})
 	adapter := logger.TemporalLogger()
 	bound := temporallog.With(adapter, "TaskQueue", "llm", "WorkflowID", "workflow-1", "payload", "private-content")
 	bound.Info("activity completed", "RunID", "run-1", "ActivityID", "activity-1", "Error", errors.New("private-content"), "ignored-odd-key")
@@ -62,10 +59,7 @@ func TestTemporalLoggerUsesSlogAndFiltersSDKFields(t *testing.T) {
 
 func TestTemporalLoggerRespectsConfiguredLevelAndTextFormat(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Level: "warn", Format: "text"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := newLogger(t, observability.LogOptions{Output: &output, Level: "warn", Format: "text"})
 	adapter := logger.TemporalLogger()
 	adapter.Debug("filtered debug")
 	adapter.Info("filtered info")

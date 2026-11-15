@@ -17,26 +17,17 @@ import (
 
 func TestDocumentDigestCoversContentOnly(t *testing.T) {
 	document := fetchFixture(t)
-	encoded, err := document.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeDocument(t, document)
 	later := document
 	later.FetchedAt = later.FetchedAt.Add(time.Hour)
-	again, err := later.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
+	again := encodeDocument(t, later)
 	if !bytes.Equal(encoded, again) || Digest(encoded) != Digest(again) {
 		t.Fatal("a later fetch of the same catalog changed the encoded Document")
 	}
 	if bytes.Contains(encoded, []byte("fetched_at")) {
 		t.Fatalf("encoded Document stores the fetch time: %s", encoded)
 	}
-	decoded, err := DecodeDocument(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
+	decoded := decodeDocument(t, encoded)
 	if !decoded.FetchedAt.IsZero() {
 		t.Fatalf("decoded FetchedAt = %v, want zero until set from the Store", decoded.FetchedAt)
 	}
@@ -92,9 +83,7 @@ func TestRefreshObservesAnUnchangedCatalog(t *testing.T) {
 		Install: func(Document) error { installs++; return nil },
 		Observe: func(event Event) { events = append(events, event) }}
 	for range 3 {
-		if err := refresher.Refresh(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		mustRefresh(t, refresher)
 		now = now.Add(2 * time.Hour)
 	}
 	var published []string
@@ -308,4 +297,22 @@ func TestFetchCapsEndpointLookupsOfKnownModels(t *testing.T) {
 			t.Fatalf("m03 context length = %d, want the changed listing", model.ContextLength)
 		}
 	}
+}
+
+func encodeDocument(t *testing.T, document Document) []byte {
+	t.Helper()
+	encoded, err := document.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func decodeDocument(t *testing.T, encoded []byte) Document {
+	t.Helper()
+	document, err := DecodeDocument(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
 }

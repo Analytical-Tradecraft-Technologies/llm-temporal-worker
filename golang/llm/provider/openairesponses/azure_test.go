@@ -42,10 +42,7 @@ func TestAzureResponsesUsesV1PathAndAPIKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := adaptertest.CompileStrict(t, adapter, "azure-responses", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "azure-op", Model: "gpt-contract", ServiceClass: llm.ServiceClassStandard})
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if got == nil {
 		t.Fatal("Azure request was not captured")
 	}

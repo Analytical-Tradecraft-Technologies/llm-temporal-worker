@@ -24,35 +24,7 @@ func TestWireFixtureMatchesTypedSDKParams(t *testing.T) {
 
 func TestMultimodalToolFixtureMatchesTypedSDKParams(t *testing.T) {
 	profile := mustProfile(t, testProfile())
-	maxTokens := 321
-	temperature := 0.25
-	topK := 5
-	request := llm.Request{
-		OperationKey: "fixture-multimodal-tools",
-		Model:        "claude-contract",
-		Instructions: []llm.Instruction{
-			{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"},
-			{Level: llm.InstructionLevelApplication, Kind: llm.InstructionKindParts, Content: []llm.Part{
-				llm.TextPart{Text: "application"}, llm.JSONPart{Value: json.RawMessage(`{"kind":"context"}`)},
-			}},
-		},
-		Input: []llm.Item{
-			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
-				llm.TextPart{Text: "hello"},
-				llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png"},
-				llm.DocumentPart{Bytes: []byte("plain document"), MediaType: "text/plain", Title: "notes"},
-			}},
-			llm.ModelText("prior"),
-			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
-			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
-		},
-		Tools:      []llm.Tool{{Name: "lookup", Description: "look up a place", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)}},
-		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
-		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
-		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopK: &topK, StopSequences: []string{"END"}},
-		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone},
-		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"tag":"us"}`)},
-	}
+	request := multimodalToolRequest("fixture-multimodal-tools")
 	params, err := lowerRequest(request, profile, "auto")
 	if err != nil {
 		t.Fatal(err)
@@ -91,28 +63,14 @@ func TestMediaRejectionFixture(t *testing.T) {
 }
 
 func TestResponseFixturesMatchLiftedSemanticContract(t *testing.T) {
-	var response anthropic.Message
-	if err := json.Unmarshal(mustReadFixture(t, "response.completed.json"), &response); err != nil {
-		t.Fatal(err)
-	}
-	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := mustProfile(t, testProfile()).liftResponse(call, &response, "req-fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[anthropic.Message](t, mustReadFixture(t, "response.completed.json"))
+	lifted := mustLift(t, mustProfile(t, testProfile()), liftCall("fixture-op", llm.ServiceClassStandard), &response, "req-fixture")
 	assertFixture(t, mustReadFixture(t, "response.semantic.json"), contract.MarshalJSON(t, lifted))
 }
 
 func TestThinkingToolFixtureLiftsProviderStateAndUsage(t *testing.T) {
-	var response anthropic.Message
-	if err := json.Unmarshal(mustReadFixture(t, "response.thinking-tool.json"), &response); err != nil {
-		t.Fatal(err)
-	}
-	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "fixture-thinking", ServiceClass: llm.ServiceClassPriority}
-	lifted, err := mustProfile(t, testProfile()).liftResponse(call, &response, "req-thinking")
-	if err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[anthropic.Message](t, mustReadFixture(t, "response.thinking-tool.json"))
+	lifted := mustLift(t, mustProfile(t, testProfile()), liftCall("fixture-thinking", llm.ServiceClassPriority), &response, "req-thinking")
 	if lifted.Status != llm.ResponseStatusToolCalls || lifted.Service.Actual == nil || *lifted.Service.Actual != llm.ServiceClassPriority {
 		t.Fatalf("status/service = %#v %#v", lifted.Status, lifted.Service)
 	}
@@ -137,4 +95,39 @@ func mustReadFixture(t *testing.T, name string) []byte {
 func assertFixture(t *testing.T, want, got []byte) {
 	t.Helper()
 	contract.AssertCanonicalJSON(t, got, want, "fixture")
+}
+
+// multimodalToolRequest is the ordered multimodal, tool-using request with
+// structured output, sampling, adaptive reasoning and an extension that the
+// wire fixture and the lowering test both send.
+func multimodalToolRequest(operationKey string) llm.Request {
+	maxTokens := 321
+	temperature := 0.25
+	topK := 5
+	return llm.Request{
+		OperationKey: operationKey,
+		Model:        "claude-contract",
+		Instructions: []llm.Instruction{
+			{Level: llm.InstructionLevelPolicy, Kind: llm.InstructionKindText, Text: "policy"},
+			{Level: llm.InstructionLevelApplication, Kind: llm.InstructionKindParts, Content: []llm.Part{
+				llm.TextPart{Text: "application"}, llm.JSONPart{Value: json.RawMessage(`{"kind":"context"}`)},
+			}},
+		},
+		Input: []llm.Item{
+			llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{
+				llm.TextPart{Text: "hello"},
+				llm.ImagePart{URL: "https://example.test/image.png", MediaType: "image/png"},
+				llm.DocumentPart{Bytes: []byte("plain document"), MediaType: "text/plain", Title: "notes"},
+			}},
+			llm.ModelText("prior"),
+			llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: json.RawMessage(`{"q":"sydney"}`)},
+			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.JSONPart{Value: json.RawMessage(`{"ok":true}`)}}},
+		},
+		Tools:      []llm.Tool{{Name: "lookup", Description: "look up a place", InputSchema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}`)}},
+		ToolPolicy: llm.ToolPolicy{Mode: llm.ToolChoiceNamed, Name: "lookup", Parallel: true},
+		Output:     &llm.OutputSpec{MaxTokens: &maxTokens, Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`)}},
+		Sampling:   &llm.SamplingSpec{Temperature: &temperature, TopK: &topK, StopSequences: []string{"END"}},
+		Reasoning:  &llm.ReasoningSpec{Mode: llm.ReasoningModeAdaptive, Summary: llm.ReasoningSummaryNone},
+		Extensions: map[string]json.RawMessage{"anthropic.contract": json.RawMessage(`{"tag":"us"}`)},
+	}
 }

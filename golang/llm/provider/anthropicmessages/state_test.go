@@ -16,16 +16,9 @@ import (
 
 func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	const raw = `{ "signature": "sig-raw", "thinking": "private", "type": "thinking", "future": {"n": 1} }`
-	var response anthropic.Message
-	if err := json.Unmarshal([]byte(`{"id":"state-1","model":"claude-contract","content":[`+raw+`,{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":"standard"}}`), &response); err != nil {
-		t.Fatal(err)
-	}
+	response := contract.DecodeJSON[anthropic.Message](t, []byte(`{"id":"state-1","model":"claude-contract","content":[`+raw+`,{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"service_tier":"standard"}}`))
 	profile := mustProfile(t, testProfile())
-	call := provider.Call{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract", OperationKey: "state", ServiceClass: llm.ServiceClassStandard}
-	lifted, err := profile.liftResponse(call, &response, "req-state")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, profile, liftCall("state", llm.ServiceClassStandard), &response, "req-state")
 	state, ok := lifted.Output[0].(llm.ProviderState)
 	if !ok || string(state.Opaque) != raw {
 		t.Fatalf("lifted opaque state = %#v, want %q", lifted.Output[0], raw)
@@ -49,10 +42,7 @@ func TestOpaqueThinkingStateSurvivesLiftLowerWithExactBytes(t *testing.T) {
 	if !ok {
 		t.Fatalf("replayed state = %#v", messages[1])
 	}
-	replayedRaw, err := json.Marshal(replayed)
-	if err != nil {
-		t.Fatal(err)
-	}
+	replayedRaw := contract.MarshalJSON(t, replayed)
 	var want, got any
 	if err := json.Unmarshal([]byte(raw), &want); err != nil {
 		t.Fatal(err)

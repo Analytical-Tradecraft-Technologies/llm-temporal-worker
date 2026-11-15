@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/openai/openai-go/v3"
 )
@@ -16,6 +15,6 @@ func TestCachedInputCostUsesDisjointComponents(t *testing.T) {
 		response.Usage.PromptTokensDetails.CachedTokens = read
 		response.Usage.PromptTokensDetails.CacheWriteTokens = write
 		response.Usage.TotalTokens = total
-		return testProfile().liftResponse(provider.Call{ServiceClass: llm.ServiceClassStandard}, &response, "req")
+		return liftStandard(&response)
 	})
 }
