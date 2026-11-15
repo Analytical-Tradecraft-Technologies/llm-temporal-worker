@@ -363,10 +363,7 @@ func (store *InMemoryOutbox) Retry(ctx context.Context, id string, token LeaseTo
 	if !availableAt.After(retriedAt) {
 		return errors.New("maintenance outbox retry must be scheduled after retry time")
 	}
-	if err := store.finish(ctx, id, token, retriedAt, availableAt, EventFailed); err != nil {
-		return err
-	}
-	return nil
+	return store.finish(ctx, id, token, retriedAt, availableAt, EventFailed)
 }
 
 func (store *InMemoryOutbox) finish(ctx context.Context, id string, token LeaseToken, at, availableAt time.Time, state EventState) error {

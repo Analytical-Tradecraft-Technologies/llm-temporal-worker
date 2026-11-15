@@ -35,10 +35,7 @@ func (r *CloudExecutionRuntime) PlanGenerationV1(ctx context.Context, request ll
 	if _, err := r.preparation.authorize(ctx, request.Context); err != nil {
 		return llm.GenerationPlanV1{}, err
 	}
-	var index int64
-	if request.Cache != nil {
-		index = int64(request.Cache.Variant)
-	}
+	index := generateSampleIndex(request)
 	op := cloudstate.Operation{Scope: cloudstate.Scope{Tenant: request.Context.Tenant, Project: request.Context.Project}, Kind: "generate", Key: request.OperationKey, RequestIndex: index, Manifest: manifest, Now: r.now()}
 	saved, err := r.store.LoadGenerationPlan(ctx, op)
 	if err == nil {

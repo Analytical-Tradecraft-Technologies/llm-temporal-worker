@@ -50,10 +50,7 @@ func (observer *dispatchObserver) BeforePossibleWrite(ctx context.Context) error
 	}
 	observer.marked = true
 	recordOperationState(ctx, admission.StateDispatching)
-	if err := observer.engine.beat(ctx, observer.engine.candidateProgress(observer.operation.ID, "pre_write", observer.candidate)); err != nil {
-		return err
-	}
-	return nil
+	return observer.engine.beat(ctx, observer.engine.candidateProgress(observer.operation.ID, "pre_write", observer.candidate))
 }
 
 // AfterResponseHeaders runs once the provider has answered. A cancellation
@@ -141,13 +138,11 @@ func (engine *Engine) dispatchPlan(ctx context.Context, request, providerRequest
 		}
 		attemptSpan.End()
 		if invokeErr != nil && providerPending {
-			mapped := pendingPollError(invokeErr)
-			mapped.OperationID = operation.ID
-			return llm.Response{}, mapped
+			return llm.Response{}, withOperationID(pendingPollError(invokeErr), operation.ID)
 		}
 		if invokeErr == nil {
 			if observer.heartbeatErr != nil {
-				return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "progress heartbeat failed", observer.heartbeatErr), candidate.estimate.MicroUSD)
+				return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, heartbeatFailed(provider.DispatchAccepted, observer.heartbeatErr), candidate.estimate.MicroUSD)
 			}
 			return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
 		}
@@ -244,8 +239,7 @@ func (engine *Engine) finishFailed(ctx context.Context, operation admission.Oper
 			metrics.RecordAmbiguous(candidate.EndpointID)
 		}
 	}
-	failure.OperationID = operation.ID
-	return failure
+	return withOperationID(failure, operation.ID)
 }
 
 func (engine *Engine) finishNoDispatch(ctx context.Context, operation admission.Operation, request llm.Request) error {
@@ -275,13 +269,9 @@ func (engine *Engine) handleCancellation(ctx context.Context, operation admissio
 		if err := engine.dependencies.Admission.Fail(finalCtx, admission.FailRequest{OperationID: operation.ID, DispatchToken: operation.DispatchToken, Certainty: admission.NotDispatched, Incurred: 0, Attempt: admission.AttemptFacts{RouteID: candidate.RouteID, EndpointID: candidate.EndpointID, Provider: candidate.Provider, Dispatch: admission.NotDispatched}, Reason: "canceled before dispatch"}); err == nil {
 			recordOperationState(ctx, admission.StateDefiniteFailed)
 		}
-		failure := engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause)
-		failure.OperationID = operation.ID
-		return failure
+		return withOperationID(engineError(provider.CodeCanceled, provider.PhaseAdmission, provider.DispatchNotDispatched, provider.RetryNever, "request canceled", cause), operation.ID)
 	}
-	failure := engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "request canceled after possible provider write", cause)
-	failure.OperationID = operation.ID
-	return failure
+	return withOperationID(engineError(provider.CodeAmbiguousDispatch, provider.PhaseDispatch, provider.DispatchAmbiguous, provider.RetryNever, "request canceled after possible provider write", cause), operation.ID)
 }
 
 func classifyProviderError(err error, marked bool) *provider.Error {

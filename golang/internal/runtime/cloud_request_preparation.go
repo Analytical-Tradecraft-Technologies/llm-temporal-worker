@@ -156,9 +156,7 @@ func (p *CloudRequestPreparation) Prepare(ctx context.Context, input llm.Prepare
 		if request.Parent != nil {
 			parent = string(*request.Parent)
 		}
-		if request.Cache != nil {
-			index = int64(request.Cache.Variant)
-		}
+		index = generateSampleIndex(*request)
 		manifest, _ = json.Marshal(request)
 	} else {
 		request := input.Compact
@@ -528,9 +526,7 @@ func (p *CloudRequestPreparation) restoreLoaded(ctx context.Context, record clou
 			return PreparedCloudRequest{}, cloudRuntimeError(cloudstate.ErrCorrupt, false)
 		}
 		result.Generate, caller = &request, request.Context
-		if request.Cache != nil {
-			index = int64(request.Cache.Variant)
-		}
+		index = generateSampleIndex(request)
 		if request.Parent != nil {
 			parent = string(*request.Parent)
 		}

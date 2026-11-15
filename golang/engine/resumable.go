@@ -181,14 +181,12 @@ func (engine *Engine) resumeDispatching(ctx context.Context, request, providerRe
 	result, invokeErr, providerPending := engine.invokeAttempt(ctx, operation, candidate.candidate, resumable, call, observer)
 	if invokeErr != nil {
 		if providerPending {
-			mapped := pendingPollError(invokeErr)
-			mapped.OperationID = operation.ID
-			return llm.Response{}, mapped
+			return llm.Response{}, withOperationID(pendingPollError(invokeErr), operation.ID)
 		}
 		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, classifyProviderError(invokeErr, true), 0)
 	}
 	if observer.heartbeatErr != nil {
-		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, engineError(provider.CodeStateUnavailable, provider.PhaseFinalize, provider.DispatchAccepted, provider.RetrySameOperation, "progress heartbeat failed", observer.heartbeatErr), 0)
+		return llm.Response{}, engine.finishFailed(ctx, operation, candidate.candidate, heartbeatFailed(provider.DispatchAccepted, observer.heartbeatErr), 0)
 	}
 	return engine.finalizeSuccess(ctx, request, snapshot, quoted, index, operation, parent, call, result.Response)
 }

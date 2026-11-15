@@ -448,10 +448,7 @@ func validateResponse(request llm.QueryRequestV1, response llm.QueryResponseV1) 
 	if _, err := json.Marshal(response); err != nil {
 		return fmt.Errorf("query response is invalid: %w", err)
 	}
-	if err := validateResponsePageSize(request, response); err != nil {
-		return err
-	}
-	return nil
+	return validateResponsePageSize(request, response)
 }
 
 // validateResponsePageSize keeps paginated results bounded at the Activity

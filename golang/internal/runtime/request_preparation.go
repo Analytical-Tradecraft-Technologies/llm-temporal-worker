@@ -97,11 +97,16 @@ func PrepareGenerateInput(ctx context.Context, request llm.GenerateRequestV1, re
 	if !ok || (pins.present() && len(semantic.Input) != len(items)) {
 		return PreparedGenerateInput{}, preparationError(provider.CodeStateCorrupt)
 	}
-	result := PreparedGenerateInput{Request: semantic, Settings: settings, pins: pins}
-	if request.Cache != nil {
-		result.SampleIndex = int64(request.Cache.Variant)
+	return PreparedGenerateInput{Request: semantic, Settings: settings, pins: pins, SampleIndex: generateSampleIndex(request)}, nil
+}
+
+// generateSampleIndex is the response-cache sample index a Generate request
+// selects: its cache variant, or 0 without a cache policy.
+func generateSampleIndex(request llm.GenerateRequestV1) int64 {
+	if request.Cache == nil {
+		return 0
 	}
-	return result, nil
+	return int64(request.Cache.Variant)
 }
 
 // PreparedCompactInput describes the bounded summarizer and the verbatim
