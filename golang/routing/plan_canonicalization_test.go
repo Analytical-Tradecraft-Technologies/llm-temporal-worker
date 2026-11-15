@@ -2,7 +2,6 @@ package routing
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -48,24 +47,8 @@ func TestPlannerCanonicalizesEquivalentRequestsIntoByteStablePlans(t *testing.T)
 	secondRequest.Extensions["alpha"] = json.RawMessage(`{"nested":{"a":1,"b":2}}`)
 	secondRequest.Extensions["beta"] = json.RawMessage(`{"a":1,"b":2}`)
 
-	planner := DeterministicPlanner{}
-	first, err := planner.Plan(context.Background(), Input{Request: firstRequest, Catalog: catalog})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := planner.Plan(context.Background(), Input{Request: secondRequest, Catalog: catalog})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(first, second) {
-		t.Fatalf("equivalent requests produced different plans:\nfirst:  %#v\nsecond: %#v", first, second)
-	}
-	if first.Digest != second.Digest || first.DigestHex != second.DigestHex {
-		t.Fatalf("equivalent requests changed plan digest: %x/%s != %x/%s", first.Digest, first.DigestHex, second.Digest, second.DigestHex)
-	}
-	if firstBytes, secondBytes := canonicalPlanJSON(t, first), canonicalPlanJSON(t, second); !bytes.Equal(firstBytes, secondBytes) {
-		t.Fatalf("equivalent requests changed canonical plan bytes:\nfirst:  %s\nsecond: %s", firstBytes, secondBytes)
-	}
+	first := mustPlan(t, Input{Request: firstRequest, Catalog: catalog})
+	assertEquivalentPlans(t, "equivalent requests", first, mustPlan(t, Input{Request: secondRequest, Catalog: catalog}))
 
 	want := []struct {
 		route    string
@@ -97,10 +80,7 @@ func TestPlannerDoesNotMoveToAnUnrequestedClass(t *testing.T) {
 	request.ServiceClass = llm.ServiceClassStandard
 	request.ServiceClassFallbacks = []llm.ServiceClass{llm.ServiceClassPriority}
 
-	plan, err := (DeterministicPlanner{}).Plan(context.Background(), Input{Request: request, Catalog: canonicalizationCatalog(t)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := mustPlan(t, Input{Request: request, Catalog: canonicalizationCatalog(t)})
 	for _, candidate := range plan.Candidates {
 		if candidate.AttemptedClass == llm.ServiceClassEconomy {
 			t.Fatalf("planner moved to unrequested economy class: %#v", candidate)
@@ -164,6 +144,18 @@ func canonicalizationRequest(extensionOrder []string) llm.Request {
 		ServiceClassFallbacks: []llm.ServiceClass{llm.ServiceClassEconomy, llm.ServiceClassStandard},
 		Context:               llm.RequestContext{Tags: map[string]string{"region": "us-east-1", "request_kind": "canonicalization"}},
 		Extensions:            extensions,
+	}
+}
+
+// assertEquivalentPlans fails unless first and second are deeply equal plans
+// with identical digests and canonical JSON bytes; what names the comparison.
+func assertEquivalentPlans(tb testing.TB, what string, first, second Plan) {
+	tb.Helper()
+	if !reflect.DeepEqual(first, second) || first.Digest != second.Digest || first.DigestHex != second.DigestHex {
+		tb.Fatalf("%s produced different plans:\nfirst:  %#v\nsecond: %#v", what, first, second)
+	}
+	if firstBytes, secondBytes := canonicalPlanJSON(tb, first), canonicalPlanJSON(tb, second); !bytes.Equal(firstBytes, secondBytes) {
+		tb.Fatalf("%s changed canonical plan bytes:\nfirst:  %s\nsecond: %s", what, firstBytes, secondBytes)
 	}
 }
 

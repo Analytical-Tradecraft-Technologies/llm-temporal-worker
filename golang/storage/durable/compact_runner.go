@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -141,10 +142,7 @@ func CompactV1(ctx context.Context, request llm.CompactRequestV1, ports CompactP
 	}
 
 	replay, err := ports.Replay(ctx, request)
-	if err != nil {
-		return llm.CompactResponseV1{}, stageError("compact replay", err)
-	}
-	if err := contextErr(ctx); err != nil {
+	if err := afterStage(ctx, "compact replay", err); err != nil {
 		return llm.CompactResponseV1{}, err
 	}
 	if replay.ReconciliationPending != nil {
@@ -287,7 +285,7 @@ func validateCompactReplay(request llm.CompactRequestV1, replay CompactReplay) e
 	if err != nil {
 		return fmt.Errorf("materialized compact transcript: %w", err)
 	}
-	if !equalStrings(pending, replay.State.PendingToolCalls) {
+	if !slices.Equal(pending, replay.State.PendingToolCalls) {
 		return errors.New("materialized compact tool frontier does not match transcript")
 	}
 	return nil

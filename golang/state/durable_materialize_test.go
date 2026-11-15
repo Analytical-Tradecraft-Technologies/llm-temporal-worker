@@ -33,14 +33,9 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootResponse, err := codec.EncodeResponse(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootPatch, err := codec.EncodeSettingsPatch(SettingsPatch{Model: SetPatch("gpt-test"), ServiceClass: SetPatch(llm.ServiceClassStandard), Portability: SetPatch(llm.PortabilityStrict)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := mustEncoded(t)
+	rootResponse := encoded(codec.EncodeResponse(nil))
+	rootPatch := encoded(codec.EncodeSettingsPatch(strictRootSettingsPatch()))
 	childDelta, err := codec.EncodeDelta([]llm.Item{llm.HumanText("child")})
 	if err != nil {
 		t.Fatal(err)
@@ -49,10 +44,7 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	childPatch, err := codec.EncodeSettingsPatch(SettingsPatch{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	childPatch := encoded(codec.EncodeSettingsPatch(SettingsPatch{}))
 	rootRefs := durableMaterializePutBlobs(reader, rootDelta, rootResponse, rootPatch)
 	childRefs := durableMaterializePutBlobs(reader, childDelta, childResponse, childPatch)
 	newCheckpoint := func(id CheckpointID, parent *CheckpointID, depth int32, operation string, refs [3]CheckpointBlobReference) DurableCheckpoint {
@@ -68,6 +60,28 @@ func newDurableMaterializeFixture(t *testing.T) durableMaterializeFixture {
 	return durableMaterializeFixture{repository: repository, reader: reader, codec: codec, now: now, rootID: rootID, childID: childID}
 }
 
+// mustEncoded returns a function that unwraps a codec encoding, failing t on
+// its error.
+func mustEncoded(t testing.TB) func([]byte, error) []byte {
+	return func(data []byte, err error) []byte {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+}
+
+// strictRootSettingsPatch is the settings patch the test lineages' roots set.
+func strictRootSettingsPatch() SettingsPatch {
+	return SettingsPatch{Model: SetPatch("gpt-test"), ServiceClass: SetPatch(llm.ServiceClassStandard), Portability: SetPatch(llm.PortabilityStrict)}
+}
+
+// materializer replays the fixture's rows and blobs at the fixture's time.
+func (fixture durableMaterializeFixture) materializer() *DurableCheckpointMaterializer {
+	return &DurableCheckpointMaterializer{Repository: fixture.repository, Blobs: fixture.reader, Codec: fixture.codec, Now: func() time.Time { return fixture.now }}
+}
+
 func durableMaterializePutBlobs(reader *durableMaterializeBlobReader, values ...[]byte) [3]CheckpointBlobReference {
 	refs := [3]CheckpointBlobReference{}
 	for index, value := range values {
@@ -81,8 +95,7 @@ func durableMaterializePutBlobs(reader *durableMaterializeBlobReader, values ...
 
 func TestDurableCheckpointMaterializerReplaysScopedRows(t *testing.T) {
 	fixture := newDurableMaterializeFixture(t)
-	materializer := &DurableCheckpointMaterializer{Repository: fixture.repository, Blobs: fixture.reader, Codec: fixture.codec, Now: func() time.Time { return fixture.now }}
-	got, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{})
+	got, err := fixture.materializer().Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +140,7 @@ func uuidLikeCheckpointID(id CheckpointID) CheckpointID {
 
 func TestDurableCheckpointMaterializerFailsClosedOnBlobFaultsAndCycles(t *testing.T) {
 	fixture := newDurableMaterializeFixture(t)
-	materializer := &DurableCheckpointMaterializer{Repository: fixture.repository, Blobs: fixture.reader, Now: func() time.Time { return fixture.now }}
+	materializer := fixture.materializer()
 	fixture.reader.fail = errors.New("blob backend unavailable")
 	if _, err := materializer.Materialize(context.Background(), "scope-a", fixture.childID, MaterializeLimits{}); err == nil {
 		t.Fatal("materializer accepted a blob backend fault")

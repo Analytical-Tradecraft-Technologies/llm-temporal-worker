@@ -154,6 +154,24 @@ var langfuseExportFailureReasons = map[string]struct{}{
 	"unavailable": {},
 }
 
+var (
+	serviceClasses       = map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
+	actualServiceClasses = map[string]struct{}{"economy": {}, "standard": {}, "priority": {}, "unknown": {}}
+	costStatuses         = map[string]struct{}{"exact": {}, "unknown": {}}
+	maintenanceResources = map[string]struct{}{
+		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
+		"checkpoint": {}, "blob": {}, "outbox": {}, "budget": {},
+	}
+	maintenanceOutcomes = map[string]struct{}{
+		"eligible": {}, "tombstoned": {}, "deleted": {}, "skipped": {},
+	}
+	cacheEventNames = map[string]struct{}{
+		"hit": {}, "use": {}, "miss": {}, "fill": {}, "fill_existing": {},
+		"fill_busy": {}, "fill_failed": {}, "error": {},
+	}
+	pendingPollOutcomes = map[string]struct{}{"started": {}, "completed": {}, "retry": {}, "failed": {}}
+)
+
 func values(values []string) map[string]struct{} {
 	result := make(map[string]struct{}, len(values))
 	for _, value := range values {
@@ -323,115 +341,91 @@ func (metrics *Metrics) builtIn(value string, allowed map[string]struct{}) strin
 	return value
 }
 
-func (metrics *Metrics) RecordActivity(status, errorClass string, duration time.Duration, phase string) {
+// withRLock runs record under the read lock that guards the allowed label
+// vocabularies. A nil Metrics records nothing.
+func (metrics *Metrics) withRLock(record func()) {
 	if metrics == nil {
 		return
 	}
 	metrics.mu.RLock()
 	defer metrics.mu.RUnlock()
-	metrics.activityTotal.WithLabelValues(metrics.builtIn(status, metrics.allowed.statuses), metrics.builtIn(errorClass, metrics.allowed.errors)).Inc()
-	metrics.activityDuration.WithLabelValues(metrics.builtIn(phase, metrics.allowed.phases)).Observe(duration.Seconds())
+	record()
+}
+
+func (metrics *Metrics) RecordActivity(status, errorClass string, duration time.Duration, phase string) {
+	metrics.withRLock(func() {
+		metrics.activityTotal.WithLabelValues(metrics.builtIn(status, metrics.allowed.statuses), metrics.builtIn(errorClass, metrics.allowed.errors)).Inc()
+		metrics.activityDuration.WithLabelValues(metrics.builtIn(phase, metrics.allowed.phases)).Observe(duration.Seconds())
+	})
 }
 
 // RecordActivityFailure records a terminal failed Activity attempt. Origin is
 // intentionally restricted to the fixed vocabulary.
 func (metrics *Metrics) RecordActivityFailure(origin string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.activityFailureTotal.WithLabelValues(metrics.builtIn(origin, activityFailureOrigins)).Inc()
+	metrics.withRLock(func() {
+		metrics.activityFailureTotal.WithLabelValues(metrics.builtIn(origin, activityFailureOrigins)).Inc()
+	})
 }
 
 func (metrics *Metrics) RecordProviderAttempt(endpoint, model, class, outcome string, duration time.Duration) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.providerAttemptTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}), metrics.builtIn(outcome, metrics.allowed.outcomes)).Inc()
-	metrics.providerDuration.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, map[string]struct{}{"economy": {}, "standard": {}, "priority": {}})).Observe(duration.Seconds())
+	metrics.withRLock(func() {
+		metrics.providerAttemptTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, serviceClasses), metrics.builtIn(outcome, metrics.allowed.outcomes)).Inc()
+		metrics.providerDuration.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, serviceClasses)).Observe(duration.Seconds())
+	})
 }
 
 func (metrics *Metrics) RecordServiceClass(requested, actual, endpoint string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
-	actualClasses := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}, "unknown": {}}
-	metrics.serviceClassActual.WithLabelValues(metrics.builtIn(requested, classes), metrics.builtIn(actual, actualClasses), metrics.allow(endpoint, metrics.allowed.endpoints)).Inc()
+	metrics.withRLock(func() {
+		metrics.serviceClassActual.WithLabelValues(metrics.builtIn(requested, serviceClasses), metrics.builtIn(actual, actualServiceClasses), metrics.allow(endpoint, metrics.allowed.endpoints)).Inc()
+	})
 }
 
 func (metrics *Metrics) RecordBudgetAdmission(policy, outcome string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.budgetAdmission.WithLabelValues(metrics.allow(policy, metrics.allowed.policies), metrics.builtIn(outcome, metrics.allowed.outcomes)).Inc()
+	metrics.withRLock(func() {
+		metrics.budgetAdmission.WithLabelValues(metrics.allow(policy, metrics.allowed.policies), metrics.builtIn(outcome, metrics.allowed.outcomes)).Inc()
+	})
 }
 
 // RecordExactCost records an exact-USD accounting event without converting
 // the amount to float. The exact decimal remains in the response/ledger;
 // Prometheus only receives a bounded event count.
 func (metrics *Metrics) RecordExactCost(endpoint, model, class, method string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
-	metrics.costExactTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, classes), metrics.allow(method, metrics.allowed.methods)).Inc()
+	metrics.withRLock(func() {
+		metrics.costExactTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.allow(model, metrics.allowed.models), metrics.builtIn(class, serviceClasses), metrics.allow(method, metrics.allowed.methods)).Inc()
+	})
 }
 
 // RecordCostStatus records whether a completed operation has an exact or
 // unknown cost. The amount and unknown reason remain in the durable ledger;
 // this counter deliberately exposes only bounded dimensions.
 func (metrics *Metrics) RecordCostStatus(endpoint, model, class, status, method string) {
-	if metrics == nil {
-		return
-	}
-	classes := map[string]struct{}{"economy": {}, "standard": {}, "priority": {}}
-	statuses := map[string]struct{}{"exact": {}, "unknown": {}}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.costStatus.WithLabelValues(
-		metrics.allow(endpoint, metrics.allowed.endpoints),
-		metrics.allow(model, metrics.allowed.models),
-		metrics.builtIn(class, classes),
-		metrics.builtIn(status, statuses),
-		metrics.allow(method, metrics.allowed.methods),
-	).Inc()
+	metrics.withRLock(func() {
+		metrics.costStatus.WithLabelValues(
+			metrics.allow(endpoint, metrics.allowed.endpoints),
+			metrics.allow(model, metrics.allowed.models),
+			metrics.builtIn(class, serviceClasses),
+			metrics.builtIn(status, costStatuses),
+			metrics.allow(method, metrics.allowed.methods),
+		).Inc()
+	})
 }
 
 func (metrics *Metrics) RecordOperationState(state string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.operationState.WithLabelValues(metrics.allow(state, metrics.allowed.operationStates)).Inc()
+	metrics.withRLock(func() {
+		metrics.operationState.WithLabelValues(metrics.allow(state, metrics.allowed.operationStates)).Inc()
+	})
 }
 
 func (metrics *Metrics) RecordAmbiguous(endpoint string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.ambiguousTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints)).Inc()
+	metrics.withRLock(func() {
+		metrics.ambiguousTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints)).Inc()
+	})
 }
 
 func (metrics *Metrics) RecordContinuation(decision string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.continuationTotal.WithLabelValues(metrics.allow(decision, metrics.allowed.continuationDecisions)).Inc()
+	metrics.withRLock(func() {
+		metrics.continuationTotal.WithLabelValues(metrics.allow(decision, metrics.allowed.continuationDecisions)).Inc()
+	})
 }
 
 func (metrics *Metrics) RecordConfigReload(outcome string) {
@@ -445,95 +439,61 @@ func (metrics *Metrics) RecordConfigReload(outcome string) {
 // vocabularies are deliberately fixed so table names and operator input never
 // become unbounded Prometheus labels.
 func (metrics *Metrics) RecordMaintenance(resource, outcome string, rows int, duration time.Duration) {
-	if metrics == nil {
-		return
-	}
 	if rows < 0 {
 		rows = 0
 	}
-	resources := map[string]struct{}{
-		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
-		"checkpoint": {}, "blob": {}, "outbox": {}, "budget": {},
-	}
-	outcomes := map[string]struct{}{
-		"eligible": {}, "tombstoned": {}, "deleted": {}, "skipped": {},
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.maintenanceRows.WithLabelValues(metrics.builtIn(resource, resources), metrics.builtIn(outcome, outcomes)).Add(float64(rows))
-	// A maintenance pass reports one row counter for each outcome. Observe its
-	// duration only on the single eligible event so one pass contributes one
-	// histogram sample rather than multiplying latency by outcome count.
-	if outcome == "eligible" {
-		metrics.maintenanceDuration.WithLabelValues(metrics.builtIn(resource, resources)).Observe(nonNegativeDuration(duration).Seconds())
-	}
+	metrics.withRLock(func() {
+		metrics.maintenanceRows.WithLabelValues(metrics.builtIn(resource, maintenanceResources), metrics.builtIn(outcome, maintenanceOutcomes)).Add(float64(rows))
+		// A maintenance pass reports one row counter for each outcome. Observe its
+		// duration only on the single eligible event so one pass contributes one
+		// histogram sample rather than multiplying latency by outcome count.
+		if outcome == "eligible" {
+			metrics.maintenanceDuration.WithLabelValues(metrics.builtIn(resource, maintenanceResources)).Observe(nonNegativeDuration(duration).Seconds())
+		}
+	})
 }
 
 // RecordMaintenanceFailure records a failed bounded pass without exposing
 // database error text or caller-controlled table names.
 func (metrics *Metrics) RecordMaintenanceFailure(resource string) {
-	if metrics == nil {
-		return
-	}
-	resources := map[string]struct{}{
-		"cache": {}, "status": {}, "inventory": {}, "query_execution": {},
-		"checkpoint": {}, "blob": {}, "outbox": {}, "budget": {},
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.maintenanceFailures.WithLabelValues(metrics.builtIn(resource, resources)).Inc()
+	metrics.withRLock(func() {
+		metrics.maintenanceFailures.WithLabelValues(metrics.builtIn(resource, maintenanceResources)).Inc()
+	})
 }
 
 // RecordCache records one bounded response-cache lifecycle event. Use and hit
 // are deliberately separate: a replayed operation can be a hit without
 // inserting a second use row.
 func (metrics *Metrics) RecordCache(event string) {
-	if metrics == nil {
-		return
-	}
-	events := map[string]struct{}{
-		"hit": {}, "use": {}, "miss": {}, "fill": {}, "fill_existing": {},
-		"fill_busy": {}, "fill_failed": {}, "error": {},
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.cacheEvents.WithLabelValues(metrics.builtIn(event, events)).Inc()
+	metrics.withRLock(func() {
+		metrics.cacheEvents.WithLabelValues(metrics.builtIn(event, cacheEventNames)).Inc()
+	})
 }
 
 // RecordPendingPoll records a provider-owned poll boundary. The worker may
 // retry a pending operation many times, so this is a counter rather than an
 // in-memory gauge that could be lost on restart.
 func (metrics *Metrics) RecordPendingPoll(outcome string) {
-	if metrics == nil {
-		return
-	}
-	outcomes := map[string]struct{}{"started": {}, "completed": {}, "retry": {}, "failed": {}}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.pendingPolls.WithLabelValues(metrics.builtIn(outcome, outcomes)).Inc()
+	metrics.withRLock(func() {
+		metrics.pendingPolls.WithLabelValues(metrics.builtIn(outcome, pendingPollOutcomes)).Inc()
+	})
 }
 
 // RecordLangfuseExportFailure records one failed Langfuse export Activity
 // attempt. Reason is restricted to the fixed vocabulary.
 func (metrics *Metrics) RecordLangfuseExportFailure(reason string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.langfuseExportFailed.WithLabelValues(metrics.builtIn(reason, langfuseExportFailureReasons)).Inc()
+	metrics.withRLock(func() {
+		metrics.langfuseExportFailed.WithLabelValues(metrics.builtIn(reason, langfuseExportFailureReasons)).Inc()
+	})
 }
 
 // RecordRouteHeld counts one route candidate that provider planning skipped
 // because its shared health record holds it: an open circuit, exhausted
 // credit or a billing issue. Route health is otherwise visible only in Redis.
 func (metrics *Metrics) RecordRouteHeld(endpoint, reason string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.routeHeldTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(reason, routeHeldReasons)).Inc()
+	metrics.withRLock(func() {
+		metrics.routeHeldTotal.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(reason, routeHeldReasons)).Inc()
+	})
 }
 
 // RecordExecutionStep observes one v1 durable execution step Activity
@@ -541,12 +501,9 @@ func (metrics *Metrics) RecordRouteHeld(endpoint, reason string) {
 // Prepare and acquire are pure admission and compilation work; generate and
 // compact also include the provider call.
 func (metrics *Metrics) RecordExecutionStep(step string, duration time.Duration) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.executionStep.WithLabelValues(metrics.builtIn(step, executionSteps)).Observe(nonNegativeDuration(duration).Seconds())
+	metrics.withRLock(func() {
+		metrics.executionStep.WithLabelValues(metrics.builtIn(step, executionSteps)).Observe(nonNegativeDuration(duration).Seconds())
+	})
 }
 
 // RecordRouteHealthTransition counts one flip of a shared route health
@@ -554,12 +511,9 @@ func (metrics *Metrics) RecordExecutionStep(step string, duration time.Duration)
 // the sum across workers is the number of flips. Unlike RecordRouteHeld it
 // needs no traffic on the held route.
 func (metrics *Metrics) RecordRouteHealthTransition(endpoint, to string) {
-	if metrics == nil {
-		return
-	}
-	metrics.mu.RLock()
-	defer metrics.mu.RUnlock()
-	metrics.routeHealthFlips.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(to, routeHealthTransitions)).Inc()
+	metrics.withRLock(func() {
+		metrics.routeHealthFlips.WithLabelValues(metrics.allow(endpoint, metrics.allowed.endpoints), metrics.builtIn(to, routeHealthTransitions)).Inc()
+	})
 }
 
 // CatalogPriceExpirySource reports, at now, when the earliest current priced

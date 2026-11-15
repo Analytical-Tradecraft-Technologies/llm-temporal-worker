@@ -12,14 +12,8 @@ import (
 const requestID = "llmtw_req_49c0cb63-15ed-4da7-aa74-17a7d711c9a5"
 
 func TestExecutionContractsRoundTripEveryState(t *testing.T) {
-	var generate llm.GenerateResponseV1
-	var compact llm.CompactResponseV1
-	if err := json.Unmarshal(readV1Fixture(t, "generate-response.json"), &generate); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(readV1Fixture(t, "compact-response.json"), &compact); err != nil {
-		t.Fatal(err)
-	}
+	generate := mustUnmarshal[llm.GenerateResponseV1](t, readV1Fixture(t, "generate-response.json"), "generate-response.json")
+	compact := mustUnmarshal[llm.CompactResponseV1](t, readV1Fixture(t, "compact-response.json"), "compact-response.json")
 	for _, kind := range []string{"generate", "compact"} {
 		for _, state := range []llm.ExecutionStateV1{llm.ExecutionBudgetRequired, llm.ExecutionAcquired, llm.ExecutionBudgetWait, llm.ExecutionCacheWait, llm.ExecutionPending, llm.ExecutionProviderCompleted, llm.ExecutionCompleted, llm.ExecutionFailed, llm.ExecutionOutcomeUnknown} {
 			t.Run(kind+"/"+string(state), func(t *testing.T) {
@@ -39,10 +33,7 @@ func TestExecutionContractsRoundTripEveryState(t *testing.T) {
 					}
 				}
 				data := mustMarshal(t, value)
-				var decoded llm.ExecutionResultV1
-				if err := json.Unmarshal(data, &decoded); err != nil {
-					t.Fatal(err)
-				}
+				decoded := mustUnmarshal[llm.ExecutionResultV1](t, data, "decode execution result")
 				second, err := json.Marshal(decoded)
 				if err != nil || string(second) != string(data) {
 					t.Fatalf("unstable wire round trip: %v", err)
@@ -92,20 +83,10 @@ func TestExecutionResultRejectsInvalidUnionsAndClosedFields(t *testing.T) {
 }
 
 func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
-	var generate llm.GenerateRequestV1
-	var compact llm.CompactRequestV1
-	if err := json.Unmarshal(readV1Fixture(t, "generate-root.json"), &generate); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(readV1Fixture(t, "compact-request.json"), &compact); err != nil {
-		t.Fatal(err)
-	}
+	generate := readV1GenerateFixture(t, "generate-root.json")
+	compact := mustUnmarshal[llm.CompactRequestV1](t, readV1Fixture(t, "compact-request.json"), "compact-request.json")
 	for _, request := range []llm.PrepareExecutionV1{{Generate: &generate}, {Compact: &compact}} {
-		data := mustMarshal(t, request)
-		var decoded llm.PrepareExecutionV1
-		if err := json.Unmarshal(data, &decoded); err != nil {
-			t.Fatal(err)
-		}
+		mustUnmarshal[llm.PrepareExecutionV1](t, mustMarshal(t, request), "decode prepare")
 	}
 	for _, request := range []llm.PrepareExecutionV1{{}, {Generate: &generate, Compact: &compact}} {
 		if _, err := json.Marshal(request); err == nil {
@@ -113,10 +94,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 		}
 	}
 	for _, data := range []string{`{}`, `null`, `{"generate":null}`, `{"generate":{},"extra":true}`, `{"compact":{},"compact":{}}`} {
-		var value llm.PrepareExecutionV1
-		if err := json.Unmarshal([]byte(data), &value); err == nil {
-			t.Fatal("invalid prepare accepted")
-		}
+		requireUnmarshalRejected[llm.PrepareExecutionV1](t, []byte(data), "invalid prepare accepted")
 	}
 	reference := llm.ExecutionReferenceV1{RequestID: requestID, Context: generate.Context}
 	data := mustMarshal(t, reference)
@@ -125,9 +103,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 		t.Fatalf("reference: %v", err)
 	}
 	for _, bad := range []string{`{}`, `null`, `{"request_id":"` + requestID + `","context":null}`, `{"request_id":"` + requestID + `","context":{"tenant":"t","project":"p","actor":"a","secret":true}}`, strings.Replace(string(data), `"request_id"`, `"provider_id"`, 1)} {
-		if err := json.Unmarshal([]byte(bad), &decoded); err == nil {
-			t.Fatalf("accepted %s", bad)
-		}
+		requireUnmarshalRejected[llm.ExecutionReferenceV1](t, []byte(bad), "accepted %s", bad)
 	}
 	// The capability is optional at decode (the runtime verifies it) but
 	// bounded in size and alphabet, and never present but empty.
@@ -139,9 +115,7 @@ func TestExecutionPrepareAndReferenceContracts(t *testing.T) {
 	}
 	for _, capability := range []string{`""`, `null`, `1`, `"has space"`, `"` + strings.Repeat("a", 129) + `"`} {
 		bad := strings.Replace(string(data), `"ref_v1.k1.abc-_"`, capability, 1)
-		if err := json.Unmarshal([]byte(bad), &decoded); err == nil {
-			t.Fatalf("accepted %s", bad)
-		}
+		requireUnmarshalRejected[llm.ExecutionReferenceV1](t, []byte(bad), "accepted %s", bad)
 	}
 	reference.Capability = strings.Repeat("a", 129)
 	if _, err := json.Marshal(reference); err == nil {
@@ -166,10 +140,7 @@ func TestExecutionResultAcceptsProviderStatusOnlyOnFailure(t *testing.T) {
 		strings.Replace(failed, `502}`, `"502"}`, 1),
 		`{"request_id":"` + requestID + `","kind":"generate","state":"pending","retry_after_seconds":3,"provider_status":502}`,
 	} {
-		value := llm.ExecutionResultV1{}
-		if err := json.Unmarshal([]byte(data), &value); err == nil {
-			t.Fatalf("accepted %s", data)
-		}
+		requireUnmarshalRejected[llm.ExecutionResultV1](t, []byte(data), "accepted %s", data)
 	}
 	if _, err := json.Marshal(llm.ExecutionResultV1{RequestID: requestID, Kind: "generate", State: llm.ExecutionOutcomeUnknown, ProviderStatus: 502}); err == nil {
 		t.Fatal("provider status accepted outside a failure")

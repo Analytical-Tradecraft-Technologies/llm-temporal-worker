@@ -40,13 +40,12 @@ func FuzzPlannerNeverSelectsUnauthorizedClasses(f *testing.F) {
 		for index, value := range routeBytes {
 			class := fuzzClass(value)
 			offered[class] = struct{}{}
-			route := Route{
+			route := classRoute(class, string(class)+"-tier", Route{
 				ID: "route-" + string(rune('a'+index)), EndpointID: "endpoint-" + string(rune('a'+index)),
 				Provider: "provider", Family: "family", Region: "region", AccountRegion: "region",
 				Model: "model-" + string(rune('a'+index)), ModelLineage: "lineage-" + string(rune('a'+index)),
-				Classes: []llm.ServiceClass{class}, ProviderTiers: map[llm.ServiceClass]string{class: string(class) + "-tier"},
-				Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true,
-			}
+				PriceVersion: "price-v1", PriceAvailable: true,
+			})
 			routes[index] = route
 			configured[route.ID] = route
 		}

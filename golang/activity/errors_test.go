@@ -27,6 +27,25 @@ func safeApplicationError(t *testing.T, err error) (*temporal.ApplicationError, 
 	return application, details
 }
 
+// assertApplicationError fails unless err is a Temporal application error of
+// wantType with the given retryability.
+func assertApplicationError(t *testing.T, err error, wantType string, nonRetryable bool) *temporal.ApplicationError {
+	t.Helper()
+	var application *temporal.ApplicationError
+	if !errors.As(err, &application) {
+		t.Fatalf("error = %T %v, want *temporal.ApplicationError", err, err)
+	}
+	assertApplicationType(t, application, wantType, nonRetryable)
+	return application
+}
+
+func assertApplicationType(t *testing.T, application *temporal.ApplicationError, wantType string, nonRetryable bool) {
+	t.Helper()
+	if application.Type() != wantType || application.NonRetryable() != nonRetryable {
+		t.Fatalf("application error type=%q non_retryable=%v, want %q non_retryable=%v", application.Type(), application.NonRetryable(), wantType, nonRetryable)
+	}
+}
+
 func TestErrorMappingUsesSafeStableTypes(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -47,9 +66,7 @@ func TestErrorMappingUsesSafeStableTypes(t *testing.T) {
 			test.err.RetryAfter = time.Second
 			mapped := ToTemporalError(test.err)
 			application, details := safeApplicationError(t, mapped)
-			if application.Type() != test.wantType || application.NonRetryable() != test.nonRetryable {
-				t.Fatalf("application error type=%q non_retryable=%v", application.Type(), application.NonRetryable())
-			}
+			assertApplicationType(t, application, test.wantType, test.nonRetryable)
 			if strings.Contains(application.Error(), "secret") {
 				t.Fatal("safe error leaked provider message")
 			}
@@ -90,34 +107,32 @@ func TestErrorMappingPreservesCancellation(t *testing.T) {
 	}
 }
 
-func TestErrorMappingHonorsCertifiedPreDispatchDeadlineRetryNever(t *testing.T) {
-	deadline := provider.NewPreDispatchContextError(context.DeadlineExceeded)
-	deadline.OperationID = "operation-pre-dispatch-deadline"
-
-	mapped := ToTemporalError(deadline)
-	application, details := safeApplicationError(t, mapped)
-	if application.Type() != ErrorTypeProviderTransient || !application.NonRetryable() {
-		t.Fatalf("application error type=%q non_retryable=%v, want transient non-retryable", application.Type(), application.NonRetryable())
-	}
-	if details.OperationID != deadline.OperationID || details.Code != string(provider.CodeDeadlineExceeded) || details.Dispatch != string(provider.DispatchNotDispatched) {
-		t.Fatalf("safe details = %#v", details)
-	}
-}
-
-func TestErrorMappingHonorsCertifiedPreDispatchCancellationRetryNever(t *testing.T) {
-	canceled := provider.NewPreDispatchContextError(context.Canceled)
-	canceled.OperationID = "operation-pre-dispatch-canceled"
-
-	mapped := ToTemporalError(canceled)
-	application, details := safeApplicationError(t, mapped)
-	if application.Type() != ErrorTypeInvalidArgument || !application.NonRetryable() {
-		t.Fatalf("application error type=%q non_retryable=%v, want invalid argument non-retryable", application.Type(), application.NonRetryable())
-	}
-	if errors.Is(mapped, context.Canceled) {
-		t.Fatal("certified pre-dispatch caller cancellation must be a non-retryable failure, not Temporal task cancellation")
-	}
-	if details.OperationID != canceled.OperationID || details.Code != string(provider.CodeCanceled) || details.Dispatch != string(provider.DispatchNotDispatched) {
-		t.Fatalf("safe details = %#v", details)
+// A certified pre-dispatch deadline is a non-retryable transient failure and
+// a certified pre-dispatch caller cancellation a non-retryable invalid
+// argument; neither becomes Temporal task cancellation.
+func TestErrorMappingHonorsCertifiedPreDispatchContextRetryNever(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		cause    error
+		wantType string
+		wantCode provider.Code
+	}{
+		{"deadline", context.DeadlineExceeded, ErrorTypeProviderTransient, provider.CodeDeadlineExceeded},
+		{"canceled", context.Canceled, ErrorTypeInvalidArgument, provider.CodeCanceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failure := provider.NewPreDispatchContextError(test.cause)
+			failure.OperationID = "operation-pre-dispatch-" + test.name
+			mapped := ToTemporalError(failure)
+			application, details := safeApplicationError(t, mapped)
+			assertApplicationType(t, application, test.wantType, true)
+			if errors.Is(mapped, context.Canceled) {
+				t.Fatal("certified pre-dispatch failure must be a non-retryable failure, not Temporal task cancellation")
+			}
+			if details.OperationID != failure.OperationID || details.Code != string(test.wantCode) || details.Dispatch != string(provider.DispatchNotDispatched) {
+				t.Fatalf("safe details = %#v", details)
+			}
+		})
 	}
 }
 

@@ -113,6 +113,12 @@ type Progress struct {
 	At          time.Time
 }
 
+// candidateProgress is the heartbeat for phase of operationID on candidate's
+// route and class, stamped now.
+func (engine *Engine) candidateProgress(operationID, phase string, candidate routing.Candidate) Progress {
+	return Progress{OperationID: operationID, Phase: phase, RouteIndex: candidate.RouteIndex, ClassIndex: candidate.FallbackIndex, At: engine.dependencies.Clock()}
+}
+
 // Dependencies are injected so engine tests do not need Temporal, provider
 // credentials, Redis, or wall-clock sleeps.
 type Dependencies struct {

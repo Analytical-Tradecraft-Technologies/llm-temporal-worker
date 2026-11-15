@@ -2,20 +2,13 @@ package llm
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestGenerateRequestV1ValidatesOutputFormatName(t *testing.T) {
-	negative, err := os.ReadFile("testdata/v1/negative-generate-output-name.json")
-	if err != nil {
-		t.Fatal(err)
-	}
 	const invalid = `"name":"claim summary",`
-	if !strings.Contains(string(negative), invalid) {
-		t.Fatalf("fixture does not contain %s", invalid)
-	}
+	negative := readFixtureContaining(t, "testdata/v1/negative-generate-output-name.json", invalid)
 	for name, test := range map[string]struct {
 		replacement string
 		valid       bool
@@ -32,7 +25,7 @@ func TestGenerateRequestV1ValidatesOutputFormatName(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var request GenerateRequestV1
-			err := request.UnmarshalJSON([]byte(strings.Replace(string(negative), invalid, test.replacement, 1)))
+			err := request.UnmarshalJSON([]byte(strings.Replace(negative, invalid, test.replacement, 1)))
 			if test.valid != (err == nil) {
 				t.Fatalf("decode error = %v, want valid=%t", err, test.valid)
 			}

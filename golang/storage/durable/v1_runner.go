@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -233,10 +234,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	}
 
 	replay, err := ports.Replay(ctx, request)
-	if err != nil {
-		return llm.GenerateResponseV1{}, stageError("replay", err)
-	}
-	if err := contextErr(ctx); err != nil {
+	if err := afterStage(ctx, "replay", err); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
 	// A normal replay is the only durable view of the ancestor transcript that
@@ -279,10 +277,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 		return *replay.Completed, nil
 	}
 	decision, err := ports.CacheLookup(ctx, request, replay)
-	if err != nil {
-		return llm.GenerateResponseV1{}, stageError("cache lookup", err)
-	}
-	if err := contextErr(ctx); err != nil {
+	if err := afterStage(ctx, "cache lookup", err); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
 	if err := decision.Validate(); err != nil {
@@ -316,10 +311,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 	}
 
 	compaction, err := ports.CompactionDecision(ctx, request, replay, decision)
-	if err != nil {
-		return llm.GenerateResponseV1{}, stageError("compaction decision", err)
-	}
-	if err := contextErr(ctx); err != nil {
+	if err := afterStage(ctx, "compaction decision", err); err != nil {
 		return llm.GenerateResponseV1{}, err
 	}
 	if compaction.Required {
@@ -330,10 +322,7 @@ func GenerateV1(ctx context.Context, request llm.GenerateRequestV1, ports Genera
 			return llm.GenerateResponseV1{}, err
 		}
 		replay, err = ports.Compact(ctx, request, replay)
-		if err != nil {
-			return llm.GenerateResponseV1{}, stageError("compaction", err)
-		}
-		if err := contextErr(ctx); err != nil {
+		if err := afterStage(ctx, "compaction", err); err != nil {
 			return llm.GenerateResponseV1{}, err
 		}
 		if err := validateGenerateReplayFrontier(request, replay, true); err != nil {
@@ -515,7 +504,7 @@ func validateGenerateReplayFrontier(request llm.GenerateRequestV1, replay Genera
 	if err != nil {
 		return fmt.Errorf("replay transcript: %w", err)
 	}
-	if !equalStrings(basePending, replay.State.PendingToolCalls) {
+	if !slices.Equal(basePending, replay.State.PendingToolCalls) {
 		return errors.New("replay tool frontier does not match transcript")
 	}
 	combined := make([]llm.Item, 0, len(replay.State.Items)+len(request.Append))
@@ -525,18 +514,6 @@ func validateGenerateReplayFrontier(request llm.GenerateRequestV1, replay Genera
 		return fmt.Errorf("request append violates replay tool frontier: %w", err)
 	}
 	return nil
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }
 
 // validateGenerateCacheFinalization prevents a cache lookup from returning the
@@ -610,6 +587,15 @@ func validateGenerateResponseParent(expectedParent *llm.CheckpointHandle, respon
 		return errors.New("response checkpoint parent does not match effective parent")
 	}
 	return nil
+}
+
+// afterStage maps a port error to its stage. Otherwise it reports a context
+// that ended during the port call.
+func afterStage(ctx context.Context, stage string, err error) error {
+	if err != nil {
+		return stageError(stage, err)
+	}
+	return contextErr(ctx)
 }
 
 func stageError(stage string, err error) error {

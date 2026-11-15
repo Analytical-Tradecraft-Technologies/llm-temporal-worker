@@ -49,18 +49,20 @@ func assertDigestCompatibility(t *testing.T, request Request) {
 	}
 }
 
+// readRequestFile decodes the request JSON file at path.
+func readRequestFile(t *testing.T, path string) Request {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mustUnmarshalJSON[Request](t, data, "decode "+path)
+}
+
 func TestRequestDigestLegacyCompatibility(t *testing.T) {
 	for _, path := range []string{"testdata/request/minimal.json", "testdata/request/full.json"} {
 		t.Run(path, func(t *testing.T) {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var request Request
-			if err := json.Unmarshal(data, &request); err != nil {
-				t.Fatal(err)
-			}
-			assertDigestCompatibility(t, request)
+			assertDigestCompatibility(t, readRequestFile(t, path))
 		})
 	}
 	// Exercise every typed item/part and optional request field, including byte

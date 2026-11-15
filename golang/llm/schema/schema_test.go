@@ -91,11 +91,7 @@ func TestPublicAPISchemasCompileLocally(t *testing.T) {
 		"compact-request.schema.json", "compact-response.schema.json",
 		"query-request.schema.json", "query-response.schema.json",
 	} {
-		data, err := os.ReadFile(filepath.Join("..", "..", "api", "schema", "v1", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := schema.Parse(data); err != nil {
+		if _, err := schema.Parse(readV1SchemaFile(t, name)); err != nil {
 			t.Fatalf("parse public schema %s: %v", name, err)
 		}
 	}

@@ -100,10 +100,7 @@ func TestNanoUSDCheckedArithmeticAndExactDisplayConversion(t *testing.T) {
 	if _, err := NanoUSD(2).Sub(3); err == nil {
 		t.Fatal("NanoUSD.Sub accepted a negative result")
 	}
-	value, err := USDFromNano(123)
-	if err != nil || value.String() != "0.000000123000000000" {
-		t.Fatalf("USDFromNano(123) = %s, %v", value.String(), err)
-	}
+	value := assertUSDResult(t, "USDFromNano(123)", "0.000000123000000000")(USDFromNano(123))
 	if got, err := CeilNanoUSD(value); err != nil || got != 123 {
 		t.Fatalf("CeilNanoUSD(USDFromNano(123)) = %d, %v", got, err)
 	}

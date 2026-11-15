@@ -54,19 +54,11 @@ func NewContinuationStore(options ContinuationOptions) (*ContinuationStore, erro
 }
 
 func (store *ContinuationStore) CreateRoot(ctx context.Context, continuation state.Continuation) (state.Handle, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if continuation.Tenant == "" {
-		return "", fmt.Errorf("continuation tenant is required")
-	}
-	handle, err := store.keyring.Issue(continuation.Tenant)
+	handle, continuation, err := state.IssueRoot(ctx, store.keyring, continuation)
 	if err != nil {
 		return "", err
 	}
-	continuation.ID = handle
-	continuation.Depth = 0
-	return store.put(state.Handle(handle), continuation)
+	return store.put(handle, continuation)
 }
 
 func (store *ContinuationStore) Get(ctx context.Context, handle state.Handle) (state.Continuation, error) {
@@ -106,22 +98,9 @@ func (store *ContinuationStore) GetForTenant(ctx context.Context, tenant string,
 }
 
 func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutChildRequest) (state.Handle, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	parent, err := store.Get(ctx, request.Parent)
+	parent, child, err := state.PrepareChild(ctx, store.Get, request, store.maxDepth)
 	if err != nil {
 		return "", err
-	}
-	child := request.Child.Clone()
-	if child.Tenant == "" {
-		child.Tenant = parent.Tenant
-	}
-	if child.Tenant != parent.Tenant || child.Depth != parent.Depth+1 || child.ParentID != request.Parent.String() {
-		return "", state.ErrConflict
-	}
-	if child.Depth > store.maxDepth {
-		return "", fmt.Errorf("continuation depth exceeds limit")
 	}
 	// Keep the operation-key lookup and publication in one critical section.
 	// A retry storm can call PutChild concurrently with the same parent and
@@ -134,7 +113,7 @@ func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutC
 		if handle, exists := store.byOp[operationKey]; exists {
 			record, ok := store.records[handle]
 			if ok && store.clock().Before(record.value.ExpiresAt) {
-				if !sameChildFacts(record.value, child) {
+				if !state.SameChildFacts(record.value, child) {
 					return "", state.ErrConflict
 				}
 				return handle, nil
@@ -217,11 +196,4 @@ func (store *ContinuationStore) sweepLocked(now time.Time) int {
 		}
 	}
 	return removed
-}
-
-// sameChildFacts compares the immutable facts of an idempotent child retry.
-// A retry with the same parent and operation key but a different history is
-// a conflict, not a replay of the stored child.
-func sameChildFacts(stored, incoming state.Continuation) bool {
-	return stored.TranscriptDigest == incoming.TranscriptDigest && stored.TranscriptComplete == incoming.TranscriptComplete
 }

@@ -12,17 +12,12 @@ import (
 func TestDurableEphemeralRedisPolicy(t *testing.T) {
 	data := string(exampleYAML(t))
 	data = strings.Replace(data, "required_persistence: aof_and_rdb", "required_persistence: none\n    maxmemory_policy: volatile-lru", 1)
-	snapshot, err := config.Compile(context.Background(), []byte(data), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := mustCompile(t, []byte(data))
 	if got := snapshot.Config().State.Redis; got.RequiredPersistence != "none" || got.EffectiveMaxMemoryPolicy() != "volatile-lru" {
 		t.Fatalf("ephemeral Redis policy was not preserved: %#v", got)
 	}
 	for _, policy := range []string{"allkeys-lru", "allkeys-lfu", "allkeys-random", "volatile-random", "unknown"} {
-		if _, err := config.Load([]byte(strings.Replace(data, "maxmemory_policy: volatile-lru", "maxmemory_policy: "+policy, 1))); err == nil {
-			t.Fatalf("accepted unsafe/unsupported eviction policy %q", policy)
-		}
+		requireLoadRejected(t, []byte(strings.Replace(data, "maxmemory_policy: volatile-lru", "maxmemory_policy: "+policy, 1)), "accepted unsafe/unsupported eviction policy %q", policy)
 	}
 	fixture := strings.Replace(data, "kind: durable", "kind: redis", 1)
 	fixture = strings.Replace(fixture, cloudRequestSettings, "", 1)
@@ -32,10 +27,7 @@ func TestDurableEphemeralRedisPolicy(t *testing.T) {
 
 func TestRedisEvictionDefaultsAndSnapshotDigest(t *testing.T) {
 	data := string(exampleYAML(t))
-	base, err := config.Compile(context.Background(), []byte(data), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustCompile(t, []byte(data))
 	if base.Config().State.Redis.EffectiveMaxMemoryPolicy() != "noeviction" {
 		t.Fatal("existing configuration eviction policy changed")
 	}

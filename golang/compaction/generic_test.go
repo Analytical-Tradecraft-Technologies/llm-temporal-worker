@@ -10,6 +10,16 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
+// mustPrepareRequest runs PrepareRequest and fails the test on an error.
+func mustPrepareRequest(t *testing.T, source llm.Request, operationKey string, input []llm.Item, policy Policy) llm.Request {
+	t.Helper()
+	request, err := PrepareRequest(source, operationKey, input, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
 func TestPolicyDefaultsAndValidation(t *testing.T) {
 	policy := DefaultPolicy()
 	if err := policy.Validate(); err != nil {
@@ -38,10 +48,7 @@ func TestPrepareRequestIsolatesApplicationSettings(t *testing.T) {
 		Input:      []llm.Item{llm.HumanText("hello")},
 	}
 	original := request
-	compact, err := PrepareRequest(request, "generate-1/compact", request.Input, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compact := mustPrepareRequest(t, request, "generate-1/compact", request.Input, policy)
 	if len(compact.Tools) != 0 || compact.ToolPolicy.Mode != llm.ToolChoiceNone || compact.Continuation != nil || compact.Reasoning != nil {
 		t.Fatalf("isolated request retained application controls: %#v", compact)
 	}
@@ -99,10 +106,7 @@ func TestPrepareRequestPreservesGenerateSettingsForFollowingGenerate(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	compact, err := PrepareRequest(source, "generate-settings/compact", source.Input, DefaultPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
+	compact := mustPrepareRequest(t, source, "generate-settings/compact", source.Input, DefaultPolicy())
 	unchangedJSON, err := json.Marshal(source)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +176,7 @@ func TestPlainTextSummaryRejectsToolAndBoundsOutput(t *testing.T) {
 	if _, err := PlainTextSummary(withCompanions, 64); err == nil {
 		t.Fatal("summary without model text accepted")
 	}
-	response.Output = append(response.Output, llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)})
+	response.Output = append(response.Output, lookupCall("call-1"))
 	if _, err := PlainTextSummary(response, 64); err == nil {
 		t.Fatal("tool call accepted as compaction output")
 	}
@@ -210,10 +214,7 @@ func TestFlattenSummarizerInstructionsOnlyForApplicationCallers(t *testing.T) {
 			for _, level := range test.levels {
 				request.Instructions = append(request.Instructions, llm.Instruction{Kind: llm.InstructionKindText, Level: level, Text: "be helpful"})
 			}
-			compact, err := PrepareRequest(request, "generate-1/compact", input, DefaultPolicy())
-			if err != nil {
-				t.Fatal(err)
-			}
+			compact := mustPrepareRequest(t, request, "generate-1/compact", input, DefaultPolicy())
 			for index := 0; index < 2; index++ {
 				if got := compact.Instructions[index].Level; got != llm.InstructionLevelPolicy {
 					t.Fatalf("PrepareRequest summarizer instruction %d level = %q, want policy", index, got)
@@ -252,10 +253,7 @@ func TestPrepareRequestOmitsSamplingWithOnlyStopSequencesAndSeed(t *testing.T) {
 	input := []llm.Item{llm.HumanText("prefix")}
 	source := llm.Request{OperationKey: "generate", Model: "model-1", Input: input,
 		Sampling: &llm.SamplingSpec{Seed: &seed, StopSequences: []string{"END"}}}
-	compact, err := PrepareRequest(source, "generate/compact", input, DefaultPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
+	compact := mustPrepareRequest(t, source, "generate/compact", input, DefaultPolicy())
 	if compact.Sampling != nil {
 		t.Fatalf("summarizer sampling = %+v; want nil", compact.Sampling)
 	}

@@ -124,10 +124,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 			if errors.Is(err, errCacheFillNotStarted) || (!saved.Plan.RequiresReservation() && !errors.Is(err, cloudstate.ErrCorrupt)) {
 				return executor.save(ctx, call.scope, call.id, saved, executor.unclaimedExecution(saved))
 			}
-			next := saved.Execution
-			next.Stage = cloudstate.ExecutionUnknown
-			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-			return executor.save(ctx, call.scope, call.id, saved, next)
+			return executor.save(ctx, call.scope, call.id, saved, ambiguousExecution(saved.Execution))
 		}
 	}
 	var claim *durable.ClaimReceipt
@@ -146,10 +143,7 @@ func (executor *CloudProviderExecution) submit(ctx context.Context, call *CloudB
 	if err != nil {
 		// Even a lost claim reply remains charged. Do not infer that the start
 		// permission was unused, and never refund or acquire a replacement here.
-		next := saved.Execution
-		next.Stage = cloudstate.ExecutionUnknown
-		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-		return executor.save(ctx, call.scope, call.id, saved, next)
+		return executor.save(ctx, call.scope, call.id, saved, ambiguousExecution(saved.Execution))
 	}
 	executor.captureLangfuse(ctx, call, saved)
 	observer := &executionObserver{executor: executor, scope: call.scope, id: call.id, saved: saved, claim: claim}
@@ -312,10 +306,7 @@ func (executor *CloudProviderExecution) unrecoverable(ctx context.Context, scope
 	if saved.Execution.Stage == cloudstate.ExecutionUnknown {
 		return executor.settleUnknown(ctx, scope, id, saved)
 	}
-	next := saved.Execution
-	next.Stage = cloudstate.ExecutionUnknown
-	next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
-	return executor.save(ctx, scope, id, saved, next)
+	return executor.save(ctx, scope, id, saved, ambiguousExecution(saved.Execution))
 }
 
 // settleUnknown charges an unresolved paid attempt at its full reservation
@@ -488,8 +479,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 		if polling && !unsavable {
 			return ProviderExecutionResult{}, executionError(provider.CodeProviderInvalidResponse)
 		}
-		next.Stage = cloudstate.ExecutionUnknown
-		next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+		next = ambiguousExecution(next)
 		var classified *provider.Error
 		// A one-shot Invoke always reports a completed outcome. A resumable
 		// submission that failed may still have a running job to recover.
@@ -537,8 +527,7 @@ func (executor *CloudProviderExecution) completeCall(ctx context.Context, scope 
 			}
 			next.Failure = executionFailure(code, outcome.Dispatch, outcome.Failure, now)
 		case provider.ResumableNotFound:
-			next.Stage = cloudstate.ExecutionUnknown
-			next.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+			next = ambiguousExecution(next)
 		}
 	}
 	switch {
@@ -1153,4 +1142,12 @@ func applyHostedToolCharge(response *llm.Response, cost pricing.Cost) {
 		return
 	}
 	response.Cost.Status, response.Cost.ActualCostUSD, response.Cost.Method, response.Cost.UnknownReason = llm.CostStatusKnown, &total, string(cost.Method), ""
+}
+
+// ambiguousExecution marks execution unknown with an ambiguous-dispatch
+// failure: whether the provider ran it cannot be known.
+func ambiguousExecution(execution cloudstate.ProviderExecution) cloudstate.ProviderExecution {
+	execution.Stage = cloudstate.ExecutionUnknown
+	execution.Failure = &cloudstate.ExecutionFailure{Code: provider.CodeAmbiguousDispatch, Dispatch: provider.DispatchAmbiguous}
+	return execution
 }

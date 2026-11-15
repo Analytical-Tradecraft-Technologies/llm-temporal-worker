@@ -23,6 +23,14 @@ func (materializer validatingMaterializer) MaterializeHandle(context.Context, st
 	return materializer.result, nil
 }
 
+// generateWithMaterializedState runs a child Generate through runtime wrapped
+// to materialize value.
+func generateWithMaterializedState(runtime V1Runtime, value state.MaterializedState) error {
+	wrapped := &MaterializingV1Runtime{Runtime: runtime, Materializer: validatingMaterializer{result: value}, Scope: fixedScopeID}
+	_, err := wrapped.GenerateV1(context.Background(), childGenerateV1Request("parent"))
+	return err
+}
+
 func TestMaterializingV1RuntimeRejectsInvalidMaterializedStateBeforeDispatch(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -64,12 +72,7 @@ func TestMaterializingV1RuntimeRejectsInvalidMaterializedStateBeforeDispatch(t *
 		t.Run(test.name, func(t *testing.T) {
 			value := validMaterializedStateForValidation("parent")
 			test.mutate(&value)
-			wrapped := &MaterializingV1Runtime{
-				Runtime:      &v1RuntimeStub{},
-				Materializer: validatingMaterializer{result: value},
-				Scope:        fixedScopeID,
-			}
-			_, err := wrapped.GenerateV1(context.Background(), childGenerateV1Request("parent"))
+			err := generateWithMaterializedState(&v1RuntimeStub{}, value)
 			if err == nil {
 				t.Fatal("GenerateV1 unexpectedly accepted invalid materialized state")
 			}
@@ -81,13 +84,7 @@ func TestMaterializingV1RuntimeRejectsInvalidMaterializedStateBeforeDispatch(t *
 func TestMaterializingV1RuntimeRejectsToolFrontierMismatch(t *testing.T) {
 	value := validMaterializedStateForValidation("parent")
 	value.PendingToolCalls = []string{"unrecorded"}
-	wrapped := &MaterializingV1Runtime{
-		Runtime:      &materializingRuntimeProbe{events: new([]string)},
-		Materializer: validatingMaterializer{result: value},
-		Scope:        fixedScopeID,
-	}
-	request := childGenerateV1Request("parent")
-	_, err := wrapped.GenerateV1(context.Background(), request)
+	err := generateWithMaterializedState(&materializingRuntimeProbe{events: new([]string)}, value)
 	var providerErr *provider.Error
 	if err == nil || !errors.As(err, &providerErr) {
 		t.Fatalf("GenerateV1 error = %v, want provider error", err)
@@ -101,13 +98,7 @@ func TestMaterializingV1RuntimeAcceptsEmptyMaterializedTranscript(t *testing.T) 
 	value := validMaterializedStateForValidation("parent")
 	value.Items = nil
 	value.PendingToolCalls = nil
-	wrapped := &MaterializingV1Runtime{
-		Runtime:      &materializingRuntimeProbe{events: new([]string)},
-		Materializer: validatingMaterializer{result: value},
-		Scope:        fixedScopeID,
-	}
-	request := childGenerateV1Request("parent")
-	if _, err := wrapped.GenerateV1(context.Background(), request); err != nil {
+	if err := generateWithMaterializedState(&materializingRuntimeProbe{events: new([]string)}, value); err != nil {
 		t.Fatalf("GenerateV1 rejected an empty materialized transcript: %v", err)
 	}
 }

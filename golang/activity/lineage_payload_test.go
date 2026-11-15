@@ -40,21 +40,10 @@ func TestV1PayloadSizeDoesNotFollowAncestorLineage(t *testing.T) {
 			Parent:       handle,
 			Policy:       []byte(`{"target_tokens":128}`),
 		}
-		generateResponse := llm.GenerateResponseV1{
-			APIVersion: llm.APIVersion, OperationKey: "lineage-generate", OperationID: "operation-generate",
-			Status:     llm.ResponseStatusCompleted,
-			Output:     []llm.Item{llm.ModelText("one response")},
-			Checkpoint: llm.CheckpointMetadata{Handle: handle, Kind: "generation", Depth: int32(count)},
-			Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
-			Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-		}
+		generateResponse := completedGenerateResponseV1("lineage-generate", "operation-generate", llm.CheckpointMetadata{Handle: handle, Kind: "generation", Depth: int32(count)}, "disabled")
+		generateResponse.Output = []llm.Item{llm.ModelText("one response")}
 		compactParent := handle
-		compactResponse := llm.CompactResponseV1{
-			APIVersion: llm.CompactAPIVersion, OperationKey: "lineage-compact", OperationID: "operation-compact",
-			Checkpoint: llm.CheckpointMetadata{Handle: handle, Parent: &compactParent, Kind: "compaction", Depth: int32(count)},
-			Cache:      llm.CacheDispositionV1{Disposition: "disabled"},
-			Cost:       llm.CostV1{Status: "exact", ActualCostUSD: stringPointer("0"), Method: "provider_reported"},
-		}
+		compactResponse := compactResponseV1("lineage-compact", "operation-compact", llm.CheckpointMetadata{Handle: handle, Parent: &compactParent, Kind: "compaction", Depth: int32(count)}, "disabled")
 
 		generateRequestWire, err := MarshalGenerateV1(generateRequest, limits)
 		if err != nil {

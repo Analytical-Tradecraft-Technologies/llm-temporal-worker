@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -217,7 +218,7 @@ func validatePreparationReplay(caller llm.RequestContext, parent string, replay 
 		return preparationError(provider.CodeStateCorrupt)
 	}
 	pending, err := state.ValidateTranscript(replay.Items)
-	if err != nil || !equalCheckpointFrontier(pending, replay.PendingToolCalls) || replay.Settings.Validate() != nil {
+	if err != nil || !slices.Equal(pending, replay.PendingToolCalls) || replay.Settings.Validate() != nil {
 		return preparationError(provider.CodeStateCorrupt)
 	}
 	return nil

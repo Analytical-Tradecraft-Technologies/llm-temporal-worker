@@ -25,10 +25,7 @@ func FuzzProviderCacheKeyForkIdentity(f *testing.F) {
 		if parent == [32]byte{} {
 			parent[0] = 1
 		}
-		key, err := DeriveProviderCacheKey([]byte("fuzz-secret"), scope, parent, epoch, lineage)
-		if err != nil {
-			t.Fatalf("derive key: %v", err)
-		}
+		key := mustDeriveProviderCacheKey(t, []byte("fuzz-secret"), scope, parent, epoch, lineage)
 		// Every immutable fork receives the same parent digest and provider
 		// lineage, so all three forks must reuse exactly one prefix identity.
 		for fork := 0; fork < 3; fork++ {
@@ -61,10 +58,7 @@ func TestAffinitySetValidationRejectsDuplicateRanksAndNegativeUsage(t *testing.T
 func TestProviderCacheAffinityNeverExposesRawKeyMaterial(t *testing.T) {
 	var parent [32]byte
 	parent[0] = 42
-	key, err := DeriveProviderCacheKey([]byte("secret"), "tenant/project", parent, "epoch", "lineage")
-	if err != nil {
-		t.Fatal(err)
-	}
+	key := mustDeriveProviderCacheKey(t, []byte("secret"), "tenant/project", parent, "epoch", "lineage")
 	if bytes.Contains(key[:], []byte("tenant")) || bytes.Contains(key[:], []byte("lineage")) {
 		t.Fatalf("raw identity leaked into HMAC digest: %x", key)
 	}

@@ -14,6 +14,19 @@ func textMessage(actor llm.Actor, text string) llm.Message {
 	return llm.Message{Actor: actor, Content: []llm.Part{llm.TextPart{Text: text}}}
 }
 
+// lookupCall is a call of the "lookup" tool with empty arguments.
+func lookupCall(id string) llm.ToolCall {
+	return llm.ToolCall{ID: id, Name: "lookup", Arguments: []byte(`{}`)}
+}
+
+// lookupResult is an empty result of the "lookup" tool call id.
+func lookupResult(id string) llm.ToolResult {
+	return llm.ToolResult{CallID: id, Name: "lookup"}
+}
+
+// anthropicThinking is an opaque Anthropic thinking block.
+var anthropicThinking = llm.ProviderState{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: []byte(`{"type":"thinking"}`)}
+
 // mustSelectPrefix runs SelectPrefix and fails the test on an error.
 func mustSelectPrefix(t *testing.T, items []llm.Item, recentTurns int) PrefixSelection {
 	t.Helper()
@@ -33,6 +46,16 @@ func mustSelectRequestPrefix(t *testing.T, source llm.Request, policy Policy) Pr
 		t.Fatal(err)
 	}
 	return selection
+}
+
+// assertRequestWindow checks SelectRequestPrefix keeps retained as a window
+// of turns turns; want describes the expected window.
+func assertRequestWindow(t *testing.T, source llm.Request, policy Policy, retained []llm.Item, turns int, want string) {
+	t.Helper()
+	selection, err := SelectRequestPrefix(source, policy)
+	if err != nil || selection.RetainedTurns != turns || !reflect.DeepEqual(selection.Retained, retained) {
+		t.Fatalf("selection = %#v, err = %v, want %s", selection, err, want)
+	}
 }
 
 // assertPrefixSplit checks a selection's prefix and retained items and, when
@@ -63,7 +86,7 @@ func TestSelectPrefixRetainsRecentTurns(t *testing.T) {
 func TestSelectPrefixNeverSplitsToolExchange(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "question"),
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+		lookupCall("call-1"),
 		llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "answer"}}},
 		textMessage(llm.ActorModel, "result"),
 	}
@@ -73,14 +96,14 @@ func TestSelectPrefixNeverSplitsToolExchange(t *testing.T) {
 func TestSelectPrefixRetainsOpenToolFrontierEvenWithZeroRecentTurns(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "question"),
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+		lookupCall("call-1"),
 	}
 	assertPrefixSplit(t, mustSelectPrefix(t, items, 0), items[:1], items[1:], 1)
 }
 
 func TestSelectPrefixRejectsInvalidTranscript(t *testing.T) {
 	_, err := SelectPrefix([]llm.Item{
-		llm.ToolResult{CallID: "missing", Name: "lookup"},
+		lookupResult("missing"),
 	}, 1)
 	if err == nil {
 		t.Fatal("unmatched tool result unexpectedly accepted")
@@ -109,13 +132,12 @@ func TestSelectPrefixKeepsProviderStateWithFollowingOutput(t *testing.T) {
 }
 
 func TestSelectPrefixKeepsThinkingWithPendingToolCall(t *testing.T) {
-	thinking := llm.ProviderState{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: []byte(`{"type":"thinking"}`)}
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "first"),
 		textMessage(llm.ActorModel, "reply"),
 		textMessage(llm.ActorHuman, "second"),
-		thinking,
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+		anthropicThinking,
+		lookupCall("call-1"),
 	}
 	for _, recent := range []int{0, 1} {
 		selection := mustSelectPrefix(t, items, recent)
@@ -131,11 +153,11 @@ func TestSelectPrefixKeepsThinkingWithPendingToolCall(t *testing.T) {
 func TestSelectPrefixBoundaryProperty(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "one"),
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
-		llm.ToolResult{CallID: "call-1", Name: "lookup"},
+		lookupCall("call-1"),
+		lookupResult("call-1"),
 		textMessage(llm.ActorModel, "two"),
-		llm.ToolCall{ID: "call-2", Name: "lookup", Arguments: []byte(`{}`)},
-		llm.ToolResult{CallID: "call-2", Name: "lookup"},
+		lookupCall("call-2"),
+		lookupResult("call-2"),
 		textMessage(llm.ActorHuman, "three"),
 	}
 	for recent := 0; recent <= len(items)+1; recent++ {
@@ -148,31 +170,26 @@ func TestSelectPrefixBoundaryProperty(t *testing.T) {
 			t.Fatalf("recent=%d changed transcript: %#v", recent, combined)
 		}
 		for _, id := range []string{"call-1", "call-2"} {
-			prefixHas, retainedHas := containsToolCall(selection.Prefix, id), containsToolCall(selection.Retained, id)
-			resultPrefixHas, resultRetainedHas := containsToolResult(selection.Prefix, id), containsToolResult(selection.Retained, id)
-			if prefixHas != resultPrefixHas || retainedHas != resultRetainedHas {
+			prefixCall, prefixResult := toolExchangeSides(selection.Prefix, id)
+			retainedCall, retainedResult := toolExchangeSides(selection.Retained, id)
+			if prefixCall != prefixResult || retainedCall != retainedResult {
 				t.Fatalf("recent=%d split tool exchange %s", recent, id)
 			}
 		}
 	}
 }
 
-func containsToolCall(items []llm.Item, id string) bool {
+// toolExchangeSides reports whether items hold the call id and its result.
+func toolExchangeSides(items []llm.Item, id string) (call, result bool) {
 	for _, item := range items {
-		if value, ok := item.(llm.ToolCall); ok && value.ID == id {
-			return true
+		switch value := item.(type) {
+		case llm.ToolCall:
+			call = call || value.ID == id
+		case llm.ToolResult:
+			result = result || value.CallID == id
 		}
 	}
-	return false
-}
-
-func containsToolResult(items []llm.Item, id string) bool {
-	for _, item := range items {
-		if value, ok := item.(llm.ToolResult); ok && value.CallID == id {
-			return true
-		}
-	}
-	return false
+	return call, result
 }
 
 func TestSelectPrefixPreservesPointerToolFrontiers(t *testing.T) {
@@ -201,9 +218,9 @@ func TestSelectPrefixPreservesPointerToolFrontiers(t *testing.T) {
 func TestSelectPrefixKeepsMixedToolResponseAtomic(t *testing.T) {
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "question"),
-		llm.ToolCall{ID: "a", Name: "lookup", Arguments: []byte("{}")},
+		lookupCall("a"),
 		textMessage(llm.ActorModel, "Checking another source"),
-		llm.ToolCall{ID: "b", Name: "lookup", Arguments: []byte("{}")},
+		lookupCall("b"),
 		llm.ToolResult{CallID: "a"},
 		llm.ToolResult{CallID: "b"},
 		textMessage(llm.ActorModel, "done"),
@@ -225,15 +242,14 @@ func TestSelectPrefixKeepsMixedToolResponseAtomic(t *testing.T) {
 }
 
 func TestSelectPrefixKeepsThinkingWithToolCallPastInterveningText(t *testing.T) {
-	thinking := llm.ProviderState{Provider: "anthropic", EndpointFamily: "messages", MediaType: "application/vnd.anthropic.content-block+json", Opaque: []byte(`{"type":"thinking"}`)}
 	items := []llm.Item{
 		textMessage(llm.ActorHuman, "first"),
 		textMessage(llm.ActorModel, "reply"),
 		textMessage(llm.ActorHuman, "second"),
-		thinking,
-		thinking,
+		anthropicThinking,
+		anthropicThinking,
 		textMessage(llm.ActorModel, "I will look that up."),
-		llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
+		lookupCall("call-1"),
 	}
 	for _, recent := range []int{0, 1} {
 		selection := mustSelectPrefix(t, items, recent)
@@ -303,16 +319,12 @@ func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 
 	// A window that fits is kept in full.
 	policy.TargetTokens = 1900
-	if selection := mustSelectRequestPrefix(t, source, policy); !reflect.DeepEqual(selection.Retained, items[1:]) || selection.RetainedTurns != 3 {
-		t.Fatalf("retained = %#v (%d turns), want the whole window", selection.Retained, selection.RetainedTurns)
-	}
+	assertRequestWindow(t, source, policy, items[1:], 3, "the whole window")
 
 	// The summary counts: the same window no longer fits once its output
 	// reserve would push the compacted request past the target (#1347).
 	policy.OutputReserveTokens = 1000
-	if selection := mustSelectRequestPrefix(t, source, policy); !reflect.DeepEqual(selection.Retained, items[2:]) || selection.RetainedTurns != 2 {
-		t.Fatalf("retained = %#v (%d turns), want the two turns that leave room for the summary", selection.Retained, selection.RetainedTurns)
-	}
+	assertRequestWindow(t, source, policy, items[2:], 2, "the two turns that leave room for the summary")
 	policy.OutputReserveTokens = 1
 
 	// Instructions count: the same items no longer fit once the prompt grows.
@@ -324,12 +336,9 @@ func TestSelectRequestPrefixShortensWindowToTargetTokens(t *testing.T) {
 	// The last turn stays even when it alone exceeds the target, and a zero
 	// window stays empty.
 	policy.TargetTokens = 1
-	selection, err := SelectRequestPrefix(source, policy)
-	if err != nil || selection.RetainedTurns != 1 || !reflect.DeepEqual(selection.Retained, items[3:]) {
-		t.Fatalf("selection = %#v, err = %v, want the last turn alone", selection, err)
-	}
+	assertRequestWindow(t, source, policy, items[3:], 1, "the last turn alone")
 	policy.RecentTurns = 0
-	selection, err = SelectRequestPrefix(source, policy)
+	selection, err := SelectRequestPrefix(source, policy)
 	if err != nil || selection.RetainedTurns != 0 || len(selection.Retained) != 0 {
 		t.Fatalf("selection = %#v, err = %v, want an empty window", selection, err)
 	}
@@ -395,7 +404,5 @@ func TestSelectRequestPrefixDoesNotCountInlineMediaBytesAsText(t *testing.T) {
 	source := llm.Request{OperationKey: "compact-1", Model: "alias", Input: items}
 	policy := DefaultPolicy()
 	policy.RecentTurns, policy.TriggerTokens, policy.TargetTokens, policy.OutputReserveTokens = 2, 2000, 600, 1
-	if selection := mustSelectRequestPrefix(t, source, policy); selection.RetainedTurns != 2 || !reflect.DeepEqual(selection.Retained, items[2:]) {
-		t.Fatalf("retained = %#v (%d turns), want the image turn kept", selection.Retained, selection.RetainedTurns)
-	}
+	assertRequestWindow(t, source, policy, items[2:], 2, "the image turn kept")
 }

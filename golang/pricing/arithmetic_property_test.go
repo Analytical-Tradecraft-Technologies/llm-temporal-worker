@@ -22,25 +22,26 @@ func TestDecimalCeilingAndOverflowInvariants(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.price, func(t *testing.T) {
-			price, err := ParseDecimalUSD(test.price)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := decimalCeilingOracle(t, test.price, test.units, test.unitsPerPrice)
-			got, err := CeilMicroUSD(price, test.units, test.unitsPerPrice)
-			if want.Cmp(big.NewInt(int64(RedisSafeLimit))) > 0 {
-				if err == nil {
-					t.Fatalf("overflow result = %d, want error", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("CeilMicroUSD(%q, %d, %d): %v", test.price, test.units, test.unitsPerPrice, err)
-			}
-			if got.Int64() != want.Int64() {
-				t.Fatalf("CeilMicroUSD(%q, %d, %d) = %d, want exact ceiling %d", test.price, test.units, test.unitsPerPrice, got, want)
-			}
+			assertCeilMatchesOracle(t, test.price, mustDecimalUSD(t, test.price), test.units, test.unitsPerPrice)
 		})
+	}
+}
+
+// assertCeilMatchesOracle checks CeilMicroUSD(price) against the exact
+// rational ceiling of value, requiring an error when that ceiling exceeds the
+// Redis-safe range.
+func assertCeilMatchesOracle(t *testing.T, value string, price DecimalUSD, units, unitsPerPrice int64) {
+	t.Helper()
+	want := decimalCeilingOracle(t, value, units, unitsPerPrice)
+	got, err := CeilMicroUSD(price, units, unitsPerPrice)
+	if want.Cmp(big.NewInt(int64(RedisSafeLimit))) > 0 {
+		if err == nil {
+			t.Fatalf("overflow result = %d, want error", got)
+		}
+		return
+	}
+	if err != nil || got.Int64() != want.Int64() {
+		t.Fatalf("CeilMicroUSD(%q, %d, %d) = %d, %v; want exact ceiling %d", value, units, unitsPerPrice, got, err, want)
 	}
 }
 

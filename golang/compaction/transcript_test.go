@@ -21,11 +21,7 @@ func TestPrepareRequestQuotesThePrefixAsOneDelimitedHumanMessage(t *testing.T) {
 		llm.ToolResult{CallID: "call_1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "tool output"}}, IsError: true},
 		llm.ModelText("model answer"),
 	}
-	policy := DefaultPolicy()
-	request, err := PrepareRequest(llm.Request{OperationKey: "generate", Model: "model-1", Input: prefix}, "generate/compact", prefix, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request := summarizerRequest(t, prefix)
 	if len(request.Input) != 1 {
 		t.Fatalf("summarizer input = %#v", request.Input)
 	}
@@ -56,15 +52,13 @@ func TestPrepareRequestQuotesThePrefixAsOneDelimitedHumanMessage(t *testing.T) {
 		strings.Index(text, "Write the summary of this transcript now") < strings.Index(text, "-----END TRANSCRIPT ") {
 		t.Fatalf("summarizer text is not delimited:\n%s", text)
 	}
-	again, err := PrepareRequest(llm.Request{OperationKey: "generate", Model: "model-1", Input: prefix}, "generate/compact", prefix, policy)
-	if err != nil || again.Input[0].(llm.Message).Content[0].(llm.TextPart).Text != text {
-		t.Fatal("summarizer input is not deterministic", err)
+	if summarizerText(t, prefix) != text {
+		t.Fatal("summarizer input is not deterministic")
 	}
 	// Transcript text that imitates the closing marker changes the marker.
 	forged := append(append([]llm.Item(nil), prefix...), llm.HumanText(markers[1][0]))
-	other, err := PrepareRequest(llm.Request{OperationKey: "generate", Model: "model-1", Input: forged}, "generate/compact", forged, policy)
-	if err != nil || strings.Count(other.Input[0].(llm.Message).Content[0].(llm.TextPart).Text, markers[1][0]) != 1 {
-		t.Fatal("transcript content can close its own quotation", err)
+	if strings.Count(summarizerText(t, forged), markers[1][0]) != 1 {
+		t.Fatal("transcript content can close its own quotation")
 	}
 }
 
@@ -75,13 +69,15 @@ func TestSummaryItemIsAHumanMessage(t *testing.T) {
 	}
 }
 
+// summarizerRequest prepares the default-policy compaction request for prefix.
+func summarizerRequest(t *testing.T, prefix []llm.Item) llm.Request {
+	t.Helper()
+	return mustPrepareRequest(t, llm.Request{OperationKey: "generate", Model: "model-1", Input: prefix}, "generate/compact", prefix, DefaultPolicy())
+}
+
 func summarizerText(t *testing.T, prefix []llm.Item) string {
 	t.Helper()
-	request, err := PrepareRequest(llm.Request{OperationKey: "generate", Model: "model-1", Input: prefix}, "generate/compact", prefix, DefaultPolicy())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return request.Input[0].(llm.Message).Content[0].(llm.TextPart).Text
+	return summarizerRequest(t, prefix).Input[0].(llm.Message).Content[0].(llm.TextPart).Text
 }
 
 // Pointer-form items are valid transcript input and must render as their

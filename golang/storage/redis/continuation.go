@@ -106,19 +106,11 @@ func NewContinuationStore(options ContinuationOptions) (*ContinuationStore, erro
 }
 
 func (store *ContinuationStore) CreateRoot(ctx context.Context, continuation state.Continuation) (state.Handle, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if continuation.Tenant == "" {
-		return "", fmt.Errorf("continuation tenant is required")
-	}
-	handle, err := store.keyring.Issue(continuation.Tenant)
+	handle, continuation, err := state.IssueRoot(ctx, store.keyring, continuation)
 	if err != nil {
 		return "", err
 	}
-	continuation.ID = handle
-	continuation.Depth = 0
-	return store.put(ctx, state.Handle(handle), continuation, "")
+	return store.put(ctx, handle, continuation, "")
 }
 
 func (store *ContinuationStore) Get(ctx context.Context, handle state.Handle) (state.Continuation, error) {
@@ -180,29 +172,16 @@ func (store *ContinuationStore) GetForTenant(ctx context.Context, tenant string,
 }
 
 func (store *ContinuationStore) PutChild(ctx context.Context, request state.PutChildRequest) (state.Handle, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	parent, err := store.Get(ctx, request.Parent)
+	parent, child, err := state.PrepareChild(ctx, store.Get, request, store.maxDepth)
 	if err != nil {
 		return "", err
-	}
-	child := request.Child.Clone()
-	if child.Tenant == "" {
-		child.Tenant = parent.Tenant
-	}
-	if child.Tenant != parent.Tenant || child.Depth != parent.Depth+1 || child.ParentID != request.Parent.String() {
-		return "", state.ErrConflict
-	}
-	if child.Depth > store.maxDepth {
-		return "", fmt.Errorf("continuation depth exceeds limit")
 	}
 	operationIndexKey := ""
 	if request.OperationKey != "" {
 		operationIndexKey = store.space.continuationOperationKey(parent.Tenant, request.Parent.String(), request.OperationKey)
 		if value, err := store.reader.Get(ctx, operationIndexKey); err == nil && value != "" {
 			existing, getErr := store.Get(ctx, state.Handle(value))
-			if getErr == nil && !sameChildFacts(existing, child) {
+			if getErr == nil && !state.SameChildFacts(existing, child) {
 				return "", state.ErrConflict
 			}
 			return state.Handle(value), nil
@@ -257,7 +236,7 @@ func (store *ContinuationStore) put(ctx context.Context, handle state.Handle, co
 		// the preliminary read. The winning child is immutable, so comparing
 		// it here closes that window without trusting a stale read.
 		existing := state.Handle(parts[1])
-		if stored, getErr := store.Get(ctx, existing); getErr == nil && !sameChildFacts(stored, continuation) {
+		if stored, getErr := store.Get(ctx, existing); getErr == nil && !state.SameChildFacts(stored, continuation) {
 			return "", state.ErrConflict
 		}
 		return existing, nil
@@ -310,11 +289,4 @@ func resolveStateError(ctx context.Context, err error) error {
 		return state.ErrNotFound
 	}
 	return fmt.Errorf("Redis state mutation outcome is unresolved: %w", ErrUnavailable)
-}
-
-// sameChildFacts compares the immutable facts of an idempotent child retry.
-// A retry with the same parent and operation key but a different history is
-// a conflict, not a replay of the stored child.
-func sameChildFacts(stored, incoming state.Continuation) bool {
-	return stored.TranscriptDigest == incoming.TranscriptDigest && stored.TranscriptComplete == incoming.TranscriptComplete
 }

@@ -29,8 +29,8 @@ func TestTemporalVersioningOptionalAndControllerOverrides(t *testing.T) {
 	if loaded.Temporal.Worker.Versioning.Enabled {
 		t.Fatal("versioning must default off")
 	}
-	data := strings.Replace(string(exampleYAML(t)), "  worker:\n", "  worker:\n    versioning: {enabled: true, deployment_name: yaml-worker, build_id: yaml-build}\n", 1)
-	loaded = mustLoadConfig(t, []byte(data))
+	data := replaceExample(t, "  worker:\n", "  worker:\n    versioning: {enabled: true, deployment_name: yaml-worker, build_id: yaml-build}\n")
+	loaded = mustLoadConfig(t, data)
 	if loaded.Temporal.Worker.Versioning.BuildID != "yaml-build" {
 		t.Fatal("YAML identity lost")
 	}
@@ -38,7 +38,7 @@ func TestTemporalVersioningOptionalAndControllerOverrides(t *testing.T) {
 	t.Setenv("TEMPORAL_NAMESPACE", "controller-namespace")
 	t.Setenv("TEMPORAL_DEPLOYMENT_NAME", "controller-worker")
 	t.Setenv("TEMPORAL_WORKER_BUILD_ID", "controller-build")
-	loaded = mustLoadConfig(t, []byte(data))
+	loaded = mustLoadConfig(t, data)
 	if loaded.Temporal.Target != "controller.example.internal:7233" || loaded.Temporal.Namespace != "controller-namespace" || loaded.Temporal.Worker.Versioning != (config.WorkerVersioningConfig{Enabled: true, DeploymentName: "controller-worker", BuildID: "controller-build"}) {
 		t.Fatalf("controller identity not effective: %+v", loaded.Temporal)
 	}
@@ -60,19 +60,14 @@ func TestTemporalVersioningRejectsPartialOrEmptyControllerIdentity(t *testing.T)
 			for key, value := range test.env {
 				t.Setenv(key, value)
 			}
-			if _, err := config.Load(exampleYAML(t)); err == nil {
-				t.Fatal("invalid controller configuration accepted")
-			}
+			requireLoadRejected(t, exampleYAML(t), "invalid controller configuration accepted")
 		})
 	}
 }
 func TestTemporalVersioningRejectsInvalidYAMLIdentity(t *testing.T) {
 	withoutTemporalControllerEnvironment(t)
 	for _, setting := range []string{"{enabled: true}", "{enabled: true, deployment_name: worker}", "{enabled: true, deployment_name: worker, build_id: 'bad build'}", "{enabled: false, deployment_name: worker, build_id: build}"} {
-		data := strings.Replace(string(exampleYAML(t)), "  worker:\n", "  worker:\n    versioning: "+setting+"\n", 1)
-		if _, err := config.Load([]byte(data)); err == nil {
-			t.Fatalf("invalid YAML identity accepted: %s", setting)
-		}
+		requireLoadRejected(t, replaceExample(t, "  worker:\n", "  worker:\n    versioning: "+setting+"\n"), "invalid YAML identity accepted: %s", setting)
 	}
 }
 func TestTemporalVersioningRejectsIdentitiesTemporalRejects(t *testing.T) {

@@ -5,9 +5,14 @@ import (
 	"time"
 )
 
+// newTestPassiveHealth opens a route after two failures, with a one-minute
+// cooldown, on a clock frozen at Unix time 100.
+func newTestPassiveHealth() *PassiveHealth {
+	return NewPassiveHealth(HealthPolicy{Threshold: 2, Cooldown: time.Minute}, func() time.Time { return time.Unix(100, 0) })
+}
+
 func TestPassiveHealthDoesNotCountAmbiguous(t *testing.T) {
-	now := time.Unix(100, 0)
-	health := NewPassiveHealth(HealthPolicy{Threshold: 2, Cooldown: time.Minute}, func() time.Time { return now })
+	health := newTestPassiveHealth()
 	health.Record("r", "v1", FailureAmbiguous)
 	if got := health.View("v1").Routes["r"]; got.Open {
 		t.Fatal("ambiguous outcome opened route")
@@ -24,8 +29,7 @@ func TestPassiveHealthDoesNotCountAmbiguous(t *testing.T) {
 }
 
 func TestPassiveHealthClosesStaleSnapshotState(t *testing.T) {
-	now := time.Unix(100, 0)
-	health := NewPassiveHealth(HealthPolicy{Threshold: 2, Cooldown: time.Minute}, func() time.Time { return now })
+	health := newTestPassiveHealth()
 
 	health.Record("r", "v1", FailureAuthentication)
 	if got := health.View("v1").Routes["r"]; !got.Open || !got.AuthOpen {

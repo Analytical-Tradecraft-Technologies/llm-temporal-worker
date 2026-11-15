@@ -98,10 +98,7 @@ func TestEstimateReservesHaiku55LongPromptPrice(t *testing.T) {
 // long is set, and at the standard prices otherwise.
 func assertReservedAtPromptPrice(t *testing.T, request llm.Request, candidate routing.Candidate, entry pricing.Entry, long bool) Estimate {
 	t.Helper()
-	estimate, err := Estimator{}.EstimateCandidate(request, candidate, entry)
-	if err != nil {
-		t.Fatal(err)
-	}
+	estimate := mustEstimateCandidate(t, Estimator{}, request, candidate, entry)
 	prices := entry.Prices
 	if long {
 		prices = entry.LongPrompt.Prices

@@ -65,7 +65,7 @@ func TestPlannerNeverMovesAcrossRequiredContinuationPin(t *testing.T) {
 
 func TestProviderCacheAffinityCannotBypassHealthEligibility(t *testing.T) {
 	catalog := continuationPropertyCatalog(t)
-	request := llm.Request{OperationKey: "affinity-health-property", Model: "logical", ServiceClass: llm.ServiceClassStandard, Context: llm.RequestContext{Tenant: "tenant"}}
+	request := standardTenantRequest("affinity-health-property")
 	health := HealthView{Routes: map[string]RouteHealth{
 		"pinned":   {Enabled: true, Open: true, Reason: "operator-open"},
 		"portable": {Enabled: true, Open: true, Reason: "operator-open"},
@@ -84,8 +84,8 @@ func TestProviderCacheAffinityCannotBypassHealthEligibility(t *testing.T) {
 func continuationPropertyCatalog(t *testing.T) Catalog {
 	t.Helper()
 	catalog, err := CompileCatalog("continuation-property-v1", map[string]Model{"logical": {Routes: []Route{
-		{ID: "pinned", EndpointID: "endpoint-pinned", Provider: "anthropic", Family: "messages", Region: "region", AccountRegion: "region", Model: "model-pinned", ModelLineage: "lineage-pinned", ModelRevision: "revision-pinned", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
-		{ID: "portable", EndpointID: "endpoint-portable", Provider: "openai", Family: "responses", Region: "region", AccountRegion: "region", Model: "model-portable", ModelLineage: "lineage-portable", ModelRevision: "revision-portable", Classes: []llm.ServiceClass{llm.ServiceClassStandard}, ProviderTiers: map[llm.ServiceClass]string{llm.ServiceClassStandard: "standard"}, Capabilities: testCapabilities(), PriceVersion: "price-v1", PriceAvailable: true},
+		pricedRoute(llm.ServiceClassStandard, Route{ID: "pinned", EndpointID: "endpoint-pinned", Provider: "anthropic", Family: "messages", Region: "region", AccountRegion: "region", Model: "model-pinned", ModelLineage: "lineage-pinned", ModelRevision: "revision-pinned"}),
+		pricedRoute(llm.ServiceClassStandard, Route{ID: "portable", EndpointID: "endpoint-portable", Provider: "openai", Family: "responses", Region: "region", AccountRegion: "region", Model: "model-portable", ModelLineage: "lineage-portable", ModelRevision: "revision-portable"}),
 	}}})
 	if err != nil {
 		t.Fatal(err)

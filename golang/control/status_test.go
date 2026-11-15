@@ -58,47 +58,42 @@ func TestStatusEventRequiresEvidenceForCreditIncident(t *testing.T) {
 	}
 }
 
+// creditObservation returns observation(at) carrying the given credit evidence.
+func creditObservation(at time.Time, source Source, credit CreditState, billing BillingState, providerCode string) StatusObservation {
+	value := observation(at)
+	value.Source, value.Credit, value.Billing, value.ProviderCode = source, credit, billing, providerCode
+	return value
+}
+
+// creditIncident returns an authoritative exhausted-credit observation at at.
+func creditIncident(at time.Time) StatusObservation {
+	return creditObservation(at, SourceManagementAPI, CreditExhausted, BillingIssue, "insufficient_quota")
+}
+
+// requireStickyCreditIncident applies value and fails unless status still
+// projects the credit incident confirmed at confirmedAt.
+func requireStickyCreditIncident(t *testing.T, status *RouteStatus, value StatusObservation, confirmedAt time.Time, what string) {
+	t.Helper()
+	if !status.Apply(mustStatusEvent(t, value)) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
+		t.Fatalf("after %s, credit incident projection = %#v", what, *status)
+	}
+	if !status.CreditConfirmedAt.Equal(confirmedAt) {
+		t.Fatalf("after %s, credit confirmation = %v, want %v", what, status.CreditConfirmedAt, confirmedAt)
+	}
+}
+
 func TestRouteStatusCreditIncidentIsStickyUntilAuthoritativeClear(t *testing.T) {
 	base := time.Unix(100, 0)
 	status := RouteStatus{}
-	value := observation(base)
-	value.Credit, value.Billing = CreditExhausted, BillingIssue
-	value.Source, value.ProviderCode = SourceManagementAPI, "insufficient_quota"
-	event := mustStatusEvent(t, value)
-	if !status.Apply(event) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
-		t.Fatalf("incident projection = %#v", status)
-	}
-	if !status.CreditConfirmedAt.Equal(base) {
-		t.Fatalf("initial credit confirmation = %v, want %v", status.CreditConfirmedAt, base)
-	}
-	value = observation(base.Add(time.Second))
-	value.Source, value.Credit, value.Billing = SourceInference, CreditOK, BillingOK
-	event = mustStatusEvent(t, value)
-	if !status.Apply(event) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
-		t.Fatalf("inference observation cleared incident: %#v", status)
-	}
-	if !status.CreditConfirmedAt.Equal(base) {
-		t.Fatalf("inference changed credit confirmation = %v, want %v", status.CreditConfirmedAt, base)
-	}
-	value = observation(base.Add(1250 * time.Millisecond))
-	value.Source, value.Credit, value.Billing, value.ProviderCode = SourceInference, CreditOK, BillingOK, "quota_restored"
-	event = mustStatusEvent(t, value)
-	if !status.Apply(event) || !status.CreditConfirmedAt.Equal(base) {
+	requireStickyCreditIncident(t, &status, creditIncident(base), base, "initial incident")
+	requireStickyCreditIncident(t, &status, creditObservation(base.Add(time.Second), SourceInference, CreditOK, BillingOK, ""), base, "inference observation")
+	restore := creditObservation(base.Add(1250*time.Millisecond), SourceInference, CreditOK, BillingOK, "quota_restored")
+	if !status.Apply(mustStatusEvent(t, restore)) || !status.CreditConfirmedAt.Equal(base) {
 		t.Fatalf("inference restore changed credit confirmation = %v, want %v", status.CreditConfirmedAt, base)
 	}
-	value = observation(base.Add(1500 * time.Millisecond))
-	value.Source, value.Credit, value.Billing = SourceStartupProbe, CreditUnknown, BillingUnknown
-	event = mustStatusEvent(t, value)
-	if !status.Apply(event) || status.Credit != CreditExhausted || status.Billing != BillingIssue {
-		t.Fatalf("unknown health observation cleared incident: %#v", status)
-	}
-	if !status.CreditConfirmedAt.Equal(base) {
-		t.Fatalf("startup probe changed credit confirmation = %v, want %v", status.CreditConfirmedAt, base)
-	}
-	value = observation(base.Add(2 * time.Second))
-	value.Source, value.Credit, value.Billing, value.ProviderCode = SourceManagementAPI, CreditOK, BillingOK, "quota_restored"
-	event = mustStatusEvent(t, value)
-	if !status.Apply(event) || status.Credit != CreditOK || status.Billing != BillingOK {
+	requireStickyCreditIncident(t, &status, creditObservation(base.Add(1500*time.Millisecond), SourceStartupProbe, CreditUnknown, BillingUnknown, ""), base, "startup probe")
+	clear := creditObservation(base.Add(2*time.Second), SourceManagementAPI, CreditOK, BillingOK, "quota_restored")
+	if !status.Apply(mustStatusEvent(t, clear)) || status.Credit != CreditOK || status.Billing != BillingOK {
 		t.Fatalf("authoritative clear not applied: %#v", status)
 	}
 	if !status.CreditConfirmedAt.IsZero() {
@@ -109,19 +104,11 @@ func TestRouteStatusCreditIncidentIsStickyUntilAuthoritativeClear(t *testing.T) 
 func TestRouteStatusInferenceProviderCodeRefreshesConfirmation(t *testing.T) {
 	base := time.Unix(200, 0)
 	status := RouteStatus{}
-	incident := observation(base)
-	incident.Credit, incident.Billing = CreditExhausted, BillingIssue
-	incident.Source, incident.ProviderCode = SourceManagementAPI, "insufficient_quota"
-	first := mustStatusEvent(t, incident)
-	if !status.Apply(first) {
+	if !status.Apply(mustStatusEvent(t, creditIncident(base))) {
 		t.Fatal("initial incident was not applied")
 	}
-	withEvidence := observation(base.Add(time.Second))
-	withEvidence.Source = SourceInference
-	withEvidence.Credit, withEvidence.Billing = CreditExhausted, BillingIssue
-	withEvidence.ProviderCode = "billing_hard_limit"
-	second := mustStatusEvent(t, withEvidence)
-	if !status.Apply(second) {
+	withEvidence := creditObservation(base.Add(time.Second), SourceInference, CreditExhausted, BillingIssue, "billing_hard_limit")
+	if !status.Apply(mustStatusEvent(t, withEvidence)) {
 		t.Fatal("provider-evidence inference was not applied")
 	}
 	if !status.CreditConfirmedAt.Equal(withEvidence.ObservedAt) {

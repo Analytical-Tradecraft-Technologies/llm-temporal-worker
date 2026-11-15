@@ -36,11 +36,7 @@ func TestRequestDigestIgnoresOperationKey(t *testing.T) {
 	first := readRequestFixture(t, "full.json")
 	second := first
 	second.OperationKey = "another-operation"
-	one := requestDigest(t, first)
-	two := requestDigest(t, second)
-	if one != two {
-		t.Fatalf("operation_key changed request digest: %x != %x", one, two)
-	}
+	assertSameRequestDigest(t, first, second, "operation_key")
 }
 
 func TestRequestDigestCanonicalizesObjectKeyOrder(t *testing.T) {
@@ -52,23 +48,13 @@ func TestRequestDigestCanonicalizesObjectKeyOrder(t *testing.T) {
 	second.Extensions = map[string]json.RawMessage{
 		"payload": json.RawMessage(`{"a":{"x":true,"y":false},"b":2}`),
 	}
-	one := requestDigest(t, first)
-	two := requestDigest(t, second)
-	if one != two {
-		t.Fatalf("object key order changed request digest: %x != %x", one, two)
-	}
+	assertSameRequestDigest(t, first, second, "object key order")
 }
 
 func TestRequestDigestUsesDecodedBytes(t *testing.T) {
 	firstData := readFixture(t, filepath.Join("request", "full.json"))
 	secondData := bytes.Replace(firstData, []byte(`"AQI="`), []byte(`"A\u0051I="`), 1)
-	first := unmarshalRequest(t, firstData)
-	second := unmarshalRequest(t, secondData)
-	one := requestDigest(t, first)
-	two := requestDigest(t, second)
-	if one != two {
-		t.Fatalf("equivalent decoded bytes changed request digest: %x != %x", one, two)
-	}
+	assertSameRequestDigest(t, unmarshalRequest(t, firstData), unmarshalRequest(t, secondData), "equivalent decoded bytes")
 }
 
 func TestRequestDigestChangesForSemanticContextAndRouteAuthorization(t *testing.T) {
@@ -116,11 +102,16 @@ func readRequestFixture(t *testing.T, name string) llm.Request {
 
 func unmarshalRequest(t *testing.T, data []byte) llm.Request {
 	t.Helper()
-	var request llm.Request
-	if err := json.Unmarshal(data, &request); err != nil {
-		t.Fatal(err)
+	return mustUnmarshal[llm.Request](t, data, "decode request")
+}
+
+// assertSameRequestDigest fails when first and second have different request
+// digests; what names the difference between them.
+func assertSameRequestDigest(t *testing.T, first, second llm.Request, what string) {
+	t.Helper()
+	if one, two := requestDigest(t, first), requestDigest(t, second); one != two {
+		t.Fatalf("%s changed request digest: %x != %x", what, one, two)
 	}
-	return request
 }
 
 func requestDigest(t *testing.T, request llm.Request) [32]byte {

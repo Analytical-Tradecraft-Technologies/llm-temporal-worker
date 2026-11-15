@@ -16,10 +16,7 @@ import (
 func TestInlineMediaBytesAreNotCountedAsTextTokens(t *testing.T) {
 	estimator := Estimator{MaxOutput: 32768}
 	candidate := routing.Candidate{ID: "c", Model: "physical", AttemptedClass: llm.ServiceClassStandard, ContextTokens: 128_000}
-	textOnly, err := estimator.CountInputTokens(mediaEstimateRequest(), candidate)
-	if err != nil {
-		t.Fatal(err)
-	}
+	textOnly := mustCountInputTokens(t, estimator, mediaEstimateRequest(), candidate)
 	for _, test := range []struct {
 		name      string
 		part      llm.Part
@@ -39,10 +36,7 @@ func TestInlineMediaBytesAreNotCountedAsTextTokens(t *testing.T) {
 			if err := estimator.ValidateContext(request, candidate); err != nil {
 				t.Fatalf("context check rejected inline media: %v", err)
 			}
-			counted, err := estimator.CountInputTokens(request, candidate)
-			if err != nil {
-				t.Fatal(err)
-			}
+			counted := mustCountInputTokens(t, estimator, request, candidate)
 			// Only the part's structure (kind, media type) is text.
 			if counted < textOnly || counted > textOnly+50 {
 				t.Fatalf("counted input tokens = %d, want within 50 of text-only %d", counted, textOnly)
@@ -70,10 +64,7 @@ func TestInlineTextDocumentReservesItsByteLength(t *testing.T) {
 	if len(text) != 23 {
 		t.Fatalf("fixture length = %d", len(text))
 	}
-	base, err := estimator.EstimateCandidate(mediaEstimateRequest(), routing.Candidate{ID: "c"}, mediaEstimateEntry())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustEstimateCandidate(t, estimator, mediaEstimateRequest(), routing.Candidate{ID: "c"}, mediaEstimateEntry())
 	for _, test := range []struct {
 		name      string
 		part      llm.Part
@@ -93,10 +84,7 @@ func TestInlineTextDocumentReservesItsByteLength(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/context %d", test.name, contextTokens), func(t *testing.T) {
 				candidate := routing.Candidate{ID: "c", ContextTokens: contextTokens}
 				request := mediaEstimateRequest(test.part)
-				got, err := estimator.EstimateCandidate(request, candidate, mediaEstimateEntry())
-				if err != nil {
-					t.Fatal(err)
-				}
+				got := mustEstimateCandidate(t, estimator, request, candidate, mediaEstimateEntry())
 				if test.unbounded {
 					want := base.InputTokens + MediaDocumentInputTokenFloor
 					if contextTokens > 0 {
@@ -113,10 +101,7 @@ func TestInlineTextDocumentReservesItsByteLength(t *testing.T) {
 				if low, high := base.InputTokens+test.length, base.InputTokens+test.length+50; got.InputTokens < low || got.InputTokens > high {
 					t.Fatalf("context %d: input tokens = %d, want between %d and %d", contextTokens, got.InputTokens, low, high)
 				}
-				counted, err := estimator.CountInputTokens(request, candidate)
-				if err != nil {
-					t.Fatal(err)
-				}
+				counted := mustCountInputTokens(t, estimator, request, candidate)
 				// The context check sees the text at the ordinary baseline.
 				if low := base.InputTokens + (test.length+3)/4; counted < low || counted > got.InputTokens {
 					t.Fatalf("context %d: counted input tokens = %d, want between %d and %d", contextTokens, counted, low, got.InputTokens)
@@ -140,9 +125,7 @@ func TestInlineTextDocumentStillCountsAgainstContextWindow(t *testing.T) {
 
 func TestEstimateDoesNotModifyInlineMediaRequest(t *testing.T) {
 	request := mediaEstimateRequest(llm.ImagePart{Bytes: []byte{1, 2, 3, 4}, MediaType: "image/png"}, &llm.DocumentPart{Bytes: []byte("note"), MediaType: "text/plain"})
-	if _, err := (Estimator{}).EstimateCandidate(request, routing.Candidate{ID: "c"}, mediaEstimateEntry()); err != nil {
-		t.Fatal(err)
-	}
+	mustEstimateCandidate(t, Estimator{}, request, routing.Candidate{ID: "c"}, mediaEstimateEntry())
 	content := request.Input[0].(llm.Message).Content
 	if got := content[1].(llm.ImagePart).Bytes; len(got) != 4 {
 		t.Fatalf("image bytes were stripped from the caller's request: %v", got)

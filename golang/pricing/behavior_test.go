@@ -35,18 +35,7 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 	catalog := mustCompileUSD(t, "catalog-v1", []Entry{entry})
 
 	resolver := NewResolver(catalog)
-	quote, err := resolver.Resolve(Query{
-		Provider:     entry.Provider,
-		Family:       entry.Family,
-		EndpointID:   entry.EndpointID,
-		Region:       entry.Region,
-		Model:        entry.Model,
-		ProviderTier: entry.ProviderTier,
-		At:           from.Add(30 * time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	quote := mustResolve(t, resolver, entryQuery(entry, from.Add(30*time.Minute)))
 	if quote.CatalogVersion != "catalog-v1" || quote.CatalogDigest == "" || quote.Entry.Version != "entry-v1" {
 		t.Fatalf("quote = %#v", quote)
 	}
@@ -65,29 +54,12 @@ func TestPricingCatalogResolveAndCostSmoke(t *testing.T) {
 		t.Fatalf("cost = %#v", cost)
 	}
 
-	reloaded, err := CompileUSD("catalog-v2", []Entry{{
-		Provider:     entry.Provider,
-		Family:       entry.Family,
-		EndpointID:   entry.EndpointID,
-		Region:       entry.Region,
-		Model:        entry.Model,
-		ProviderTier: entry.ProviderTier,
-		Prices:       UnitPrices{InputPerMillion: MustDecimalUSD("2")},
-		Version:      "entry-v2",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolver.Reload(reloaded)
-	quote, err = resolver.Resolve(Query{
-		Provider:     entry.Provider,
-		Family:       entry.Family,
-		EndpointID:   entry.EndpointID,
-		Region:       entry.Region,
-		Model:        entry.Model,
-		ProviderTier: entry.ProviderTier,
-		At:           from.Add(30 * time.Minute),
-	})
+	// The replacement keeps the identity but drops the effective interval.
+	next := entry
+	next.EffectiveFrom, next.EffectiveUntil = time.Time{}, time.Time{}
+	next.Prices, next.Version = UnitPrices{InputPerMillion: MustDecimalUSD("2")}, "entry-v2"
+	resolver.Reload(mustCompileUSD(t, "catalog-v2", []Entry{next}))
+	quote, err = resolver.Resolve(entryQuery(entry, from.Add(30*time.Minute)))
 	if err != nil || quote.CatalogVersion != "catalog-v2" || quote.Entry.Version != "entry-v2" {
 		t.Fatalf("reloaded quote = %#v, %v", quote, err)
 	}
@@ -98,13 +70,7 @@ func TestCostFromUsageKeepsTokenPricesPerMillion(t *testing.T) {
 		InputPerMillion: MustDecimalUSD("2"),
 		PerRequest:      MustDecimalUSD("0.10"),
 	}}
-	cost, err := CostFromUsage(entry, Usage{InputTokens: 500_000})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := cost.USD.String(), "1.100000000000000000"; got != want {
-		t.Fatalf("token plus per-request cost = %s, want %s", got, want)
-	}
+	assertCostUSD(t, "token plus per-request", entry, Usage{InputTokens: 500_000}, "1.100000000000000000")
 }
 
 func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
@@ -156,10 +122,10 @@ func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
 
 	valid.EffectiveFrom, valid.EffectiveUntil = from, from.Add(time.Hour)
 	catalog := mustCompileUSD(t, "v1", []Entry{valid})
-	if _, err := catalog.Resolve(Query{Provider: valid.Provider, Family: valid.Family, EndpointID: valid.EndpointID, Region: valid.Region, Model: valid.Model, ProviderTier: valid.ProviderTier, At: from.Add(time.Hour)}); !errors.Is(err, ErrNoActivePrice) {
+	if _, err := catalog.Resolve(entryQuery(valid, from.Add(time.Hour))); !errors.Is(err, ErrNoActivePrice) {
 		t.Fatalf("price at exclusive end = %v", err)
 	}
-	if _, err := catalog.Resolve(Query{Provider: valid.Provider, Family: valid.Family, EndpointID: valid.EndpointID, Region: valid.Region, Model: valid.Model, ProviderTier: valid.ProviderTier, At: from}); err != nil {
+	if _, err := catalog.Resolve(entryQuery(valid, from)); err != nil {
 		t.Fatalf("price at inclusive start = %v", err)
 	}
 
@@ -174,22 +140,24 @@ func TestPricingCatalogValidationAndResolutionBoundaries(t *testing.T) {
 }
 
 func TestLegacyMoneyConversionsUseExplicitFloorAndSafeBounds(t *testing.T) {
-	converted, err := USDFromMicro(1)
-	if err != nil || converted.String() != "0.000001000000000000" {
-		t.Fatalf("USDFromMicro(1) = %s, %v", converted.String(), err)
-	}
+	assertUSDResult(t, "USDFromMicro(1)", "0.000001000000000000")(USDFromMicro(1))
 
 	for _, test := range []struct {
-		usd  string
-		want MicroUSD
+		name    string
+		convert func(USD) (MicroUSD, error)
+		usd     string
+		want    MicroUSD
 	}{
-		{"0.000001999999999999", 1},
-		{"0.000000999999999999", 0},
-		{"9007199254.740991000000000000", RedisSafeLimit},
+		{"MicroFromUSD", MicroFromUSD, "0.000001999999999999", 1},
+		{"MicroFromUSD", MicroFromUSD, "0.000000999999999999", 0},
+		{"MicroFromUSD", MicroFromUSD, "9007199254.740991000000000000", RedisSafeLimit},
+		{"CeilMicroFromUSD", CeilMicroFromUSD, "0.000001000000000001", 2},
+		{"CeilMicroFromUSD", CeilMicroFromUSD, "0.000000000000000001", 1},
+		{"CeilMicroFromUSD", CeilMicroFromUSD, "9007199254.740991", RedisSafeLimit},
 	} {
-		got, err := MicroFromUSD(MustUSD(test.usd))
+		got, err := test.convert(MustUSD(test.usd))
 		if err != nil || got != test.want {
-			t.Errorf("MicroFromUSD(%s) = %d, %v; want %d", test.usd, got, err, test.want)
+			t.Errorf("%s(%s) = %d, %v; want %d", test.name, test.usd, got, err, test.want)
 		}
 	}
 	if _, err := USDFromMicro(-1); err == nil {
@@ -200,19 +168,6 @@ func TestLegacyMoneyConversionsUseExplicitFloorAndSafeBounds(t *testing.T) {
 	}
 	if _, err := MicroFromUSD(MustUSD("9007199254.740992000000000000")); err == nil {
 		t.Fatal("USD above Redis-safe compatibility range converted successfully")
-	}
-	for _, test := range []struct {
-		usd  string
-		want MicroUSD
-	}{
-		{"0.000001000000000001", 2},
-		{"0.000000000000000001", 1},
-		{"9007199254.740991", RedisSafeLimit},
-	} {
-		got, err := CeilMicroFromUSD(MustUSD(test.usd))
-		if err != nil || got != test.want {
-			t.Errorf("CeilMicroFromUSD(%s) = %d, %v; want %d", test.usd, got, err, test.want)
-		}
 	}
 	if _, err := CeilMicroFromUSD(MustUSD("9007199254.740991000001000000")); err == nil {
 		t.Fatal("CeilMicroFromUSD permitted a value above the Redis-safe ceiling")

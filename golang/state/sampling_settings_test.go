@@ -108,14 +108,7 @@ func TestCheckpointBlobCodecRoundTripsSamplingLeaves(t *testing.T) {
 	items := []llm.Item{llm.HumanText("hello")}
 	snapshot := CheckpointSnapshot{Items: items, Settings: settings, Depth: 1, Lineage: []Handle{"root"}}
 	snapshot.Digest = snapshot.digest()
-	encodedSnapshot, err := codec.EncodeSnapshot(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotSnapshot, err := codec.DecodeSnapshot(encodedSnapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, gotSnapshot := mustRoundTripSnapshot(t, codec, snapshot)
 	if !reflect.DeepEqual(gotSnapshot.Settings, settings) || gotSnapshot.Digest != snapshot.Digest {
 		t.Fatalf("snapshot settings = %+v; want %+v", gotSnapshot.Settings, settings)
 	}
@@ -155,16 +148,13 @@ func TestSnapshotDigestAndEncodingUnchangedWithoutSamplingLeaves(t *testing.T) {
 
 	legacy := legacyModelState{Model: settings.Model, ServiceClass: settings.ServiceClass, Portability: settings.Portability,
 		Temperature: settings.Temperature, TemperatureDecimal: settings.TemperatureDecimal, ReasoningEffort: settings.ReasoningEffort}
-	data, err := json.Marshal(struct {
+	data := mustJSON(t, struct {
 		Schema   string
 		Items    []llm.Item
 		Settings legacyModelState
 		Depth    int32
 		Lineage  []Handle
 	}{checkpointSchemaVersion, items, legacy, snapshot.Depth, snapshot.Lineage})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if snapshot.digest() != sha256.Sum256(data) {
 		t.Fatal("snapshot digest changed for a state that does not use the new leaves")
 	}

@@ -62,14 +62,12 @@ func TestModelSyncConfigRejectsUnsafeShapes(t *testing.T) {
 	cases := map[string]func(*config.Config){
 		"missing openrouter endpoint": func(value *config.Config) { value.ModelSync.OpenRouter.Endpoint = "absent" },
 		"openrouter without marker": func(value *config.Config) {
-			endpoint := value.Endpoints["openrouter-sync"]
-			endpoint.Extensions = nil
-			value.Endpoints["openrouter-sync"] = endpoint
+			editEndpoint(value, "openrouter-sync", func(endpoint *config.EndpointConfig) { endpoint.Extensions = nil })
 		},
 		"pinned provider order": func(value *config.Config) {
-			endpoint := value.Endpoints["openrouter-sync"]
-			endpoint.Extensions = map[string]map[string]any{"openrouter": {"provider_order": []any{"OpenAI"}}}
-			value.Endpoints["openrouter-sync"] = endpoint
+			editEndpoint(value, "openrouter-sync", func(endpoint *config.EndpointConfig) {
+				endpoint.Extensions = map[string]map[string]any{"openrouter": {"provider_order": []any{"OpenAI"}}}
+			})
 		},
 		"duplicate direct endpoint": func(value *config.Config) {
 			value.ModelSync.Direct = append(value.ModelSync.Direct, value.ModelSync.Direct[0])
@@ -78,9 +76,7 @@ func TestModelSyncConfigRejectsUnsafeShapes(t *testing.T) {
 			value.ModelSync.RefreshIntervalMin = config.Duration(2 * time.Hour)
 		},
 		"optional endpoint outside model sync": func(value *config.Config) {
-			endpoint := value.Endpoints["openai-prod"]
-			endpoint.Optional = true
-			value.Endpoints["openai-prod"] = endpoint
+			editEndpoint(value, "openai-prod", func(endpoint *config.EndpointConfig) { endpoint.Optional = true })
 		},
 		"optional endpoint referenced by a route": func(value *config.Config) {
 			model := value.Models["invoice-summarizer"]
@@ -88,9 +84,7 @@ func TestModelSyncConfigRejectsUnsafeShapes(t *testing.T) {
 			value.Models["invoice-summarizer"] = model
 		},
 		"routed sync endpoint without price catalog": func(value *config.Config) {
-			endpoint := value.Endpoints["openai-sync"]
-			endpoint.Optional = false
-			value.Endpoints["openai-sync"] = endpoint
+			editEndpoint(value, "openai-sync", func(endpoint *config.EndpointConfig) { endpoint.Optional = false })
 			model := value.Models["invoice-summarizer"]
 			model.Routes = append(model.Routes, config.RouteConfig{ID: "sync", Endpoint: "openai-sync", Model: "gpt-x", Classes: []llm.ServiceClass{llm.ServiceClassStandard}})
 			value.Models["invoice-summarizer"] = model

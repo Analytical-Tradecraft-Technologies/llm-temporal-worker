@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	sdkactivity "go.temporal.io/sdk/activity"
@@ -124,15 +123,7 @@ func normalizeHeartbeatProgress(progress engine.Progress, started, last time.Tim
 }
 
 func safeHeartbeatIdentifier(value string) string {
-	if value == "" || len(value) > maxHeartbeatIdentifierBytes {
-		return ""
-	}
-	for _, runeValue := range value {
-		if unicode.IsControl(runeValue) {
-			return ""
-		}
-	}
-	return value
+	return safeIdentifier(value, maxHeartbeatIdentifierBytes)
 }
 
 func safeHeartbeatPhase(value string) string {

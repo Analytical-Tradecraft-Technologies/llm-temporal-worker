@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -16,10 +15,7 @@ import (
 )
 
 func TestContinuationSecurityHandleFixturesFailClosed(t *testing.T) {
-	keyring, err := NewKeyring([]Key{{ID: "k1", Secret: bytes.Repeat([]byte{1}, 32), Primary: true}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyring := mustPrimaryKeyring(t, "k1", 1, nil)
 	for _, line := range securityFixtureLines(t, "handles.txt") {
 		t.Run(line, func(t *testing.T) {
 			if _, err := keyring.Verify("tenant-a", line); !errors.Is(err, ErrInvalidHandle) {
@@ -27,10 +23,7 @@ func TestContinuationSecurityHandleFixturesFailClosed(t *testing.T) {
 			}
 		})
 	}
-	valid, err := keyring.Issue("tenant-a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	valid := mustIssue(t, keyring, "tenant-a")
 	if _, err := keyring.Verify("tenant-b", valid); !errors.Is(err, ErrInvalidHandle) {
 		t.Fatalf("cross-tenant handle error = %v, want ErrInvalidHandle", err)
 	}
@@ -55,10 +48,7 @@ func TestContinuationSecurityRecordFixturesFailClosed(t *testing.T) {
 	for _, fixture := range fixtures {
 		t.Run(fixture.Name, func(t *testing.T) {
 			transcript := []llm.Item{llm.HumanText("safe")}
-			_, digest, err := CanonicalTranscript(transcript)
-			if err != nil {
-				t.Fatal(err)
-			}
+			_, digest := mustCanonicalTranscript(t, transcript)
 			if fixture.DigestMismatch {
 				digest = sha256.Sum256([]byte("swapped-blob"))
 			}

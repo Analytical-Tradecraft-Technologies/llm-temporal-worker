@@ -201,18 +201,14 @@ func runMerge(args []string, stdout io.Writer) error {
 }
 
 func runVerify(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("verify", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	layout := flags.String("layout", "", "multi-platform OCI layout directory")
-	var platforms platformNames
-	flags.Var(&platforms, "platform", "os/arch every platform the index must contain; repeat for each platform")
-	if err := flags.Parse(args); err != nil {
+	layout, platforms, err := parseLayoutFlags("verify", args, "multi-platform OCI layout directory", "os/arch every platform the index must contain; repeat for each platform")
+	if err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *layout == "" || len(platforms) == 0 {
+	if layout == "" || len(platforms) == 0 {
 		return errors.New("verify requires -layout and at least one -platform os/arch")
 	}
-	digest, err := verifyMultiPlatformLayout(*layout, platforms)
+	digest, err := verifyMultiPlatformLayout(layout, platforms)
 	if err != nil {
 		return err
 	}
@@ -221,23 +217,37 @@ func runVerify(args []string, stdout io.Writer) error {
 }
 
 func runConfigDigest(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("config-digest", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	layout := flags.String("layout", "", "single-platform OCI layout directory")
-	var platforms platformNames
-	flags.Var(&platforms, "platform", "os/arch the layout must contain")
-	if err := flags.Parse(args); err != nil {
+	layout, platforms, err := parseLayoutFlags("config-digest", args, "single-platform OCI layout directory", "os/arch the layout must contain")
+	if err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || *layout == "" || len(platforms) != 1 {
+	if layout == "" || len(platforms) != 1 {
 		return errors.New("config-digest requires -layout and exactly one -platform os/arch")
 	}
-	image, err := loadSinglePlatformLayout(*layout, platforms[0])
+	image, err := loadSinglePlatformLayout(layout, platforms[0])
 	if err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, image.configDigest)
 	return nil
+}
+
+// parseLayoutFlags parses the -layout and repeated -platform flags shared by
+// verify and config-digest. Positional arguments yield an empty layout, which
+// each caller reports with its own usage error.
+func parseLayoutFlags(command string, args []string, layoutUsage, platformUsage string) (string, platformNames, error) {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	layout := flags.String("layout", "", layoutUsage)
+	var platforms platformNames
+	flags.Var(&platforms, "platform", platformUsage)
+	if err := flags.Parse(args); err != nil {
+		return "", nil, err
+	}
+	if flags.NArg() != 0 {
+		return "", platforms, nil
+	}
+	return *layout, platforms, nil
 }
 
 func parsePlatform(value string) (platform, error) {
@@ -563,33 +573,34 @@ func manifestBlobs(dir string, manifestDescriptor descriptor, want *platform) ([
 }
 
 func readIndexBlob(dir string, d descriptor) (imageIndex, error) {
-	data, err := readJSONBlob(dir, d)
-	if err != nil {
-		return imageIndex{}, err
-	}
-	var index imageIndex
-	if err := json.Unmarshal(data, &index); err != nil || index.SchemaVersion != 2 {
-		return imageIndex{}, fmt.Errorf("image index %s is invalid", d.Digest)
-	}
-	if index.MediaType != "" && index.MediaType != mediaTypeImageIndex {
-		return imageIndex{}, fmt.Errorf("image index %s declares media type %q", d.Digest, index.MediaType)
-	}
-	return index, nil
+	return readVersionedBlob(dir, d, "image index", mediaTypeImageIndex, func(index imageIndex) (int, string) {
+		return index.SchemaVersion, index.MediaType
+	})
 }
 
 func readManifestBlob(dir string, d descriptor) (imageManifest, error) {
+	return readVersionedBlob(dir, d, "image manifest", mediaTypeImageManifest, func(manifest imageManifest) (int, string) {
+		return manifest.SchemaVersion, manifest.MediaType
+	})
+}
+
+// readVersionedBlob decodes a schema-version-2 JSON blob of kind whose media
+// type, when declared, must be mediaType.
+func readVersionedBlob[T any](dir string, d descriptor, kind, mediaType string, header func(T) (int, string)) (T, error) {
+	var value, zero T
 	data, err := readJSONBlob(dir, d)
 	if err != nil {
-		return imageManifest{}, err
+		return zero, err
 	}
-	var manifest imageManifest
-	if err := json.Unmarshal(data, &manifest); err != nil || manifest.SchemaVersion != 2 {
-		return imageManifest{}, fmt.Errorf("image manifest %s is invalid", d.Digest)
+	err = json.Unmarshal(data, &value)
+	schemaVersion, declared := header(value)
+	if err != nil || schemaVersion != 2 {
+		return zero, fmt.Errorf("%s %s is invalid", kind, d.Digest)
 	}
-	if manifest.MediaType != "" && manifest.MediaType != mediaTypeImageManifest {
-		return imageManifest{}, fmt.Errorf("image manifest %s declares media type %q", d.Digest, manifest.MediaType)
+	if declared != "" && declared != mediaType {
+		return zero, fmt.Errorf("%s %s declares media type %q", kind, d.Digest, declared)
 	}
-	return manifest, nil
+	return value, nil
 }
 
 func readConfigBlob(dir string, d descriptor) (imageConfig, error) {

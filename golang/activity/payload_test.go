@@ -14,14 +14,7 @@ import (
 
 func TestRequestPayloadRoundTrip(t *testing.T) {
 	payload := GenerateRequest{APIVersion: APIVersion, Request: llm.Request{OperationKey: "operation-1", Context: llm.RequestContext{Tenant: "tenant-1"}, Model: "model-1", Input: []llm.Item{llm.HumanText("hello")}}}
-	encoded, err := MarshalRequest(payload, PayloadLimits{MaxInlineBytes: 16 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := UnmarshalRequest(encoded, PayloadLimits{MaxInlineBytes: 16 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded, decoded := mustPayloadRoundTrip(t, payload, MarshalRequest, UnmarshalRequest)
 	if decoded.Request.OperationKey != payload.Request.OperationKey || decoded.Request.ServiceClass != llm.ServiceClassStandard {
 		t.Fatalf("decoded payload = %#v", decoded)
 	}
@@ -40,19 +33,9 @@ func TestEnvelopeMarshalAndUnmarshalUseTheSameLimit(t *testing.T) {
 		},
 		Metadata: ResultMetadata{OperationID: "operation-id"},
 	}
-	encoded, err := json.Marshal(response)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// The configured limit is deliberately one byte below the full envelope,
 	// while the nested response remains small enough for its own validator.
-	limits := PayloadLimits{MaxInlineBytes: len(encoded) - 1}
-	if _, err := MarshalResponse(response, limits); err == nil {
-		t.Fatal("MarshalResponse accepted an envelope larger than its limit")
-	}
-	if _, err := UnmarshalResponse(encoded, limits); err == nil {
-		t.Fatal("UnmarshalResponse accepted an envelope larger than its limit")
-	}
+	assertCodecRejectsOneByteOverLimit(t, response, MarshalResponse, UnmarshalResponse)
 }
 
 func TestRequestPayloadRejectsUnknownVersionFieldsAndDuplicates(t *testing.T) {
@@ -160,14 +143,8 @@ func TestPayloadUnmarshalRejectsOversizeBeforeJSONDecode(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{name: "request", call: func() error {
-			_, err := UnmarshalRequest(oversize, PayloadLimits{MaxInlineBytes: 64})
-			return err
-		}},
-		{name: "response", call: func() error {
-			_, err := UnmarshalResponse(oversize, PayloadLimits{MaxInlineBytes: 64})
-			return err
-		}},
+		{name: "request", call: func() error { return errOnly(UnmarshalRequest(oversize, PayloadLimits{MaxInlineBytes: 64})) }},
+		{name: "response", call: func() error { return errOnly(UnmarshalResponse(oversize, PayloadLimits{MaxInlineBytes: 64})) }},
 	} {
 		t.Run(decode.name, func(t *testing.T) {
 			err := decode.call()
@@ -197,16 +174,42 @@ func TestBlobRefValidationAndResponseRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := GenerateResponse{APIVersion: APIVersion, Response: llm.Response{OperationKey: "operation-1", Status: llm.ResponseStatusCompleted, Service: llm.ServiceFacts{Requested: llm.ServiceClassStandard, Attempted: llm.ServiceClassStandard}}}
-	encoded, err := MarshalResponse(response, PayloadLimits{MaxInlineBytes: 16 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := UnmarshalResponse(encoded, PayloadLimits{MaxInlineBytes: 16 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, decoded := mustPayloadRoundTrip(t, response, MarshalResponse, UnmarshalResponse)
 	if decoded.Response.OperationKey != response.Response.OperationKey {
 		t.Fatalf("decoded response = %#v", decoded)
+	}
+}
+
+// errOnly discards a call's value and keeps its error.
+func errOnly[T any](_ T, err error) error { return err }
+
+// mustPayloadRoundTrip encodes value with marshal and decodes the encoding
+// with unmarshal under a 16 KiB inline limit, failing on either error.
+func mustPayloadRoundTrip[T any](t *testing.T, value T, marshal func(T, PayloadLimits) ([]byte, error), unmarshal func([]byte, PayloadLimits) (T, error)) ([]byte, T) {
+	t.Helper()
+	limits := PayloadLimits{MaxInlineBytes: 16 * 1024}
+	encoded, err := marshal(value, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := unmarshal(encoded, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded, decoded
+}
+
+// assertCodecRejectsOneByteOverLimit checks marshal and unmarshal both reject
+// value once the inline limit is one byte below its JSON encoding.
+func assertCodecRejectsOneByteOverLimit[T any](t *testing.T, value T, marshal func(T, PayloadLimits) ([]byte, error), unmarshal func([]byte, PayloadLimits) (T, error)) {
+	t.Helper()
+	encoded := mustJSON(t, value)
+	limits := PayloadLimits{MaxInlineBytes: len(encoded) - 1}
+	if _, err := marshal(value, limits); err == nil {
+		t.Fatalf("encode accepted a %T larger than its limit", value)
+	}
+	if _, err := unmarshal(encoded, limits); err == nil {
+		t.Fatalf("decode accepted a %T larger than its limit", value)
 	}
 }
 

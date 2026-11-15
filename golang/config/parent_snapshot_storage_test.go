@@ -13,15 +13,11 @@ import (
 // complete example, or leaves it unset when value is empty.
 func withParentSnapshotStorage(t *testing.T, value string) []byte {
 	t.Helper()
-	data := string(exampleYAML(t))
 	const anchor = "    namespace: worker-v1\n"
-	if !strings.Contains(data, anchor) {
-		t.Fatal("example has no state.requests.namespace")
-	}
 	if value == "" {
-		return []byte(data)
+		return []byte(exampleContaining(t, anchor))
 	}
-	return []byte(strings.Replace(data, anchor, anchor+"    parent_snapshot_storage: "+value+"\n", 1))
+	return replaceExample(t, anchor, anchor+"    parent_snapshot_storage: "+value+"\n")
 }
 
 func TestParentSnapshotStorageDefaultsInlineWithoutChangingDigest(t *testing.T) {

@@ -29,14 +29,8 @@ func mediaEstimateEntry() pricing.Entry {
 func TestEstimateTextOnlyInputIsSerializedSizeEstimate(t *testing.T) {
 	request := mediaEstimateRequest()
 	estimator := Estimator{SafetyRatio: big.NewRat(135, 100)}
-	got, err := estimator.EstimateCandidate(request, routing.Candidate{ID: "c"}, mediaEstimateEntry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := estimator.CountInputTokens(request, routing.Candidate{ID: "c"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := mustEstimateCandidate(t, estimator, request, routing.Candidate{ID: "c"}, mediaEstimateEntry())
+	want := mustCountInputTokens(t, estimator, request, routing.Candidate{ID: "c"})
 	if got.InputTokens != want || got.InputTokens >= 1000 {
 		t.Fatalf("text-only input tokens = %d, want serialized estimate %d", got.InputTokens, want)
 	}
@@ -45,10 +39,7 @@ func TestEstimateTextOnlyInputIsSerializedSizeEstimate(t *testing.T) {
 func TestEstimateURLMediaReservesPerPartFloor(t *testing.T) {
 	estimator := Estimator{SafetyRatio: big.NewRat(135, 100)}
 	candidate := routing.Candidate{ID: "c"}
-	base, err := estimator.EstimateCandidate(mediaEstimateRequest(), candidate, mediaEstimateEntry())
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustEstimateCandidate(t, estimator, mediaEstimateRequest(), candidate, mediaEstimateEntry())
 	image := llm.ImagePart{URL: "https://example.com/cat.png", MediaType: "image/png"}
 	document := llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"}
 	for name, test := range map[string]struct {
@@ -60,10 +51,7 @@ func TestEstimateURLMediaReservesPerPartFloor(t *testing.T) {
 		"both":     {[]llm.Part{image, document}, MediaImageInputTokenFloor + MediaDocumentInputTokenFloor},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := estimator.EstimateCandidate(mediaEstimateRequest(test.parts...), candidate, mediaEstimateEntry())
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := mustEstimateCandidate(t, estimator, mediaEstimateRequest(test.parts...), candidate, mediaEstimateEntry())
 			if got.InputTokens < base.InputTokens+test.floor {
 				t.Fatalf("input tokens = %d, want at least %d", got.InputTokens, base.InputTokens+test.floor)
 			}
@@ -122,10 +110,7 @@ func TestEstimateDocumentFloorCoversLargestSupportedPDF(t *testing.T) {
 	}
 	estimator := Estimator{}
 	request := mediaEstimateRequest(llm.DocumentPart{URL: "https://example.com/report.pdf", MediaType: "application/pdf"})
-	got, err := estimator.EstimateCandidate(request, routing.Candidate{ID: "c"}, mediaEstimateEntry())
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := mustEstimateCandidate(t, estimator, request, routing.Candidate{ID: "c"}, mediaEstimateEntry())
 	if got.InputTokens < MediaDocumentInputTokenFloor {
 		t.Fatalf("undeclared-window input tokens = %d, want at least %d", got.InputTokens, MediaDocumentInputTokenFloor)
 	}
@@ -138,15 +123,9 @@ func TestFallbackEstimateCountsToolResultErrorPrefix(t *testing.T) {
 		request := mediaEstimateRequest()
 		request.Input = append(request.Input, llm.ToolCall{ID: "call-1", Name: "lookup", Arguments: []byte(`{}`)},
 			llm.ToolResult{CallID: "call-1", Content: []llm.Part{llm.TextPart{Text: "timed out"}}, IsError: isError})
-		native, err := Estimator{}.CountInputTokens(request, routing.Candidate{ID: "c", Family: "anthropic_messages"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		native := mustCountInputTokens(t, Estimator{}, request, routing.Candidate{ID: "c", Family: "anthropic_messages"})
 		for _, family := range []string{"openai_responses", "openai_chat"} {
-			emulated, err := Estimator{}.CountInputTokens(request, routing.Candidate{ID: "c", Family: family})
-			if err != nil {
-				t.Fatal(err)
-			}
+			emulated := mustCountInputTokens(t, Estimator{}, request, routing.Candidate{ID: "c", Family: family})
 			want := int64(0)
 			if isError {
 				want = int64(len(llm.ToolResultErrorTextPrefix)) / 4

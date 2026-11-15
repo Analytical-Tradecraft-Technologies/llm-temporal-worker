@@ -37,10 +37,7 @@ func TestRedisKeyPrefixEnvironmentOverrideIsEffectiveBeforeValidation(t *testing
 	if got, want := loaded.State.Redis.KeyPrefix, "tenant-a.v1"; got != want {
 		t.Fatalf("environment Redis key prefix = %q, want %q", got, want)
 	}
-	snapshot, err := config.Compile(t.Context(), exampleYAML(t), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := mustCompile(t, exampleYAML(t))
 	if !strings.Contains(string(snapshot.Canonical()), `"key_prefix":"tenant-a.v1"`) {
 		t.Fatalf("effective config omitted overridden Redis key prefix: %s", snapshot.Canonical())
 	}

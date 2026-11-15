@@ -80,21 +80,13 @@ func TestUSDParseExponentFormExactly(t *testing.T) {
 func TestUSDCheckedArithmeticAndRatio(t *testing.T) {
 	one := MustUSD("1")
 	tenth := MustUSD("0.1")
-	if got, err := one.Add(tenth); err != nil || got.String() != "1.100000000000000000" {
-		t.Fatalf("USD.Add = %s, %v", got.String(), err)
-	}
-	if got, err := one.Sub(tenth); err != nil || got.String() != "0.900000000000000000" {
-		t.Fatalf("USD.Sub = %s, %v", got.String(), err)
-	}
+	assertUSDResult(t, "USD.Add", "1.100000000000000000")(one.Add(tenth))
+	assertUSDResult(t, "USD.Sub", "0.900000000000000000")(one.Sub(tenth))
 	if _, err := tenth.Sub(one); err == nil {
 		t.Fatal("USD.Sub permitted a negative result")
 	}
-	if got, err := MustUSD("0.000000000000000001").MulRatio(big.NewInt(3), big.NewInt(2)); err != nil || got.String() != "0.000000000000000002" {
-		t.Fatalf("USD.MulRatio = %s, %v", got.String(), err)
-	}
-	if got, err := CeilUSD(MustDecimalUSD("0.00000123"), 1, 1); err != nil || got.String() != "0.000001230000000000" {
-		t.Fatalf("CeilUSD preserved precision = %s, %v", got.String(), err)
-	}
+	assertUSDResult(t, "USD.MulRatio", "0.000000000000000002")(MustUSD("0.000000000000000001").MulRatio(big.NewInt(3), big.NewInt(2)))
+	assertUSDResult(t, "CeilUSD preserved precision", "0.000001230000000000")(CeilUSD(MustDecimalUSD("0.00000123"), 1, 1))
 }
 
 func TestUSDUnknownIsDistinctFromKnownZero(t *testing.T) {

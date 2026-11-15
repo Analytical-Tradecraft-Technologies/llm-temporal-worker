@@ -8,14 +8,21 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 )
 
+// mustSignCursor signs request with codec and fails the test on error.
+func mustSignCursor(t *testing.T, codec *CursorCodec, request QueryRequest, position string, horizon, issuedAt time.Time) QueryCursor {
+	t.Helper()
+	token, err := codec.Sign(request, position, horizon, issuedAt)
+	if err != nil {
+		t.Fatalf("CursorCodec.Sign() error = %v", err)
+	}
+	return token
+}
+
 func TestCursorCodecBindsScopeFilterAndHorizon(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
 	codec := CursorCodec{Key: []byte("test-key"), TTL: 10 * time.Minute}
-	query := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QuerySpendSummary, Filter: SpendSummaryQuery{StartTime: now.Add(-time.Hour), EndTime: now, GroupBy: []SpendDimension{SpendByProvider, SpendByModel}, OperationKinds: []OperationKind{OperationGenerate}}}
-	token, err := codec.Sign(query, "position-1", now.Add(-30*time.Second), now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	query := scopedQuery(llm.QuerySpendSummary, SpendSummaryQuery{StartTime: now.Add(-time.Hour), EndTime: now, GroupBy: []SpendDimension{SpendByProvider, SpendByModel}, OperationKinds: []OperationKind{OperationGenerate}})
+	token := mustSignCursor(t, &codec, query, "position-1", now.Add(-30*time.Second), now)
 	claims, err := codec.Decode(query, token, now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -38,15 +45,12 @@ func TestCursorCodecBindsScopeFilterAndHorizon(t *testing.T) {
 
 func TestCursorCodecIgnoresContinuationCursorInFilterDigest(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
-	first := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{Page: QueryPage{Size: 20}}}
+	first := scopedQuery(llm.QueryProviderStatus, ProviderStatusQuery{Page: QueryPage{Size: 20}})
 	cursor := QueryCursor("continuation")
 	continuation := first
 	continuation.Filter = ProviderStatusQuery{Page: QueryPage{Size: 20, Cursor: &cursor}}
 	codec := CursorCodec{Key: []byte("key")}
-	token, err := codec.Sign(first, "position", now, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := mustSignCursor(t, &codec, first, "position", now, now)
 	if _, err := codec.Decode(continuation, token, now); err != nil {
 		t.Fatalf("continuation cursor changed binding: %v", err)
 	}
@@ -55,13 +59,10 @@ func TestCursorCodecIgnoresContinuationCursorInFilterDigest(t *testing.T) {
 func TestCursorCodecCanonicalizesUnorderedSpendDimensions(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
 	codec := CursorCodec{Key: []byte("test-key")}
-	first := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QuerySpendSummary, Filter: SpendSummaryQuery{StartTime: now.Add(-time.Hour), EndTime: now, GroupBy: []SpendDimension{SpendByProvider, SpendByModel}, OperationKinds: []OperationKind{OperationGenerate, OperationCompact}}}
+	first := scopedQuery(llm.QuerySpendSummary, SpendSummaryQuery{StartTime: now.Add(-time.Hour), EndTime: now, GroupBy: []SpendDimension{SpendByProvider, SpendByModel}, OperationKinds: []OperationKind{OperationGenerate, OperationCompact}})
 	second := first
 	second.Filter = SpendSummaryQuery{StartTime: first.Filter.(SpendSummaryQuery).StartTime, EndTime: now, GroupBy: []SpendDimension{SpendByModel, SpendByProvider}, OperationKinds: []OperationKind{OperationCompact, OperationGenerate}}
-	token, err := codec.Sign(first, "position", now.Add(-time.Minute), now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := mustSignCursor(t, &codec, first, "position", now.Add(-time.Minute), now)
 	if _, err := codec.Decode(second, token, now); err != nil {
 		t.Fatalf("unordered dimensions should share binding: %v", err)
 	}
@@ -70,14 +71,11 @@ func TestCursorCodecCanonicalizesUnorderedSpendDimensions(t *testing.T) {
 func TestCursorCodecRejectsTamperExpiryFutureAndOversize(t *testing.T) {
 	now := time.Date(2026, time.July, 21, 2, 0, 0, 0, time.UTC)
 	codec := CursorCodec{Key: []byte("test-key"), TTL: time.Minute, MaxPosition: 8}
-	query := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{}}
+	query := scopedQuery(llm.QueryProviderStatus, ProviderStatusQuery{})
 	if _, err := codec.Sign(query, strings.Repeat("x", 9), now, now); err == nil {
 		t.Fatal("oversized position accepted")
 	}
-	token, err := codec.Sign(query, "position", now, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := mustSignCursor(t, &codec, query, "position", now, now)
 	tampered := QueryCursor(string(token)[:len(token)-1] + "A")
 	if _, err := codec.Decode(query, tampered, now); err == nil {
 		t.Fatal("tampered token accepted")
@@ -85,10 +83,7 @@ func TestCursorCodecRejectsTamperExpiryFutureAndOversize(t *testing.T) {
 	if _, err := codec.Decode(query, token, now.Add(2*time.Minute)); err == nil {
 		t.Fatal("expired token accepted")
 	}
-	future, err := codec.Sign(query, "position", now, now.Add(3*time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
+	future := mustSignCursor(t, &codec, query, "position", now, now.Add(3*time.Minute))
 	if _, err := codec.Decode(query, future, now); err == nil {
 		t.Fatal("future token accepted")
 	}
@@ -118,7 +113,7 @@ func TestCursorCodecSupportsEveryQueryKind(t *testing.T) {
 
 func TestCursorCodecRejectsTypedNilFilter(t *testing.T) {
 	var filter *ProviderStatusQuery
-	query := QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: filter}
+	query := scopedQuery(llm.QueryProviderStatus, filter)
 	codec := CursorCodec{Key: []byte("key")}
 	now := time.Now().UTC()
 	if _, err := codec.Sign(query, "position", now, now); err == nil {
@@ -146,11 +141,11 @@ func TestCursorCodecRejectsMalformedTypedRequest(t *testing.T) {
 		},
 		{
 			name:  "invalid page size",
-			query: QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryProviderStatus, Filter: ProviderStatusQuery{Page: QueryPage{Size: 1001}}},
+			query: scopedQuery(llm.QueryProviderStatus, ProviderStatusQuery{Page: QueryPage{Size: 1001}}),
 		},
 		{
 			name:  "filter kind mismatch",
-			query: QueryRequest{OperationKey: "op", Scope: testScope(), Kind: llm.QueryModelInventory, Filter: ProviderStatusQuery{}},
+			query: scopedQuery(llm.QueryModelInventory, ProviderStatusQuery{}),
 		},
 	}
 	for _, test := range tests {

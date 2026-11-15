@@ -12,13 +12,8 @@ func TestInclusiveReasoningCannotBeChargedTwice(t *testing.T) {
 			t.Fatalf("%s charged overlapping usage", family)
 		}
 		entry.Prices.ReasoningPerMillion = MustDecimalUSD("0")
-		if _, err := CompileUSD("v1", []Entry{entry}); err != nil {
-			t.Fatal(err)
-		}
-		cost, err := CostFromUsage(entry, Usage{OutputTokens: 100, ReasoningTokens: 60})
-		if err != nil || cost.USD.Cmp(MustUSD("0.0002")) != 0 {
-			t.Fatalf("inclusive output cost = %v, %v", cost.USD, err)
-		}
+		mustCompileUSD(t, "v1", []Entry{entry})
+		assertCostUSD(t, family+" inclusive output", entry, Usage{OutputTokens: 100, ReasoningTokens: 60}, "0.0002")
 	}
 }
 
@@ -31,17 +26,11 @@ func TestMessagesThinkingIsBilledOnceThroughOutput(t *testing.T) {
 			t.Fatalf("%s accepted a reasoning price", family)
 		}
 		entry.Prices.ReasoningPerMillion = MustDecimalUSD("0")
-		cost, err := CostFromUsage(entry, Usage{OutputTokens: 1000, ReasoningTokens: 800})
-		if err != nil || cost.USD.Cmp(MustUSD("0.015")) != 0 {
-			t.Fatalf("%s cost = %v, %v, want 0.015", family, cost.USD, err)
-		}
+		assertCostUSD(t, family, entry, Usage{OutputTokens: 1000, ReasoningTokens: 800}, "0.015")
 	}
 }
 
 func TestSeparateReasoningPricesRemainSupported(t *testing.T) {
 	entry := Entry{Family: "separate_usage", Prices: UnitPrices{OutputPerMillion: MustDecimalUSD("2"), ReasoningPerMillion: MustDecimalUSD("3")}}
-	cost, err := CostFromUsage(entry, Usage{OutputTokens: 40, ReasoningTokens: 60})
-	if err != nil || cost.USD.Cmp(MustUSD("0.00026")) != 0 {
-		t.Fatalf("separate cost = %v, %v", cost.USD, err)
-	}
+	assertCostUSD(t, "separate", entry, Usage{OutputTokens: 40, ReasoningTokens: 60}, "0.00026")
 }

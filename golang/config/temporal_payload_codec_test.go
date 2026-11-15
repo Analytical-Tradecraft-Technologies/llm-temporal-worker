@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -25,12 +24,8 @@ const payloadCodecYAML = `  payload_codec:
 
 func withPayloadCodec(t *testing.T, block string) []byte {
 	t.Helper()
-	base := string(exampleYAML(t))
 	const anchor = "  identity_prefix: llmtw\n"
-	if !strings.Contains(base, anchor) {
-		t.Fatal("example no longer sets temporal.identity_prefix")
-	}
-	return []byte(strings.Replace(base, anchor, anchor+block, 1))
+	return replaceExample(t, anchor, anchor+block)
 }
 
 // The codec is opt-in: the example leaves it unset, and an unset codec does
@@ -53,14 +48,8 @@ func TestPayloadCodecIsDisabledByDefault(t *testing.T) {
 	if codec == nil || codec.Kind != config.PayloadCodecAES256GCM || len(codec.Keys) != 2 || !codec.Keys[0].Primary {
 		t.Fatalf("payload codec = %+v", codec)
 	}
-	before, err := config.Compile(context.Background(), exampleYAML(t), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	after, err := config.Compile(context.Background(), withPayloadCodec(t, payloadCodecYAML), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := mustCompile(t, exampleYAML(t))
+	after := mustCompile(t, withPayloadCodec(t, payloadCodecYAML))
 	if before.ConfigVersion() == after.ConfigVersion() {
 		t.Fatal("enabling the payload codec did not change the configuration digest")
 	}

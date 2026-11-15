@@ -6,7 +6,7 @@ import (
 )
 
 func TestContinuationHandleTenantBindingInvariants(t *testing.T) {
-	keyring := mustKeyring(t, []Key{{ID: "primary", Secret: bytes.Repeat([]byte{7}, 32), Primary: true}}, bytes.NewReader(bytes.Repeat([]byte{9}, 64)))
+	keyring := mustPrimaryKeyring(t, "primary", 7, bytes.NewReader(bytes.Repeat([]byte{9}, 64)))
 	for _, tenant := range []string{"tenant-a", "tenant-b", "tenant-\u03b4"} {
 		handle, err := keyring.Issue(tenant)
 		if err != nil {
