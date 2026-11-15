@@ -114,18 +114,13 @@ func TestCloudRepositoryFactoryFailsClosedWithoutSecretLeak(t *testing.T) {
 }
 
 func TestCloudRequestsAttachedOncePerSnapshotAndDrainedOnFailure(t *testing.T) {
-	verifier, err := state.NewKeyring([]state.Key{{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := testKeyring(t, state.Key{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)})
 	var repositories []*recordingCloudRequests
 	var namespaces []string
 	var fail bool
 	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-		Clock: time.Now,
-		Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
-			return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
-		}),
+		Clock:    time.Now,
+		Resolver: requestKeyResolver,
 		CloudRequestFactory: func(_ context.Context, c cloudstate.Config, _ []byte) (CloudRequestRepository, error) {
 			r := &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}
 			repositories = append(repositories, r)
@@ -227,10 +222,7 @@ func (s *cloudCheckpointTestStore) Write(context.Context, string, []byte, string
 }
 
 func TestCloudCheckpointCapabilitiesRejectIncompleteStores(t *testing.T) {
-	verifier, err := state.NewKeyring([]state.Key{{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := testKeyring(t, state.Key{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)})
 	for _, test := range []struct {
 		name       string
 		repository CloudRequestRepository
@@ -335,14 +327,11 @@ func TestProductionFactoryBuildsCloudSnapshotWithoutPostgres(t *testing.T) {
 				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
 					return singleRouteSnapshot("test", "openai-prod", "test-v1"), nil
 				}),
-				Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+				Resolver: secrets.ResolverFunc(func(ctx context.Context, ref config.SecretRef) ([]byte, error) {
 					if strings.Contains(strings.ToLower(ref.Name+ref.Path), "postgres") {
 						t.Fatal("resolved PostgreSQL secret")
 					}
-					if ref.Name == "REQUEST_KEY" {
-						return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
-					}
-					return bytes.Repeat([]byte{7}, 32), nil
+					return bootstrapResolver(ctx, ref)
 				}),
 				RedisClient: redis, RedisKeySecret: bytes.Repeat([]byte{8}, 32),
 				BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
@@ -421,10 +410,7 @@ type cloudBootstrapCloser struct{ close func() }
 func (c cloudBootstrapCloser) Close() error { c.close(); return nil }
 
 func TestCloudReadinessRejectsIncompleteClientsBeforeRuntimeBuilder(t *testing.T) {
-	verifier, err := state.NewKeyring([]state.Key{{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	verifier := testKeyring(t, state.Key{ID: "test", Secret: bytes.Repeat([]byte{7}, 32)})
 	for _, test := range []struct {
 		name   string
 		probes []DependencyProbe
@@ -436,10 +422,8 @@ func TestCloudReadinessRejectsIncompleteClientsBeforeRuntimeBuilder(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			closed := false
 			factory := &ProductionEngineFactory{options: ProductionFactoryOptions{
-				Clock: time.Now,
-				Resolver: secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
-					return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
-				}),
+				Clock:    time.Now,
+				Resolver: requestKeyResolver,
 				CloudRequestFactory: func(context.Context, cloudstate.Config, []byte) (CloudRequestRepository, error) {
 					return &recordingCloudRequests{checkpointStore: &cloudCheckpointTestStore{}, responseStore: &cloudResponseTestStore{}, fillStore: &cloudFillTestStore{}}, nil
 				},
@@ -488,12 +472,7 @@ func TestProductionFactoryRequiresBudgetInitializationOutsideDevelopment(t *test
 				SnapshotLoader: SnapshotLoaderFunc(func(context.Context, *config.Snapshot) (engine.Snapshot, error) {
 					return singleRouteSnapshot("test", "openai-prod", "test-v1"), nil
 				}),
-				Resolver: secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
-					if ref.Name == "REQUEST_KEY" {
-						return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32))), nil
-					}
-					return bytes.Repeat([]byte{7}, 32), nil
-				}),
+				Resolver:    bootstrapResolver,
 				RedisClient: redis, RedisKeySecret: bytes.Repeat([]byte{8}, 32),
 				BlobFactory: func(context.Context, config.Config) (blob.Store, io.Closer, error) {
 					return &cloudBootstrapBlobStore{newTestBlobStore()}, cloudBootstrapCloser{func() {}}, nil
@@ -578,3 +557,23 @@ func attachCloudRuntime(t *testing.T, repository CloudRequestRepository, verifie
 	_, _, err = factory.attachV1Runtime(context.Background(), cloudSnapshot(t, namespace), nil, clients)
 	return closed, built, err
 }
+
+// encodedRequestKey is a fresh copy of the base64 request-storage key the
+// cloud factory tests resolve.
+func encodedRequestKey() []byte {
+	return []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{4}, 32)))
+}
+
+// requestKeyResolver resolves every secret to the encoded request key.
+var requestKeyResolver = secrets.ResolverFunc(func(context.Context, config.SecretRef) ([]byte, error) {
+	return encodedRequestKey(), nil
+})
+
+// bootstrapResolver resolves REQUEST_KEY to the encoded request key and every
+// other secret to 32 bytes of sevens.
+var bootstrapResolver = secrets.ResolverFunc(func(_ context.Context, ref config.SecretRef) ([]byte, error) {
+	if ref.Name == "REQUEST_KEY" {
+		return encodedRequestKey(), nil
+	}
+	return bytes.Repeat([]byte{7}, 32), nil
+})

@@ -176,9 +176,7 @@ func TestCloudV1BuilderRejectsIncompleteOrMixedSnapshots(t *testing.T) {
 			if runtime, err := builder(context.Background(), snapshot, nil, clients); !errors.Is(err, ErrDurableV1Composition) || runtime != nil {
 				t.Fatalf("runtime=%T err=%v", runtime, err)
 			}
-			if f.submits.Load() != 0 {
-				t.Fatal("provider called during construction")
-			}
+			requireCount(t, &f.submits, 0, "provider called during construction")
 		})
 	}
 }
@@ -229,9 +227,7 @@ func TestCloudV1BuilderAuthorizationPrecedesStorage(t *testing.T) {
 	if _, err = runtime.(activity.ExecutionRuntime).PrepareExecutionV1(context.Background(), llm.PrepareExecutionV1{Generate: &f.request}); err == nil {
 		t.Fatal("unauthorized preparation accepted")
 	}
-	if f.submits.Load() != 0 {
-		t.Fatal("unauthorized provider call")
-	}
+	requireCount(t, &f.submits, 0, "unauthorized provider call")
 	for shard := 0; shard < cloudstate.PendingShards; shard++ {
 		pending, err := f.repository.ListPending(context.Background(), shard, 100, "")
 		if err != nil || len(pending.Requests) != 0 {

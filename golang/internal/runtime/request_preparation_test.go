@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -288,14 +287,8 @@ func TestPrepareCompactInputRejectsInvalidStoredAndOverridePolicies(t *testing.T
 // The published schema's compaction fixture sets every policy field, so the
 // worker must accept exactly the policy that fixture publishes.
 func TestDecodeCompactionPolicyAcceptsPublishedFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "llm", "testdata", "v1", "generate-fork-patch-compaction.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var request llm.GenerateRequestV1
-	if err := json.Unmarshal(data, &request); err != nil {
-		t.Fatal(err)
-	}
+	data := mustReadFile(t, filepath.Join("..", "..", "llm", "testdata", "v1", "generate-fork-patch-compaction.json"))
+	request := decodeJSON[llm.GenerateRequestV1](t, data)
 	if request.SettingsPatch.CompactionPolicy.Set == nil {
 		t.Fatal("fixture omitted the compaction policy")
 	}

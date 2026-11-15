@@ -73,14 +73,13 @@ func (f *boundedCloudFixture) acquiredForSaveFaults(t *testing.T) (llm.Execution
 	ctx := context.Background()
 	v := f.prepareGenerate(t, ctx)
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	return ref, budgets
 }
 
 func (f *boundedCloudFixture) savedExecution(t *testing.T, ref llm.ExecutionReferenceV1) cloudstate.SavedProviderExecution {
 	t.Helper()
-	scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
+	scope := testRequestScope
 	attempt, err := f.repository.LoadRequestAttempt(context.Background(), scope, cloudstate.RequestID(ref.RequestID))
 	if err != nil {
 		t.Fatal(err)
@@ -158,11 +157,8 @@ func TestCloudProviderOutcomeSaveRetriesTransientStorageFailure(t *testing.T) {
 				if f.submits.Load() != 1 || budgets.reconciles.Load() != 1 || f.now.Sub(started) > 2*time.Second {
 					t.Fatalf("submits=%d reconciles=%d waited=%s", f.submits.Load(), budgets.reconciles.Load(), f.now.Sub(started))
 				}
-				v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-				boundedState(t, v, err, llm.ExecutionCompleted)
-				if f.submits.Load() != 1 {
-					t.Fatal("completion dispatched again")
-				}
+				f.complete(t, ctx, ref, llm.ExecutionCompleted)
+				requireCount(t, &f.submits, 1, "completion dispatched again")
 			})
 		}
 	}
@@ -190,11 +186,9 @@ func TestCloudProviderOutcomeSavePersistentFailureStaysUnknown(t *testing.T) {
 	fault.armed = false
 	// The Activity retry finds only the durable submitting marker. It must wait
 	// for recovery and report the outcome unknown; it can never dispatch again.
-	v, err := f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionPending)
+	f.step(t, ctx, f.request, llm.ExecutionPending)
 	f.now = f.now.Add(16 * time.Minute)
-	v, err = f.runtime.PollExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionOutcomeUnknown)
+	f.poll(t, ctx, ref, llm.ExecutionOutcomeUnknown)
 	saved := f.savedExecution(t, ref)
 	if saved.Execution.Stage != cloudstate.ExecutionUnknown || saved.Execution.Claim == nil || saved.Execution.Settled {
 		t.Fatalf("unknown paid attempt = %+v", saved.Execution)

@@ -65,18 +65,9 @@ func TestSnapshotLoaderFuncDelegatesToFunction(t *testing.T) {
 }
 
 func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
-	configData, err := os.ReadFile("../../deploy/local/config.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	capabilities, err := os.ReadFile("../../deploy/local/capabilities.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	prices, err := os.ReadFile("../../deploy/local/prices.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	configData := mustReadFile(t, "../../deploy/local/config.yaml")
+	capabilities := mustReadFile(t, "../../deploy/local/capabilities.yaml")
+	prices := mustReadFile(t, "../../deploy/local/prices.yaml")
 	directory := t.TempDir()
 	capabilitiesPath := filepath.Join(directory, "capabilities.yaml")
 	pricesPath := filepath.Join(directory, "prices.yaml")
@@ -88,10 +79,7 @@ func TestCatalogSnapshotLoaderPublishesLocalCatalogSmoke(t *testing.T) {
 	}
 	data := strings.ReplaceAll(string(configData), "/etc/llmtw/capabilities.yaml", capabilitiesPath)
 	data = strings.ReplaceAll(data, "/etc/llmtw/prices.yaml", pricesPath)
-	compiled, err := config.Compile(context.Background(), []byte(data), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := mustCompileConfig(t, []byte(data))
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
 	if err != nil {
@@ -179,10 +167,7 @@ func testRouteInputs(t *testing.T) (config.Config, catalog.Bundle) {
 
 func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	value, bundle := testRouteInputs(t)
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	model, ok := routes.Models["logical-model"]
 	if !ok || len(model.Routes) != 1 {
 		t.Fatalf("compiled routes = %#v", routes)
@@ -194,10 +179,7 @@ func TestCompileRoutesPublishesProviderAndRoutingContracts(t *testing.T) {
 	if route.EndpointAccountHMAC == [32]byte{} {
 		t.Fatal("compiled route is missing endpoint-account identity HMAC")
 	}
-	second, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := mustCompileRoutes(t, value, bundle)
 	if second.Models["logical-model"].Routes[0].EndpointAccountHMAC != route.EndpointAccountHMAC {
 		t.Fatal("runtime endpoint-account identity HMAC is not deterministic")
 	}
@@ -320,10 +302,7 @@ func TestRuntimeCatalogRouteAffinityUsesCompiledAccountIdentity(t *testing.T) {
 	model := value.Models["logical-model"]
 	model.Routes = append(model.Routes, config.RouteConfig{ID: "route-b", Endpoint: "endpoint-a", Model: "gpt-test", Classes: []llm.ServiceClass{llm.ServiceClassStandard}})
 	value.Models["logical-model"] = model
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	compiled := routes.Models["logical-model"].Routes
 	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	plan, err := (routing.DeterministicPlanner{}).Plan(context.Background(), routing.Input{
@@ -374,10 +353,7 @@ func TestRuntimeEndpointAccountIdentitySeparatesAccounts(t *testing.T) {
 
 func TestCompileRoutesKeepsAnthropicAWSAndBedrockCatalogStateSeparate(t *testing.T) {
 	value, bundle := anthropicAWSRouteInputs(t)
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	route := routes.Models["claude-aws"].Routes[0]
 	if route.Family != string(provider.FamilyAnthropicMessages) || route.EndpointID != "anthropic-aws" {
 		t.Fatalf("AWS route identity = %#v", route)
@@ -563,10 +539,7 @@ func TestCompileRoutesPreservesOutputCeiling(t *testing.T) {
 	profile := bundle.Capabilities["profile-a"]
 	profile.OutputTokens = 1234
 	bundle.Capabilities["profile-a"] = profile
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	if got := routes.Models["logical-model"].Routes[0].OutputTokens; got != 1234 {
 		t.Fatalf("output ceiling = %d", got)
 	}
@@ -577,10 +550,7 @@ func TestCompileRoutesPreservesContextLimit(t *testing.T) {
 	profile := bundle.Capabilities["profile-a"]
 	profile.ContextTokens = 4096
 	bundle.Capabilities["profile-a"] = profile
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	if got := routes.Models["logical-model"].Routes[0].ContextTokens; got != 4096 {
 		t.Fatalf("context limit=%d", got)
 	}
@@ -690,13 +660,11 @@ func TestCloudExecutionRecoversPlanAdmittedUnderPinnedPriceVersion(t *testing.T)
 	pin("price/v1") // the previous binary pinned the load-time version
 	v := f.prepareGenerate(t, ctx)
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	pin("") // rolling upgrade: the same configuration now compiles unpinned
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 	f.restart(t)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
+	v, err := f.runtime.CompleteExecutionV1(ctx, ref)
 	if boundedState(t, v, err, llm.ExecutionCompleted).Generate == nil || f.submits.Load() != 1 {
 		t.Fatal("admitted plan was not dispatched exactly once by the upgraded worker")
 	}
@@ -717,17 +685,11 @@ func TestCloudExecutionRecoversPlanAdmittedUnderPinnedPriceVersion(t *testing.T)
 // The endpoint digest is what lets dispatched work outlive a reload, so it
 // must ignore unrelated settings and follow the endpoint's own configuration.
 func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T) {
-	configData, err := os.ReadFile("../../deploy/local/config.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	configData := mustReadFile(t, "../../deploy/local/config.yaml")
 	directory := t.TempDir()
 	base := string(configData)
 	for _, name := range []string{"capabilities.yaml", "prices.yaml"} {
-		data, err := os.ReadFile("../../deploy/local/" + name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := mustReadFile(t, "../../deploy/local/"+name)
 		path := filepath.Join(directory, name)
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
@@ -739,10 +701,7 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 		if !strings.Contains(base+"\x00", old) {
 			t.Fatalf("local configuration no longer contains %q", old)
 		}
-		compiled, err := config.Compile(context.Background(), []byte(strings.Replace(base, old, replacement, 1)), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		compiled := mustCompileConfig(t, []byte(strings.Replace(base, old, replacement, 1)))
 		loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC) }}).Load(context.Background(), compiled)
 		if err != nil {
 			t.Fatal(err)
@@ -784,10 +743,7 @@ func TestCatalogSnapshotLoaderEndpointDigestFollowsOnlyTheEndpoint(t *testing.T)
 func TestCompileRoutesCarriesServiceClassPolicies(t *testing.T) {
 	value, bundle := testRouteInputs(t)
 	value.ServiceClassPolicies = []config.ServiceClassPolicy{{ID: "no-priority", Match: config.ServiceClassPolicyMatch{Tenant: "tenant-a"}, Classes: []llm.ServiceClass{llm.ServiceClassStandard}}}
-	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := mustCompileRoutes(t, value, bundle)
 	copied, err := copyProviderCatalog(routes)
 	if err != nil {
 		t.Fatal(err)
@@ -797,4 +753,15 @@ func TestCompileRoutesCarriesServiceClassPolicies(t *testing.T) {
 			t.Fatalf("class policies = %+v", catalog.ClassPolicies)
 		}
 	}
+}
+
+// mustCompileRoutes compiles value's routes against bundle at the contract
+// tests' fixed date or fails the test.
+func mustCompileRoutes(t *testing.T, value config.Config, bundle catalog.Bundle) routing.Catalog {
+	t.Helper()
+	routes, err := compileRoutes(value, bundle, time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return routes
 }

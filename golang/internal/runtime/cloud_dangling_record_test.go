@@ -19,8 +19,7 @@ func TestCloudLostRecordBlobIsCorruptNotANewOperation(t *testing.T) {
 	f := boundedCloud(t, false)
 	ctx, v := f.generateStep(t, llm.ExecutionProviderCompleted)
 	ref := f.ref(v)
-	v, err := f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
+	v = f.complete(t, ctx, ref, llm.ExecutionCompleted)
 	if f.submits.Load() != 1 {
 		t.Fatalf("submits=%d", f.submits.Load())
 	}
@@ -40,7 +39,7 @@ func TestCloudLostRecordBlobIsCorruptNotANewOperation(t *testing.T) {
 			t.Fatalf("%s: lost record blob is a retryable Activity error: %v", name, activity.ToTemporalError(err))
 		}
 	}
-	_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
+	_, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	requireCorrupt("prepare", err)
 	_, err = f.runtime.GenerateStepV1(ctx, f.request)
 	requireCorrupt("generate", err)
@@ -65,7 +64,7 @@ func TestCloudLostParentCheckpointBlobIsCorruptNotRetried(t *testing.T) {
 	f.blobs.mu.Unlock()
 	f.restart(t)
 
-	request := llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle}
+	request := f.compactRequest(parent, nil)
 	_, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
 	if !isProviderError(err, provider.CodeStateCorrupt, provider.RetryNever) {
 		t.Fatalf("replay of a lost parent checkpoint = %#v, want non-retryable state_corrupt", err)

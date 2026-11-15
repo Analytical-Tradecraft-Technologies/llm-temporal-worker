@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -10,12 +11,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/app"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/openairesponses"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/routing"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/state"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/cloudstate"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
 )
@@ -76,6 +81,15 @@ func invokeFailingAfterWrite(submits *atomic.Int32, failure error) func(context.
 	}
 }
 
+// invokeFailing returns an adapter Invoke that counts the submission in
+// submits and fails with failure before any possible write.
+func invokeFailing(submits *atomic.Int32, failure error) func(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
+	return func(context.Context, provider.Call, provider.Observer) (provider.Result, error) {
+		submits.Add(1)
+		return provider.Result{}, failure
+	}
+}
+
 // countedPossibleWrite counts a provider submission in submits (when
 // non-nil) and crosses observer's possible-write boundary.
 func countedPossibleWrite(ctx context.Context, submits *atomic.Int32, observer provider.Observer) error {
@@ -94,6 +108,12 @@ func submitFailingAfterWrite(submits *atomic.Int32, failure error) func(context.
 	}
 }
 
+// deniedRejection is the permanent, definitely-rejected permission failure
+// the cloud tests use to fail a request outright.
+func deniedRejection() error {
+	return provider.NewError(provider.CodePermissionDenied, provider.PhaseDispatch, provider.DispatchRejected, provider.RetryNever, "rejected")
+}
+
 // unavailableRejection is the retryable, definitely-rejected provider outage
 // the cloud tests use to move to the next route.
 func unavailableRejection() error {
@@ -106,7 +126,13 @@ var testRequestScope = cloudstate.Scope{Tenant: "tenant", Project: "project"}
 
 // ref returns the execution reference of v for the fixture's Generate request.
 func (f *boundedCloudFixture) ref(v llm.ExecutionResultV1) llm.ExecutionReferenceV1 {
-	return llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: f.request.Context, Capability: v.Capability}
+	return executionRef(v, f.request.Context)
+}
+
+// executionRef returns the execution reference of v for a request made under
+// caller.
+func executionRef(v llm.ExecutionResultV1, caller llm.RequestContext) llm.ExecutionReferenceV1 {
+	return llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: caller, Capability: v.Capability}
 }
 
 // firstAttempt returns the execution reference of v, the request scope and
@@ -125,19 +151,14 @@ func (f *boundedCloudFixture) firstAttempt(t testing.TB, ctx context.Context, v 
 // runs that attempt to completion with exactly one submission in all.
 func (f *boundedCloudFixture) requireRenewedAttemptCompletes(t testing.TB, ctx context.Context, ref llm.ExecutionReferenceV1, scope cloudstate.Scope, first cloudstate.RequestAttempt) {
 	t.Helper()
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	v := f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	next, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
 	if err != nil || next.ID == first.ID || len(next.PriorCandidates) != 0 {
 		t.Fatalf("expired attempt not renewed: %+v, %v", next, err)
 	}
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionCompleted)
-	if f.submits.Load() != 1 {
-		t.Fatal("renewed attempt not submitted once", f.submits.Load())
-	}
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	f.complete(t, ctx, ref, llm.ExecutionCompleted)
+	requireCount(t, &f.submits, 1, "renewed attempt not submitted once")
 }
 
 // appendAliasRoute adds a copy of the alias model's first route as routeID on
@@ -165,12 +186,9 @@ func (f *budgetPlanningFixture) addFallbackRoute(t testing.TB, routeID, endpoint
 // step to a provider result and completes the execution, without restarts.
 func (f *boundedCloudFixture) acquireGenerateComplete(t testing.TB, ctx context.Context, ref llm.ExecutionReferenceV1) llm.ExecutionResultV1 {
 	t.Helper()
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	return boundedState(t, v, err, llm.ExecutionCompleted)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+	f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
+	return f.complete(t, ctx, ref, llm.ExecutionCompleted)
 }
 
 // runCompact drives request through Prepare, Acquire, CompactStep and
@@ -178,21 +196,17 @@ func (f *boundedCloudFixture) acquireGenerateComplete(t testing.TB, ctx context.
 // rebuilt before the step and before completion, as a new worker would be.
 func (f *boundedCloudFixture) runCompact(t testing.TB, ctx context.Context, request llm.CompactRequestV1, restart bool) llm.ExecutionResultV1 {
 	t.Helper()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Compact: &request})
-	boundedState(t, v, err, llm.ExecutionBudgetRequired)
-	ref := llm.ExecutionReferenceV1{RequestID: v.RequestID, Context: request.Context, Capability: v.Capability}
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	v := f.prepare(t, ctx, llm.PrepareExecutionV1{Compact: &request}, llm.ExecutionBudgetRequired)
+	ref := executionRef(v, request.Context)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	if restart {
 		f.restart(t)
 	}
-	v, err = f.runtime.CompactStepV1(ctx, request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.compactStep(t, ctx, request, llm.ExecutionProviderCompleted)
 	if restart {
 		f.restart(t)
 	}
-	v, err = f.runtime.CompleteExecutionV1(ctx, ref)
-	return boundedState(t, v, err, llm.ExecutionCompleted)
+	return f.complete(t, ctx, ref, llm.ExecutionCompleted)
 }
 
 // startTestRuntime starts runtime, skipping the test where the sandbox does
@@ -237,6 +251,24 @@ func (f *budgetPlanningFixture) plan(t testing.TB, planning *BudgetPlanning, com
 	return planned
 }
 
+// planGenerate plans request through a fresh provider planning for
+// capabilities and returns its result.
+func planGenerate(t testing.TB, capabilities V1RuntimeCapabilities, request llm.GenerateRequestV1) (PlannedProviderCall, error) {
+	t.Helper()
+	return mustProviderPlanning(t, capabilities).Generate(context.Background(), mustPrepareGenerate(t, request))
+}
+
+// recoveryBinding returns the recovery binding of planned's provider call on
+// its route or fails the test.
+func recoveryBinding(t testing.TB, planned PlannedBudgetCall) ProviderRecoveryBinding {
+	t.Helper()
+	binding, err := planned.Provider.RecoveryBinding(planned.Route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binding
+}
+
 // responsesAdapter is a real OpenAI Responses adapter for endpoint
 // "endpoint" at capability profile/v1 that sends through httpClient.
 func responsesAdapter(t testing.TB, httpClient *http.Client) *openairesponses.Adapter {
@@ -255,11 +287,7 @@ func responsesAdapter(t testing.TB, httpClient *http.Client) *openairesponses.Ad
 // exampleConfig reads the repository example configuration.
 func exampleConfig(t testing.TB) []byte {
 	t.Helper()
-	data, err := os.ReadFile("../../config.example.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return mustReadFile(t, "../../config.example.yaml")
 }
 
 // generateStep runs the fixture's Generate step under a background context
@@ -275,8 +303,7 @@ func (f *boundedCloudFixture) generateStep(t testing.TB, want llm.ExecutionState
 // need a budget and returns its result.
 func (f *boundedCloudFixture) prepareGenerate(t testing.TB, ctx context.Context) llm.ExecutionResultV1 {
 	t.Helper()
-	v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	return boundedState(t, v, err, llm.ExecutionBudgetRequired)
+	return f.prepare(t, ctx, llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionBudgetRequired)
 }
 
 // isProviderError reports whether err is a provider error with code and
@@ -328,4 +355,169 @@ func requireCleanReturn(t testing.TB, done <-chan error, name string) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("%s did not shut down", name)
 	}
+}
+
+// keepNoRecentTurns sets request's compaction policy to keep no recent turns,
+// so every earlier turn is eligible for compaction.
+func keepNoRecentTurns(request *llm.GenerateRequestV1) {
+	policy := json.RawMessage(`{"recent_turns":0}`)
+	request.SettingsPatch.CompactionPolicy.Set = &policy
+}
+
+// prepare prepares input and requires state want.
+func (f *boundedCloudFixture) prepare(t testing.TB, ctx context.Context, input llm.PrepareExecutionV1, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+	t.Helper()
+	v, err := f.runtime.PrepareExecutionV1(ctx, input)
+	return boundedState(t, v, err, want)
+}
+
+// acquire acquires ref's budget and requires state want.
+func (f *boundedCloudFixture) acquire(t testing.TB, ctx context.Context, ref llm.ExecutionReferenceV1, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+	t.Helper()
+	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
+	return boundedState(t, v, err, want)
+}
+
+// step runs request's Generate step and requires state want.
+func (f *boundedCloudFixture) step(t testing.TB, ctx context.Context, request llm.GenerateRequestV1, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+	t.Helper()
+	v, err := f.runtime.GenerateStepV1(ctx, request)
+	return boundedState(t, v, err, want)
+}
+
+// compactStep runs request's Compact step and requires state want.
+func (f *boundedCloudFixture) compactStep(t testing.TB, ctx context.Context, request llm.CompactRequestV1, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+	t.Helper()
+	v, err := f.runtime.CompactStepV1(ctx, request)
+	return boundedState(t, v, err, want)
+}
+
+// poll polls ref's execution and requires state want.
+func (f *boundedCloudFixture) poll(t testing.TB, ctx context.Context, ref llm.ExecutionReferenceV1, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+	t.Helper()
+	v, err := f.runtime.PollExecutionV1(ctx, ref)
+	return boundedState(t, v, err, want)
+}
+
+// complete completes ref's execution and requires state want.
+func (f *boundedCloudFixture) complete(t testing.TB, ctx context.Context, ref llm.ExecutionReferenceV1, want llm.ExecutionStateV1) llm.ExecutionResultV1 {
+	t.Helper()
+	v, err := f.runtime.CompleteExecutionV1(ctx, ref)
+	return boundedState(t, v, err, want)
+}
+
+// compactRequest is a Compact request keyed "compact" for parent's
+// checkpoint under the fixture's caller, with cache policy cache.
+func (f *boundedCloudFixture) compactRequest(parent llm.ExecutionResultV1, cache *llm.CachePolicyV1) llm.CompactRequestV1 {
+	return llm.CompactRequestV1{OperationKey: "compact", Context: f.request.Context, Parent: parent.Generate.Checkpoint.Handle, Cache: cache}
+}
+
+// followUp is a Generate request keyed key that continues parent under the
+// fixture's caller with one human message holding text.
+func (f *boundedCloudFixture) followUp(parent llm.CheckpointHandle, key, text string) llm.GenerateRequestV1 {
+	return llm.GenerateRequestV1{OperationKey: key, Context: f.request.Context, Parent: &parent, Append: []llm.Item{llm.HumanText(text)}}
+}
+
+// failCompile is an adapter compile hook that fails every call with err.
+func failCompile(err error) func(provider.CompileInput) (provider.Call, error) {
+	return func(provider.CompileInput) (provider.Call, error) { return provider.Call{}, err }
+}
+
+// newTestApp builds an application from options, failing the test on error,
+// and closes it when the test ends.
+func newTestApp(t testing.TB, options app.Options) *app.App {
+	t.Helper()
+	application, err := app.New(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = application.Close(context.Background()) })
+	return application
+}
+
+// testKeyring builds a handle keyring holding key or fails the test.
+func testKeyring(t testing.TB, key state.Key) *state.Keyring {
+	t.Helper()
+	keyring, err := state.NewKeyring([]state.Key{key}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keyring
+}
+
+// testLogger builds a logger with options or fails the test.
+func testLogger(t testing.TB, options observability.LogOptions) *observability.Logger {
+	t.Helper()
+	logger, err := observability.NewLogger(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return logger
+}
+
+// mustNewRuntime builds a runtime from data and options or fails the test;
+// the caller owns its shutdown.
+func mustNewRuntime(t testing.TB, data []byte, options Options) *Runtime {
+	t.Helper()
+	runtime, err := New(context.Background(), data, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
+}
+
+// mustCompileConfig compiles data without a reference resolver or fails the
+// test.
+func mustCompileConfig(t testing.TB, data []byte) *config.Snapshot {
+	t.Helper()
+	snapshot, err := config.Compile(context.Background(), data, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
+// mustReadFile reads path or fails the test.
+func mustReadFile(t testing.TB, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// encodeJSON encodes value or fails the test.
+func encodeJSON(t testing.TB, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// decodeJSON decodes data into a new T or fails the test.
+func decodeJSON[T any](t testing.TB, data []byte) T {
+	t.Helper()
+	var value T
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+// requireCount fails the test with message and both counts unless counter
+// holds want.
+func requireCount(t testing.TB, counter *atomic.Int32, want int32, message string) {
+	t.Helper()
+	if got := counter.Load(); got != want {
+		t.Fatalf("%s: got %d, want %d", message, got, want)
+	}
+}
+
+// continueTurn points the fixture's Generate request at parent under
+// operation key, without the root turn's settings patch.
+func (f *boundedCloudFixture) continueTurn(parent llm.CheckpointHandle, key string) {
+	f.request.Parent, f.request.OperationKey, f.request.SettingsPatch = &parent, key, llm.SettingsPatchV1{}
 }

@@ -101,10 +101,7 @@ func TestProductionAnthropicProfileLiftsResponseTiers(t *testing.T) {
 				if response.Status != llm.ResponseStatusCompleted || response.Usage.InputTokens != 2 || response.Usage.OutputTokens != 1 {
 					t.Fatalf("response = %+v", response)
 				}
-				output, err := json.Marshal(response.Output)
-				if err != nil {
-					t.Fatal(err)
-				}
+				output := encodeJSON(t, response.Output)
 				if !strings.Contains(string(output), `"text":"done"`) {
 					t.Fatalf("output = %s", output)
 				}

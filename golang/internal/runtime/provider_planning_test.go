@@ -137,14 +137,8 @@ func TestProviderPlanningRealCompilerResolvesAliasesAndFallbackForBothPhases(t *
 			if planned.Candidate.RequestedClass != llm.ServiceClassPriority || planned.Candidate.AttemptedClass != llm.ServiceClassStandard || planned.Call.Model != "provider-model" || planned.Call.ServiceClass != llm.ServiceClassStandard {
 				t.Fatalf("unresolved provider selection: %+v", planned)
 			}
-			data, err := json.Marshal(planned.Call.SDKParams)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var wire map[string]any
-			if err := json.Unmarshal(data, &wire); err != nil {
-				t.Fatal(err)
-			}
+			data := encodeJSON(t, planned.Call.SDKParams)
+			wire := decodeJSON[map[string]any](t, data)
 			if wire["model"] != "provider-model" || wire["service_tier"] != "default" {
 				t.Fatalf("wrong SDK projection: %s", data)
 			}
@@ -239,9 +233,7 @@ func TestProviderPlanningFallbackUsesIndependentCompilerInputs(t *testing.T) {
 		input.Request.Input[0].(llm.Message).Content[0] = llm.TextPart{Text: "sensitive mutated input"}
 		return provider.Call{}, provider.NewError(provider.CodeUnsupportedCapability, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNextRoute, "sensitive compiler error")
 	}
-	planning := mustProviderPlanning(t, capabilities)
-	prepared := mustPrepareGenerate(t, request)
-	planned, err := planning.Generate(context.Background(), prepared)
+	planned, err := planGenerate(t, capabilities, request)
 	if err != nil || planned.Call.EndpointID != "second-endpoint" || len(first.inputs) != 1 || len(second.inputs) != 1 {
 		t.Fatalf("fallback failed: %+v, %v", planned, err)
 	}
@@ -305,9 +297,7 @@ func TestProviderPlanningRejectsWrongCompilerAndCandidateBindings(t *testing.T) 
 					return plan, err
 				})
 			}
-			planning := mustProviderPlanning(t, capabilities)
-			prepared := mustPrepareGenerate(t, request)
-			_, err := planning.Generate(context.Background(), prepared)
+			_, err := planGenerate(t, capabilities, request)
 			assertPlanningError(t, err, provider.CodeConfiguration)
 		})
 	}
@@ -317,12 +307,8 @@ func TestProviderPlanningDoesNotFallbackAfterPossibleDispatch(t *testing.T) {
 	for _, dispatch := range []provider.DispatchCertainty{provider.DispatchAccepted, provider.DispatchAmbiguous, provider.DispatchRejected} {
 		t.Run(string(dispatch), func(t *testing.T) {
 			capabilities, _, adapter, request, _, _ := planningFixture()
-			adapter.compile = func(provider.CompileInput) (provider.Call, error) {
-				return provider.Call{}, provider.NewError(provider.CodeInternal, provider.PhaseCompile, dispatch, provider.RetryNextRoute, "sensitive paid outcome")
-			}
-			planning := mustProviderPlanning(t, capabilities)
-			prepared := mustPrepareGenerate(t, request)
-			_, err := planning.Generate(context.Background(), prepared)
+			adapter.compile = failCompile(provider.NewError(provider.CodeInternal, provider.PhaseCompile, dispatch, provider.RetryNextRoute, "sensitive paid outcome"))
+			_, err := planGenerate(t, capabilities, request)
 			var mapped *provider.Error
 			if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchAmbiguous || mapped.Retry != provider.RetryNever || mapped.Cause != nil {
 				t.Fatalf("possible dispatch became fallback: %#v", err)
@@ -478,9 +464,7 @@ func TestProviderPlanningEnforcesOutputCeilingWithCustomPlanner(t *testing.T) {
 			input.Catalog.Models["alias"].Routes[0].OutputTokens = 0
 			return (routing.DeterministicPlanner{}).Plan(ctx, input)
 		})
-		planning := mustProviderPlanning(t, capabilities)
-		prepared := mustPrepareGenerate(t, request)
-		_, err := planning.Generate(context.Background(), prepared)
+		_, err := planGenerate(t, capabilities, request)
 		if limit < 1000 {
 			if err == nil || len(adapter.inputs) != 0 {
 				t.Fatal("oversize output reached compiler")
@@ -515,9 +499,7 @@ func TestProviderPlanningCapsDefaultOutputLimitAtRouteCeiling(t *testing.T) {
 			if test.explicit != nil {
 				request.SettingsPatch.Output.Set = &llm.OutputSpec{MaxTokens: test.explicit, Format: llm.OutputFormat{Kind: llm.OutputKindText}}
 			}
-			planning := mustProviderPlanning(t, capabilities)
-			prepared := mustPrepareGenerate(t, request)
-			planned, err := planning.Generate(context.Background(), prepared)
+			planned, err := planGenerate(t, capabilities, request)
 			if test.wantError {
 				var mapped *provider.Error
 				if !errors.As(err, &mapped) || len(adapter.inputs) != 0 {

@@ -526,26 +526,17 @@ func TestBudgetPlanningPrefersLessTriedCandidates(t *testing.T) {
 	f.addFallbackRoute(t, "alternate", "alternate-endpoint")
 	f.cap.Adapters.(engine.AdapterMap)["alternate-endpoint"] = f.adapter
 	planning := f.planning(t)
-	first, err := planning.Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := f.plan(t, planning, false)
 	if first.Route.EndpointID != "endpoint" {
 		t.Fatal("initial priority changed")
 	}
 	f.attempt.PriorCandidates = []string{first.Provider.Candidate.ID}
-	second, err := planning.Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	second := f.plan(t, planning, false)
 	if second.Route.EndpointID != "alternate-endpoint" {
 		t.Fatal("failed candidate starved alternative")
 	}
 	f.attempt.PriorCandidates = append(f.attempt.PriorCandidates, second.Provider.Candidate.ID)
-	third, err := planning.Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	third := f.plan(t, planning, false)
 	if third.Route.EndpointID != "endpoint" {
 		t.Fatal("equal attempt counts lost configured priority")
 	}
@@ -556,10 +547,7 @@ func TestBudgetPlanningPrefersLessTriedCandidates(t *testing.T) {
 // the workflow deadline (#1168).
 func TestBudgetPlanningRejectsReservationLargerThanTheWindowLimit(t *testing.T) {
 	f := newBudgetPlanningFixture(t)
-	planned, err := f.planning(t).Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	planned := f.plan(t, f.planning(t), false)
 	cost := planned.Reservation.Reservations[0].AmountUSD
 	for i := range f.source.value.BudgetPolicies[0].Windows {
 		f.source.value.BudgetPolicies[0].Windows[i].LimitUSD = pricing.MustUSD("0.000000001")
@@ -567,6 +555,6 @@ func TestBudgetPlanningRejectsReservationLargerThanTheWindowLimit(t *testing.T) 
 	if cost.Cmp(pricing.MustUSD("0.000000001")) <= 0 {
 		t.Skip("fixture quote is below the smallest limit")
 	}
-	_, err = f.planning(t).Generate(context.Background(), f.generate, f.attempt)
+	_, err := f.planning(t).Generate(context.Background(), f.generate, f.attempt)
 	assertBudgetPlanningError(t, err, provider.CodeBudgetDenied)
 }

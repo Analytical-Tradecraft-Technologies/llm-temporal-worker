@@ -51,42 +51,32 @@ func TestDialTemporalWithRetryRetriesTransientFrontendUnavailable(t *testing.T) 
 	if got != value {
 		t.Fatal("retry returned a different Temporal client")
 	}
-	if got, want := attempts.Load(), int32(3); got != want {
-		t.Fatalf("dial attempts = %d, want %d", got, want)
-	}
+	requireCount(t, &attempts, 3, "dial attempts")
 }
 
-func TestDialTemporalWithRetryStopsAtBoundedAttemptBudget(t *testing.T) {
-	var attempts atomic.Int32
-	wantErr := status.Error(codes.Unavailable, "frontend unavailable")
-	dial := func(context.Context, client.Options) (client.Client, error) {
-		attempts.Add(1)
-		return nil, wantErr
-	}
-
-	_, err := dialTemporalWithRetry(context.Background(), dial, client.Options{}, temporalDialTestPolicy())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("bounded dial error = %v, want %v", err, wantErr)
-	}
-	if got, want := attempts.Load(), int32(3); got != want {
-		t.Fatalf("dial attempts = %d, want bounded budget %d", got, want)
-	}
-}
-
-func TestDialTemporalWithRetryDoesNotRetryPermanentErrors(t *testing.T) {
-	var attempts atomic.Int32
-	wantErr := status.Error(codes.PermissionDenied, "invalid Temporal credentials")
-	dial := func(context.Context, client.Options) (client.Client, error) {
-		attempts.Add(1)
-		return nil, wantErr
-	}
-
-	_, err := dialTemporalWithRetry(context.Background(), dial, client.Options{}, temporalDialTestPolicy())
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("permanent dial error = %v, want %v", err, wantErr)
-	}
-	if got, want := attempts.Load(), int32(1); got != want {
-		t.Fatalf("permanent-error dial attempts = %d, want %d", got, want)
+// A transient outage stops at the bounded attempt budget; a permanent error
+// is not retried at all.
+func TestDialTemporalWithRetryStopsOnFailure(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		err      error
+		attempts int32
+	}{
+		{name: "bounded", err: status.Error(codes.Unavailable, "frontend unavailable"), attempts: 3},
+		{name: "permanent", err: status.Error(codes.PermissionDenied, "invalid Temporal credentials"), attempts: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			dial := func(context.Context, client.Options) (client.Client, error) {
+				attempts.Add(1)
+				return nil, test.err
+			}
+			_, err := dialTemporalWithRetry(context.Background(), dial, client.Options{}, temporalDialTestPolicy())
+			if !errors.Is(err, test.err) {
+				t.Fatalf("%s dial error = %v, want %v", test.name, err, test.err)
+			}
+			requireCount(t, &attempts, test.attempts, test.name+" dial attempts")
+		})
 	}
 }
 
@@ -104,9 +94,7 @@ func TestDialTemporalWithRetryHonorsCancellationDuringBackoff(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled dial error = %v, want context.Canceled", err)
 	}
-	if got, want := attempts.Load(), int32(1); got != want {
-		t.Fatalf("canceled dial attempts = %d, want %d", got, want)
-	}
+	requireCount(t, &attempts, 1, "canceled dial attempts")
 }
 
 func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
@@ -143,17 +131,12 @@ func TestDefaultTemporalClientFactoryUsesBoundedDialRetry(t *testing.T) {
 	if got != value {
 		t.Fatal("factory returned a different Temporal client")
 	}
-	if got, want := attempts.Load(), int32(2); got != want {
-		t.Fatalf("factory dial attempts = %d, want %d", got, want)
-	}
+	requireCount(t, &attempts, 2, "factory dial attempts")
 }
 
 func TestTemporalClientFactoryBindsConfiguredLogger(t *testing.T) {
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output, Level: "warn"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Output: &output, Level: "warn"})
 	called := false
 	factory := DefaultTemporalClientFactory{
 		Logger: logger,

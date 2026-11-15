@@ -71,9 +71,7 @@ func (f *boundedCloudFixture) plan(t *testing.T, key, text string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.submits.Load() != before {
-		t.Fatal("planning performed paid work")
-	}
+	requireCount(t, &f.submits, before, "planning performed paid work")
 	return decision.CompactBeforeGenerate
 }
 

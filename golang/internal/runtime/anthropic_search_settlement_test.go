@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -66,14 +65,11 @@ func TestAnthropicSearchCostFromSDKResponseThroughPublication(t *testing.T) {
 			if published.Status != "exact" || published.ActualCostUSD == nil || result.Response.Cost.ActualCostUSD.Cmp(pricing.MustUSD(tc.total)) != 0 {
 				t.Fatalf("published cost = %#v, want %s", published, tc.total)
 			}
-			receipt, err := json.Marshal(llm.GenerateResponseV1{
+			receipt := encodeJSON(t, llm.GenerateResponseV1{
 				OperationKey: "search-cost", OperationID: "origin-search-cost", Status: result.Response.Status,
 				Output: result.Response.Output, Checkpoint: llm.CheckpointMetadata{Handle: "checkpoint-synthetic", Kind: "generation"},
 				Cache: llm.CacheDispositionV1{Disposition: "miss_populated"}, Cost: published,
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
 			diagnostics, err := withCacheOriginCost(nil, cache.ResponseEntry{OriginOperationID: "origin-search-cost", Response: receipt})
 			if err != nil {
 				t.Fatal(err)

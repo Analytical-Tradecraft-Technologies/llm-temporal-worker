@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/cache"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/control"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/engine"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/observability"
@@ -63,8 +62,7 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 	f.adapter.invoke = invokeFailingAfterWrite(&f.submits, unavailableRejection())
 	for i := 0; i < 3; i++ {
 		f.request.OperationKey = fmt.Sprintf("failure-%d", i)
-		result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-		boundedState(t, result, err, llm.ExecutionFailed)
+		f.step(t, context.Background(), f.request, llm.ExecutionFailed)
 		f.now = f.now.Add(time.Second)
 		f.restart(t)
 	}
@@ -85,14 +83,11 @@ func TestCloudRouteHealthAcrossWorkersAndCooldown(t *testing.T) {
 	if !errors.As(err, &classified) || classified.Code != provider.CodeProviderUnavailable || classified.Retry == provider.RetryNever {
 		t.Fatal("open circuit not retryable", err)
 	}
-	if f.submits.Load() != 3 {
-		t.Fatal("open circuit dispatched")
-	}
+	requireCount(t, &f.submits, 3, "open circuit dispatched")
 	f.now = f.now.Add(time.Minute)
 	f.adapter.invoke = success
 	f.restart(t)
-	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, result, err, llm.ExecutionProviderCompleted)
+	result := f.step(t, context.Background(), f.request, llm.ExecutionProviderCompleted)
 	if shared.status.Circuit != control.CircuitClosed || shared.status.ConsecutiveDefiniteFailures != 0 {
 		t.Fatal("successful probe did not close circuit")
 	}
@@ -110,8 +105,7 @@ func TestCloudUnknownOutcomeDoesNotOpenCircuit(t *testing.T) {
 	f.cap.ProviderStatusRecorder = shared
 	f.restart(t)
 	f.adapter.invoke = invokeFailingAfterWrite(nil, errors.New("response lost"))
-	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, result, err, llm.ExecutionPending)
+	f.step(t, context.Background(), f.request, llm.ExecutionPending)
 	if shared.observations != 0 {
 		t.Fatal("unknown outcome counted as endpoint failure")
 	}
@@ -123,8 +117,7 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 	f.cap.ProviderRouteStatus = shared
 	f.cap.ProviderStatusRecorder = shared
 	f.restart(t)
-	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, result, err, llm.ExecutionPending)
+	result := f.step(t, context.Background(), f.request, llm.ExecutionPending)
 	snapshot, err := f.cap.Snapshot.Current(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -134,8 +127,7 @@ func TestCloudOpenCircuitDoesNotAbandonPendingProviderWork(t *testing.T) {
 	f.now = f.now.Add(2 * time.Second)
 	f.restart(t)
 	ref := f.ref(result)
-	result, err = f.runtime.PollExecutionV1(context.Background(), ref)
-	boundedState(t, result, err, llm.ExecutionProviderCompleted)
+	f.poll(t, context.Background(), ref, llm.ExecutionProviderCompleted)
 	if f.submits.Load() != 1 || f.polls.Load() != 1 {
 		t.Fatal("paid recovery abandoned or resubmitted")
 	}
@@ -207,8 +199,7 @@ func TestCloudRouteHealthSameRouteIDAcrossModels(t *testing.T) {
 	f.cap.ProviderRouteStatus, f.cap.ProviderStatusRecorder = shared, shared
 	f.cap.Adapters = engine.AdapterMap{"endpoint": f.adapter.executionSyncAdapter, "endpoint-two": f.adapter.executionSyncAdapter}
 	f.restart(t)
-	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, result, err, llm.ExecutionProviderCompleted)
+	f.step(t, context.Background(), f.request, llm.ExecutionProviderCompleted)
 	if len(shared.records) != 1 {
 		t.Fatalf("first model did not record one route status: %+v", shared.records)
 	}
@@ -216,8 +207,7 @@ func TestCloudRouteHealthSameRouteIDAcrossModels(t *testing.T) {
 	f.restart(t)
 	f.request.OperationKey = "second-model"
 	f.request.SettingsPatch.Model.Set = preparationPointer("alias-two")
-	result, err = f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, result, err, llm.ExecutionProviderCompleted)
+	f.step(t, context.Background(), f.request, llm.ExecutionProviderCompleted)
 	if len(shared.records) != 2 || f.submits.Load() != 2 {
 		t.Fatalf("second model shared the first model's route status: %+v submits=%d", shared.records, f.submits.Load())
 	}
@@ -237,11 +227,8 @@ func TestCloudRouteHealthIgnoresMismatchedIdentity(t *testing.T) {
 	route := snapshot.Routes.Models["alias"].Routes[0]
 	shared.status = control.RouteStatus{ConfigDigest: snapshot.ConfigDigest, ConfigEpoch: snapshot.ConfigEpoch, RouteID: route.ID, EndpointID: route.EndpointID, EndpointAccountHMAC: [32]byte{9}, Provider: "other-provider", EndpointFamily: route.Family, Model: route.Model, ProviderTier: route.ProviderTiers[llm.ServiceClassStandard], Circuit: control.CircuitOpen, ObservedAt: f.now, StaleAfter: f.now.Add(time.Minute), Credit: control.CreditExhausted, Billing: control.BillingOK}
 	f.restart(t)
-	result, err := f.runtime.GenerateStepV1(context.Background(), f.request)
-	boundedState(t, result, err, llm.ExecutionProviderCompleted)
-	if f.submits.Load() != 1 {
-		t.Fatal("mismatched route status blocked the candidate")
-	}
+	f.step(t, context.Background(), f.request, llm.ExecutionProviderCompleted)
+	requireCount(t, &f.submits, 1, "mismatched route status blocked the candidate")
 }
 
 // The reported configuration: two models, each with a route "primary" on a
@@ -250,10 +237,7 @@ func TestCloudRouteHealthIgnoresMismatchedIdentity(t *testing.T) {
 // the cloud recorder, and then asks route health about the second model.
 func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 	read := func(name string) string {
-		data, err := os.ReadFile(filepath.Join("../../deploy/local", name))
-		if err != nil {
-			t.Fatal(err)
-		}
+		data := mustReadFile(t, filepath.Join("../../deploy/local", name))
 		return string(data)
 	}
 	data, prices := read("config.yaml"), read("prices.yaml")
@@ -281,10 +265,7 @@ func TestCloudRouteHealthConfiguredDuplicateRouteIDs(t *testing.T) {
 		}
 		data = strings.ReplaceAll(data, "/etc/llmtw/"+name, path)
 	}
-	compiled, err := config.Compile(context.Background(), []byte(data), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := mustCompileConfig(t, []byte(data))
 	now := time.Date(2026, 10, 4, 1, 0, 0, 0, time.UTC)
 	loaded, err := (CatalogSnapshotLoader{Clock: func() time.Time { return now }}).Load(context.Background(), compiled)
 	if err != nil {
@@ -420,10 +401,7 @@ func TestCloudRouteHealthTransitionsAreCountedAndLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	var logs strings.Builder
-	logger, err := observability.NewLogger(observability.LogOptions{Format: "json", Output: &logs})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Format: "json", Output: &logs})
 	ctx := observability.WithLogger(observability.WithMetrics(context.Background(), metrics), logger)
 	shared := &keyedHealthFixture{}
 	recordOutcome := routeOutcomeRecorder(ctx, shared, digest, &now)

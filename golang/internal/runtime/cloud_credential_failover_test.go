@@ -89,17 +89,14 @@ func TestCloudCredentialRejectionFailsOverToAnotherRoute(t *testing.T) {
 				t.Fatalf("rejection = %+v, want a retryable %s", v, test.code)
 			}
 			ref := f.ref(v)
-			v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-			boundedState(t, v, err, llm.ExecutionAcquired)
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
+			f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+			f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 			// Past the ordinary cooldown, a new request still skips the
 			// rejected route instead of failing on it again.
 			f.now = f.now.Add(time.Minute)
 			f.restart(t)
 			f.request.OperationKey = "after-rejection"
-			v, err = f.runtime.GenerateStepV1(ctx, f.request)
-			boundedState(t, v, err, llm.ExecutionProviderCompleted)
+			v = f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 			if got := calls(); got["endpoint"] != 1 || got["alternate-endpoint"] != 2 {
 				t.Fatalf("calls = %v, want one rejected call and the rest on the alternate", got)
 			}
@@ -146,13 +143,10 @@ func TestCloudCredentialRejectionExhaustsAttempts(t *testing.T) {
 	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	ref := f.ref(v)
 	f.now = f.now.Add(2 * time.Second)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+	f.step(t, ctx, f.request, llm.ExecutionFailed)
 	f.now = f.now.Add(2 * time.Second)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	v = f.acquire(t, ctx, ref, llm.ExecutionFailed)
 	if v.Retryable || v.ErrorCode != string(provider.CodeAuthentication) || v.FailureCode != "provider_rejected" {
 		t.Fatalf("exhausted result = %+v, want the terminal authentication failure", v)
 	}

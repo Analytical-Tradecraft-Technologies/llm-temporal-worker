@@ -15,7 +15,7 @@ import (
 func rejectedReload(t *testing.T, references config.ReferenceResolver, clients func(context.Context, *config.Snapshot) (app.ClientSet, error)) error {
 	t.Helper()
 	reloading := false
-	application, err := app.New(context.Background(), app.Options{
+	application := newTestApp(t, app.Options{
 		InitialConfig: replacementTestConfig(t, func(*config.Config) {}),
 		Builder: app.SnapshotBuilder{References: config.ReferenceResolverFunc(func(ctx context.Context, value *config.Config) error {
 			if !reloading || references == nil {
@@ -30,12 +30,8 @@ func rejectedReload(t *testing.T, references config.ReferenceResolver, clients f
 			return app.ClientSetFunc(func(context.Context) error { return nil }), nil
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = application.Close(context.Background()) })
 	reloading = true
-	err = application.Reload(context.Background(), replacementTestConfig(t, func(value *config.Config) { value.Limits.Items++ }))
+	err := application.Reload(context.Background(), replacementTestConfig(t, func(value *config.Config) { value.Limits.Items++ }))
 	if err == nil {
 		t.Fatal("reload unexpectedly succeeded")
 	}

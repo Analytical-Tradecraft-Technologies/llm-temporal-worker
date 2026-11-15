@@ -15,10 +15,7 @@ import (
 func TestRedisDependencyProbeChecksEveryConfiguredPolicyWithoutMutation(t *testing.T) {
 	client := healthyRedisProbeClient()
 	probe, err := NewRedisDependencyProbe(client, testRedisProbeConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := probe.Probe(context.Background())
+	result := probeResult(t, probe, err)
 	if result.Dependency != DependencyRedis || result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
 		t.Fatalf("healthy Redis result = %#v", result)
 	}
@@ -39,10 +36,7 @@ func TestRedisDependencyProbeVerifiesActiveBudgetGenerationWhenConfigured(t *tes
 	client := healthyRedisProbeClient()
 	generation := &fakeBudgetGenerationProbe{}
 	probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+	if result := probeResult(t, probe, err); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
 		t.Fatalf("durable Redis result = %#v", result)
 	}
 	if generation.activeCalls != 1 || generation.manifestCalls != 1 {
@@ -60,10 +54,7 @@ func TestRedisDependencyProbeRejectsUnvalidatedActiveBudgetManifest(t *testing.T
 	generation := &fakeBudgetGenerationProbe{manifest: manifest, active: pointer}
 	generation.manifest.RebuildComplete = false
 	probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := probe.Probe(context.Background())
+	result := probeResult(t, probe, err)
 	if result.Dependency != DependencyRedis || result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
 		t.Fatalf("unvalidated generation manifest result = %#v", result)
 	}
@@ -73,25 +64,10 @@ func TestRedisDependencyProbeRejectsUnvalidatedActiveBudgetManifest(t *testing.T
 }
 
 func TestRedisDependencyProbeValidatesEnabledCoordinationStream(t *testing.T) {
-	value := testRedisProbeConfig()
-	enabled := true
-	value.CoordinationStreamEnabled = &enabled
-	value.StreamTrimSafety = config.Duration(time.Minute)
-	client := healthyRedisProbeClient()
-	client.streamType = "stream"
-	client.streamInfo = &redisclient.XInfoStream{
-		Length:            1,
-		EntriesAdded:      1,
-		LastGeneratedID:   "1-0",
-		MaxDeletedEntryID: "0-0",
-		FirstEntry:        redisclient.XMessage{ID: "1-0"},
-		LastEntry:         redisclient.XMessage{ID: "1-0"},
-	}
+	value := streamProbeConfig(time.Minute)
+	client := streamProbeClient()
 	probe, err := NewRedisDependencyProbeWithStream(client, value, "llm:events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+	if result := probeResult(t, probe, err); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
 		t.Fatalf("coordination stream result = %#v", result)
 	}
 	if client.typeCalls != 1 || client.streamInfoCalls != 1 {
@@ -113,26 +89,11 @@ func TestRedisDependencyProbeRejectsInvalidCoordinationStream(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			value := testRedisProbeConfig()
-			enabled := true
-			value.CoordinationStreamEnabled = &enabled
-			value.StreamTrimSafety = config.Duration(time.Minute)
-			client := healthyRedisProbeClient()
-			client.streamType = "stream"
-			client.streamInfo = &redisclient.XInfoStream{
-				Length:            1,
-				EntriesAdded:      1,
-				LastGeneratedID:   "1-0",
-				MaxDeletedEntryID: "0-0",
-				FirstEntry:        redisclient.XMessage{ID: "1-0"},
-				LastEntry:         redisclient.XMessage{ID: "1-0"},
-			}
+			value := streamProbeConfig(time.Minute)
+			client := streamProbeClient()
 			test.client(client)
 			probe, err := NewRedisDependencyProbeWithStream(client, value, "llm:events")
-			if err != nil {
-				t.Fatal(err)
-			}
-			result := probe.Probe(context.Background())
+			result := probeResult(t, probe, err)
 			if result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
 				t.Fatalf("invalid coordination stream result = %#v", result)
 			}
@@ -141,20 +102,14 @@ func TestRedisDependencyProbeRejectsInvalidCoordinationStream(t *testing.T) {
 }
 
 func TestRedisDependencyProbeRequiresCoordinationStreamKey(t *testing.T) {
-	value := testRedisProbeConfig()
-	enabled := true
-	value.CoordinationStreamEnabled = &enabled
-	value.StreamTrimSafety = config.Duration(time.Minute)
+	value := streamProbeConfig(time.Minute)
 	if _, err := NewRedisDependencyProbeWithStream(healthyRedisProbeClient(), value, ""); err == nil {
 		t.Fatal("enabled coordination stream unexpectedly accepted an empty key")
 	}
 }
 
 func TestRedisDependencyProbeRequiresOneSecondTrimSafety(t *testing.T) {
-	value := testRedisProbeConfig()
-	enabled := true
-	value.CoordinationStreamEnabled = &enabled
-	value.StreamTrimSafety = config.Duration(time.Nanosecond)
+	value := streamProbeConfig(time.Nanosecond)
 	if _, err := NewRedisDependencyProbeWithStream(healthyRedisProbeClient(), value, "llm:events"); err == nil {
 		t.Fatal("sub-second coordination stream trim safety unexpectedly accepted")
 	}
@@ -177,10 +132,7 @@ func TestRedisDependencyProbeFailsClosedForInvalidActiveBudgetGeneration(t *test
 			generation := &fakeBudgetGenerationProbe{}
 			test.set(generation)
 			probe, err := NewRedisDependencyProbeWithBudgetGeneration(client, testRedisProbeConfig(), generation)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result := probe.Probe(context.Background())
+			result := probeResult(t, probe, err)
 			if result.Dependency != DependencyRedis || result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
 				t.Fatalf("invalid generation result = %#v", result)
 			}
@@ -243,10 +195,7 @@ func TestRedisDependencyProbeRejectsEveryConfiguredPolicyMismatch(t *testing.T) 
 				test.client(client)
 			}
 			probe, err := NewRedisDependencyProbe(client, value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			result := probe.Probe(context.Background())
+			result := probeResult(t, probe, err)
 			if result.Status != ProbeStatusPolicy || result.Reason != ProbeReasonPolicyMismatch {
 				t.Fatalf("policy result = %#v", result)
 			}
@@ -274,10 +223,7 @@ func TestRedisDependencyProbeAcceptsEachConfiguredPersistencePolicy(t *testing.T
 			client.settings["appendonly"] = test.appendOnly
 			client.settings["save"] = test.save
 			probe, err := NewRedisDependencyProbe(client, value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
+			if result := probeResult(t, probe, err); result.Status != ProbeStatusReady || result.Reason != ProbeReasonReady {
 				t.Fatalf("%s probe result = %#v", test.persistence, result)
 			}
 		})
@@ -291,10 +237,7 @@ func TestRedisDependencyProbeLuaFallbackUsesPreloadedScript(t *testing.T) {
 	client := healthyRedisProbeClient()
 	client.scriptExists = []bool{true}
 	probe, err := NewRedisDependencyProbe(client, value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := probe.Probe(context.Background())
+	result := probeResult(t, probe, err)
 	if result.Status != ProbeStatusReady || client.scriptExistsCalls != 1 || client.functionListCalls != 0 {
 		t.Fatalf("Lua fallback result/calls = %#v script-exists=%d function-list=%d", result, client.scriptExistsCalls, client.functionListCalls)
 	}
@@ -389,37 +332,35 @@ func TestDependencyProbesBoundEachProbeWithContextDeadline(t *testing.T) {
 	}
 }
 
-func TestDependencyProbesRejectCanceledParentBeforeInvokingProbe(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	calls := 0
-	err := CheckDependencyProbes(ctx, []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult {
-		calls++
-		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
-	})}, time.Second)
-	if !errors.Is(err, errRequiredDependencyUnavailable) {
-		t.Fatalf("canceled probe gate error = %v", err)
-	}
-	if calls != 0 {
-		t.Fatalf("canceled probe gate invoked %d probes", calls)
-	}
-}
-
-func TestDependencyProbesRejectCancellationAfterProbeReturns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	calls := 0
-	err := CheckDependencyProbes(ctx, []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult {
-		calls++
-		// Model an injected implementation that completes successfully without
-		// observing its context. The gate must still fail closed.
-		cancel()
-		return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
-	})}, time.Second)
-	if !errors.Is(err, errRequiredDependencyUnavailable) {
-		t.Fatalf("canceled-after-probe gate error = %v", err)
-	}
-	if calls != 1 {
-		t.Fatalf("canceled-after-probe invoked %d probes, want 1", calls)
+// A canceled parent fails the gate closed, whether it is canceled before any
+// probe runs or by a probe that returns ready without observing its context.
+func TestDependencyProbesRejectCanceledParent(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		cancelFirst bool
+		wantCalls   int
+	}{
+		{name: "before probe", cancelFirst: true, wantCalls: 0},
+		{name: "after probe returns", wantCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if test.cancelFirst {
+				cancel()
+			}
+			calls := 0
+			err := CheckDependencyProbes(ctx, []DependencyProbe{DependencyProbeFunc(func(context.Context) ProbeResult {
+				calls++
+				cancel()
+				return ProbeResult{Dependency: DependencyRedis, Status: ProbeStatusReady, Reason: ProbeReasonReady}
+			})}, time.Second)
+			if !errors.Is(err, errRequiredDependencyUnavailable) {
+				t.Fatalf("canceled probe gate error = %v", err)
+			}
+			if calls != test.wantCalls {
+				t.Fatalf("canceled probe gate invoked %d probes, want %d", calls, test.wantCalls)
+			}
+		})
 	}
 }
 
@@ -956,10 +897,7 @@ func TestValidateRequiredDependencyProbeSetSelectsCloudBackendWithoutIO(t *testi
 func TestRedisDependencyProbeAcceptsDiscardedCoordinationHints(t *testing.T) {
 	for _, state := range []string{"absent", "evicted-during-probe", "trimmed"} {
 		t.Run(state, func(t *testing.T) {
-			value := testRedisProbeConfig()
-			enabled := true
-			value.CoordinationStreamEnabled = &enabled
-			value.StreamTrimSafety = config.Duration(time.Minute)
+			value := streamProbeConfig(time.Minute)
 			client := healthyRedisProbeClient()
 			client.streamType = "stream"
 			client.streamInfo = &redisclient.XInfoStream{Length: 1, EntriesAdded: 10000,
@@ -972,12 +910,44 @@ func TestRedisDependencyProbeAcceptsDiscardedCoordinationHints(t *testing.T) {
 				client.streamInfoErr = errors.New("ERR no such key")
 			}
 			probe, err := NewRedisDependencyProbeWithStream(client, value, "llm:events")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result := probe.Probe(context.Background()); result.Status != ProbeStatusReady {
+			if result := probeResult(t, probe, err); result.Status != ProbeStatusReady {
 				t.Fatalf("discarded hints blocked readiness: %#v", result)
 			}
 		})
 	}
+}
+
+// streamProbeConfig is the test Redis configuration with the coordination
+// stream enabled and trimSafety as its trim safety.
+func streamProbeConfig(trimSafety time.Duration) config.RedisConfig {
+	value := testRedisProbeConfig()
+	enabled := true
+	value.CoordinationStreamEnabled = &enabled
+	value.StreamTrimSafety = config.Duration(trimSafety)
+	return value
+}
+
+// streamProbeClient is a healthy Redis client whose coordination stream holds
+// one entry.
+func streamProbeClient() *fakeRedisProbeClient {
+	client := healthyRedisProbeClient()
+	client.streamType = "stream"
+	client.streamInfo = &redisclient.XInfoStream{
+		Length:            1,
+		EntriesAdded:      1,
+		LastGeneratedID:   "1-0",
+		MaxDeletedEntryID: "0-0",
+		FirstEntry:        redisclient.XMessage{ID: "1-0"},
+		LastEntry:         redisclient.XMessage{ID: "1-0"},
+	}
+	return client
+}
+
+// probeResult runs probe once, failing the test if building it returned err.
+func probeResult(t *testing.T, probe DependencyProbe, err error) ProbeResult {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return probe.Probe(context.Background())
 }

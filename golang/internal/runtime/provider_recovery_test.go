@@ -61,19 +61,13 @@ func TestProviderRecoveryRealCompilerRestoresBothActivitiesWithoutHTTP(t *testin
 				t.Fatal(err)
 			}
 			// The projection round-trips without SDK objects or the raw key.
-			data, err := json.Marshal(binding)
-			if err != nil {
-				t.Fatal(err)
-			}
+			data := encodeJSON(t, binding)
 			for _, value := range []string{"SDKParams", "Adapter", "sensitive prompt", "sensitive history", `"OperationKey"`} {
 				if strings.Contains(string(data), value) {
 					t.Fatal("recovery binding contains invocation-local data")
 				}
 			}
-			var stored ProviderRecoveryBinding
-			if err := json.Unmarshal(data, &stored); err != nil {
-				t.Fatal(err)
-			}
+			stored := decodeJSON[ProviderRecoveryBinding](t, data)
 			var restored PlannedProviderCall
 			if kind == "generate" {
 				restored, err = recovery.Generate(context.Background(), generate, stored)
@@ -104,9 +98,7 @@ func TestProviderRecoveryDoesNotSelectNewRouteOrFallBack(t *testing.T) {
 	second := &planningAdapter{version: first.version}
 	source.appendAliasRoute("second-route", "second-endpoint")
 	capabilities.Adapters = engine.AdapterMap{"endpoint": first, "second-endpoint": second}
-	first.compile = func(provider.CompileInput) (provider.Call, error) {
-		return provider.Call{}, errors.New("sensitive unavailable compiler")
-	}
+	first.compile = failCompile(errors.New("sensitive unavailable compiler"))
 	planning := mustProviderPlanning(t, capabilities)
 	prepared := mustPrepareGenerate(t, request)
 	original, err := planning.Generate(context.Background(), prepared)
@@ -133,9 +125,7 @@ func TestProviderRecoveryDoesNotSelectNewRouteOrFallBack(t *testing.T) {
 	if err != nil || restored.Candidate != original.Candidate || len(first.inputs) != 0 || len(second.inputs) != 1 {
 		t.Fatalf("recovery changed the selected route: %v", err)
 	}
-	second.compile = func(provider.CompileInput) (provider.Call, error) {
-		return provider.Call{}, errors.New("sensitive local failure")
-	}
+	second.compile = failCompile(errors.New("sensitive local failure"))
 	_, err = recovery.Generate(context.Background(), prepared, binding)
 	assertRecoveryError(t, err, provider.CodeStateUnavailable, provider.RetrySameOperation)
 	if !reflect.DeepEqual(lookups, []string{"second-endpoint", "second-endpoint"}) || len(first.inputs) != 0 {
@@ -303,9 +293,7 @@ func TestProviderRecoveryCompilerFailuresNeverBecomeFallbackOrPermission(t *test
 			case "capability":
 				adapter.capabilityErr = errors.New("sensitive capability error")
 			case "compile":
-				adapter.compile = func(provider.CompileInput) (provider.Call, error) {
-					return provider.Call{}, errors.New("sensitive compile error")
-				}
+				adapter.compile = failCompile(errors.New("sensitive compile error"))
 			case "nil adapter":
 				code, retry = provider.CodeConfiguration, provider.RetryNever
 				capabilities.Adapters = engine.AdapterMap{"endpoint": (*planningAdapter)(nil)}
@@ -320,9 +308,7 @@ func TestProviderRecoveryCompilerFailuresNeverBecomeFallbackOrPermission(t *test
 					return call, nil
 				}
 			case "possible dispatch":
-				adapter.compile = func(provider.CompileInput) (provider.Call, error) {
-					return provider.Call{}, provider.NewError(provider.CodeInternal, provider.PhaseCompile, provider.DispatchAccepted, provider.RetryNextRoute, "sensitive paid result")
-				}
+				adapter.compile = failCompile(provider.NewError(provider.CodeInternal, provider.PhaseCompile, provider.DispatchAccepted, provider.RetryNextRoute, "sensitive paid result"))
 			case "canceled compile":
 				adapter.compile = func(input provider.CompileInput) (provider.Call, error) { cancel(); return planningCall(input), nil }
 			}

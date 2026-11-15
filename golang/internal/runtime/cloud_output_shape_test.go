@@ -110,11 +110,7 @@ func TestCloudGenerateUnusableOutputFailsTerminally(t *testing.T) {
 			if v.FailureCode != "incomplete_response" || v.Retryable {
 				t.Fatalf("failure = %+v", v)
 			}
-			scope := cloudstate.Scope{Tenant: "tenant", Project: "project"}
-			attempt, err := f.repository.LoadRequestAttempt(ctx, scope, cloudstate.RequestID(v.RequestID))
-			if err != nil {
-				t.Fatal(err)
-			}
+			_, scope, attempt := f.firstAttempt(t, ctx, v)
 			assertCloudStatus(t, f, attempt.ID, cloudstate.StatusFailed)
 			assertCloudStatus(t, f, attempt.RootID, cloudstate.StatusFailed)
 			saved, err := f.repository.LoadProviderExecution(ctx, scope, attempt.ID)
@@ -174,8 +170,7 @@ func TestCloudGenerateOutputShapeAfterPoll(t *testing.T) {
 	f.continueFrom(second, "third", outputShapeResult(id))
 	ctx, v := f.generateStep(t, llm.ExecutionPending)
 	f.now = f.now.Add(2 * time.Second)
-	v, err := f.runtime.PollExecutionV1(ctx, f.ref(v))
-	boundedState(t, v, err, llm.ExecutionFailed)
+	v = f.poll(t, ctx, f.ref(v), llm.ExecutionFailed)
 	if v.FailureCode != "incomplete_response" || f.submits.Load() != 3 {
 		t.Fatalf("failure=%+v submits=%d", v, f.submits.Load())
 	}

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -62,14 +61,8 @@ func TestProductionFactoryResponsesAdaptersReplayReasoningStatelessly(t *testing
 				if err != nil {
 					t.Fatalf("Compile() error = %v", err)
 				}
-				encoded, err := json.Marshal(call.SDKParams)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var wire map[string]any
-				if err := json.Unmarshal(encoded, &wire); err != nil {
-					t.Fatal(err)
-				}
+				encoded := encodeJSON(t, call.SDKParams)
+				wire := decodeJSON[map[string]any](t, encoded)
 				return wire
 			}
 			replayed := func(wire map[string]any) []map[string]any {

@@ -58,10 +58,8 @@ func TestCloudRetryAfterDoesNotDelayFailover(t *testing.T) {
 		t.Fatal("rate limit not retryable")
 	}
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionProviderCompleted)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
+	v = f.step(t, ctx, f.request, llm.ExecutionProviderCompleted)
 	if got := calls(); got["endpoint"] != 1 || got["alternate-endpoint"] != 1 {
 		t.Fatalf("calls = %v, want one per route", got)
 	}
@@ -75,22 +73,18 @@ func TestCloudRetryAfterHoldsTheHintedRoute(t *testing.T) {
 	f.restart(t)
 	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	f.now = f.now.Add(time.Minute)
-	v, err = f.runtime.GenerateStepV1(ctx, f.request)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	f.step(t, ctx, f.request, llm.ExecutionFailed)
 	// The third attempt returns to the first route, still 59 minutes into its
 	// hour; the second route's own hint is a minute longer.
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionBudgetWait)
+	v = f.acquire(t, ctx, ref, llm.ExecutionBudgetWait)
 	if v.RetryAfterSeconds != 59*60 {
 		t.Fatalf("retry after = %d, want the first route's remaining hint", v.RetryAfterSeconds)
 	}
 	// After the hint and an unused quote renewal, the first route is retried.
 	f.now = f.now.Add(59 * time.Minute)
-	v, err = f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionAcquired)
+	v = f.acquire(t, ctx, ref, llm.ExecutionAcquired)
 	if got := calls(); got["endpoint"] != 1 || got["alternate-endpoint"] != 1 {
 		t.Fatalf("calls = %v, want no dispatch before the hint", got)
 	}
@@ -110,12 +104,9 @@ func TestCloudExhaustionDoesNotWaitForRetryAfter(t *testing.T) {
 	}
 	ctx, v := f.generateStep(t, llm.ExecutionFailed)
 	ref := f.ref(v)
-	v, err := f.runtime.AcquireBudgetV1(ctx, ref)
-	boundedState(t, v, err, llm.ExecutionFailed)
+	v = f.acquire(t, ctx, ref, llm.ExecutionFailed)
 	if v.Retryable || v.ErrorCode != string(provider.CodeProviderRateLimited) {
 		t.Fatalf("exhausted result = %+v, want the terminal rate limit", v)
 	}
-	if f.submits.Load() != 1 {
-		t.Fatal("exhausted request submitted again")
-	}
+	requireCount(t, &f.submits, 1, "exhausted request submitted again")
 }

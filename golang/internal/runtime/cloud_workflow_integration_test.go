@@ -279,8 +279,7 @@ func exerciseCloudWorkflowLifecycle(t *testing.T, async, aws bool) {
 	h := newLiveCloudWorkflow(t, async, aws)
 	request := h.fixture.request
 	request.Cache = &llm.CachePolicyV1{}
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&request)
 	stop := h.startWorker(t)
 	run := h.start(t, workflows.GenerateWorkflowName, request)
 	if async {
@@ -403,8 +402,7 @@ func TestCloudWorkflowLiveBudgetWait(t *testing.T) {
 	h := newLiveCloudWorkflow(t, false, false)
 	f := h.fixture
 	f.restart(t)
-	prepared, err := f.runtime.PrepareExecutionV1(h.ctx, llm.PrepareExecutionV1{Generate: &f.request})
-	boundedState(t, prepared, err, llm.ExecutionBudgetRequired)
+	prepared := f.prepare(t, h.ctx, llm.PrepareExecutionV1{Generate: &f.request}, llm.ExecutionBudgetRequired)
 	_, scope, attempt := f.firstAttempt(t, h.ctx, prepared)
 	plan, err := f.repository.LoadBudgetPlan(h.ctx, scope, attempt.ID)
 	if err != nil {
@@ -427,9 +425,7 @@ func TestCloudWorkflowLiveBudgetWait(t *testing.T) {
 	case <-h.ctx.Done():
 		t.Fatal("budget activity did not return wait")
 	}
-	if f.submits.Load() != 0 {
-		t.Fatal("provider called before budget became available")
-	}
+	requireCount(t, &f.submits, 0, "provider called before budget became available")
 	leaser := f.cap.Budgets.(durable.BudgetLeaser)
 	if _, err := leaser.Claim(h.ctx, durable.ClaimRequest{OperationID: blocker.OperationID, GenerationID: blocker.GenerationID, IncarnationID: reserved.IncarnationID}); err != nil {
 		t.Fatal(err)

@@ -83,10 +83,7 @@ func TestCloudRequestPreparationConcurrentCompletion(t *testing.T) {
 			for _, outcome := range []string{"completed", "still-running", "changed-input"} {
 				t.Run(kind+"/"+method+"/"+outcome, func(t *testing.T) {
 					p, store, materializer, input := cloudPreparationFixture(t, kind)
-					first, err := p.Prepare(context.Background(), input)
-					if err != nil {
-						t.Fatal(err)
-					}
+					first := mustPrepare(t, p, input)
 					calls := materializer.calls
 					materializer.err = state.ErrExpired
 					store.loadErr = contracts.ErrUnavailable
@@ -100,6 +97,7 @@ func TestCloudRequestPreparationConcurrentCompletion(t *testing.T) {
 						}
 					}
 					var result PreparedCloudRequest
+					var err error
 					if method == "prepare" {
 						result, err = p.Prepare(context.Background(), input)
 					} else {
@@ -161,6 +159,16 @@ func cloudPreparationFixture(t *testing.T, kind string) (*CloudRequestPreparatio
 	return helper, store, materializer, input
 }
 
+// mustPrepare prepares input through p or fails the test.
+func mustPrepare(t *testing.T, p *CloudRequestPreparation, input llm.PrepareExecutionV1) PreparedCloudRequest {
+	t.Helper()
+	prepared, err := p.Prepare(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
+}
+
 // preparationTestKeyring issues the reference capabilities of preparation
 // fixtures.
 var preparationTestKeyring = func() *state.Keyring {
@@ -184,10 +192,7 @@ func TestCloudRequestPreparationSurvivesParentExpiryAndProcessRestart(t *testing
 	for _, kind := range []string{"root", "generate", "compact"} {
 		t.Run(kind, func(t *testing.T) {
 			p, store, m, input := cloudPreparationFixture(t, kind)
-			first, err := p.Prepare(context.Background(), input)
-			if err != nil {
-				t.Fatal(err)
-			}
+			first := mustPrepare(t, p, input)
 			wantCalls := 1
 			if kind == "root" {
 				wantCalls = 0
@@ -221,10 +226,7 @@ func TestCloudRequestPreparationAuthorizesBeforeAnyStorageAccess(t *testing.T) {
 	for _, completed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "running", true: "completed"}[completed], func(t *testing.T) {
 			p, store, _, input := cloudPreparationFixture(t, "generate")
-			first, err := p.Prepare(context.Background(), input)
-			if err != nil {
-				t.Fatal(err)
-			}
+			first := mustPrepare(t, p, input)
 			if completed {
 				store.record.Status = cloudstate.StatusCompleted
 			}
@@ -265,9 +267,7 @@ func TestCloudRequestPreparationFailsClosedOnStorageAndBindingErrors(t *testing.
 		p, store, m, input := cloudPreparationFixture(t, "generate")
 		// An already-running operation without preparation: a storage fault
 		// must not be treated as a miss that rematerializes the parent.
-		if _, err := p.Prepare(context.Background(), input); err != nil {
-			t.Fatal(err)
-		}
+		mustPrepare(t, p, input)
 		store.data, store.saves, m.calls = nil, 0, 0
 		store.loadErr = fault
 		if _, err := p.Prepare(context.Background(), input); err == nil || m.calls != 0 || store.saves != 0 {
@@ -276,10 +276,7 @@ func TestCloudRequestPreparationFailsClosedOnStorageAndBindingErrors(t *testing.
 	}
 	for _, mutation := range []func(*cloudstate.RequestPreparation){func(p *cloudstate.RequestPreparation) { p.CheckpointScope = "other" }, func(p *cloudstate.RequestPreparation) { p.ParentSnapshot = nil }, func(p *cloudstate.RequestPreparation) { p.PreparedAt = p.PreparedAt.Add(-time.Hour) }} {
 		p, store, m, input := cloudPreparationFixture(t, "generate")
-		first, err := p.Prepare(context.Background(), input)
-		if err != nil {
-			t.Fatal(err)
-		}
+		first := mustPrepare(t, p, input)
 		var changed cloudstate.RequestPreparation
 		_ = json.Unmarshal(store.data, &changed)
 		mutation(&changed)
@@ -300,10 +297,7 @@ func TestCloudRequestPreparationInvalidSemanticInputIsNotSaved(t *testing.T) {
 
 func TestCloudRequestPreparationCompletedReplayNeedsNoParent(t *testing.T) {
 	p, store, m, input := cloudPreparationFixture(t, "generate")
-	first, err := p.Prepare(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := mustPrepare(t, p, input)
 	store.record.Status = cloudstate.StatusCompleted
 	store.data = nil
 	store.loadErr = errors.New("must not read preparation")
@@ -316,10 +310,7 @@ func TestCloudRequestPreparationCompletedReplayNeedsNoParent(t *testing.T) {
 
 func TestCloudRequestPreparationRejectsWrongSampleButRestoresAcrossConfiguration(t *testing.T) {
 	p, store, _, input := cloudPreparationFixture(t, "generate")
-	prepared, err := p.Prepare(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	prepared := mustPrepare(t, p, input)
 	store.record.Request.RequestIndex++
 	if _, err := p.Load(context.Background(), referenceFor(prepared)); err == nil {
 		t.Fatal("accepted inconsistent sample")
@@ -336,10 +327,7 @@ func TestCloudRequestPreparationRejectsWrongSampleButRestoresAcrossConfiguration
 func TestCloudRequestPreparationRecoversInputWhileProviderIsPendingOrUnknown(t *testing.T) {
 	for _, status := range []cloudstate.Status{cloudstate.StatusProviderPending, cloudstate.StatusOutcomeUnknown} {
 		p, store, m, input := cloudPreparationFixture(t, "generate")
-		prepared, err := p.Prepare(context.Background(), input)
-		if err != nil {
-			t.Fatal(err)
-		}
+		prepared := mustPrepare(t, p, input)
 		store.record.Status = status
 		m.err = state.ErrExpired
 		if _, err := p.Load(context.Background(), referenceFor(prepared)); err != nil || m.calls != 1 {
@@ -450,8 +438,7 @@ func TestCloudExecutionRuntimeRejectedPrepareLeavesNothingPending(t *testing.T) 
 				}
 			}
 			// Nothing was bound to the key, so corrected input can still use it.
-			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &valid})
-			boundedState(t, v, err, llm.ExecutionBudgetRequired)
+			f.prepare(t, ctx, llm.PrepareExecutionV1{Generate: &valid}, llm.ExecutionBudgetRequired)
 		})
 	}
 }
@@ -466,10 +453,7 @@ func TestCloudProjectDefaultIsPinnedWithoutChangingCallerInput(t *testing.T) {
 			}
 			p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: catalog}}
 			original, _ := json.Marshal(input)
-			first, err := p.Prepare(context.Background(), input)
-			if err != nil {
-				t.Fatal(err)
-			}
+			first := mustPrepare(t, p, input)
 			if kind == "root" {
 				prepared, err := first.generateInput(context.Background())
 				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
@@ -480,10 +464,7 @@ func TestCloudProjectDefaultIsPinnedWithoutChangingCallerInput(t *testing.T) {
 				}
 				// A new configuration cannot change an already prepared operation.
 				p.source = engine.StaticSnapshot{Value: engine.Snapshot{}}
-				again, err := p.Prepare(context.Background(), input)
-				if err != nil {
-					t.Fatal(err)
-				}
+				again := mustPrepare(t, p, input)
 				prepared, err = again.generateInput(context.Background())
 				if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
 					t.Fatal("retry changed default")
@@ -512,10 +493,7 @@ func TestCloudProjectDefaultPreservesExplicitTier(t *testing.T) {
 		p, _, _, input := cloudPreparationFixture(t, "root")
 		p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: routing.Catalog{ClassPolicies: []routing.ClassPolicy{{DefaultClass: llm.ServiceClassEconomy}}}}}
 		input.Generate.SettingsPatch.ServiceClass.Set = &class
-		prepared, err := p.Prepare(context.Background(), input)
-		if err != nil {
-			t.Fatal(err)
-		}
+		prepared := mustPrepare(t, p, input)
 		semantic, err := prepared.generateInput(context.Background())
 		if err != nil || semantic.Request.ServiceClass != class || prepared.Preparation.DefaultServiceClass != "" {
 			t.Fatalf("explicit %s replaced: %v", class, err)
@@ -528,10 +506,7 @@ func TestCloudProjectDefaultPreservesExplicitClear(t *testing.T) {
 	p.source = engine.StaticSnapshot{Value: engine.Snapshot{Routes: routing.Catalog{ClassPolicies: []routing.ClassPolicy{{DefaultClass: llm.ServiceClassEconomy}}}}}
 	input.Generate.SettingsPatch.ServiceClass.Set = nil
 	input.Generate.SettingsPatch.ServiceClass.Clear = true
-	prepared, err := p.Prepare(context.Background(), input)
-	if err != nil {
-		t.Fatal(err)
-	}
+	prepared := mustPrepare(t, p, input)
 	semantic, err := prepared.generateInput(context.Background())
 	if err != nil || semantic.Request.ServiceClass != llm.ServiceClassStandard || prepared.Preparation.DefaultServiceClass != "" {
 		t.Fatalf("explicit clear replaced: %v", err)

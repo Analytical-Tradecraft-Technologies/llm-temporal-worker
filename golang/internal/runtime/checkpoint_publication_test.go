@@ -64,10 +64,7 @@ func (s *publicationStore) Read(_ context.Context, scope string, ref state.Check
 }
 func publicationFixture(t *testing.T) (*CheckpointPublication, *CheckpointReplay, *publicationStore, CheckpointPublicationIdentity, llm.GenerateRequestV1, llm.Response) {
 	t.Helper()
-	keys, err := state.NewKeyring([]state.Key{{ID: "test", Primary: true, Secret: bytes.Repeat([]byte{7}, 32)}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := testKeyring(t, state.Key{ID: "test", Primary: true, Secret: bytes.Repeat([]byte{7}, 32)})
 	now := time.Date(2026, 9, 25, 1, 0, 0, 0, time.UTC)
 	store := &publicationStore{rows: map[state.CheckpointID]state.DurableCheckpoint{}, blobs: map[string][]byte{}}
 	materializer := &state.DurableCheckpointMaterializer{Repository: store, Blobs: store, HandleVerifier: keys, Now: func() time.Time { return now }}
@@ -115,10 +112,7 @@ func TestCheckpointPublicationGenerationRoundTripAndFork(t *testing.T) {
 	request.OperationKey = "child"
 	request.SettingsPatch = llm.SettingsPatchV1{}
 	request.Append = []llm.Item{llm.HumanText("follow up")}
-	base, err := replay.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustReplayGenerate(t, replay, request)
 	if base.State.Tenant != "tenant" || base.State.Project != "project" || base.State.Settings.TemperatureDecimal.String() != "0.123456789012345678" || len(base.State.Items) != 2 {
 		t.Fatal("lost authorized scope, exact settings or transcript", base)
 	}
@@ -209,10 +203,7 @@ func TestCheckpointPublicationCompactionRoundTrip(t *testing.T) {
 			}
 			store.rows[cp.ID] = cp
 			generate := llm.GenerateRequestV1{OperationKey: "after", Context: req.Context, Parent: &out.Checkpoint.Handle}
-			next, err := replay.Generate(context.Background(), generate)
-			if err != nil {
-				t.Fatal(err)
-			}
+			next := mustReplayGenerate(t, replay, generate)
 			want := base.State.Items
 			if !noWork {
 				want = append([]llm.Item{compaction.SummaryItem(text)}, prepared.Selection.Retained...)
@@ -244,9 +235,7 @@ func TestCheckpointPublicationCacheHitMakesDistinctZeroCostChild(t *testing.T) {
 	assertOriginCost(t, out.Diagnostics, originResponse.OperationID, *originResponse.Cost.ActualCostUSD)
 	store.rows[child.ID] = child
 	req.Parent = &out.Checkpoint.Handle
-	if _, err := replay.Generate(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
+	mustReplayGenerate(t, replay, req)
 }
 
 func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) {
@@ -294,10 +283,7 @@ func TestCheckpointPublicationCachedCompactionKeepsConsumerSuffix(t *testing.T) 
 	assertOriginCost(t, response.Diagnostics, originResponse.OperationID, *originResponse.Cost.ActualCostUSD)
 	store.rows[cp.ID] = cp
 	request.Parent = &response.Checkpoint.Handle
-	next, err := replay.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	next := mustReplayGenerate(t, replay, request)
 	want := append([]llm.Item{compaction.SummaryItem(publishedSummaryText(t, result))}, prepared.Selection.Retained...)
 	if !reflect.DeepEqual(next.State.Items, want) || !reflect.DeepEqual(next.State.Settings, base.State.Settings) {
 		t.Fatal("cached compaction lost consumer state")
@@ -359,10 +345,7 @@ func TestCheckpointPublicationSnapshotCadence(t *testing.T) {
 	request.OperationKey = "child"
 	request.SettingsPatch = llm.SettingsPatchV1{}
 	request.Append = []llm.Item{llm.HumanText("follow up")}
-	base, err := replay.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	base := mustReplayGenerate(t, replay, request)
 	transcript, err := state.CheckpointBlobCodec{}.EncodeDelta(append(append(append([]llm.Item(nil), base.State.Items...), request.Append...), result.Output...))
 	if err != nil {
 		t.Fatal(err)
@@ -425,12 +408,20 @@ func TestPublicationRetainsConfiguredRootClassInCheckpoint(t *testing.T) {
 	request.Parent = &published.Checkpoint.Handle
 	request.OperationKey = "next"
 	request.SettingsPatch = llm.SettingsPatchV1{}
-	inherited, err := replay.Generate(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	inherited := mustReplayGenerate(t, replay, request)
 	prepared, err := PrepareGenerateInput(context.Background(), request, inherited)
 	if err != nil || prepared.Request.ServiceClass != llm.ServiceClassEconomy {
 		t.Fatalf("checkpoint lost configured default: %+v, %v", prepared.Request, err)
 	}
+}
+
+// mustReplayGenerate replays request's parent through replay or fails the
+// test.
+func mustReplayGenerate(t *testing.T, replay *CheckpointReplay, request llm.GenerateRequestV1) durable.GenerateReplay {
+	t.Helper()
+	result, err := replay.Generate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

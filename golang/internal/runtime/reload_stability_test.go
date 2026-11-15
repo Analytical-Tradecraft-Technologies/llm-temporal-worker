@@ -17,7 +17,14 @@ import (
 // test, so each observation is an explicit poll call.
 func manualConfigFileWatcher(t *testing.T, path string, baseline []byte) *configFileWatcher {
 	t.Helper()
-	watcher, err := newConfigFileWatcherWithBaseline(path, time.Hour, baseline)
+	return pollingConfigFileWatcher(t, path, time.Hour, baseline)
+}
+
+// pollingConfigFileWatcher returns a watcher of path that polls every
+// interval against baseline and closes when the test ends.
+func pollingConfigFileWatcher(t *testing.T, path string, interval time.Duration, baseline []byte) *configFileWatcher {
+	t.Helper()
+	watcher, err := newConfigFileWatcherWithBaseline(path, interval, baseline)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,8 +49,7 @@ func writeConfigFile(t *testing.T, path, content string) {
 }
 
 func TestConfigFileWatcherNotifiesOnlyAfterTwoEqualPolls(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	writeConfigFile(t, path, "first")
+	path := tempConfigFile(t, "first")
 	watcher := manualConfigFileWatcher(t, path, []byte("first"))
 
 	watcher.poll()
@@ -72,8 +78,7 @@ func TestConfigFileWatcherNotifiesOnlyAfterTwoEqualPolls(t *testing.T) {
 }
 
 func TestConfigFileWatcherReobservesAfterALateReadSawOtherContent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	writeConfigFile(t, path, "stable")
+	path := tempConfigFile(t, "stable")
 	watcher := manualConfigFileWatcher(t, path, []byte("stable"))
 
 	if watcher.settled([]byte("stab")) {
@@ -91,8 +96,7 @@ func TestConfigFileWatcherReobservesAfterALateReadSawOtherContent(t *testing.T) 
 }
 
 func TestConfigFileWatcherDefersStartupReplacementUntilStable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	writeConfigFile(t, path, "version: replacement\n")
+	path := tempConfigFile(t, "version: replacement\n")
 	watcher := manualConfigFileWatcher(t, path, []byte("version: initial\n"))
 	if watcherNotified(watcher) {
 		t.Fatal("startup replacement was notified before it was seen stable")
@@ -152,12 +156,8 @@ func TestWatchedReloadNeverPublishesAFileCaughtMidWrite(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
 	data := runtimeConfig(t)
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	writeConfigFile(t, path, string(data))
-	runtime, err := New(context.Background(), data, testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := tempConfigFile(t, string(data))
+	runtime := mustNewRuntime(t, data, testRuntimeOptions(t, controller, &closed))
 	watcher := manualConfigFileWatcher(t, path, data)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -266,8 +266,7 @@ func TestConfigValidationAgreesWithBudgetCompilationBounds(t *testing.T) {
 // must not exempt the bytes that reload read before the signal; the bypass
 // belongs to the reload the signal queues.
 func TestWatchedReloadGateBindsSIGHUPToTheReloadItQueues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	writeConfigFile(t, path, "stable")
+	path := tempConfigFile(t, "stable")
 	gate := &watchedReloadGate{watcher: manualConfigFileWatcher(t, path, []byte("stable"))}
 
 	watcherReload := gate.begin()
@@ -281,4 +280,13 @@ func TestWatchedReloadGateBindsSIGHUPToTheReloadItQueues(t *testing.T) {
 	if gate.begin() == nil {
 		t.Fatal("one SIGHUP exempted more than one reload")
 	}
+}
+
+// tempConfigFile writes content to a config.yaml in a fresh temporary
+// directory and returns its path.
+func tempConfigFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfigFile(t, path, content)
+	return path
 }

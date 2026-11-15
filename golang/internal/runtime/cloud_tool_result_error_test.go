@@ -60,10 +60,7 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 				`"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15}}`))}, nil
 	})})
 	f.cap.Adapters = engine.AdapterMap{"endpoint": adapter}
-	handle := parent.Generate.Checkpoint.Handle
-	f.request.Parent = &handle
-	f.request.OperationKey = "tool-error-turn"
-	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.continueTurn(parent.Generate.Checkpoint.Handle, "tool-error-turn")
 	f.request.Append = []llm.Item{llm.ToolResult{CallID: "call-1", Name: "lookup", Content: []llm.Part{llm.TextPart{Text: "upstream timed out"}}, IsError: true}}
 	f.now = f.now.Add(time.Second)
 	f.restart(t)
@@ -80,14 +77,10 @@ func TestCloudExecutionToolResultErrorReachesResponsesProvider(t *testing.T) {
 // byte limit but not with the prefix has to be compacted first.
 func TestCloudGenerationPlanCountsToolResultErrorPrefix(t *testing.T) {
 	f := toolCallingCloud(t)
-	policy := json.RawMessage(`{"recent_turns":0}`)
-	f.request.SettingsPatch.CompactionPolicy.Set = &policy
+	keepNoRecentTurns(&f.request)
 	f.restart(t)
 	parent := f.finish(t)
-	handle := parent.Generate.Checkpoint.Handle
-	f.request.Parent = &handle
-	f.request.OperationKey = "tool-error-plan"
-	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.continueTurn(parent.Generate.Checkpoint.Handle, "tool-error-plan")
 	f.now = f.now.Add(time.Second)
 	f.restart(t)
 	planningAttempt := 0

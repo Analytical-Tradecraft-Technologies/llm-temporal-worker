@@ -207,9 +207,7 @@ func TestRuntimeMetricsSurfaceMatchesListenerConfiguration(t *testing.T) {
 			if got := runtime.MetricsServer != nil; got != test.wantMetricsServer {
 				t.Fatalf("metrics server presence = %v, want %v", got, test.wantMetricsServer)
 			}
-			if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/metrics"); got != test.wantHealthStatus {
-				t.Fatalf("health listener /metrics status = %d, want %d", got, test.wantHealthStatus)
-			}
+			requireHealthStatus(t, runtime, "/metrics", test.wantHealthStatus, "health listener /metrics status")
 			if runtime.MetricsServer != nil {
 				if got := runtimeHealthStatus(t, runtime.MetricsServer.Addr(), "/metrics"); got != http.StatusOK {
 					t.Fatalf("metrics listener /metrics status = %d, want %d", got, http.StatusOK)
@@ -224,10 +222,7 @@ func TestRuntimeStartFailsClosedWithoutV1Runtime(t *testing.T) {
 	var closed atomic.Bool
 	options := testRuntimeOptions(t, controller, &closed)
 	options.V1Runtime = nil
-	runtime, err := New(context.Background(), runtimeConfig(t), options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, runtimeConfig(t), options)
 	if err := runtime.Run(context.Background()); !errors.Is(err, ErrV1RuntimeUnavailable) {
 		t.Fatalf("Run error = %v, want ErrV1RuntimeUnavailable", err)
 	}
@@ -620,17 +615,11 @@ func TestRuntimeMonitorPausesPollingAndRestoresReadyHealth(t *testing.T) {
 	if runtime.Health.Live() != true {
 		t.Fatal("dependency failure changed liveness")
 	}
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/live"); got != http.StatusOK {
-		t.Fatalf("live status during dependency failure = %d", got)
-	}
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusServiceUnavailable {
-		t.Fatalf("ready status during dependency failure = %d", got)
-	}
+	requireHealthStatus(t, runtime, "/health/live", http.StatusOK, "live status during dependency failure")
+	requireHealthStatus(t, runtime, "/health/ready", http.StatusServiceUnavailable, "ready status during dependency failure")
 	probe.healthy.Store(true)
 	waitForRuntime(t, func() bool { return runtime.Health.Ready() && controller.starts.Load() >= 2 })
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusOK {
-		t.Fatalf("ready status after dependency recovery = %d", got)
-	}
+	requireHealthStatus(t, runtime, "/health/ready", http.StatusOK, "ready status after dependency recovery")
 }
 
 func TestRuntimeMonitorTracksDependencyProbesIntroducedByReload(t *testing.T) {
@@ -703,9 +692,7 @@ func TestRuntimeMonitorTracksReloadedV1RuntimeReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForRuntime(t, func() bool { return runtime.Health.Ready() && replacement.starts.Load() >= 1 })
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusOK {
-		t.Fatalf("ready status after configured v1 reload = %d", got)
-	}
+	requireHealthStatus(t, runtime, "/health/ready", http.StatusOK, "ready status after configured v1 reload")
 }
 
 func TestRuntimeMonitorTracksReloadedV1ReadinessWithoutDependencyProbes(t *testing.T) {
@@ -752,9 +739,7 @@ func assertUnconfiguredV1ReloadNotReady(t *testing.T, probes []DependencyProbe) 
 	if runtime.Health.Live() != true {
 		t.Fatal("unconfigured v1 reload changed liveness")
 	}
-	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), "/health/ready"); got != http.StatusServiceUnavailable {
-		t.Fatalf("ready status after unconfigured v1 reload = %d", got)
-	}
+	requireHealthStatus(t, runtime, "/health/ready", http.StatusServiceUnavailable, "ready status after unconfigured v1 reload")
 	return runtime, replacement
 }
 
@@ -939,10 +924,7 @@ func runtimeHealthStatus(t *testing.T, address, path string) int {
 func TestRuntimeStartsAndShutsDownInOrder(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
-	runtime, err := New(context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
 	if runtime.Health.Ready() {
 		t.Fatal("runtime became ready before Start")
 	}
@@ -963,10 +945,7 @@ func TestRuntimeStartsAndShutsDownInOrder(t *testing.T) {
 func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 	controller := &testWorker{}
 	var closed atomic.Bool
-	runtime, err := New(context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
 	// Probe listeners are intentionally real sockets. Some restricted test
 	// sandboxes deny loopback binds; skip this lifecycle test there while the
 	// listener behavior remains covered by internal/httpserver tests.
@@ -976,10 +955,7 @@ func TestRunTreatsCancellationAsGracefulExit(t *testing.T) {
 	}
 	controller = &testWorker{}
 	closed = atomic.Bool{}
-	runtime, err = New(context.Background(), runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime = mustNewRuntime(t, runtimeConfig(t), testRuntimeOptions(t, controller, &closed))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- runtime.Run(ctx) }()
@@ -1201,10 +1177,7 @@ func TestDependencyReadinessDiscardsAProbeOfASupersededSnapshot(t *testing.T) {
 		return testEngine{}, &testDependencyProbeClientSet{probes: []DependencyProbe{healthy}}, nil
 	})
 	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", -1))
-	runtime, err := New(context.Background(), configuration, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, configuration, options)
 	initial := runtime.App.Current()
 
 	synced := make(chan error, 1)
@@ -1254,10 +1227,7 @@ func TestDependencyReadinessReleasesItsSnapshotLeaseBeforeResume(t *testing.T) {
 		return testEngine{}, &testDependencyProbeClientSet{probes: []DependencyProbe{healthy}}, nil
 	})
 	configuration := []byte(strings.Replace(string(runtimeMonitorConfig(t)), "environment: production", "environment: development", -1))
-	runtime, err := New(context.Background(), configuration, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runtime := mustNewRuntime(t, configuration, options)
 	synced := make(chan error, 1)
 	go func() { synced <- runtime.syncDependencyReadiness(context.Background()) }()
 	waitForRuntimeEvent(t, controller.entered, "worker start during dependency recovery")
@@ -1299,5 +1269,14 @@ func TestStopDependencyMonitorHonoursTheShutdownDeadlineDuringABlockedResume(t *
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("stopDependencyMonitor ignored its 20ms deadline while Resume held the readiness lock")
+	}
+}
+
+// requireHealthStatus fails the test unless runtime's health listener
+// answers path with want; what names the checked status.
+func requireHealthStatus(t *testing.T, runtime *Runtime, path string, want int, what string) {
+	t.Helper()
+	if got := runtimeHealthStatus(t, runtime.HealthServer.Addr(), path); got != want {
+		t.Fatalf("%s = %d, want %d", what, got, want)
 	}
 }

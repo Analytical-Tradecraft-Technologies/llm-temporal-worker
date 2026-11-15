@@ -86,10 +86,7 @@ func newCLIBudgetFixture(t *testing.T) *cliBudgetFixture {
 	for _, member := range members {
 		read.Members = append(read.Members, redisstore.BudgetStatusWindowRecord{Schema: redisstore.BudgetStatusWindowSchema, GenerationID: "generation-1", IncarnationID: "incarnation-1", ManifestDigest: digest, MemberKey: member.Key(), LimitNanoUSD: member.LimitNanoUSD, ReservedNanoUSD: "200000000", AccountedNanoUSD: "100000000", CoverageStart: start, CoverageEnd: end})
 	}
-	payload, err := json.Marshal(read)
-	if err != nil {
-		t.Fatal(err)
-	}
+	payload := encodeJSON(t, read)
 	keys, err := redisstore.NewBudgetKeySpace(redisstore.KeyOptions{Prefix: "worker", HashTag: "budget", KeySecret: bytes.Repeat([]byte{8}, 32)})
 	if err != nil {
 		t.Fatal(err)
@@ -137,11 +134,7 @@ func budgetResult(t *testing.T, response llm.QueryResponseV1) llm.BudgetStatus {
 
 func budgetWindow(t *testing.T, raw json.RawMessage) map[string]any {
 	t.Helper()
-	var window map[string]any
-	if err := json.Unmarshal(raw, &window); err != nil {
-		t.Fatal(err)
-	}
-	return window
+	return decodeJSON[map[string]any](t, raw)
 }
 
 func requireUnsupportedBudget(t *testing.T, err error) {
@@ -232,10 +225,7 @@ func TestCLIBudgetStatusIsOneCompleteSnapshot(t *testing.T) {
 func TestPersistedQueryLogsAuthorizationDecisionsWithoutContent(t *testing.T) {
 	value := trustedTemporalTestConfig(t)
 	var output bytes.Buffer
-	logger, err := observability.NewLogger(observability.LogOptions{Output: &output})
-	if err != nil {
-		t.Fatal(err)
-	}
+	logger := testLogger(t, observability.LogOptions{Output: &output})
 	service, err := NewPersistedQueryService(trustedTemporalSnapshot(t, value), QueryRepositories{}, PersistedQueryOptions{
 		Authorize: func(_ context.Context, request control.Authorization) error {
 			if request.Project != "project" {
@@ -258,10 +248,7 @@ func TestPersistedQueryLogsAuthorizationDecisionsWithoutContent(t *testing.T) {
 	}
 	var decisions []string
 	for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
-		var entry map[string]any
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			t.Fatal(err)
-		}
+		entry := decodeJSON[map[string]any](t, []byte(line))
 		if entry["msg"] != "control query access decision" {
 			continue
 		}

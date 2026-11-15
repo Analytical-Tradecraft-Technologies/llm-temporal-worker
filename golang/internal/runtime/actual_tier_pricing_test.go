@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -50,10 +49,7 @@ func TestBudgetPlanningCapturesThePricesOfTheRoutesOtherClasses(t *testing.T) {
 	priority := f.entry
 	priority.ProviderTier, priority.Prices.OutputPerMillion = "priority", pricing.MustDecimalUSD("20")
 	f.prices(t, []pricing.Entry{f.entry, priority})
-	planned, err := f.planning(t).Generate(context.Background(), f.generate, f.attempt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	planned := f.plan(t, f.planning(t), false)
 	captured, ok := planned.ClassEntries[llm.ServiceClassPriority]
 	if !ok || captured.ProviderTier != "priority" || len(planned.ClassEntries) != 1 {
 		t.Fatalf("class entries = %#v, want only the priority entry", planned.ClassEntries)

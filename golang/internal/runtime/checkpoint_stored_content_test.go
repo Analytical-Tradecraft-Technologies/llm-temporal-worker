@@ -92,9 +92,7 @@ func TestCloudExecutionRuntimeFailsStoredBlockedMediaURLAsInvalidArgument(t *tes
 			}
 
 			// The continuation adds no media of its own.
-			f.request.Parent = &parent
-			f.request.OperationKey = "after-policy"
-			f.request.SettingsPatch = llm.SettingsPatchV1{}
+			f.continueTurn(parent, "after-policy")
 			compact := llm.CompactRequestV1{OperationKey: "compact-after-policy", Context: f.request.Context, Parent: parent, Cache: &llm.CachePolicyV1{}}
 			for name, input := range map[string]llm.PrepareExecutionV1{"generate": {Generate: &f.request}, "compact": {Compact: &compact}} {
 				_, err := f.runtime.PrepareExecutionV1(ctx, input)
@@ -121,9 +119,7 @@ func TestCloudExecutionRuntimeReplaysStoredPublicMediaURL(t *testing.T) {
 	ctx := context.Background()
 	stored := llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "describe"}, llm.ImagePart{URL: "https://cdn1.example.com/chart.png", MediaType: "image/png"}}}
 	parent := publishStoredRoot(t, f, []llm.Item{stored})
-	f.request.Parent = &parent
-	f.request.OperationKey = "public-replay"
-	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.continueTurn(parent, "public-replay")
 	f.prepareGenerate(t, ctx)
 
 	before := pendingCloudRequests(t, f)
@@ -145,22 +141,17 @@ func TestCloudExecutionRuntimeAggregateLineageByteLimitIsNotRetried(t *testing.T
 	ctx := context.Background()
 	delta := []llm.Item{llm.HumanText(strings.Repeat("x", 600))}
 	parent := publishStoredRoot(t, f, delta)
-	encoded, err := json.Marshal(delta)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := encodeJSON(t, delta)
 	// Larger than the delta or the output alone, smaller than both together.
 	f.options.Limits.MaxBytes = int64(len(encoded)) + 16
 	f.restart(t)
 
-	_, err = f.cap.Checkpoints.Materializer.MaterializeHandle(ctx, "trusted-scope", string(parent), f.options.Limits)
+	_, err := f.cap.Checkpoints.Materializer.MaterializeHandle(ctx, "trusted-scope", string(parent), f.options.Limits)
 	if !errors.Is(err, state.ErrLimitExceeded) {
 		t.Fatalf("materialize error = %v, want ErrLimitExceeded", err)
 	}
 
-	f.request.Parent = &parent
-	f.request.OperationKey = "over-lineage-limit"
-	f.request.SettingsPatch = llm.SettingsPatchV1{}
+	f.continueTurn(parent, "over-lineage-limit")
 	_, err = f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 	assertCheckpointReplayError(t, err, provider.CodeInvalidArgument)
 	var mapped *provider.Error

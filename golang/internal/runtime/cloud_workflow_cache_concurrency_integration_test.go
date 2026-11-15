@@ -3,7 +3,6 @@
 package runtime
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -51,8 +50,7 @@ func exerciseCloudCacheConcurrency(t *testing.T, compact, aws bool) {
 	paid := 1
 	if compact {
 		// Create a real public-workflow source before the concurrent compactions.
-		policy := json.RawMessage(`{"recent_turns":0}`)
-		request.SettingsPatch.CompactionPolicy.Set = &policy
+		keepNoRecentTurns(&request)
 		h.complete.Store(true)
 		stop := h.startWorker(t)
 		parent = h.generate(t, request).Checkpoint

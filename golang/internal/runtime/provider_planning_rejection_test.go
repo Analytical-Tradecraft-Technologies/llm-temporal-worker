@@ -46,10 +46,7 @@ func TestCloudExecutionReportsUnsupportedCapabilityForRejectedRoutes(t *testing.
 			f.request.SettingsPatch.Instructions.Set = &[]llm.Instruction{
 				{Kind: llm.InstructionKindText, Level: llm.InstructionLevelPolicy, Text: "sensitive policy"}, hierarchyApplicationInstruction}
 			var logs bytes.Buffer
-			logger, err := observability.NewLogger(observability.LogOptions{Output: &logs})
-			if err != nil {
-				t.Fatal(err)
-			}
+			logger := testLogger(t, observability.LogOptions{Output: &logs})
 			ctx := observability.WithLogger(context.Background(), logger)
 			v, err := f.runtime.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &f.request})
 			if err == nil {
@@ -63,9 +60,7 @@ func TestCloudExecutionReportsUnsupportedCapabilityForRejectedRoutes(t *testing.
 			if details["rejected_routes"] != "1" || details["route_1"] != "route" || details["reason_1"] != "route_compile_rejected" {
 				t.Fatalf("details = %v", details)
 			}
-			if f.submits.Load() != 0 {
-				t.Fatal("rejected request reached the provider")
-			}
+			requireCount(t, &f.submits, 0, "rejected request reached the provider")
 			line := logs.String()
 			if strings.Count(line, "\n") != 1 || !strings.Contains(line, `"route_id":"route"`) || !strings.Contains(line, `"cause":"route_compile_rejected"`) ||
 				!strings.Contains(line, `"error_code":"unsupported_capability"`) || strings.Contains(line, "sensitive") || strings.Contains(line, "instruction") {
@@ -92,9 +87,7 @@ func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
 		}, code: provider.CodeUnsupportedCapability, phase: provider.PhaseCompile,
 			details: map[string]string{"rejected_routes": "1", "route_1": "route", "reason_1": rejectCompile + ":structured_output"}},
 		{name: "compiler message is not a feature", configure: func(_ *planningSource, adapter *planningAdapter, _ *llm.GenerateRequestV1) {
-			adapter.compile = func(provider.CompileInput) (provider.Call, error) {
-				return provider.Call{}, provider.NewError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "sensitive: compiler error")
-			}
+			adapter.compile = failCompile(provider.NewError(provider.CodeInvalidArgument, provider.PhaseCompile, provider.DispatchNotDispatched, provider.RetryNever, "sensitive: compiler error"))
 		}, code: provider.CodeUnsupportedCapability, phase: provider.PhaseCompile,
 			details: map[string]string{"rejected_routes": "1", "route_1": "route", "reason_1": rejectCompile}},
 		{name: "planner rejects the capability", configure: func(source *planningSource, _ *planningAdapter, _ *llm.GenerateRequestV1) {
@@ -102,9 +95,7 @@ func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
 		}, code: provider.CodeUnsupportedCapability, phase: provider.PhasePlan,
 			details: map[string]string{"rejected_routes": "1", "route_1": "route", "reason_1": routing.RejectCapability + ":text"}},
 		{name: "adapter is unavailable", configure: func(_ *planningSource, adapter *planningAdapter, _ *llm.GenerateRequestV1) {
-			adapter.compile = func(provider.CompileInput) (provider.Call, error) {
-				return provider.Call{}, errors.New("sensitive failure")
-			}
+			adapter.compile = failCompile(errors.New("sensitive failure"))
 		}, code: provider.CodeNoRoute, phase: provider.PhaseCompile,
 			details: map[string]string{"rejected_routes": "1", "route_1": "route", "reason_1": rejectAdapterUnavailable}},
 		{name: "route is disabled", configure: func(source *planningSource, _ *planningAdapter, _ *llm.GenerateRequestV1) {
@@ -135,9 +126,7 @@ func TestProviderPlanningClassifiesExhaustedSelection(t *testing.T) {
 			if customPlanner != nil {
 				capabilities.Planner = customPlanner
 			}
-			planning := mustProviderPlanning(t, capabilities)
-			prepared := mustPrepareGenerate(t, request)
-			_, err := planning.Generate(context.Background(), prepared)
+			_, err := planGenerate(t, capabilities, request)
 			details := rejectedSelection(t, err, test.code, test.phase)
 			if len(details) != len(test.details) {
 				t.Fatalf("details = %v, want %v", details, test.details)

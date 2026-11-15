@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -98,8 +97,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	if len(mini) != 1 || mini[0].EndpointID != "openrouter" || mini[0].Model != "openai/gpt-5.4-mini" {
 		t.Fatalf("synced model routes = %+v, want only the enabled OpenRouter route", mini)
 	}
-	quote, err := snapshot.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
-		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()})
+	quote, err := snapshot.Prices.Resolve(openRouterMiniQuery())
 	if err != nil {
 		t.Fatalf("synced route has no price: %v", err)
 	}
@@ -116,8 +114,7 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	document.FetchedAt = document.FetchedAt.Add(time.Hour)
 	mustInstall(t, syncRuntime, &document)
 	unchanged, _ := syncRuntime.Current(context.Background())
-	if sameQuote, err := unchanged.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
-		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()}); err != nil || sameQuote.Entry.Version != quote.Entry.Version {
+	if sameQuote, err := unchanged.Prices.Resolve(openRouterMiniQuery()); err != nil || sameQuote.Entry.Version != quote.Entry.Version {
 		t.Fatalf("unchanged catalog quote version = %q, err = %v; want %q", sameQuote.Entry.Version, err, quote.Entry.Version)
 	}
 	// A later refresh with new prices replaces the snapshot; an earlier
@@ -126,13 +123,11 @@ func TestModelSyncLayersSyncedRoutesWithoutChangingTheConfigIdentity(t *testing.
 	document.Models[1].Endpoints[0].Pricing.Prompt = "0.000001"
 	mustInstall(t, syncRuntime, &document)
 	refreshed, _ := syncRuntime.Current(context.Background())
-	newQuote, err := refreshed.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
-		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()})
+	newQuote, err := refreshed.Prices.Resolve(openRouterMiniQuery())
 	if err != nil || newQuote.Entry.Prices.InputPerMillion.CanonicalString() != "1" || newQuote.Entry.Version == quote.Entry.Version {
 		t.Fatalf("refreshed quote = %+v, err = %v", newQuote, err)
 	}
-	if again, _ := snapshot.Prices.Resolve(pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
-		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()}); again.Entry.Prices.InputPerMillion.CanonicalString() != "0.8" {
+	if again, _ := snapshot.Prices.Resolve(openRouterMiniQuery()); again.Entry.Prices.InputPerMillion.CanonicalString() != "0.8" {
 		t.Fatal("a refresh mutated an already captured snapshot")
 	}
 }
@@ -255,10 +250,7 @@ func TestEndpointRecoveryIdentityMatchesTheRecoveryReference(t *testing.T) {
 	if legacy, err := legacyEndpointConfigDigest("openrouter", changed); err != nil || legacy == base {
 		t.Fatalf("the legacy digest must still cover the whole configuration: %v", err)
 	}
-	page, err := os.ReadFile("../../../docs/reference/cloud-provider-recovery.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	page := mustReadFile(t, "../../../docs/reference/cloud-provider-recovery.md")
 	for _, field := range []string{"`timeout`", "`langfuse`", "`optional`", "`outbound_hosts`", "legacy digest"} {
 		if !strings.Contains(string(page), field) {
 			t.Fatalf("cloud-provider-recovery.md does not name %s", field)
@@ -290,4 +282,11 @@ func mustInstall(t *testing.T, syncRuntime *modelSyncRuntime, document *modelsyn
 	if err := syncRuntime.install(document); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// openRouterMiniQuery is a price query, as of now, for the synced OpenRouter
+// route of openai/gpt-5.4-mini.
+func openRouterMiniQuery() pricing.Query {
+	return pricing.Query{Provider: "openrouter", Family: "openai_chat", EndpointID: "openrouter", Region: "global",
+		Model: "openai/gpt-5.4-mini", ProviderTier: "default", At: time.Now()}
 }

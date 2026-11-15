@@ -53,7 +53,7 @@ func benchmarkV1ActivitiesAdmission(b *testing.B, f *boundedCloudFixture) {
 		started := time.Now()
 		prepared, err := activities.PrepareExecutionV1(ctx, llm.PrepareExecutionV1{Generate: &request})
 		admissionBenchmarkState(b, "prepare", prepared, err, llm.ExecutionBudgetRequired)
-		reference := llm.ExecutionReferenceV1{RequestID: prepared.RequestID, Context: request.Context, Capability: prepared.Capability}
+		reference := executionRef(*prepared, request.Context)
 		acquired, err := activities.AcquireBudgetV1(ctx, reference)
 		admissionBenchmarkState(b, "acquire", acquired, err, llm.ExecutionAcquired)
 		generated, err := activities.GenerateStepV1(ctx, request)
