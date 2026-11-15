@@ -1,8 +1,6 @@
 package bedrockmessages
 
 import (
-	"fmt"
-
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
@@ -30,7 +28,7 @@ func (profile Profile) liftResponseWithTier(call provider.Call, response *anthro
 		providerTier = headerTier
 	}
 	actual := profile.actualClass(providerTier)
-	output, states, status, err := anthropicwire.LiftMessage(call, requestID, response, "bedrock", contentStateBlocks, liftStatus)
+	output, states, status, err := anthropicwire.LiftMessage(call, requestID, response, "bedrock", contentStateBlocks, false)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -58,30 +56,4 @@ func liftDiagnostics(call provider.Call) []llm.Diagnostic {
 	}
 	return []llm.Diagnostic{{Code: "extensions_dropped", Severity: llm.DiagnosticWarning, Path: "/extensions",
 		Message: "Bedrock Messages has no extension allowlist; the request's extensions were not sent to the provider"}}
-}
-
-func liftStatus(stopReason anthropic.StopReason, hasToolCalls, hasRefusal bool) (llm.ResponseStatus, error) {
-	switch stopReason {
-	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
-		if hasRefusal {
-			return llm.ResponseStatusRefused, nil
-		}
-		if hasToolCalls {
-			return llm.ResponseStatusToolCalls, nil
-		}
-		return llm.ResponseStatusCompleted, nil
-	case anthropic.StopReasonToolUse:
-		if !hasToolCalls {
-			return "", fmt.Errorf("provider stop reason tool_use did not contain a tool call")
-		}
-		return llm.ResponseStatusToolCalls, nil
-	case anthropic.StopReasonMaxTokens, anthropic.StopReasonModelContextWindowExceeded:
-		// Context-window exhaustion is a length truncation: keep the partial
-		// output and usage rather than discarding a paid response.
-		return llm.ResponseStatusLength, nil
-	case anthropic.StopReasonRefusal:
-		return llm.ResponseStatusRefused, nil
-	default:
-		return "", fmt.Errorf("provider returned unknown stop reason %q", stopReason)
-	}
 }
