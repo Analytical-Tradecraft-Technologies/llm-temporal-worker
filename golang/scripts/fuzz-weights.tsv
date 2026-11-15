@@ -1,0 +1,31 @@
+# Seconds per fuzz target at FUZZ_TIME=250000x for scripts/run-fuzz.sh (#1570).
+# Measured one target at a time with a fresh build cache (as a CI shard
+# compiles), four at once, at 10368963 (2026-11-15). Only the ratios matter.
+# Refresh from the "Fuzz target" timings every master fuzz shard prints and
+# retains in its fuzz evidence.
+./budget FuzzSlidingWindowBoundaries	59
+./llm FuzzCanonicalJSONIdempotent	126
+./llm FuzzFastJSONDecodingMatchesReference	178
+./llm FuzzItemEncodingMatchesLegacyMapEncoding	144
+./llm FuzzMarshaledRawJSON	72
+./llm FuzzRequestCanonicalizesClosedServiceClasses	50
+./llm FuzzRequestDigestLegacyCompatibility	444
+./llm/provider FuzzAssemblerEventSequences	59
+./llm/provider/anthropicmessages FuzzDecodeStream	294
+./llm/provider/bedrockmessages FuzzDecodeStream	307
+./llm/provider/openaichat FuzzDecodeStream	366
+./llm/provider/openairesponses FuzzDecodeStream	196
+./llm/schema FuzzSchemaCanonicalAndBounded	44
+./pricing FuzzNanoUSDMaterialization	29
+./pricing FuzzParseDecimalAndCeil	25
+./pricing FuzzUSDParseRoundTrip	29
+./routing FuzzPlannerCanonicalizesServiceClassFallbacks	33
+./routing FuzzPlannerNeverSelectsUnauthorizedClasses	302
+./routing FuzzProviderCacheKeyForkIdentity	163
+./state FuzzCanonicalTranscriptNeverPanics	160
+./state FuzzCheckpointBlobCodecDecodeDeltaNeverPanics	36
+./state FuzzVerifyHandleNeverPanics	23
+./storage/redis FuzzBudgetManifestMemberOrder	113
+./storage/redis FuzzOperationCodecRoundTrip	62
+./storage/redis FuzzParseBudgetStatusNano	78
+./storage/redis FuzzProviderStatusDecode	58

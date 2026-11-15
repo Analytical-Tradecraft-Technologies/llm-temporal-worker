@@ -630,8 +630,9 @@ requests. It has read-only permissions and no provider credentials.
 day at 05:00 using the `Australia/Sydney` schedule timezone. On the canonical
 master branch, container builds use Docker Build Cloud, including Compose
 lifecycle and hardened-image/release-evidence builds. Tests still execute on
-GitHub runners. After verification, OCaml tests, and fuzz shards pass, the
-container job pushes `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
+GitHub runners. The image is built and scanned while the gates run; only after
+verification, OCaml tests, and fuzz shards pass does the container job push
+those scanned bytes as `analyticaltradecraft/llm-temporal-worker:yyyyMMdd.RUN_NUMBER`
 using the UTC build date and `github.run_number`. Push, schedule, and manual
 master runs publish; non-master dispatches cannot enter the Docker environment.
 This publishes a development image and does not deploy or create a signed
