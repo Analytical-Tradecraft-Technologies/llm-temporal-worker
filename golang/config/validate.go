@@ -166,13 +166,20 @@ func validateStateBlobComposition(stateKind, blobKind string) error {
 	return nil
 }
 
-// validateOutputSizeBounds rejects a default output reservation that permits
-// a paid response which can never be read or returned. Every output token is
-// at least one byte, so a full-length response to a request that relies on
-// limits.max_output_tokens is at least that many bytes before any provider or
-// result framing, so it must be strictly smaller than one provider response
-// body and the inline execution result; the inline bound
-// (at most 2 MiB) also keeps it below the 8 MiB durable record limit.
+// validateOutputSizeBounds rejects size limits that permit a paid response
+// which can never be read, saved or returned.
+//
+// Every output token is at least one byte, so a full-length response to a
+// request that relies on limits.max_output_tokens is at least that many bytes
+// before any provider or result framing. It must be strictly smaller than one
+// provider response body and the inline execution result.
+//
+// Every response the worker reads must also fit in the durable record that
+// saves it (#1319). That record holds the saved response, the request it
+// answers and the attempt's bookkeeping. A body of
+// limits.provider_response_bytes saves as at most SavedResponseExpansion times
+// its size, a request is at most server.inline_payload_bytes, and
+// DurableRecordBookkeepingBytes covers the rest.
 func validateOutputSizeBounds(server ServerConfig, limits LimitsConfig) error {
 	outputBytes := int64(limits.MaxOutputTokens)
 	if outputBytes >= int64(server.InlinePayloadBytes) {
@@ -181,7 +188,17 @@ func validateOutputSizeBounds(server ServerConfig, limits LimitsConfig) error {
 	if outputBytes >= limits.ProviderResponseBytes {
 		return fmt.Errorf("limits.max_output_tokens must be less than limits.provider_response_bytes (%d); a full-length response could never be read", limits.ProviderResponseBytes)
 	}
+	if most := MaxSavableProviderResponseBytes(server.InlinePayloadBytes); limits.ProviderResponseBytes > most {
+		return fmt.Errorf("limits.provider_response_bytes must be at most %d with server.inline_payload_bytes %d; a larger response could be paid for but never saved in the %d-byte durable record", most, server.InlinePayloadBytes, DurableRecordBytes)
+	}
 	return nil
+}
+
+// MaxSavableProviderResponseBytes is the largest limits.provider_response_bytes
+// whose every response fits in a durable record beside a request of
+// inlinePayloadBytes and the attempt's bookkeeping.
+func MaxSavableProviderResponseBytes(inlinePayloadBytes int) int64 {
+	return (DurableRecordBytes - int64(inlinePayloadBytes) - DurableRecordBookkeepingBytes) / SavedResponseExpansion
 }
 
 func (server ServerConfig) validate(environment string) error {

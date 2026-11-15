@@ -99,23 +99,49 @@ func requireCoordinationStream(t *testing.T, loaded config.Config, what string) 
 }
 
 func TestLoadDefaultsAndValidatesProviderResponseBytes(t *testing.T) {
-	withoutSetting := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 16777216\n", "", 1)
+	withoutSetting := strings.Replace(string(exampleYAML(t)), "  provider_response_bytes: 983040\n", "", 1)
 	loaded := mustLoadConfig(t, []byte(withoutSetting))
-	if got, want := loaded.Limits.ProviderResponseBytes, int64(16<<20); got != want {
+	if got, want := loaded.Limits.ProviderResponseBytes, int64(960<<10); got != want {
 		t.Fatalf("default provider response bytes = %d, want %d", got, want)
 	}
 
-	configured := strings.Replace(withoutSetting, "  provider_timeout: 120s\n", "  provider_timeout: 120s\n  provider_response_bytes: 8388608\n", 1)
+	configured := strings.Replace(withoutSetting, "  provider_timeout: 120s\n", "  provider_timeout: 120s\n  provider_response_bytes: 524288\n", 1)
 	loaded = mustLoadConfig(t, []byte(configured))
-	if got, want := loaded.Limits.ProviderResponseBytes, int64(8<<20); got != want {
+	if got, want := loaded.Limits.ProviderResponseBytes, int64(512<<10); got != want {
 		t.Fatalf("configured provider response bytes = %d, want %d", got, want)
 	}
 
-	unsafe := strings.Replace(configured, "provider_response_bytes: 8388608", "provider_response_bytes: 67108865", 1)
+	unsafe := strings.Replace(configured, "provider_response_bytes: 524288", "provider_response_bytes: 67108865", 1)
 	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(unsafe))), "limits.provider_response_bytes")
 
-	negative := strings.Replace(configured, "provider_response_bytes: 8388608", "provider_response_bytes: -1", 1)
+	negative := strings.Replace(configured, "provider_response_bytes: 524288", "provider_response_bytes: -1", 1)
 	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(negative))), "limits.provider_response_bytes")
+}
+
+// TestLoadRejectsProviderResponseThatCannotBeSaved checks that every response
+// limits.provider_response_bytes admits fits in its durable record beside the
+// largest request server.inline_payload_bytes admits (#1319).
+func TestLoadRejectsProviderResponseThatCannotBeSaved(t *testing.T) {
+	// With the example's 512 KiB inline limit: (8 MiB - 512 KiB - 256 KiB) / 6.
+	if got := config.MaxSavableProviderResponseBytes(512 << 10); got != 1267029 {
+		t.Fatalf("most savable response bytes = %d, want 1267029", got)
+	}
+	// The default fits beside every inline limit, up to the 2 MiB cap.
+	if got := config.MaxSavableProviderResponseBytes(config.TemporalBlobLimitBytes); got < config.DefaultProviderResponseBytes {
+		t.Fatalf("default provider response bytes %d exceed %d, the most savable beside a 2 MiB request", config.DefaultProviderResponseBytes, got)
+	}
+	const setting = "provider_response_bytes: 983040"
+	mustLoadConfig(t, replaceExample(t, setting, "provider_response_bytes: 1267029"))
+	for _, test := range []struct{ to, want string }{
+		// The former 16 MiB default is twice the record limit.
+		{to: "provider_response_bytes: 16777216", want: "limits.provider_response_bytes must be at most 1267029 with server.inline_payload_bytes 524288"},
+		{to: "provider_response_bytes: 1267030", want: "could be paid for but never saved in the 8388608-byte durable record"},
+	} {
+		assertExampleEditRejected(t, setting, test.to, test.want)
+	}
+	// A larger request leaves less of the record for the response.
+	larger := strings.Replace(string(replaceExample(t, setting, "provider_response_bytes: 1267029")), "inline_payload_bytes: 524288", "inline_payload_bytes: 2097152", 1)
+	testassert.ErrorContains(t, testassert.Err(config.Load([]byte(larger))), "limits.provider_response_bytes must be at most 1004885 with server.inline_payload_bytes 2097152")
 }
 
 func TestLoadDefaultsAndValidatesHeartbeatKeepaliveInterval(t *testing.T) {
@@ -496,7 +522,7 @@ func TestLoadRejectsOutputReservationThatCannotBeReturned(t *testing.T) {
 	}{
 		{pairs: []string{"max_output_tokens: 32768", "max_output_tokens: 524288"}, want: "limits.max_output_tokens must be less than server.inline_payload_bytes (524288)"},
 		{pairs: []string{"inline_payload_bytes: 524288", "inline_payload_bytes: 32768"}, want: "limits.max_output_tokens must be less than server.inline_payload_bytes (32768)"},
-		{pairs: []string{"provider_response_bytes: 16777216", "provider_response_bytes: 32768"}, want: "limits.max_output_tokens must be less than limits.provider_response_bytes (32768)"},
+		{pairs: []string{"provider_response_bytes: 983040", "provider_response_bytes: 32768"}, want: "limits.max_output_tokens must be less than limits.provider_response_bytes (32768)"},
 	} {
 		if _, err := config.Load([]byte(replace(example, test.pairs...))); err == nil || !strings.Contains(err.Error(), test.want) {
 			t.Fatalf("Load(%v) error = %v, want %q", test.pairs, err, test.want)
@@ -504,7 +530,7 @@ func TestLoadRejectsOutputReservationThatCannotBeReturned(t *testing.T) {
 	}
 	for _, pairs := range [][]string{
 		{"max_output_tokens: 32768", "max_output_tokens: 524287"},
-		{"inline_payload_bytes: 524288", "inline_payload_bytes: 32769", "provider_response_bytes: 16777216", "provider_response_bytes: 32769"},
+		{"inline_payload_bytes: 524288", "inline_payload_bytes: 32769", "provider_response_bytes: 983040", "provider_response_bytes: 32769"},
 	} {
 		if _, err := config.Load([]byte(replace(example, pairs...))); err != nil {
 			t.Fatalf("Load(%v) error = %v", pairs, err)

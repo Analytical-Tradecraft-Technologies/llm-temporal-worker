@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/config"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/modelsync"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/internal/testassert"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 )
@@ -716,6 +717,22 @@ func TestProviderEgressHTTPClientRejectsUnsafeResponseLimit(t *testing.T) {
 				t.Fatalf("newProviderEgressHTTPClient(%d) error = %q, want %q", limit, got, want)
 			}
 		})
+	}
+}
+
+// TestModelSyncCatalogFetchHasItsOwnResponseLimit keeps the OpenRouter catalog
+// fetch off limits.provider_response_bytes, which is sized to fit a paid
+// response in its durable record (#1319) and is smaller than a catalog.
+func TestModelSyncCatalogFetchHasItsOwnResponseLimit(t *testing.T) {
+	factory := &ProductionEngineFactory{options: ProductionFactoryOptions{HTTPClient: &http.Client{}}}
+	client, err := factory.modelSyncHTTPClient(providerEgressEndpoint())
+	testassert.NoError(t, err)
+	guard, ok := client.Transport.(*providerEgressRoundTripper)
+	if !ok {
+		t.Fatalf("client transport = %T, want production provider egress guard", client.Transport)
+	}
+	if got := guard.responseByteLimit(); got != modelsync.MaxResponseBytes || got <= config.DefaultProviderResponseBytes {
+		t.Fatalf("catalog response limit = %d, want %d", got, modelsync.MaxResponseBytes)
 	}
 }
 
