@@ -99,10 +99,7 @@ func TestThrottleFunctionMetadataIsStableAndSeparate(t *testing.T) {
 }
 
 func TestThrottleKeysAreOpaqueAndCoLocated(t *testing.T) {
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	for _, key := range []string{
 		space.throttleKey("requests", "tenant/private"),
 		space.throttleKey("tokens", "tenant/private"),

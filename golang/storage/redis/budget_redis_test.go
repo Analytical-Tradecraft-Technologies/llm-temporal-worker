@@ -82,13 +82,28 @@ func testBudgetKeySpaceForAdapter(t *testing.T) BudgetKeySpace {
 	return keys
 }
 
-func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.T) {
-	keys := testBudgetKeySpaceForAdapter(t)
-	fake := &fakeBudgetGenerationRedis{evalVal: int64(1), values: make(map[string]string)}
+func newFakeBudgetGenerationPort(t *testing.T, fake *fakeBudgetGenerationRedis, keys BudgetKeySpace) *RedisBudgetGenerationPort {
+	t.Helper()
 	port, err := NewRedisBudgetGenerationPort(fake, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return port
+}
+
+func newFakeBudgetEventPort(t *testing.T, fake *fakeBudgetEventRedis, keys BudgetKeySpace) *RedisBudgetEventPort {
+	t.Helper()
+	port, err := NewRedisBudgetEventPort(fake, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.T) {
+	keys := testBudgetKeySpaceForAdapter(t)
+	fake := &fakeBudgetGenerationRedis{evalVal: int64(1), values: make(map[string]string)}
+	port := newFakeBudgetGenerationPort(t, fake, keys)
 	manifest := testBudgetManifest(t)
 	pointer, err := port.PublishGeneration(context.Background(), manifest)
 	if err != nil {
@@ -134,10 +149,7 @@ func TestRedisBudgetGenerationPortPublishesAtomicallyAndLoadsPointer(t *testing.
 func TestRedisBudgetGenerationPortRejectsImmutableConflictAndMalformedState(t *testing.T) {
 	keys := testBudgetKeySpaceForAdapter(t)
 	fake := &fakeBudgetGenerationRedis{evalVal: int64(0), values: make(map[string]string)}
-	port, err := NewRedisBudgetGenerationPort(fake, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	port := newFakeBudgetGenerationPort(t, fake, keys)
 	if _, err := port.PublishGeneration(context.Background(), testBudgetManifest(t)); !errors.Is(err, ErrBudgetGenerationConflict) {
 		t.Fatalf("conflict error = %v", err)
 	}
@@ -154,10 +166,7 @@ func TestRedisBudgetGenerationPortRejectsImmutableConflictAndMalformedState(t *t
 func TestRedisBudgetEventPortAppendsAndReadsBroadcastCursor(t *testing.T) {
 	keys := testBudgetKeySpaceForAdapter(t)
 	fake := &fakeBudgetEventRedis{appendID: "42-7"}
-	port, err := NewRedisBudgetEventPort(fake, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	port := newFakeBudgetEventPort(t, fake, keys)
 	event := BudgetStreamEvent{Schema: budgetStreamEventSchema, Kind: BudgetEventPolicyRefresh, GenerationID: "generation", Revision: 2, OccurredAt: time.Unix(1, 0).UTC()}
 	id, err := port.Append(context.Background(), event)
 	if err != nil || id != "42-7" {
@@ -189,10 +198,7 @@ func TestRedisBudgetEventPortAppendsAndReadsBroadcastCursor(t *testing.T) {
 func TestRedisBudgetEventPortHandlesEmptyAndCorruptStreamsFailClosed(t *testing.T) {
 	keys := testBudgetKeySpaceForAdapter(t)
 	fake := &fakeBudgetEventRedis{readErr: redisclient.Nil}
-	port, err := NewRedisBudgetEventPort(fake, keys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	port := newFakeBudgetEventPort(t, fake, keys)
 	rows, err := port.Read(context.Background(), "", 1)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("empty stream = %#v, %v", rows, err)
@@ -227,10 +233,7 @@ func TestRedisBudgetEventPortHandlesEmptyAndCorruptStreamsFailClosed(t *testing.
 
 func TestRedisBudgetEventPortRecoversAfterEviction(t *testing.T) {
 	fake := &fakeBudgetEventRedis{infoErr: errors.New("ERR no such key"), readErr: redisclient.Nil}
-	port, err := NewRedisBudgetEventPort(fake, testBudgetKeySpaceForAdapter(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	port := newFakeBudgetEventPort(t, fake, testBudgetKeySpaceForAdapter(t))
 	if _, err := port.Read(context.Background(), "42-7", 10); !errors.Is(err, ErrBudgetStreamGap) {
 		t.Fatalf("eviction must trigger authoritative reload: %v", err)
 	}
@@ -271,11 +274,8 @@ func TestRedisBudgetEventPortZeroCursorDetectsDiscardedHistory(t *testing.T) {
 				fake.infoValue.FirstEntry = redisclient.XMessage{}
 				fake.infoValue.LastEntry = redisclient.XMessage{}
 			}
-			port, err := NewRedisBudgetEventPort(fake, testBudgetKeySpaceForAdapter(t))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = port.Read(context.Background(), "0-0", 10)
+			port := newFakeBudgetEventPort(t, fake, testBudgetKeySpaceForAdapter(t))
+			_, err := port.Read(context.Background(), "0-0", 10)
 			if errors.Is(err, ErrBudgetStreamGap) != test.gap || (err != nil && !test.gap) {
 				t.Fatalf("Read zero cursor = %v; want gap=%v", err, test.gap)
 			}
@@ -288,10 +288,7 @@ func TestRedisBudgetEventPortZeroCursorDetectsDiscardedHistory(t *testing.T) {
 
 func TestRedisBudgetEventPortRecoversEmptyTrimmedStream(t *testing.T) {
 	fake := &fakeBudgetEventRedis{infoValue: &redisclient.XInfoStream{EntriesAdded: 10, LastGeneratedID: "42-7"}}
-	port, err := NewRedisBudgetEventPort(fake, testBudgetKeySpaceForAdapter(t))
-	if err != nil {
-		t.Fatal(err)
-	}
+	port := newFakeBudgetEventPort(t, fake, testBudgetKeySpaceForAdapter(t))
 	if _, err := port.Read(context.Background(), "0-0", 10); !errors.Is(err, ErrBudgetStreamGap) {
 		t.Fatalf("missing hints did not reload: %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/pricing"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/conformance"
 	durable "github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/durable"
+	redisclient "github.com/redis/go-redis/v9"
 )
 
 // openLiveMaterializer clears prefix on the live Redis and returns a
@@ -35,6 +36,53 @@ func openLiveMaterializer(t *testing.T, prefix string, generation durable.Genera
 		t.Fatal(err)
 	}
 	return ctx, materializer, now
+}
+
+// openLiveRedisWithAdmissionLua opens the live Redis with the admission Lua
+// script loaded and a context that ends with the test or after timeout.
+func openLiveRedisWithAdmissionLua(t *testing.T, timeout time.Duration) (*redisclient.Client, context.Context) {
+	t.Helper()
+	client := openLiveRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
+	if err := client.ScriptLoad(ctx, AdmissionLuaSource()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	return client, ctx
+}
+
+// acquireLive requires m to accept req.
+func acquireLive(t *testing.T, m *RedisBudgetMaterializer, req durable.ReserveRequest) durable.ReserveResult {
+	t.Helper()
+	result, err := m.Accept(context.Background(), req)
+	if err != nil || !result.Accepted {
+		t.Fatalf("acquire = %#v, %v", result, err)
+	}
+	return result
+}
+
+// claimOf is the claim request for an accepted reservation.
+func claimOf(r durable.ReserveResult) durable.ClaimRequest {
+	return durable.ClaimRequest{OperationID: r.OperationID, GenerationID: r.GenerationID, IncarnationID: r.IncarnationID}
+}
+
+// claimAccepted claims request's accepted reservation.
+func claimAccepted(t *testing.T, ctx context.Context, m *RedisBudgetMaterializer, request durable.ReserveRequest, accepted durable.ReserveResult) {
+	t.Helper()
+	if _, err := m.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
+		t.Fatalf("claim = %v", err)
+	}
+}
+
+// exactLiveCompletion finalizes accepted's only reservation event at exactly
+// its reserved amount.
+func exactLiveCompletion(id string, request durable.ReserveRequest, accepted durable.ReserveResult, now time.Time) budget.CompletionEvent {
+	base := accepted.Events[0]
+	return budget.CompletionEvent{
+		EventID: id, GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
+		BucketStart: base.BucketStart, ReservationRevision: base.ReservationRevision + 1, Kind: budget.JournalFinalizeExact,
+		ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now,
+	}
 }
 
 // liveHourReservation reserves amount against limit in the current hour of
@@ -89,18 +137,8 @@ func TestLiveRedisBudgetMaterializerContract(t *testing.T) {
 		t.Fatalf("denied replay = %#v", deniedReplay)
 	}
 
-	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
-		t.Fatal(err)
-	}
-	reservationEvent := accepted.Events[0]
-	completion := budget.CompletionEvent{
-		EventID: "durable-completion-1", GenerationID: string(request.GenerationID),
-		OperationID: string(request.OperationID), WindowID: reservationEvent.WindowID,
-		BucketStart: reservationEvent.BucketStart, ReservationRevision: reservationEvent.ReservationRevision + 1,
-		Kind: budget.JournalFinalizeExact, ReservedDecreaseUSD: reservationEvent.AmountUSD,
-		AccountedIncreaseUSD: reservationEvent.AmountUSD, ActualCostUSD: ptrUSD(reservationEvent.AmountUSD),
-		CostStatus: budget.CostExact, OccurredAt: now,
-	}
+	claimAccepted(t, ctx, materializer, request, accepted)
+	completion := exactLiveCompletion("durable-completion-1", request, accepted, now)
 	reconcile := durable.ReconcileRequest{
 		OperationID: request.OperationID, GenerationID: request.GenerationID,
 		IncarnationID: "incarnation-live", Events: []budget.CompletionEvent{completion},
@@ -121,16 +159,8 @@ func TestLiveRedisBudgetMaterializerRejectsMixedBatchAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accepted reservation = %v", err)
 	}
-	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
-		t.Fatal(err)
-	}
-	base := accepted.Events[0]
-	completion := func(id string) budget.CompletionEvent {
-		return budget.CompletionEvent{EventID: id, GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
-			BucketStart: base.BucketStart, ReservationRevision: base.ReservationRevision + 1, Kind: budget.JournalFinalizeExact,
-			ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now}
-	}
-	first, second := completion("batch-first"), completion("batch-second")
+	claimAccepted(t, ctx, materializer, request, accepted)
+	first, second := exactLiveCompletion("batch-first", request, accepted, now), exactLiveCompletion("batch-second", request, accepted, now)
 	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-batch", Events: []budget.CompletionEvent{first, second}}); err == nil {
 		t.Fatalf("mixed completion batch = %v, want conflict", err)
 	}
@@ -206,15 +236,8 @@ func TestLiveRedisBudgetMaterializerHandlesSingleReservationAboveHundredThousand
 	if err != nil || !accepted.Accepted || len(accepted.Events) != 1 {
 		t.Fatalf("large reservation = %#v, %v; want accepted", accepted, err)
 	}
-	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
-		t.Fatalf("claim = %v", err)
-	}
-	base := accepted.Events[0]
-	completion := budget.CompletionEvent{
-		EventID: "large-completion", GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
-		BucketStart: base.BucketStart, ReservationRevision: base.ReservationRevision + 1, Kind: budget.JournalFinalizeExact,
-		ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now,
-	}
+	claimAccepted(t, ctx, materializer, request, accepted)
+	completion := exactLiveCompletion("large-completion", request, accepted, now)
 	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-large", Events: []budget.CompletionEvent{completion}}); err != nil {
 		t.Fatalf("exact finalization = %v", err)
 	}
@@ -249,15 +272,8 @@ func TestLiveRedisBudgetMaterializerWaitedSpendCountsFromAcceptance(t *testing.T
 	if err != nil || !accepted.Accepted || len(accepted.Events) != 1 {
 		t.Fatalf("waited reservation = %#v, %v; want accepted", accepted, err)
 	}
-	if _, err := materializer.Claim(ctx, durable.ClaimRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: accepted.IncarnationID}); err != nil {
-		t.Fatalf("claim = %v", err)
-	}
-	base := accepted.Events[0]
-	completion := budget.CompletionEvent{
-		EventID: "waited-completion", GenerationID: string(request.GenerationID), OperationID: string(request.OperationID), WindowID: base.WindowID,
-		BucketStart: base.BucketStart, ReservationRevision: base.ReservationRevision + 1, Kind: budget.JournalFinalizeExact,
-		ReservedDecreaseUSD: base.AmountUSD, AccountedIncreaseUSD: base.AmountUSD, ActualCostUSD: ptrUSD(base.AmountUSD), CostStatus: budget.CostExact, OccurredAt: now,
-	}
+	claimAccepted(t, ctx, materializer, request, accepted)
+	completion := exactLiveCompletion("waited-completion", request, accepted, now)
 	if err := materializer.Reconcile(ctx, durable.ReconcileRequest{OperationID: request.OperationID, GenerationID: request.GenerationID, IncarnationID: "incarnation-waited", Events: []budget.CompletionEvent{completion}}); err != nil {
 		t.Fatalf("exact finalization = %v", err)
 	}

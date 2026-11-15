@@ -21,6 +21,18 @@ func fillPointerBlob(t *testing.T, table *memoryTable, key kv.KeyValueKey) blob.
 	return blob.BlobKey(pointer.Blob)
 }
 
+// startedFillFixture owns and starts a fill lease and returns the failed
+// completion that finishes it.
+func startedFillFixture(t *testing.T) (*cacheFills, *memoryTable, *memoryBlobs, cache.FillLease, cache.FillCompletion) {
+	t.Helper()
+	r, table, blobs, entry, _ := responseCacheFixture(t)
+	lease := fillLease(entry)
+	store := r.ResponseFills().(*cacheFills)
+	mustAcquireFill(t, store, lease, cache.FillOwned)
+	mustStartFill(t, store, lease, lease.AcquiredAt)
+	return store, table, blobs, lease, cache.FillCompletion{Outcome: cache.FillFailed, CompletedAt: lease.AcquiredAt.Add(1)}
+}
+
 // A fill record blob that cannot be read right now is not a corrupt fill:
 // only a definitely missing or unauthenticated blob is. Both the mutable head
 // and the sealed terminal receipt are covered.
@@ -33,12 +45,8 @@ func TestCloudFillsTransientBlobReadIsNotCorruption(t *testing.T) {
 	}
 	for name, fault := range transient {
 		t.Run(name, func(t *testing.T) {
-			r, table, blobs, entry, _ := responseCacheFixture(t)
-			ctx, lease := context.Background(), fillLease(entry)
-			store := r.ResponseFills().(*cacheFills)
-			mustAcquireFill(t, store, lease, cache.FillOwned)
-			mustStartFill(t, store, lease, lease.AcquiredAt)
-			completion := cache.FillCompletion{Outcome: cache.FillFailed, CompletedAt: lease.AcquiredAt.Add(1)}
+			store, table, blobs, lease, completion := startedFillFixture(t)
+			ctx := context.Background()
 			check := func(stage string, target blob.BlobKey) {
 				t.Helper()
 				blobs.open = func(key blob.BlobKey) error {
@@ -74,12 +82,8 @@ func TestCloudFillsTransientBlobReadIsNotCorruption(t *testing.T) {
 }
 
 func TestCloudFillsMissingBlobIsCorruption(t *testing.T) {
-	r, table, blobs, entry, _ := responseCacheFixture(t)
-	ctx, lease := context.Background(), fillLease(entry)
-	store := r.ResponseFills().(*cacheFills)
-	mustAcquireFill(t, store, lease, cache.FillOwned)
-	mustStartFill(t, store, lease, lease.AcquiredAt)
-	completion := cache.FillCompletion{Outcome: cache.FillFailed, CompletedAt: lease.AcquiredAt.Add(1)}
+	store, table, blobs, lease, completion := startedFillFixture(t)
+	ctx := context.Background()
 	head := fillPointerBlob(t, table, store.responses.key("fill", lease.Key))
 	saved := blobs.values[head]
 	delete(blobs.values, head)

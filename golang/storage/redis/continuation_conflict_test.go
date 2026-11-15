@@ -15,10 +15,7 @@ func TestContinuationChildRetryWithDifferentHistoryConflicts(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
 	store := newTestContinuationStore(t, harness, harness, now)
-	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	parent := createTestRoot(t, store, now)
 	assertChildRetryConflicts(t, store, parent, now)
 }
 
@@ -41,10 +38,7 @@ func TestContinuationChildConflictDetectedWhenAtomicWriteFindsExistingOperation(
 	harness := newContinuationHarness()
 	reader := &staleOperationIndexReader{continuationHarness: harness}
 	store := newTestContinuationStore(t, harness, reader, now)
-	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	parent := createTestRoot(t, store, now)
 	reader.hidden = store.space.continuationOperationKey("tenant-a", parent.String(), "op-1")
 	assertChildRetryConflicts(t, store, parent, now)
 }
@@ -55,8 +49,7 @@ func TestContinuationChildConflictDetectedWhenAtomicWriteFindsExistingOperation(
 func assertChildRetryConflicts(t *testing.T, store *ContinuationStore, parent state.Handle, now time.Time) {
 	t.Helper()
 	child := func(text string) state.Continuation {
-		value := testContinuation(t, now)
-		value.ParentID, value.Depth = parent.String(), 1
+		value := testChildContinuation(t, now, parent)
 		value.Transcript = []llm.Item{llm.Message{Actor: llm.ActorModel, Content: []llm.Part{llm.TextPart{Text: text}}}}
 		var err error
 		_, value.TranscriptDigest, err = state.CanonicalTranscript(value.Transcript)

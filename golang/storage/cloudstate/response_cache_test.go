@@ -255,27 +255,35 @@ func TestCloudResponseCachePublicationUnknownOutcomes(t *testing.T) {
 	}
 }
 
-func TestCloudResponseCacheUseReceipts(t *testing.T) {
-	r, table, blobs, entry, origin := responseCacheFixture(t)
-	ctx := context.Background()
-	if err := r.Responses().Publish(ctx, entry); err != nil {
+// publishEntryWithReplayChild publishes entry and returns an unpublished
+// cache-replay child of origin that consumes it.
+func publishEntryWithReplayChild(t *testing.T, r *Repository, entry cache.ResponseEntry, origin state.DurableCheckpoint) state.DurableCheckpoint {
+	t.Helper()
+	if err := r.Responses().Publish(context.Background(), entry); err != nil {
 		t.Fatal(err)
 	}
 	child := childCheckpoint(origin, "consumer")
 	child.Kind, child.OriginCacheEntryID = state.CheckpointCacheReplay, &entry.ID
-	use := cache.ResponseUse{ScopeID: origin.ScopeID, OperationID: child.OriginOperationID, EntryID: entry.ID, CheckpointID: child.ID, CompletedAt: entry.CompletedAt.Add(time.Hour)}
+	return child
+}
+
+// replayUse is child's receipt for consuming entry at completedAt.
+func replayUse(origin, child state.DurableCheckpoint, entry cache.ResponseEntry, completedAt time.Time) cache.ResponseUse {
+	return cache.ResponseUse{ScopeID: origin.ScopeID, OperationID: child.OriginOperationID, EntryID: entry.ID, CheckpointID: child.ID, CompletedAt: completedAt}
+}
+
+func TestCloudResponseCacheUseReceipts(t *testing.T) {
+	r, table, blobs, entry, origin := responseCacheFixture(t)
+	ctx := context.Background()
+	child := publishEntryWithReplayChild(t, r, entry, origin)
+	use := replayUse(origin, child, entry, entry.CompletedAt.Add(time.Hour))
 	if err := r.Responses().RecordUse(ctx, use); !errors.Is(err, contracts.ErrNotFound) {
 		t.Fatalf("uncommitted checkpoint consumed: %v", err)
 	}
 	if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
 		t.Fatal(err)
 	}
-	table.hook = func(_ string, item kv.KeyValueItem) (error, error) {
-		if strings.Contains(item.PartitionKey, "/cache/use/") {
-			return nil, contracts.ErrOutcomeUnknown
-		}
-		return nil, nil
-	}
+	table.hook = failTableWrites("", "/cache/use/", nil, contracts.ErrOutcomeUnknown)
 	if err := r.Responses().RecordUse(ctx, use); !errors.Is(err, contracts.ErrOutcomeUnknown) {
 		t.Fatal(err)
 	}

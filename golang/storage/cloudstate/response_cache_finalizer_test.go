@@ -153,16 +153,11 @@ func TestCloudResponseCacheReceiptFailureBoundaries(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%t", phase, committed), func(t *testing.T) {
 				r, table, blobs, entry, origin := responseCacheFixture(t)
 				ctx := context.Background()
-				if err := r.Responses().Publish(ctx, entry); err != nil {
-					t.Fatal(err)
-				}
-				child := childCheckpoint(origin, "consumer")
-				child.Kind = state.CheckpointCacheReplay
-				child.OriginCacheEntryID = &entry.ID
+				child := publishEntryWithReplayChild(t, r, entry, origin)
 				if err := publishCheckpoint(ctx, r.Checkpoints(), child); err != nil {
 					t.Fatal(err)
 				}
-				use := cache.ResponseUse{ScopeID: origin.ScopeID, OperationID: child.OriginOperationID, EntryID: entry.ID, CheckpointID: child.ID, CompletedAt: entry.CompletedAt}
+				use := replayUse(origin, child, entry, entry.CompletedAt)
 				fault := func() (error, error) {
 					if committed {
 						return nil, contracts.ErrOutcomeUnknown

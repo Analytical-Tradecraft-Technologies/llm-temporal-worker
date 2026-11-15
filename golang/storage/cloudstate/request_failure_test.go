@@ -43,25 +43,33 @@ func failedRequestFixture(t *testing.T, retryable bool) (*Repository, *memoryTab
 	return r, table, blobs, root, a, failure, saved.Execution.UpdatedAt.Add(time.Second)
 }
 
+// faultNthIndexOrEventWrite fails the target-th pending-index replace, or
+// with event the target-th request-event create, counting matches in calls.
+// An index write fails before it applies; an event write applies and then
+// loses its acknowledgement.
+func faultNthIndexOrEventWrite(event bool, target int, calls *int) func(string, kv.KeyValueItem) (error, error) {
+	return func(action string, item kv.KeyValueItem) (error, error) {
+		match := !event && action == "replace" && strings.Contains(item.PartitionKey, "/pending/") || event && action == "create" && strings.Contains(item.PartitionKey, "/request/")
+		if match {
+			*calls++
+			if *calls == target {
+				if event {
+					return nil, contracts.ErrOutcomeUnknown
+				}
+				return contracts.ErrUnavailable, nil
+			}
+		}
+		return nil, nil
+	}
+}
+
 func TestRequestFailureRepairsLostAcknowledgementsAndIndexWrites(t *testing.T) {
 	for _, event := range []bool{false, true} {
 		for _, target := range []int{1, 2} {
 			t.Run(map[bool]string{false: "index", true: "event"}[event]+string(rune('0'+target)), func(t *testing.T) {
 				r, table, blobs, root, a, failure, now := failedRequestFixture(t, false)
 				calls := 0
-				table.hook = func(action string, item kv.KeyValueItem) (error, error) {
-					match := !event && action == "replace" && strings.Contains(item.PartitionKey, "/pending/") || event && action == "create" && strings.Contains(item.PartitionKey, "/request/")
-					if match {
-						calls++
-						if calls == target {
-							if event {
-								return nil, contracts.ErrOutcomeUnknown
-							}
-							return contracts.ErrUnavailable, nil
-						}
-					}
-					return nil, nil
-				}
+				table.hook = faultNthIndexOrEventWrite(event, target, &calls)
 				ctx := context.Background()
 				if err := r.FinishRequestFailure(ctx, root.Request.Scope, root.Request.ID, a.ID, failure, now); err == nil {
 					t.Fatal("fault ignored")

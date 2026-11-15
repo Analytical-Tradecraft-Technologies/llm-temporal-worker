@@ -100,6 +100,23 @@ func advanceDispatched(t *testing.T, lifecycle *Lifecycle) {
 	}
 }
 
+// dispatchedBoundary reserves and claims request through materializer and
+// advances the lifecycle to dispatched, the starting point for Finalize tests.
+func dispatchedBoundary(t *testing.T, materializer BudgetLeaser, request ReserveRequest) (BudgetBoundary, *Lifecycle, BudgetReservation) {
+	t.Helper()
+	boundary := newBoundary(materializer)
+	lifecycle := newLifecycle(t)
+	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
+		t.Fatal(err)
+	}
+	advanceDispatched(t, lifecycle)
+	return boundary, lifecycle, reservation
+}
+
 // A repeated Reserve returns the earlier acceptance and reports it as a replay
 // so admission metrics count one decision (#1359). The flag stays off the
 // result that callers persist.
@@ -189,17 +206,8 @@ func TestBudgetBoundaryReconcileFailureIsRetryableAfterFinalization(t *testing.T
 	request := boundaryRequest(now)
 	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now), reconcileErr: errors.New("Redis unavailable")}
 
-	boundary := newBoundary(materializer)
-	lifecycle := newLifecycle(t)
-	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
-	advanceDispatched(t, lifecycle)
-	err = boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)})
+	boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
+	err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{boundaryCompletion(request, now)})
 	if !errors.Is(err, ErrReconcilePending) {
 		t.Fatalf("reconcile error = %v", err)
 	}
@@ -224,16 +232,7 @@ func TestBudgetBoundaryRejectsCompletionIdentityMismatch(t *testing.T) {
 	request := boundaryRequest(now)
 	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now)}
 
-	boundary := newBoundary(materializer)
-	lifecycle := newLifecycle(t)
-	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
-	advanceDispatched(t, lifecycle)
+	boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 	completion := boundaryCompletion(request, now)
 	completion.OperationID = "other-operation"
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{completion}); err == nil {
@@ -246,16 +245,7 @@ func TestBudgetBoundaryPreflightsDuplicateCompletionIDs(t *testing.T) {
 	request := boundaryRequest(now)
 	materializer := &boundaryMaterializer{result: boundaryAcceptedResult(request, now)}
 
-	boundary := newBoundary(materializer)
-	lifecycle := newLifecycle(t)
-	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
-	advanceDispatched(t, lifecycle)
+	boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 	completion := boundaryCompletion(request, now)
 	if err := boundary.Finalize(context.Background(), lifecycle, reservation, []budget.CompletionEvent{completion, completion}); !errors.Is(err, ErrBudgetBoundaryInvalid) {
 		t.Fatalf("duplicate completion accepted: %v", err)
@@ -296,18 +286,9 @@ func TestBudgetBoundaryRequiresOneCompletionPerReservedWindowBucket(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			materializer := &boundaryMaterializer{result: result}
 
-			boundary := newBoundary(materializer)
-			lifecycle := newLifecycle(t)
-			reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-				t.Fatal(err)
-			}
-			advanceDispatched(t, lifecycle)
+			boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 
-			err = boundary.Finalize(context.Background(), lifecycle, reservation, test.events())
+			err := boundary.Finalize(context.Background(), lifecycle, reservation, test.events())
 			if !errors.Is(err, ErrBudgetBoundaryInvalid) {
 				t.Fatalf("incomplete completion coverage accepted: %v", err)
 			}
@@ -338,16 +319,7 @@ func TestBudgetBoundaryDistinguishesBucketTimesOutsideUnixNanoRange(t *testing.T
 
 	materializer := &boundaryMaterializer{result: result}
 
-	boundary := newBoundary(materializer)
-	lifecycle := newLifecycle(t)
-	reservation, err := boundary.Reserve(context.Background(), lifecycle, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := boundary.Claim(context.Background(), lifecycle, &reservation); err != nil {
-		t.Fatal(err)
-	}
-	advanceDispatched(t, lifecycle)
+	boundary, lifecycle, reservation := dispatchedBoundary(t, materializer, request)
 	firstCompletion := boundaryCompletion(request, now)
 	firstCompletion.BucketStart = firstBucket
 	secondCompletion := firstCompletion

@@ -15,6 +15,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+func testKeySpace(t *testing.T) keySpace {
+	t.Helper()
+	space, err := newKeySpace(testKeyOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return space
+}
+
 func testKeyOptions() KeyOptions {
 	return KeyOptions{Prefix: "test", HashTag: "admission", KeySecret: []byte("01234567890123456789012345678901")}
 }
@@ -37,6 +46,17 @@ type countingInvoker struct{ calls int }
 func (invoker *countingInvoker) Run(_ context.Context, _ string, _ []string, _ ...string) ([]any, error) {
 	invoker.calls++
 	return []any{"invalid_request", ""}, nil
+}
+
+// newTestAdmissionStore builds an admission store over test doubles with the
+// test key space and a clock fixed at now.
+func newTestAdmissionStore(t *testing.T, invoker FunctionInvoker, reader StringReader, now time.Time) *AdmissionStore {
+	t.Helper()
+	store, err := NewAdmissionStore(AdmissionOptions{Invoker: invoker, Reader: reader, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func newAdmissionHarness(now time.Time) *admissionHarness {
@@ -203,11 +223,8 @@ func TestReservationEnvelopeIsRejectedBeforeRedisInvocation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			invoker := &countingInvoker{}
-			store, err := NewAdmissionStore(AdmissionOptions{Invoker: invoker, Reader: newAdmissionHarness(now), Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = store.Begin(context.Background(), admission.BeginRequest{ID: "invalid", ScopeKey: "invalid", Reservation: test.reservation, Reservations: test.reservations, ExpiresAt: now.Add(time.Hour)})
+			store := newTestAdmissionStore(t, invoker, newAdmissionHarness(now), now)
+			_, err := store.Begin(context.Background(), admission.BeginRequest{ID: "invalid", ScopeKey: "invalid", Reservation: test.reservation, Reservations: test.reservations, ExpiresAt: now.Add(time.Hour)})
 			if err == nil {
 				t.Fatal("invalid reservation envelope accepted")
 			}
@@ -221,15 +238,12 @@ func TestReservationEnvelopeIsRejectedBeforeRedisInvocation(t *testing.T) {
 func TestExactUSDReservationProjectionIsRejectedBeforeRedisInvocation(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	invoker := &countingInvoker{}
-	store, err := NewAdmissionStore(AdmissionOptions{Invoker: invoker, Reader: newAdmissionHarness(now), Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestAdmissionStore(t, invoker, newAdmissionHarness(now), now)
 	amountUSD := pricing.MustUSD("0.000001000000000001")
 	reservation := testReservation(1, 1)
 	reservation.AmountUSD = amountUSD
 	reservation.LimitUSD = pricing.MustUSD("0.000002")
-	_, err = store.Begin(context.Background(), admission.BeginRequest{
+	_, err := store.Begin(context.Background(), admission.BeginRequest{
 		ID: "invalid", ScopeKey: "invalid", Reservation: 1, ReservationUSD: amountUSD,
 		Reservations: []admission.WindowReservation{reservation}, ExpiresAt: now.Add(time.Hour),
 	})
@@ -244,11 +258,8 @@ func TestExactUSDReservationProjectionIsRejectedBeforeRedisInvocation(t *testing
 func TestMarkDispatchingReservesAttemptIncrementHeadroom(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	harness := newAdmissionHarness(now)
-	store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = store.MarkDispatching(context.Background(), admission.DispatchRequest{
+	store := newTestAdmissionStore(t, harness, harness, now)
+	err := store.MarkDispatching(context.Background(), admission.DispatchRequest{
 		OperationID: "op", DispatchToken: "token",
 		Attempt: admission.AttemptFacts{AttemptNumber: maxAttemptNumber},
 	})
@@ -258,10 +269,7 @@ func TestMarkDispatchingReservesAttemptIncrementHeadroom(t *testing.T) {
 }
 
 func TestAdmissionKeysUseOneHashSlotAndOpaqueDigests(t *testing.T) {
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	keys := []string{
 		space.scopeKey("tenant/secret"),
 		space.operationIndexKey("operation"),
@@ -286,10 +294,7 @@ func TestAdmissionKeysUseOneHashSlotAndOpaqueDigests(t *testing.T) {
 func TestAdmissionConformanceReplayConflictAndAmbiguity(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	harness := newAdmissionHarness(now)
-	store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestAdmissionStore(t, harness, harness, now)
 	reservation := admission.WindowReservation{PolicyID: "policy", WindowID: "window", Bucket: 100, Amount: 6, Limit: 10, BucketNanos: int64(time.Second), DurationNanos: int64(10 * time.Second)}
 	request := admission.BeginRequest{ID: "op", ScopeKey: "tenant/op", RequestDigest: admission.Digest([]byte("request")), Reservation: 6, Reservations: []admission.WindowReservation{reservation}, LeaseUntil: now.Add(time.Minute), ExpiresAt: now.Add(time.Hour)}
 	first, err := store.Begin(context.Background(), request)
@@ -319,10 +324,7 @@ func TestAdmissionConformanceReplayConflictAndAmbiguity(t *testing.T) {
 func TestAdmissionContinueWireAndCompletion(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	harness := newAdmissionHarness(now)
-	store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestAdmissionStore(t, harness, harness, now)
 	reservation := admission.WindowReservation{PolicyID: "policy", WindowID: "window", Bucket: 100, Amount: 10, Limit: 100, BucketNanos: int64(time.Second), DurationNanos: int64(time.Minute)}
 	first, err := store.Begin(context.Background(), admission.BeginRequest{
 		ID: "continue-op", ScopeKey: "tenant/continue", RequestDigest: admission.Digest([]byte("continue")),
@@ -374,10 +376,7 @@ func TestAdmissionContinueWireAndCompletion(t *testing.T) {
 func TestAdmissionDeniesOverlappingReservationAtomically(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newAdmissionHarness(now)
-	store, err := NewAdmissionStore(AdmissionOptions{Invoker: harness, Reader: harness, Keys: testKeyOptions(), Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestAdmissionStore(t, harness, harness, now)
 	reservation := admission.WindowReservation{PolicyID: "policy", WindowID: "window", Bucket: 100, Amount: 6, Limit: 10, BucketNanos: int64(time.Second), DurationNanos: int64(10 * time.Second)}
 	first, err := store.Begin(context.Background(), admission.BeginRequest{ID: "one", ScopeKey: "one", RequestDigest: admission.Digest([]byte("one")), Reservation: 6, Reservations: []admission.WindowReservation{reservation}, ExpiresAt: now.Add(time.Hour)})
 	if err != nil || first.Denied != nil {

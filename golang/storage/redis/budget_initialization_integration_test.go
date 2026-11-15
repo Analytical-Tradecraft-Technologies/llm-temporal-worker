@@ -3,7 +3,6 @@
 package redis
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"sync"
@@ -17,12 +16,7 @@ import (
 )
 
 func TestLiveRedisBudgetInitialization(t *testing.T) {
-	client := openLiveRedis(t)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if err := client.ScriptLoad(ctx, AdmissionLuaSource()).Err(); err != nil {
-		t.Fatal(err)
-	}
+	client, ctx := openLiveRedisWithAdmissionLua(t, time.Minute)
 	for _, mode := range []AdmissionMode{AdmissionModeFunction, AdmissionModeLua} {
 		t.Run(string(mode), func(t *testing.T) {
 			fixture := func(t *testing.T) (*RedisBudgetInitializer, budget.Initialization) {

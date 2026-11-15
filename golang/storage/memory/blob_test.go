@@ -9,12 +9,19 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/storage/blob"
 )
 
-func TestBlobStoreCopiesDataAndBindsTenant(t *testing.T) {
-	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
-	store, err := NewBlobStore(BlobOptions{MaxBytes: 32, Clock: func() time.Time { return now }})
+// newTestBlobStore builds a blob store whose clock reads *clock.
+func newTestBlobStore(t *testing.T, maxBytes int64, clock *time.Time) *BlobStore {
+	t.Helper()
+	store, err := NewBlobStore(BlobOptions{MaxBytes: maxBytes, Clock: func() time.Time { return *clock }})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return store
+}
+
+func TestBlobStoreCopiesDataAndBindsTenant(t *testing.T) {
+	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
+	store := newTestBlobStore(t, 32, &now)
 	data := []byte("hello")
 	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: data, ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
@@ -43,10 +50,7 @@ func TestBlobStoreCopiesDataAndBindsTenant(t *testing.T) {
 
 func TestBlobStoreIsIdempotentAndRejectsConflictingMetadata(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
-	store, err := NewBlobStore(BlobOptions{MaxBytes: 32, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestBlobStore(t, 32, &now)
 	request := blob.PutRequest{Tenant: "tenant", MediaType: "application/json", Data: []byte(`{"ok":true}`), ExpiresAt: now.Add(time.Hour)}
 	first, err := store.Put(context.Background(), request)
 	if err != nil {
@@ -68,10 +72,7 @@ func TestBlobStoreIsIdempotentAndRejectsConflictingMetadata(t *testing.T) {
 func TestBlobStoreAllowsDifferentExpiryForSameContent(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	clock := now
-	store, err := NewBlobStore(BlobOptions{MaxBytes: 32, Clock: func() time.Time { return clock }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestBlobStore(t, 32, &clock)
 	first, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("hello"), ExpiresAt: now.Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
@@ -98,10 +99,7 @@ func TestBlobStoreAllowsDifferentExpiryForSameContent(t *testing.T) {
 func TestBlobStoreSweepsExpiredEntries(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
 	clock := now
-	store, err := NewBlobStore(BlobOptions{MaxBytes: 32, Clock: func() time.Time { return clock }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestBlobStore(t, 32, &clock)
 	ref, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("hello"), ExpiresAt: now.Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +115,8 @@ func TestBlobStoreSweepsExpiredEntries(t *testing.T) {
 
 func TestBlobStoreEnforcesConfiguredPerBlobLimit(t *testing.T) {
 	now := time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC)
-	store, err := NewBlobStore(BlobOptions{MaxBytes: 4, Clock: func() time.Time { return now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("12345"), ExpiresAt: now.Add(time.Hour)})
+	store := newTestBlobStore(t, 4, &now)
+	_, err := store.Put(context.Background(), blob.PutRequest{Tenant: "tenant", MediaType: "text/plain", Data: []byte("12345"), ExpiresAt: now.Add(time.Hour)})
 	if err == nil {
 		t.Fatal("blob larger than configured limit was accepted")
 	}

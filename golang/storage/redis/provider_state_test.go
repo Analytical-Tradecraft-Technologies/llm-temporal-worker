@@ -127,10 +127,7 @@ func FuzzProviderStatusDecode(f *testing.F) {
 // position issued when a page ends between such routes must stay within the
 // cursor codec's default 128-byte bound and the list options' own bound.
 func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	store := &ProviderStateStore{space: space}
 	now := time.Date(2026, 7, 14, 1, 0, 0, 0, time.UTC)
 	route := strings.Repeat("r", 100)
@@ -174,10 +171,7 @@ func TestProviderStatusPagePositionIsBoundedForLongIdentifiers(t *testing.T) {
 // model or tier, so a listing shows one row per route and endpoint: the most
 // severe scoped record.
 func TestProviderStatusScopedByModelAndTier(t *testing.T) {
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	store := &ProviderStateStore{space: space}
 	now := time.Date(2026, 7, 14, 1, 0, 0, 0, time.UTC)
 	if store.routeField("route", "endpoint", "", "") != space.digest("provider-route", "route", "endpoint") {

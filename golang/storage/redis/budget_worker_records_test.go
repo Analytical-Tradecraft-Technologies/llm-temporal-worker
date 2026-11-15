@@ -14,7 +14,7 @@ func TestListWorkerRecordsFiltersPrefixAndKeep(t *testing.T) {
 		budgetWorkerLeaseFieldPrefix + "b":  "drop-b",
 		budgetWorkerRosterFieldPrefix + "a": "keep-roster",
 	}}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-a"})
+	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: "session-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestListWorkerRecordsFiltersPrefixAndKeep(t *testing.T) {
 func TestRegisteredAtKeepsExistingRosterOrFallback(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	fake := &budgetWorkerHashFake{values: make(map[string]string)}
-	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetWorkerKeys(t), BudgetWorkerLeaseOptions{SessionID: "session-a", Clock: func() time.Time { return now }})
+	store, err := NewBudgetWorkerLeaseStore(fake, testBudgetKeySpaceForAdapter(t), BudgetWorkerLeaseOptions{SessionID: "session-a", Clock: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -64,10 +64,7 @@ func TestContinuationKeysShareAdmissionHashSlot(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
 	store := newTestContinuationStore(t, harness, harness, now)
-	root, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := createTestRoot(t, store, now)
 	if len(harness.lastKeys) != 2 {
 		t.Fatalf("root continuation keys = %d, want 2", len(harness.lastKeys))
 	}
@@ -76,9 +73,7 @@ func TestContinuationKeysShareAdmissionHashSlot(t *testing.T) {
 			t.Fatalf("root key is outside admission hash slot: %q", key)
 		}
 	}
-	child := testContinuation(t, now)
-	child.ParentID = root.String()
-	child.Depth = 1
+	child := testChildContinuation(t, now, root)
 	if _, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: child, OperationKey: "operation"}); err != nil {
 		t.Fatal(err)
 	}
@@ -112,14 +107,29 @@ func testContinuation(t *testing.T, now time.Time) state.Continuation {
 	return state.Continuation{Tenant: "tenant-a", TranscriptDigest: digest, TranscriptComplete: true, CapabilityVersion: "cap-v1", PriceVersion: "price-v1", CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
 }
 
-func TestContinuationCreateGetAndTenantBinding(t *testing.T) {
-	now := time.Unix(100, 0)
-	harness := newContinuationHarness()
-	store := newTestContinuationStore(t, harness, harness, now)
+// testChildContinuation is testContinuation as the depth-1 child of parent.
+func testChildContinuation(t *testing.T, now time.Time, parent state.Handle) state.Continuation {
+	t.Helper()
+	child := testContinuation(t, now)
+	child.ParentID = parent.String()
+	child.Depth = 1
+	return child
+}
+
+func createTestRoot(t *testing.T, store *ContinuationStore, now time.Time) state.Handle {
+	t.Helper()
 	root, err := store.CreateRoot(context.Background(), testContinuation(t, now))
 	if err != nil {
 		t.Fatal(err)
 	}
+	return root
+}
+
+func TestContinuationCreateGetAndTenantBinding(t *testing.T) {
+	now := time.Unix(100, 0)
+	harness := newContinuationHarness()
+	store := newTestContinuationStore(t, harness, harness, now)
+	root := createTestRoot(t, store, now)
 	got, err := store.Get(context.Background(), root)
 	if err != nil || got.Tenant != "tenant-a" || got.ID != root.String() {
 		t.Fatalf("root = %#v, %v", got, err)
@@ -151,18 +161,13 @@ func TestContinuationStoreRoundTripsNilTranscriptForRootAndChild(t *testing.T) {
 	if gotRoot.ID != root.String() {
 		t.Fatalf("get root returned handle %q, want %q", gotRoot.ID, root)
 	}
-	space, err := newKeySpace(testKeyOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
+	space := testKeySpace(t)
 	rootRecord := harness.values[space.continuationKey("tenant-a", root.String())]
 	if !strings.Contains(rootRecord, `"Transcript":[]`) {
 		t.Fatalf("root record transcript = %s, want empty array", rootRecord)
 	}
 
-	childValue := testContinuation(t, now)
-	childValue.ParentID = root.String()
-	childValue.Depth = 1
+	childValue := testChildContinuation(t, now, root)
 	child, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: root, Child: childValue, OperationKey: "nil-transcript-operation"})
 	if err != nil {
 		t.Fatalf("create child: %v", err)
@@ -184,13 +189,8 @@ func TestContinuationChildIsImmutableAndOperationIdempotent(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
 	store := newTestContinuationStore(t, harness, harness, now)
-	parent, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
-	child := testContinuation(t, now)
-	child.ParentID = parent.String()
-	child.Depth = 1
+	parent := createTestRoot(t, store, now)
+	child := testChildContinuation(t, now, parent)
 	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parent, Child: child, OperationKey: "op-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -211,10 +211,7 @@ func TestContinuationOperationKeyIsScopedToTenantAndParent(t *testing.T) {
 	now := time.Unix(100, 0)
 	harness := newContinuationHarness()
 	store := newTestContinuationStore(t, harness, harness, now)
-	parentA, err := store.CreateRoot(context.Background(), testContinuation(t, now))
-	if err != nil {
-		t.Fatal(err)
-	}
+	parentA := createTestRoot(t, store, now)
 	rootB := testContinuation(t, now)
 	rootB.Tenant = "tenant-b"
 	parentB, err := store.CreateRoot(context.Background(), rootB)
@@ -222,9 +219,7 @@ func TestContinuationOperationKeyIsScopedToTenantAndParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	childA := testContinuation(t, now)
-	childA.ParentID = parentA.String()
-	childA.Depth = 1
+	childA := testChildContinuation(t, now, parentA)
 	first, err := store.PutChild(context.Background(), state.PutChildRequest{Parent: parentA, Child: childA, OperationKey: "shared-op"})
 	if err != nil {
 		t.Fatal(err)
