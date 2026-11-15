@@ -204,7 +204,11 @@ be ruled out. Replacing it means a new namespace:
 5. Lower budget limits for one window length if a reset window is not
    acceptable: the new namespace starts with no recorded spend.
 6. After the longest budget window has passed, delete the old namespace's
-   keys.
+   keys. Match the complete old namespace,
+   `<old key_prefix>:{<old admission_hash_tag>}:*`, never the bare
+   `<key_prefix>:*`: if only the hash tag changed, the bare prefix also
+   matches every key of the new namespace. In Redis Cluster all the old keys
+   share the old hash tag's slot.
 
 Never change `key_secret` under the same prefix and hash tag. A production
 durable worker detects it, because the budget receipt binds the secret's

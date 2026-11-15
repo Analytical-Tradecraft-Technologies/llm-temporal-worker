@@ -150,7 +150,12 @@ in the runbook; in outline:
    ([drain procedure](../runbooks/fleet-upgrade-and-rollback.md#4-drain-when-the-change-requires-it)).
 4. Stop every old worker, then start workers with the new configuration.
 5. Keep the old namespace read-only until its longest budget window has
-   passed, then delete its keys by prefix.
+   passed, then delete its keys. Every worker key starts with
+   `<key_prefix>:{<admission_hash_tag>}:` (`keySpace.admissionPrefix` in
+   `storage/redis/key.go`), so match the complete old combination,
+   `<old key_prefix>:{<old admission_hash_tag>}:*`. Never match the bare
+   `<key_prefix>:*`: when only the hash tag changed, that pattern also covers
+   the new namespace.
 
 **Accounting consequence.** The new namespace starts with no spend. Budget
 windows open after the cutover do not count spend before it, so for one
