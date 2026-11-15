@@ -217,16 +217,19 @@ func TestExportBurstDeliversEveryTraceWithinLimit(t *testing.T) {
 // nor hide earlier failures from it (#1670).
 func TestExportBreakerCountsOnlyOutages(t *testing.T) {
 	var status atomic.Int32
+	arrived := make(chan struct{})
+	release := make(chan struct{})
 	c := newTestClient(t, 0, func(w http.ResponseWriter, r *http.Request) {
 		switch code := int(status.Load()); code {
 		case 0:
-			// The server notices a client disconnect only after the body is
-			// read.
+			// Hold the request until the test has canceled it, then drop the
+			// connection. Returning normally would send an implicit 200, which
+			// the client could read as success if it arrived before the
+			// cancellation did.
 			io.Copy(io.Discard, r.Body)
-			select {
-			case <-r.Context().Done():
-			case <-time.After(5 * time.Second):
-			}
+			arrived <- struct{}{}
+			<-release
+			panic(http.ErrAbortHandler)
 		default:
 			w.WriteHeader(code)
 		}
@@ -243,11 +246,16 @@ func TestExportBreakerCountsOnlyOutages(t *testing.T) {
 	status.Store(0)
 	for i := 0; i < breakerThreshold+1; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(10*time.Millisecond, cancel)
-		if err := c.Export(ctx, op); !errors.Is(err, ErrExport) || errors.Is(err, ErrUnavailable) {
+		go func() {
+			<-arrived
+			cancel()
+		}()
+		err := c.Export(ctx, op)
+		release <- struct{}{}
+		cancel()
+		if !errors.Is(err, ErrExport) || errors.Is(err, ErrUnavailable) {
 			t.Fatalf("canceled attempt %d: got %v", i, err)
 		}
-		cancel()
 	}
 	// Two outages, then neutral answers, then one more outage opens it: the
 	// neutral answers neither reset nor add to the count.
