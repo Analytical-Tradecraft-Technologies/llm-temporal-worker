@@ -502,8 +502,18 @@ including after an empty result page. Page size defaults to 100 and is capped at
 1,000. An initializing row can exist before the first event: `ReadForRecovery`
 must succeed before any work is attempted. A lagging index can still list a
 completed request, so always read authoritative state before acting. Pagination
-is not a snapshot. An external reconciler must repeat passes to discover new
-requests. Automatic recovery and cleanup are future work.
+is not a snapshot; repeat passes to discover new requests.
+
+`InspectPending` is the matching privileged, read-only query for one listed ID.
+It reads the authoritative record (and an attempt's root) and returns only
+content-free metadata: role, root and active-attempt links, retirement, and the
+execution stage, settlement and recovery deadlines. It never repairs an index
+row. The operator [`pending-list` and `pending-recover`](cli.md#pending-list)
+commands walk every shard with these two queries and recover through the
+existing runtime steps; see the
+[terminated-workflow runbook](../runbooks/terminated-workflow-pending-recovery.md).
+Neither removes rows: budget recovery reads terminal rows too. Automatic
+background recovery and cleanup are not provided.
 
 ## Limits and operational assumptions
 
