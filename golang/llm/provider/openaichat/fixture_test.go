@@ -36,10 +36,7 @@ func TestSemanticFixtureMatchesLiftedResponse(t *testing.T) {
 		EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-contract",
 		OperationKey: "fixture-op", ServiceClass: llm.ServiceClassStandard,
 	}
-	lifted, err := testProfile().liftResponse(call, &response, "req-fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, testProfile(), call, &response, "req-fixture")
 	got := contract.MarshalJSON(t, lifted)
 	assertCanonicalFixture(t, got, "response.semantic.json")
 }

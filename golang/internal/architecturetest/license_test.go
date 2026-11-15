@@ -1,7 +1,6 @@
 package architecturetest
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,11 +10,8 @@ import (
 // and image metadata aligned with the repository's Apache-2.0 LICENSE.
 func TestPackageLicenseMetadataMatchesRepositoryLicense(t *testing.T) {
 	root := repositoryRoot(t)
-	license, err := os.ReadFile(filepath.Join(root, "LICENSE"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(license), "Apache License") || !strings.Contains(string(license), "Version 2.0") {
+	license := readText(t, root, "LICENSE")
+	if !strings.Contains(license, "Apache License") || !strings.Contains(license, "Version 2.0") {
 		t.Fatal("repository LICENSE is no longer Apache-2.0; update this test and package metadata together")
 	}
 	for path, want := range map[string]string{

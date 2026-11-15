@@ -2,7 +2,6 @@ package openairesponses
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,29 +12,7 @@ import (
 )
 
 func TestListModelsNormalizesAndPagesDirectOpenAIModels(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			t.Fatalf("request path = %q, want /v1/models", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"object":"list","data":[{"id":"zeta","object":"model","created":1700000000,"owned_by":"openai"},{"id":"alpha","object":"model","created":1700000001,"owned_by":"openai"},{"id":"beta","object":"model","created":1700000002,"owned_by":"openai"}]}`)
-	}))
-	defer server.Close()
-	adapter := newInventoryAdapter(t, server)
-	first, err := adapter.ListModels(nil, provider.ModelListQuery{EndpointID: "openai-responses", Limit: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Complete || !strings.HasSuffix(first.NextCursor, ":2") || adaptertest.ModelIDs(first.Models) != "alpha,beta" {
-		t.Fatalf("first page = %#v, want alpha,beta with cursor 2", first)
-	}
-	second, err := adapter.ListModels(context.Background(), provider.ModelListQuery{EndpointID: "openai-responses", Cursor: first.NextCursor, Limit: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !second.Complete || second.NextCursor != "" || adaptertest.ModelIDs(second.Models) != "zeta" {
-		t.Fatalf("second page = %#v, want zeta complete", second)
-	}
+	adaptertest.ListModelsNormalizesAndPagesDirectOpenAIModels(t, "openai-responses", newInventoryLister)
 }
 
 func TestListModelsRedactsProviderErrors(t *testing.T) {
@@ -81,4 +58,8 @@ func newInventoryAdapter(t *testing.T, server *httptest.Server) *ModelListerAdap
 		t.Fatal(err)
 	}
 	return adapter
+}
+
+func newInventoryLister(t *testing.T, server *httptest.Server) provider.ModelLister {
+	return newInventoryAdapter(t, server)
 }

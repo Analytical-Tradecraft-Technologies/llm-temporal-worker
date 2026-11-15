@@ -34,10 +34,7 @@ func TestGenerateAndStreamCompileReservedOutputLimit(t *testing.T) {
 		}
 		request.Output = nil
 		if streaming {
-			stream, err := harness.engine.Stream(context.Background(), request)
-			if err != nil {
-				t.Fatal(err)
-			}
+			stream := harness.mustStream(t, context.Background(), request)
 			events := readTerminalStream(t, stream)
 			_ = stream.Close()
 			if _, ok := events[len(events)-1].(llm.ResponseCompleted); !ok {

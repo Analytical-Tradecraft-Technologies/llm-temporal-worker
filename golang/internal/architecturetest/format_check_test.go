@@ -25,11 +25,7 @@ func TestFormattingEntrypointsDelegateToCanonicalHelper(t *testing.T) {
 		{path: filepath.Join(root, ".github", "workflows", "master.yml"), name: ".github/workflows/master.yml"},
 		{path: filepath.Join(root, ".github", "workflows", "pull-request.yml"), name: ".github/workflows/pull-request.yml"},
 	} {
-		data, err := os.ReadFile(file.path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(data)
+		text := readText(t, file.path)
 		if !strings.Contains(text, "scripts/check-go-format.sh") {
 			t.Fatalf("%s does not invoke the canonical formatting helper", file.name)
 		}
@@ -38,13 +34,8 @@ func TestFormattingEntrypointsDelegateToCanonicalHelper(t *testing.T) {
 		}
 	}
 
-	strategy, err := os.ReadFile(filepath.Join(root, "docs", "testing", "strategy.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(strategy), "scripts/check-go-format.sh") {
-		t.Fatal("testing strategy does not document the canonical formatting helper")
-	}
+	strategy := readText(t, root, "docs", "testing", "strategy.md")
+	assertContains(t, strategy, "scripts/check-go-format.sh", "testing strategy does not document the canonical formatting helper")
 }
 
 func TestGoFormatHelperPassesNULDelimitedPathsAndSkipsExcludedTrees(t *testing.T) {
@@ -110,7 +101,7 @@ func runFormatHelper(t *testing.T, root, working, log, mode string) ([]byte, err
 	t.Helper()
 	fakeBin := t.TempDir()
 	fakeGofmt := filepath.Join(fakeBin, "gofmt")
-	if err := os.WriteFile(fakeGofmt, []byte(`#!/bin/sh
+	writeFile(t, fakeGofmt, []byte(`#!/bin/sh
 set -eu
 
 if [ "$1" != "-l" ]; then
@@ -133,9 +124,7 @@ case "${FORMATTER_MODE:-}" in
     exit 23
     ;;
 esac
-`), 0o755); err != nil {
-		t.Fatal(err)
-	}
+`), 0o755)
 	command := exec.Command("bash", filepath.Join(moduleRoot(t), "scripts", "check-go-format.sh"))
 	command.Dir = working
 	command.Env = prependPath(os.Environ(), fakeBin)
@@ -155,12 +144,8 @@ func prependPath(environment []string, directory string) []string {
 
 func writeGoFixture(t *testing.T, path string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("package fixture\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	makeDirectory(t, 0o755, filepath.Dir(path))
+	writeFile(t, path, []byte("package fixture\n"), 0o644)
 }
 
 func readNULPaths(t *testing.T, path string) []string {

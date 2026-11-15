@@ -14,6 +14,10 @@ const testPrompt = "summarize the quarterly results for project bluebird"
 
 func testSecret(fill byte) []byte { return bytes.Repeat([]byte{fill}, MinSecretBytes) }
 
+func primaryKey(id string, fill byte) Key {
+	return Key{ID: id, Secret: testSecret(fill), Primary: true}
+}
+
 func testCodec(t *testing.T, keys ...Key) converter.PayloadCodec {
 	t.Helper()
 	codec, err := NewAESGCM(keys)
@@ -38,8 +42,17 @@ func decodeValue(codec converter.PayloadCodec, payload *commonpb.Payload) (strin
 	return value, err
 }
 
+// requireDecodesPrompt requires payload to decode to testPrompt; what names
+// the decode in the failure message.
+func requireDecodesPrompt(t *testing.T, codec converter.PayloadCodec, payload *commonpb.Payload, what string) {
+	t.Helper()
+	if got, err := decodeValue(codec, payload); err != nil || got != testPrompt {
+		t.Fatalf("%s = %q, %v", what, got, err)
+	}
+}
+
 func TestRoundTripEncryptsWithPrimaryKey(t *testing.T) {
-	codec := testCodec(t, Key{ID: "k1", Secret: testSecret(1), Primary: true})
+	codec := testCodec(t, primaryKey("k1", 1))
 	payload := encodeValue(t, codec, testPrompt)
 
 	if got := string(payload.Metadata[converter.MetadataEncoding]); got != EncodingEncrypted {
@@ -54,10 +67,7 @@ func TestRoundTripEncryptsWithPrimaryKey(t *testing.T) {
 	if bytes.Contains(payload.Data, []byte("bluebird")) || bytes.Contains(payload.Data, []byte("json/plain")) {
 		t.Fatal("ciphertext exposes the plaintext payload")
 	}
-	got, err := decodeValue(codec, payload)
-	if err != nil || got != testPrompt {
-		t.Fatalf("decode = %q, %v", got, err)
-	}
+	requireDecodesPrompt(t, codec, payload, "decode")
 
 	again := encodeValue(t, codec, testPrompt)
 	if bytes.Equal(again.Data, payload.Data) {
@@ -66,7 +76,7 @@ func TestRoundTripEncryptsWithPrimaryKey(t *testing.T) {
 }
 
 func TestEncodePreservesNilPayloadsAndLength(t *testing.T) {
-	codec := testCodec(t, Key{ID: "k1", Secret: testSecret(1), Primary: true})
+	codec := testCodec(t, primaryKey("k1", 1))
 	encoded, err := codec.Encode([]*commonpb.Payload{nil, {Data: []byte("x")}})
 	if err != nil || len(encoded) != 2 || encoded[0] != nil || encoded[1] == nil {
 		t.Fatalf("Encode() = %v, %v", encoded, err)
@@ -78,16 +88,14 @@ func TestEncodePreservesNilPayloadsAndLength(t *testing.T) {
 }
 
 func TestKeyRotationDecryptsWithAnyConfiguredKey(t *testing.T) {
-	before := testCodec(t, Key{ID: "old", Secret: testSecret(1), Primary: true})
+	before := testCodec(t, primaryKey("old", 1))
 	written := encodeValue(t, before, testPrompt)
 
 	rotated := testCodec(t,
-		Key{ID: "new", Secret: testSecret(2), Primary: true},
+		primaryKey("new", 2),
 		Key{ID: "old", Secret: testSecret(1)},
 	)
-	if got, err := decodeValue(rotated, written); err != nil || got != testPrompt {
-		t.Fatalf("rotated decode of old payload = %q, %v", got, err)
-	}
+	requireDecodesPrompt(t, rotated, written, "rotated decode of old payload")
 	fresh := encodeValue(t, rotated, testPrompt)
 	if got := string(fresh.Metadata[MetadataKeyID]); got != "new" {
 		t.Fatalf("rotated codec encrypted with %q, want the primary key", got)
@@ -96,7 +104,7 @@ func TestKeyRotationDecryptsWithAnyConfiguredKey(t *testing.T) {
 		t.Fatalf("decode without the new key = %v", err)
 	}
 
-	retired := testCodec(t, Key{ID: "new", Secret: testSecret(2), Primary: true})
+	retired := testCodec(t, primaryKey("new", 2))
 	if _, err := decodeValue(retired, written); err == nil {
 		t.Fatal("a retired key still decrypted its payload")
 	}
@@ -104,7 +112,7 @@ func TestKeyRotationDecryptsWithAnyConfiguredKey(t *testing.T) {
 
 func TestDecodeRejectsTamperedPayloads(t *testing.T) {
 	codec := testCodec(t,
-		Key{ID: "k1", Secret: testSecret(1), Primary: true},
+		primaryKey("k1", 1),
 		Key{ID: "k2", Secret: testSecret(2)},
 	)
 	clone := func(payload *commonpb.Payload) *commonpb.Payload {
@@ -135,21 +143,17 @@ func TestDecodeRejectsTamperedPayloads(t *testing.T) {
 			t.Errorf("%s: error exposes payload content", name)
 		}
 	}
-	if got, err := decodeValue(codec, original); err != nil || got != testPrompt {
-		t.Fatalf("untampered decode = %q, %v", got, err)
-	}
+	requireDecodesPrompt(t, codec, original, "untampered decode")
 }
 
 // Histories written before the codec was enabled stay readable.
 func TestDecodePassesThroughUnencryptedPayloads(t *testing.T) {
-	codec := testCodec(t, Key{ID: "k1", Secret: testSecret(1), Primary: true})
+	codec := testCodec(t, primaryKey("k1", 1))
 	plain, err := converter.GetDefaultDataConverter().ToPayload(testPrompt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := decodeValue(codec, plain); err != nil || got != testPrompt {
-		t.Fatalf("decode of a plaintext payload = %q, %v", got, err)
-	}
+	requireDecodesPrompt(t, codec, plain, "decode of a plaintext payload")
 }
 
 func TestNewAESGCMRejectsInvalidKeys(t *testing.T) {

@@ -2,7 +2,6 @@ package openairesponses
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 const exaAgentResponse = `{"id":"run_1","object":"response","created_at":1,"status":"completed","model":"exa-agent",
@@ -52,17 +52,11 @@ func TestExaAgentSendsAFixedEffortAndReportsExaCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if got.URL.String() != "https://api.exa.ai/responses" || got.Header.Get("x-api-key") != "exa-key" || got.Header.Get("Authorization") != "" {
 		t.Fatalf("request = %s headers %#v", got.URL, got.Header)
 	}
-	var wire map[string]any
-	if err := json.Unmarshal(body, &wire); err != nil {
-		t.Fatal(err)
-	}
+	wire := contract.DecodeJSON[map[string]any](t, body)
 	// Exa's own default effort is metered; the adapter always fixes one.
 	if reasoning, _ := wire["reasoning"].(map[string]any); reasoning["effort"] != "medium" {
 		t.Fatalf("reasoning = %#v, want medium", wire["reasoning"])
@@ -86,9 +80,7 @@ func TestExaAgentAcceptsOnlySynchronousEfforts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := adapter.Invoke(context.Background(), call, provider.NopObserver{}); err != nil {
-		t.Fatal(err)
-	}
+	adaptertest.Invoke(t, adapter, call)
 	if !strings.Contains(string(body), `"effort":"low"`) {
 		t.Fatalf("request body = %s, want effort low", body)
 	}
@@ -98,7 +90,7 @@ func TestExaAgentAcceptsOnlySynchronousEfforts(t *testing.T) {
 		}
 	}
 	other := llm.Request{OperationKey: "exa-op", Model: "gpt-5.4", ServiceClass: llm.ServiceClassStandard}
-	if _, err := adapter.Compile(context.Background(), provider.CompileInput{Request: other, Query: provider.CapabilityQuery{EndpointID: "exa-agent", Family: provider.FamilyOpenAIResponses, Model: "gpt-5.4"}}); err == nil {
+	if _, err := adaptertest.Compile(adapter, "exa-agent", provider.FamilyOpenAIResponses, other, false); err == nil {
 		t.Fatal("the Exa agent endpoint accepted another model")
 	}
 	if _, err := NewExaClient(ExaClientConfig{BaseURL: "https://api.openai.com/v1", APIKey: "k", HTTPClient: http.DefaultClient}); err == nil {

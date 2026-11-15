@@ -13,8 +13,7 @@ import (
 // the engine entry points apply the remote-media URL policy themselves.
 func TestEngineRejectsBlockedMediaURLBeforeDispatch(t *testing.T) {
 	for _, raw := range []string{"http://localhost/a.png", "http://127.1/a.png", "http://[2002:a9fe:a9fe::1]/a.png", "http://metadata.google.internal/a.png"} {
-		adapter := &fakeAdapter{name: "fake", response: successfulResponse()}
-		harness := newHarness(t, adapter)
+		adapter, harness := newFakeHarness(t)
 		request := baseRequest("blocked-media-url")
 		request.Input = append(request.Input, llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.ImagePart{URL: raw, MediaType: "image/png"}}})
 		_, generateErr := harness.engine.Generate(context.Background(), request)

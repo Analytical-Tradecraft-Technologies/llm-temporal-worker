@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLowerStrictClosesObjectsAndMovesUnsupportedKeywords(t *testing.T) {
@@ -23,10 +25,7 @@ func TestLowerStrictClosesObjectsAndMovesUnsupportedKeywords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(lowered)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, lowered)
 	want := `{"$defs":{"line":{"additionalProperties":false,"properties":{"next":{"$ref":"#"},"sku":{"type":"string"}},"required":["sku","next"],"type":"object"}},` +
 		`"additionalProperties":false,"properties":{` +
 		`"code":{"description":"{if: {\"minLength\":2}, not: {\"const\":\"x\"}, then: {\"maxLength\":4}}","type":"string"},` +

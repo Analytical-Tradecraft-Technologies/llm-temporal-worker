@@ -1,9 +1,7 @@
 package architecturetest
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -46,14 +44,8 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 		t.Fatalf("record output = %q, want fixed success message", got)
 	}
 
-	data, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var evidence map[string]any
-	if err := json.Unmarshal(data, &evidence); err != nil {
-		t.Fatalf("decode redacted evidence: %v", err)
-	}
+	readJSONFile(t, evidencePath, "redacted evidence", &evidence)
 	assertExactKeys(t, "evidence", evidence, liveContractEvidenceFields...)
 	for _, forbidden := range redactedEvidenceForbiddenFields {
 		if _, found := evidence[forbidden]; found {
@@ -69,22 +61,16 @@ func TestLiveContractEvidenceRecorderWritesOnlyRedactedAllowlistedFields(t *test
 	if got := evidence["ceiling_micro_usd"]; got != float64(25_000) {
 		t.Fatalf("evidence ceiling_micro_usd = %#v, want 25000", got)
 	}
-	spend, ok := evidence["actual_spend"].(map[string]any)
-	if !ok {
-		t.Fatalf("evidence actual_spend = %#v, want object", evidence["actual_spend"])
-	}
+	spend := mappingField(t, "evidence actual_spend", evidence, "actual_spend")
 	if got := spend["micro_usd"]; got != float64(17) {
 		t.Fatalf("evidence actual spend = %#v, want 17", got)
 	}
 
-	log, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(log), "live-contract-ok") || strings.Contains(string(log), "api.openai.com") {
+	log := readText(t, logPath)
+	if strings.Contains(log, "live-contract-ok") || strings.Contains(log, "api.openai.com") {
 		t.Fatalf("redacted log contains non-allowlisted content: %q", log)
 	}
-	if !strings.Contains(string(log), "source_revision="+liveContractSourceRevision+"\n") {
+	if !strings.Contains(log, "source_revision="+liveContractSourceRevision+"\n") {
 		t.Fatalf("redacted log does not bind the source revision: %q", log)
 	}
 
@@ -214,18 +200,12 @@ func TestLiveContractEvidenceRecorderAllowsEachSupportedReportedCostMethod(t *te
 				t.Fatalf("record %s evidence: %v\\n%s", test.method, err, output)
 			}
 
-			data, err := os.ReadFile(paths.evidence)
-			if err != nil {
-				t.Fatal(err)
-			}
 			var evidence struct {
 				ActualSpend struct {
 					Method string `json:"method"`
 				} `json:"actual_spend"`
 			}
-			if err := json.Unmarshal(data, &evidence); err != nil {
-				t.Fatalf("decode %s evidence: %v", test.method, err)
-			}
+			readJSONFile(t, paths.evidence, test.method+" evidence", &evidence)
 			if evidence.ActualSpend.Method != test.method {
 				t.Fatalf("actual spend method = %q, want %q", evidence.ActualSpend.Method, test.method)
 			}
@@ -235,14 +215,8 @@ func TestLiveContractEvidenceRecorderAllowsEachSupportedReportedCostMethod(t *te
 
 func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *testing.T) {
 	root := repositoryRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, "docs", "release", "live-provider-contract.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var schema map[string]any
-	if err := json.Unmarshal(data, &schema); err != nil {
-		t.Fatalf("decode live provider evidence schema: %v", err)
-	}
+	readJSONFile(t, filepath.Join(root, "docs", "release", "live-provider-contract.schema.json"), "live provider evidence schema", &schema)
 	if schema["additionalProperties"] != false {
 		t.Fatalf("live provider evidence schema must be closed: %#v", schema["additionalProperties"])
 	}
@@ -250,10 +224,7 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 	if !sameStringSet(got, liveContractEvidenceFields) {
 		t.Fatalf("live provider evidence schema required fields = %#v, want %#v", got, liveContractEvidenceFields)
 	}
-	properties, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("live provider evidence schema properties = %#v, want mapping", schema["properties"])
-	}
+	properties := mappingField(t, "live provider evidence schema properties", schema, "properties")
 	for _, field := range liveContractEvidenceFields {
 		if _, ok := properties[field]; !ok {
 			t.Fatalf("live provider evidence schema is missing %q", field)
@@ -268,14 +239,8 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 			t.Fatalf("live provider evidence schema permits forbidden %q", forbidden)
 		}
 	}
-	actualSpend, ok := properties["actual_spend"].(map[string]any)
-	if !ok {
-		t.Fatalf("live provider actual spend schema = %#v, want mapping", properties["actual_spend"])
-	}
-	spendProperties, ok := actualSpend["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("live provider actual spend properties = %#v, want mapping", actualSpend["properties"])
-	}
+	actualSpend := mappingField(t, "live provider actual spend schema", properties, "actual_spend")
+	spendProperties := mappingField(t, "live provider actual spend properties", actualSpend, "properties")
 	method, ok := spendProperties["method"].(map[string]any)
 	if !ok || !sameStringSet(stringSequence(t, "live provider cost method", method, "enum"), []string{"provider_reported", "usage", "openrouter_reported", "exa_reported", "not_reported"}) {
 		t.Fatalf("live provider evidence cost method must remain closed to recorded methods, got %#v", spendProperties["method"])
@@ -319,14 +284,8 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 	if !ok || actualServiceClass["const"] != "standard" {
 		t.Fatalf("live provider actual service class must be const standard, got %#v", properties["actual_service_class"])
 	}
-	definitions, ok := schema["$defs"].(map[string]any)
-	if !ok {
-		t.Fatalf("live provider evidence schema definitions = %#v, want mapping", schema["$defs"])
-	}
-	identifier, ok := definitions["safe_identifier"].(map[string]any)
-	if !ok {
-		t.Fatalf("live provider safe identifier schema = %#v, want mapping", definitions["safe_identifier"])
-	}
+	definitions := mappingField(t, "live provider evidence schema definitions", schema, "$defs")
+	identifier := mappingField(t, "live provider safe identifier schema", definitions, "safe_identifier")
 	allOf, ok := identifier["allOf"].([]any)
 	if !ok {
 		t.Fatalf("live provider safe identifier allOf = %#v, want sequence", identifier["allOf"])
@@ -363,9 +322,7 @@ func TestLiveContractEvidenceSchemaIsClosedAndMatchesTheRecorderContract(t *test
 }
 
 func runLiveContractEvidence(root string, arguments ...string) ([]byte, error) {
-	command := exec.Command("python3", append([]string{filepath.Join(root, "scripts", "release", "live-contract-evidence.py")}, arguments...)...)
-	command.Dir = root
-	return command.CombinedOutput()
+	return runReleaseScript(root, "live-contract-evidence.py", arguments...)
 }
 
 // liveContractPaths are the recorder's raw input and redacted outputs inside
@@ -437,7 +394,5 @@ func (log liveContractRawLog) write(t *testing.T, path string) {
 		"    live_provider_test.go:35: profile=" + log.profile + " tenant=llmtw-live-contract request_id=" + log.requestID + " response_id=" + log.responseID + " actual_service_class=" + log.serviceClass + " actual_spend_known=" + strconv.FormatBool(log.known) + " actual_micro_usd=" + strconv.Itoa(log.microUSD) + " cost_method=" + log.method + " continuation_verified=" + strconv.FormatBool(log.continued),
 		"--- PASS: TestLiveProviderContracts/" + log.profile,
 	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, path, []byte(content), 0o600)
 }

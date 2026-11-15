@@ -8,7 +8,6 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
-	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -26,11 +25,7 @@ const (
 )
 
 func TestBedrockConverseContractProfileIsEnforced(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	report, err := contracttest.ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := contract.ValidateRepository(t)
 	for _, profile := range report.Enforced {
 		if profile.ID == "bedrock-converse" {
 			return

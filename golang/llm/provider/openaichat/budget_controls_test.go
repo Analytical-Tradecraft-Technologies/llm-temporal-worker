@@ -1,13 +1,13 @@
 package openaichat
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/budget"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
@@ -52,7 +52,7 @@ func TestChatRejectsUnsupportedChoiceCountsBeforeDispatch(t *testing.T) {
 			a := &Adapter{endpointID: "chat-prod", profile: validated}
 			req := boundedChatRequest()
 			req.Extensions = map[string]json.RawMessage{"choices": json.RawMessage(`{"count":` + raw + `}`)}
-			if _, err := a.Compile(context.Background(), provider.CompileInput{Request: req, Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true}); err == nil {
+			if _, err := adaptertest.Compile(a, "chat-prod", provider.FamilyOpenAIChat, req, true); err == nil {
 				t.Fatal("compiled unsupported choice count")
 			}
 		})
@@ -87,10 +87,7 @@ func TestChatSingleChoicePreservesBudgetedExplicitAndDefaultCap(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			call, err := (&Adapter{endpointID: "chat-prod", profile: p}).Compile(context.Background(), provider.CompileInput{Request: prepared, Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true})
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := adaptertest.CompileStrict(t, (&Adapter{endpointID: "chat-prod", profile: p}), "chat-prod", provider.FamilyOpenAIChat, prepared)
 			wire := contract.JSONObject(t, call.SDKParams)
 			if wire["max_completion_tokens"] != float64(16) || wire["n"] != float64(1) {
 				t.Fatalf("wire limits = %v, %v", wire["max_completion_tokens"], wire["n"])
@@ -124,7 +121,7 @@ func TestChatCompileRejectsOutputCapOverrides(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := (&Adapter{endpointID: "chat-prod", profile: p}).Compile(context.Background(), provider.CompileInput{Request: prepared, Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true}); err == nil {
+				if _, err := adaptertest.Compile((&Adapter{endpointID: "chat-prod", profile: p}), "chat-prod", provider.FamilyOpenAIChat, prepared, true); err == nil {
 					t.Fatalf("compiled output override: field=%s explicit=%v default=%v", field, explicit, asDefault)
 				}
 			}
@@ -135,7 +132,7 @@ func TestChatCompileRejectsOutputCapOverrides(t *testing.T) {
 func TestChatCompileRejectsUnsupportedChoiceDefault(t *testing.T) {
 	p := testProfile()
 	p.WireDefaults = map[string]json.RawMessage{"n": json.RawMessage(`4`)}
-	if _, err := (&Adapter{endpointID: "chat-prod", profile: p}).Compile(context.Background(), provider.CompileInput{Request: boundedChatRequest(), Query: provider.CapabilityQuery{EndpointID: "chat-prod", Family: provider.FamilyOpenAIChat, Model: "chat-model"}, Strict: true}); err == nil {
+	if _, err := adaptertest.Compile((&Adapter{endpointID: "chat-prod", profile: p}), "chat-prod", provider.FamilyOpenAIChat, boundedChatRequest(), true); err == nil {
 		t.Fatal("compiled unsupported default choice count")
 	}
 }

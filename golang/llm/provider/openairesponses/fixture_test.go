@@ -23,10 +23,7 @@ func TestSemanticFixtureMatchesLiftedResponse(t *testing.T) {
 	request := loadContractRequestFixture(t, "openai-responses", "request.semantic.json")
 	call := adaptertest.CompileStrict(t, fixtureAdapterForProfile(t, responsesFixtureProfiles[0]), "openai-fixture", provider.FamilyOpenAIResponses, request)
 	response := loadContractResponseFixture(t, "openai-responses", "response.completed.json")
-	lifted, err := liftResponse(call, &response, "req-openai-fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, call, &response, "req-openai-fixture")
 	got := contract.MarshalJSON(t, lifted)
 	assertCanonicalFixtureJSON(t, got, "openai-responses", "response.semantic.json")
 }

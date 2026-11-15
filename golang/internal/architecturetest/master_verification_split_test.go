@@ -151,9 +151,7 @@ func TestWorkflowMasterRaceRepetitionRunsOneIterationPerJob(t *testing.T) {
 	if got := scalarString(t, master.name, nestedMapping(t, master.name, strategy, "matrix"), "repetition"); got != wantRepetitions {
 		t.Fatalf("verify-race-repeat matrix repetition = %q, want %q", got, wantRepetitions)
 	}
-	if strings.Contains(master.raw, "-count=5") {
-		t.Fatal("master.yml must not repeat packages within one go test process")
-	}
+	assertOmits(t, master.raw, "-count=5", "master.yml must not repeat packages within one go test process")
 }
 
 // TestWorkflowMasterReportsScheduledFailures requires a failed scheduled run

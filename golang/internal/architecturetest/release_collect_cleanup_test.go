@@ -18,7 +18,5 @@ func TestReleaseEvidenceCollectionArmsComposeCleanupBeforeStartup(t *testing.T) 
 	if armed > start {
 		t.Fatal("collect.sh enables compose cleanup only after compose up succeeds")
 	}
-	if !strings.Contains(script, "trap cleanup EXIT") {
-		t.Fatal("collect.sh no longer cleans up on exit")
-	}
+	assertContains(t, script, "trap cleanup EXIT", "collect.sh no longer cleans up on exit")
 }

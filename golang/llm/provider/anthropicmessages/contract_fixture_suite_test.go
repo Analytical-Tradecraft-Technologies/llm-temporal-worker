@@ -65,11 +65,7 @@ var anthropicAWSFixture = anthropicContractFixture{
 }
 
 func (f anthropicContractFixture) testProfileIsEnforced(t *testing.T) {
-	root := filepath.Clean(filepath.Join("..", "..", ".."))
-	report, err := contracttest.ValidateRepository(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := contract.ValidateRepository(t)
 
 	wantPath := "llm/provider/anthropicmessages/testdata/contracts/" + f.id
 	for _, profile := range report.Enforced {
@@ -99,10 +95,7 @@ func (f anthropicContractFixture) testLoweringAndLifting(t *testing.T) {
 	f.assertCanonical(t, gotWire, "request.wire.json")
 
 	response := f.loadResponse(t, "response.completed.json")
-	lifted, err := profile.liftResponse(f.call(normalized, serviceClass), &response, f.requestID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	lifted := mustLift(t, profile, f.call(normalized, serviceClass), &response, f.requestID)
 	gotSemantic := contract.MarshalJSON(t, lifted)
 	f.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
@@ -202,28 +195,7 @@ func (f anthropicContractFixture) call(request llm.Request, serviceClass llm.Ser
 
 func (f anthropicContractFixture) assertClassFacts(t *testing.T, profile Profile) {
 	t.Helper()
-	var semantic []struct {
-		Class  llm.ServiceClass `json:"class"`
-		Actual llm.ServiceClass `json:"actual"`
-	}
-	if err := json.Unmarshal(f.read(t, "class-facts.semantic.json"), &semantic); err != nil {
-		t.Fatal(err)
-	}
-	actualByClass := make(map[llm.ServiceClass]llm.ServiceClass, len(semantic))
-	for _, fact := range semantic {
-		actualByClass[fact.Class] = fact.Actual
-	}
-
-	var wire []struct {
-		Class            llm.ServiceClass `json:"class"`
-		Supported        bool             `json:"supported"`
-		RequestedTier    string           `json:"requested_tier"`
-		ActualTier       string           `json:"actual_tier"`
-		PriorityCapacity *bool            `json:"priority_capacity"`
-	}
-	if err := json.Unmarshal(f.read(t, "class-facts.wire.json"), &wire); err != nil {
-		t.Fatal(err)
-	}
+	wire, actualByClass := contract.ClassFacts(t, f.read(t, "class-facts.semantic.json"), f.read(t, "class-facts.wire.json"))
 	for _, fact := range wire {
 		fixtureProfile := profile
 		if fact.PriorityCapacity != nil {

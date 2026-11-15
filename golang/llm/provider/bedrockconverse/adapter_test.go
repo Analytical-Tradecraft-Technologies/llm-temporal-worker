@@ -64,10 +64,7 @@ func TestCompileAndInvokeConverse(t *testing.T) {
 	if params.ServiceTier == nil || params.ServiceTier.Type != types.ServiceTierTypePriority {
 		t.Fatalf("service tier = %#v, want priority", params.ServiceTier)
 	}
-	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := adaptertest.Invoke(t, adapter, call)
 	if fake.input == nil || fake.input.ServiceTier.Type != types.ServiceTierTypePriority {
 		t.Fatalf("invoked service tier = %#v, want priority", fake.input.ServiceTier)
 	}

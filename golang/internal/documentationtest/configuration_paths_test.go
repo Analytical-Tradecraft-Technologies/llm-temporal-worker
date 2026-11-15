@@ -1,8 +1,6 @@
 package documentationtest
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -20,11 +18,8 @@ import (
 // by another block (#1673). A field of a type used in several places, such
 // as a secret reference, needs one in-place example among them.
 func TestConfigurationReferenceShowsEveryFieldInPlace(t *testing.T) {
-	reference, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "reference", "configuration.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	documented := documentedYAMLKeyChains(t, string(reference))
+	reference := readText(t, "..", "..", "..", "docs", "reference", "configuration.md")
+	documented := documentedYAMLKeyChains(t, reference)
 	type ownedField struct {
 		owner reflect.Type
 		name  string

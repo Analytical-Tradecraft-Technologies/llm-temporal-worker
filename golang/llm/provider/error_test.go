@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestCommonErrorKeepsCauseLocalAndSerializesSafeFacts(t *testing.T) {
@@ -96,10 +97,7 @@ func TestWithEndpointIDCopiesSafeDetailsWithoutExposingCause(t *testing.T) {
 	if _, found := original.SafeDetails["endpoint"]; found {
 		t.Fatal("WithEndpointID mutated the original error")
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	for _, raw := range []string{"secret", "private-provider-content"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe endpoint error leaked %q: %s", raw, encoded)
@@ -119,10 +117,7 @@ func TestNewEgressDeniedErrorKeepsDiagnosticCauseLocal(t *testing.T) {
 	if !errors.Is(mapped, provider.ErrProviderEgressDenied) || !errors.Is(mapped, cause) {
 		t.Fatal("egress marker or diagnostic cause was not preserved")
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	for _, raw := range []string{"provider-secret", "private-content"} {
 		if strings.Contains(string(encoded), raw) || strings.Contains(mapped.Error(), raw) {
 			t.Fatalf("safe egress error leaked %q: %s", raw, encoded)

@@ -50,11 +50,7 @@ func TestVerifyRenderedRejectsPortRangesThatSpanStateControlPorts(t *testing.T) 
 }
 
 func TestVerifyRenderedBindsNetworkPolicyToWorkerDeployment(t *testing.T) {
-	tests := []struct {
-		name    string
-		change  func(string) string
-		message string
-	}{
+	assertRenderedChangesRejected(t, "worker NetworkPolicy binding", []renderedChange{
 		{name: "selector targets another workload", change: replaceOnce("podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector:\n    matchLabels:\n      app.kubernetes.io/name: another-worker\n      app.kubernetes.io/component: worker"), message: "podSelector must exactly match the worker Deployment selector"},
 		{name: "selector targets every pod", change: replaceOnce("podSelector:\n    matchLabels:\n      app.kubernetes.io/name: llm-temporal-worker\n      app.kubernetes.io/component: worker", "podSelector: {}"), message: "podSelector must exactly match the worker Deployment selector"},
 		{
@@ -66,13 +62,7 @@ func TestVerifyRenderedBindsNetworkPolicyToWorkerDeployment(t *testing.T) {
 			message: "NetworkPolicy namespace must match the worker Deployment namespace",
 		},
 		{name: "egress policy type omitted", change: replaceOnce("policyTypes: [Ingress, Egress]", "policyTypes: [Ingress]"), message: "NetworkPolicy policyTypes must include Egress"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			assertRenderedBaseRejected(t, test.change(validRenderedWorkload), test.message, "worker NetworkPolicy binding")
-		})
-	}
+	})
 }
 
 func TestVerifyRenderedRejectsNegativeStateNamespaceSelectors(t *testing.T) {
@@ -165,11 +155,7 @@ metadata:
 }
 
 func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
-	tests := []struct {
-		name    string
-		change  func(string) string
-		message string
-	}{
+	assertRenderedChangesRejected(t, "base workload", []renderedChange{
 		{name: "root UID", change: replaceOnce("runAsUser: 65532", "runAsUser: 0"), message: "positive numeric UID"},
 		{name: "string UID", change: replaceOnce("runAsUser: 65532", "runAsUser: \"65532\""), message: "positive numeric UID"},
 		{name: "container UID override", change: replaceOnce("securityContext:\n            allowPrivilegeEscalation: false", "securityContext:\n            runAsUser: 65532\n            allowPrivilegeEscalation: false"), message: "container securityContext must not set runAsUser"},
@@ -187,22 +173,10 @@ func TestVerifyRenderedRejectsWorkloadPolicyViolations(t *testing.T) {
 		{name: "wrong readiness endpoint", change: replaceOnce("path: /health/ready", "path: /health/live"), message: "/health/ready"},
 		{name: "wrong health container port", change: replaceOnce("containerPort: 8080", "containerPort: 80"), message: "named health port"},
 		{name: "wrong liveness port reference", change: replaceOnce("path: /health/live\n              port: health", "path: /health/live\n              port: 9999"), message: "health port"},
-		{
-			name: "unapproved service account token",
-			change: func(value string) string {
-				return strings.Replace(value, "automountServiceAccountToken: false", "automountServiceAccountToken: true", -1)
-			},
-			message: "only in a workload identity overlay",
-		},
+		{name: "unapproved service account token", change: replaceAll("automountServiceAccountToken: false", "automountServiceAccountToken: true"), message: "only in a workload identity overlay"},
 		{name: "init container", change: replaceOnce("      containers:\n", "      initContainers:\n        - name: unsafe\n          image: busybox@sha256:REPLACE_WITH_RELEASE_DIGEST\n      containers:\n"), message: "init containers are not allowed"},
 		{name: "additional container", change: replaceOnce("      volumes:\n", "        - name: sidecar\n          image: busybox@sha256:REPLACE_WITH_RELEASE_DIGEST\n      volumes:\n"), message: "exactly one container"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			assertRenderedBaseRejected(t, test.change(validRenderedWorkload), test.message, "base workload")
-		})
-	}
+	})
 }
 
 func TestVerifyRenderedAllowsOnlyAnnotatedIdentityOverlays(t *testing.T) {
@@ -352,25 +326,11 @@ data:
 `
 
 func TestVerifyRenderedRequiresContentHashedImmutableConfigMap(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(string) string
-		want   string
-	}{
-		{name: "fixed name", mutate: func(rendered string) string {
-			return strings.ReplaceAll(rendered, "llmtw-config-5f8c2d7b9h", "llmtw-config")
-		}, want: "content-hashed"},
-		{name: "static suffix", mutate: func(rendered string) string {
-			return strings.ReplaceAll(rendered, "llmtw-config-5f8c2d7b9h", "llmtw-config-static")
-		}, want: "content-hashed"},
-		{name: "mutable", mutate: func(rendered string) string {
-			return strings.Replace(rendered, "immutable: true\n", "", 1)
-		}, want: "must be immutable"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			assertRenderedBaseRejected(t, test.mutate(validRenderedWorkload), test.want, "base workload")
-		})
-	}
+	assertRenderedChangesRejected(t, "base workload", []renderedChange{
+		{name: "fixed name", change: replaceAll("llmtw-config-5f8c2d7b9h", "llmtw-config"), message: "content-hashed"},
+		{name: "static suffix", change: replaceAll("llmtw-config-5f8c2d7b9h", "llmtw-config-static"), message: "content-hashed"},
+		{name: "mutable", change: replaceOnce("immutable: true\n", ""), message: "must be immutable"},
+	})
 }
 
 // More than one replica must be spread across nodes (#1515).
@@ -416,6 +376,32 @@ func TestVerifyRenderedRequiresReplicaSpread(t *testing.T) {
 func replaceOnce(old, new string) func(string) string {
 	return func(value string) string {
 		return strings.Replace(value, old, new, 1)
+	}
+}
+
+// replaceAll returns a change that replaces every old with new.
+func replaceAll(old, new string) func(string) string {
+	return func(value string) string {
+		return strings.ReplaceAll(value, old, new)
+	}
+}
+
+// renderedChange is a named edit of the valid rendered workload that the base
+// overlay must reject with an error containing message.
+type renderedChange struct {
+	name    string
+	change  func(string) string
+	message string
+}
+
+// assertRenderedChangesRejected runs each change as a subtest; label names
+// the violations.
+func assertRenderedChangesRejected(t *testing.T, label string, changes []renderedChange) {
+	t.Helper()
+	for _, test := range changes {
+		t.Run(test.name, func(t *testing.T) {
+			assertRenderedBaseRejected(t, test.change(validRenderedWorkload), test.message, label)
+		})
 	}
 }
 

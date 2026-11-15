@@ -5,10 +5,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"maps"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -392,12 +392,7 @@ func forbiddenTemporalStreamingReferences(file *ast.File) []string {
 		}
 		return true
 	})
-	references := make([]string, 0, len(found))
-	for reference := range found {
-		references = append(references, reference)
-	}
-	sort.Strings(references)
-	return references
+	return slices.Sorted(maps.Keys(found))
 }
 
 func activitiesStreamingMethodReferences(file *ast.File) []string {
@@ -412,12 +407,7 @@ func activitiesStreamingMethodReferences(file *ast.File) []string {
 			found[function.Name.Name] = struct{}{}
 		}
 	}
-	references := make([]string, 0, len(found))
-	for reference := range found {
-		references = append(references, reference)
-	}
-	sort.Strings(references)
-	return references
+	return slices.Sorted(maps.Keys(found))
 }
 
 func activitiesEngineStreamingReferences(file *ast.File) []string {
@@ -441,12 +431,7 @@ func activitiesEngineStreamingReferences(file *ast.File) []string {
 			return true
 		})
 	}
-	references := make([]string, 0, len(found))
-	for reference := range found {
-		references = append(references, reference)
-	}
-	sort.Strings(references)
-	return references
+	return slices.Sorted(maps.Keys(found))
 }
 
 func activityReceiverAliases(body *ast.BlockStmt, receiver string) map[string]struct{} {
@@ -656,11 +641,7 @@ func parseArchitectureSource(t *testing.T, name, source string) *ast.File {
 
 func readArchitectureSource(t *testing.T, path string) string {
 	t.Helper()
-	source, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(source)
+	return readText(t, path)
 }
 
 func replaceArchitectureSource(t *testing.T, source, before, after string) string {

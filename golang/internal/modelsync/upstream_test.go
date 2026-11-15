@@ -130,11 +130,8 @@ func TestCompilePricesOpenRouterAtTheMostExpensiveAllowedEndpoint(t *testing.T) 
 	document := upstreamDocument()
 	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default", llm.ServiceClassPriority: "default"})
 	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
-	compiled, err := Compile(Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy,
+	compiled := mustCompile(t, Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy,
 		Reserved: map[string]struct{}{"vendor/unlisted-precision": {}}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	var input string
 	for _, entry := range compiled.Prices {
 		if entry.Model == "deepseek/deepseek-v3.2" {
@@ -154,10 +151,7 @@ func TestCompilePricesOpenRouterAtTheMostExpensiveAllowedEndpoint(t *testing.T) 
 		t.Fatal("reserved model has no upstreams")
 	}
 	none, _ := NewUpstreamPolicy(CountryListUS, true, true, false, nil)
-	compiled, err = Compile(Input{Document: document, Rules: Rules{Digest: "x"}, OpenRouter: &openrouter, Policy: none})
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled = mustCompile(t, Input{Document: document, Rules: Rules{Digest: "x"}, OpenRouter: &openrouter, Policy: none})
 	if len(compiled.Models) != 0 || len(compiled.Upstreams) != 0 {
 		t.Fatalf("models %v upstreams %v, want none without native precision rules", compiled.Models, compiled.Upstreams)
 	}
@@ -280,12 +274,9 @@ func TestCompileTakesRouteLimitsFromAllowedEndpoints(t *testing.T) {
 		}
 	}
 	document.Models[0].ContextLength, document.Models[0].MaxCompletionTokens = 1000000, 100000
-	openrouter := testSource("openrouter", "", "openai_chat", map[llm.ServiceClass]string{llm.ServiceClassStandard: "default"})
+	openrouter := standardOpenRouterSource()
 	policy, _ := NewUpstreamPolicy(CountryListCore5, false, false, false, nil)
-	compiled, err := Compile(Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy})
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiled := mustCompile(t, Input{Document: document, Rules: mergedPrecisionRules(t), OpenRouter: &openrouter, Policy: policy})
 	route := compiled.Models["deepseek/deepseek-v3.2"].Routes[0]
 	if route.ContextTokens != 64000 || route.OutputTokens != 8000 {
 		t.Fatalf("route limits = %d/%d, want the allowed endpoints' 64000/8000", route.ContextTokens, route.OutputTokens)

@@ -31,12 +31,9 @@ func sendSchemaRequest(t *testing.T, toolSchema, toolOutputSchema, outputSchema 
 	if toolOutputSchema != "" {
 		tool.OutputSchema = json.RawMessage(toolOutputSchema)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-order", Model: "gpt-contract",
-			Tools:  []llm.Tool{tool},
-			Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(outputSchema)}}},
-		Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: "gpt-contract"},
-	})
+	call, err := adaptertest.Compile(adapter, "openai-prod", provider.FamilyOpenAIResponses, llm.Request{OperationKey: "op-order", Model: "gpt-contract",
+		Tools:  []llm.Tool{tool},
+		Output: &llm.OutputSpec{Format: llm.OutputFormat{Kind: llm.OutputKindJSONSchema, Name: "answer", Strict: true, Schema: json.RawMessage(outputSchema)}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,11 +27,8 @@ func TestConfigurationReferenceNamesEveryField(t *testing.T) {
 		if strings.HasSuffix(source, "_test.go") {
 			continue
 		}
-		data, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, match := range tag.FindAllStringSubmatch(string(data), -1) {
+		data := readText(t, source)
+		for _, match := range tag.FindAllStringSubmatch(data, -1) {
 			fields[match[1]] = filepath.Base(source)
 		}
 	}
