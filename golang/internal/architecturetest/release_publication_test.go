@@ -247,7 +247,7 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 	arm64Digest := "sha256:" + strings.Repeat("e", 64)
 	newEvidence := func(revision, imageDigest string) map[string]any {
 		artifacts := map[string]any{}
-		for _, name := range []string{"image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64"} {
+		for _, name := range []string{"image_index", "sbom", "image_scan", "sbom_arm64", "image_scan_arm64", "contract_kit"} {
 			artifacts[name] = map[string]any{}
 		}
 		return map[string]any{
@@ -296,6 +296,9 @@ func TestReleaseGuardBindsDownloadedEvidenceToTheTagCommitAndDigest(t *testing.T
 		}, wantError: true},
 		{name: "arm64 scan missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
 			delete(evidence["artifacts"].(map[string]any), "image_scan_arm64")
+		}, wantError: true},
+		{name: "contract kit missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
+			delete(evidence["artifacts"].(map[string]any), "contract_kit")
 		}, wantError: true},
 		{name: "image index missing", evidence: newEvidence(commit, digest), mutate: func(evidence map[string]any) {
 			delete(evidence["artifacts"].(map[string]any), "image_index")

@@ -94,6 +94,7 @@
         "benchmark_summary": { "$ref": "#/$defs/artifact" },
         "worker_error_summary": { "$ref": "#/$defs/artifact" },
         "fixture_manifest": { "$ref": "#/$defs/artifact" },
+        "contract_kit": { "$ref": "#/$defs/artifact" },
         "redis_summary": { "$ref": "#/$defs/artifact" },
         "temporal_summary": { "$ref": "#/$defs/artifact" },
         "compose_summary": { "$ref": "#/$defs/artifact" },

@@ -90,6 +90,7 @@ worker database; the service has no deployed SQL data. See the
 - [Durable-storage key management (proposed design)](architecture/durable-storage-key-management.md)
 - [Guarded live-provider contracts](reference/live-provider-contracts.md)
 - [Adapter fixture matrix](testing/fixture-matrix.md)
+- [v1 consumer contract kit](testing/contract-kit.md)
 - [Architecture decisions](decisions/)
 - [Redis budget generation recovery runbook](runbooks/redis-budget-generation-recovery.md)
 - [Terminated workflow pending-recovery runbook](runbooks/terminated-workflow-pending-recovery.md)
