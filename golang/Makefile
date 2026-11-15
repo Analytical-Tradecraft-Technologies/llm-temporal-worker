@@ -265,6 +265,11 @@ compose-smoke:
 # removes only the project resources, generated continuation key, temporary Go
 # cache, and images it creates. It never sends a provider request: the Temporal
 # recovery test injects a content-free adapter in the Go test process.
+# Finally it scales the worker to two Compose replicas on the shared Redis and
+# proves both poll the one task queue and complete requests through Redis
+# admission. The private provider mock fails the egress policy, so those
+# requests end in a definite, non-dispatched no-route refusal; no provider
+# request is sent.
 # The Compose wait timeout is five minutes: the Temporal and worker
 # healthchecks allow up to 212s (20s start period plus 24 checks at 5s
 # intervals with 3s timeouts), so a slow but healthy CI runner is not cut off.
@@ -367,6 +372,27 @@ compose-live-integration:
 	fi; \
 	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^(TestLiveRedisKeyPrefixFollowsComposeNamespace|TestLiveRecoveryWorkerOptionsUseTemporalSupportedMinimum|TestTemporalRecoveryWithSharedRedis|TestTemporalKeepaliveCompletesLongOneShotProviderCall)$$'; then \
 		echo "compose-live-integration Temporal recovery test service logs (redacted; service output only; no environment inspection):" >&2; \
+		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
+			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
+			LLMTW_LOG_REDACT_POSTGRES_PASSWORD="$$postgres_password" \
+			LLMTW_LOG_REDACT_MOCK_API_KEY="$$mock_api_key" \
+			LLMTW_LOG_REDACT_CONTINUATION_HMAC="$$continuation_hmac" \
+			sh ./scripts/redact-compose-logs.sh >&2 || true; \
+		exit 1; \
+	fi; \
+	if ! $(COMPOSE) --profile worker up --wait --wait-timeout 300 --no-recreate --scale worker=2 worker; then \
+		echo "compose-live-integration two-replica scale-up service logs (redacted; service output only; no environment inspection):" >&2; \
+		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
+			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
+			LLMTW_LOG_REDACT_POSTGRES_PASSWORD="$$postgres_password" \
+			LLMTW_LOG_REDACT_MOCK_API_KEY="$$mock_api_key" \
+			LLMTW_LOG_REDACT_CONTINUATION_HMAC="$$continuation_hmac" \
+			sh ./scripts/redact-compose-logs.sh >&2 || true; \
+		exit 1; \
+	fi; \
+	worker_containers="$$( $(COMPOSE) ps -q worker | tr '\n' ' ' )"; \
+	if ! GOCACHE="$$go_cache" LLMTW_TEMPORAL_ADDRESS="$$temporal_address" LLMTW_REDIS_ADDR="$$redis_address" LLMTW_REDIS_USERNAME="$$redis_username" LLMTW_REDIS_PASSWORD="$$redis_password" LLMTW_REDIS_KEY_PREFIX="$$redis_key_prefix" LLMTW_COMPOSE_WORKER_CONTAINERS="$$worker_containers" $(GO) test -count=1 -tags=composeliveintegration ./integration/temporal -run '^TestComposeTwoWorkerReplicasShareTaskQueueAndRedis$$'; then \
+		echo "compose-live-integration two-replica smoke test service logs (redacted; service output only; no environment inspection):" >&2; \
 		$(COMPOSE) logs --no-color temporal postgres redis redis-function-provisioner blob-volume-provisioner provider-mock worker 2>&1 | \
 			LLMTW_LOG_REDACT_REDIS_PASSWORD="$$redis_password" \
 			LLMTW_LOG_REDACT_POSTGRES_PASSWORD="$$postgres_password" \

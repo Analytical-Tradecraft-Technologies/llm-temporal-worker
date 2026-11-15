@@ -503,10 +503,22 @@ Temporal/Compose gate adds the real worker and task-queue boundary.
 - Kubernetes Kustomize build and policy assertions;
 - Compose single-worker lifecycle smoke (`make compose-live-integration`:
   worker readiness tracking a Redis stop and restart);
-- two workers sharing real Temporal and Redis: concurrent replay of one
-  operation (`make cloud-workflow-integration`) and worker-loss recovery
-  (the Temporal recovery suite in `make compose-live-integration`); a
-  two-pod Compose or Kubernetes deployment run is not yet checked in;
+- Compose two-replica Redis-backed smoke (the last step of
+  `make compose-live-integration`, which runs in the pull-request `verify` job
+  and the master `verify-image` job): the target scales the worker service to
+  two containers (`--scale worker=2`) on the shared Redis, and
+  `TestComposeTwoWorkerReplicasShareTaskQueueAndRedis` in
+  `golang/integration/temporal/live_two_replica_test.go` checks that Temporal
+  reports an Activity poller for each container on the one task queue, that
+  requests are started by both containers and each reaches a terminal outcome,
+  and that each request leaves exactly one admission operation in the shared
+  Redis. The local profile's provider mock is Docker-private and fails the
+  egress policy, so after admission these requests end in a definite,
+  non-dispatched no-route refusal, not model output;
+- two workers sharing real Temporal and Redis with a content-free in-process
+  adapter, which do complete inference: concurrent replay of one operation
+  (`make cloud-workflow-integration`) and worker-loss recovery (the Temporal
+  recovery suite in `make compose-live-integration`);
 - Redis restart/failover and persistence configuration;
 - signal/reload behavior with valid and invalid snapshots;
 - log/trace/heartbeat deny-field assertions;
