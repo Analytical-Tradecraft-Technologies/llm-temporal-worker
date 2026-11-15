@@ -153,15 +153,7 @@ func compileProdCall(t *testing.T, client *Client, baseURL, operationKey string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: operationKey, Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-prod", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter, call
+	return adapter, adaptertest.CompileStrict(t, adapter, "anthropic-prod", provider.FamilyAnthropicMessages, llm.Request{OperationKey: operationKey, Model: "claude-contract"})
 }
 
 type roundTripFunc = adaptertest.RoundTripFunc

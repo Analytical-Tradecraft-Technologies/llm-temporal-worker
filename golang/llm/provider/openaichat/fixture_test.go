@@ -1,15 +1,13 @@
 package openaichat
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
@@ -24,10 +22,7 @@ func TestWireFixtureMatchesNormalizedSDKParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, params)
 	assertCanonicalFixture(t, got, "request.wire.json")
 }
 
@@ -47,34 +42,16 @@ func TestSemanticFixtureMatchesLiftedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := json.Marshal(lifted)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := contract.MarshalJSON(t, lifted)
 	assertCanonicalFixture(t, got, "response.semantic.json")
 }
 
 func assertCanonicalFixture(t *testing.T, got []byte, name string) {
 	t.Helper()
-	want := readFixture(t, name)
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("fixture %s mismatch\n got: %s\nwant: %s", name, gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, readFixture(t, name), "fixture "+name)
 }
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("testdata/unit/chat/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return contract.ReadFixture(t, "testdata/unit/chat/"+name)
 }

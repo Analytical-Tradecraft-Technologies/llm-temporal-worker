@@ -147,6 +147,29 @@ func FragmentationInvariant(t *testing.T, wire []byte, seed int64, maxChunk int,
 			t.Fatalf("split %d changed decoded events\n got: %#v\nwant: %#v", split, got, want)
 		}
 	}
+	assertFragmentsDecodeTo(t, want, wire, seed, maxChunk, decode)
+	return want
+}
+
+// FragmentsAssemble checks that decode returns the same events for wire read
+// whole, one byte at a time, and in chunks of up to maxChunk bytes from seed,
+// and that those events assemble into a response for operationKey.
+func FragmentsAssemble(t *testing.T, wire []byte, seed int64, maxChunk int, operationKey string, decode Decode) {
+	t.Helper()
+	want, err := decode(bytes.NewReader(wire))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFragmentsDecodeTo(t, want, wire, seed, maxChunk, decode)
+	if _, err := Assemble(operationKey, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertFragmentsDecodeTo checks that decode returns want for wire read one
+// byte at a time and in chunks of up to maxChunk bytes from seed.
+func assertFragmentsDecodeTo(t *testing.T, want []provider.Event, wire []byte, seed int64, maxChunk int, decode Decode) {
+	t.Helper()
 	for _, chunks := range [][][]byte{Fragment(wire, 1), RandomFragment(wire, seed, maxChunk)} {
 		got, err := decode(NewChunkReader(chunks))
 		if err != nil {
@@ -156,7 +179,6 @@ func FragmentationInvariant(t *testing.T, wire []byte, seed int64, maxChunk int,
 			t.Fatalf("fragmented events differ\n got: %#v\nwant: %#v", got, want)
 		}
 	}
-	return want
 }
 
 // Assemble assembles events into the response for operationKey.

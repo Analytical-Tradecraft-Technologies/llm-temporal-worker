@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLowerRequestMapsSystemToolsOutputSamplingAndReasoning(t *testing.T) {
@@ -34,7 +35,7 @@ func TestLowerRequestMapsSystemToolsOutputSamplingAndReasoning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := marshalBedrockWire(t, params)
+	wire := contract.JSONObject(t, params)
 	if wire["model"] != "claude-contract" || wire["max_tokens"] != float64(maxTokens) {
 		t.Fatalf("request identity = %#v", wire)
 	}
@@ -205,7 +206,7 @@ func TestDefaultReasoningDoesNotOverrideProviderThinking(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wire := marshalBedrockWire(t, params)
+			wire := contract.JSONObject(t, params)
 			thinking, exists := wire["thinking"]
 			if test.wantType == "" {
 				if exists {

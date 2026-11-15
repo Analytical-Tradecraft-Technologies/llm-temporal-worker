@@ -12,6 +12,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 type fakeConverse struct {
@@ -52,10 +53,7 @@ func TestCompileAndInvokeConverse(t *testing.T) {
 	// contract so this fixture exercises a tier the documented model supports.
 	request := llm.Request{OperationKey: "op-1", Model: "amazon.nova-pro-v1:0", ServiceClass: llm.ServiceClassPriority,
 		Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "Hello"}}}}}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{Family: provider.FamilyBedrockConverse, EndpointID: "bedrock-prod", Model: request.Model}, Strict: true})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockConverse, request)
 	params, ok := call.SDKParams.(bedrockruntime.ConverseInput)
 	if !ok {
 		t.Fatalf("SDK params type = %T", call.SDKParams)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // The AWS gateway client resolves credentials once at construction and again
@@ -61,14 +62,7 @@ echo '{"Version":1,"AccessKeyId":"AKIDFIXTURE","SecretAccessKey":"fixture-secret
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "op-credentials", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}},
-		Query:   provider.CapabilityQuery{EndpointID: "anthropic-aws", Family: provider.FamilyAnthropicMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "anthropic-aws", provider.FamilyAnthropicMessages, llm.Request{OperationKey: "op-credentials", Model: "claude-contract", Input: []llm.Item{llm.Message{Actor: llm.ActorHuman, Content: []llm.Part{llm.TextPart{Text: "hello"}}}}})
 	_, err = adapter.Invoke(context.Background(), call, nil)
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Dispatch != provider.DispatchNotDispatched || mapped.Retry != provider.RetryNextRoute || !errors.Is(err, provider.ErrProviderPreDispatch) {

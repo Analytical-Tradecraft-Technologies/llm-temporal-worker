@@ -16,6 +16,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -48,10 +49,7 @@ func TestAnthropicAWSContractFixtureLowersToolInputAndOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotWire, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotWire := contract.MarshalJSON(t, params)
 	anthropicAWSFixture.assertCanonical(t, gotWire, "request.tool-input-output.wire.json")
 }
 
@@ -101,18 +99,7 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: anthropicAWSFixtureEndpoint,
-			Family:     provider.FamilyAnthropicMessages,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, anthropicAWSFixtureEndpoint, provider.FamilyAnthropicMessages, request)
 	result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	if err != nil {
 		t.Fatal(err)
@@ -128,10 +115,7 @@ func TestAnthropicAWSContractFixturesUseIndependentProfileTransport(t *testing.T
 	if got.URL.Path != "/aws-contract/v1/messages" {
 		t.Fatalf("Anthropic AWS transport path = %q", got.URL.Path)
 	}
-	gotSemantic, err := json.Marshal(result.Response)
-	if err != nil {
-		t.Fatal(err)
-	}
+	gotSemantic := contract.MarshalJSON(t, result.Response)
 	anthropicAWSFixture.assertCanonical(t, gotSemantic, "response.semantic.json")
 }
 
@@ -180,18 +164,7 @@ func assertAnthropicAWSFixtureClassifiedError(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := anthropicAWSFixture.loadRequest(t, "request.semantic.json")
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: request,
-		Query: provider.CapabilityQuery{
-			EndpointID: anthropicAWSFixtureEndpoint,
-			Family:     provider.FamilyAnthropicMessages,
-			Model:      request.Model,
-		},
-		Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, anthropicAWSFixtureEndpoint, provider.FamilyAnthropicMessages, request)
 	_, err = adapter.Invoke(context.Background(), call, provider.NopObserver{})
 	var mapped *provider.Error
 	if !errors.As(err, &mapped) || mapped.Code != provider.CodeAuthentication || mapped.Phase != provider.PhaseDispatch || mapped.Dispatch != provider.DispatchRejected || mapped.Provider.RequestID != "aws-auth-fixture" {

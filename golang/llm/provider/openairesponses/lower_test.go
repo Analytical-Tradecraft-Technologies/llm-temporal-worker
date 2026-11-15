@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // function_call_output has no error field, so is_error is emulated with the
@@ -83,7 +84,7 @@ func TestLoweringPreservesTypedInputAndControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := marshalParams(t, params)
+	wire := contract.JSONObject(t, params)
 	if got := wire["model"]; got != "gpt-contract" {
 		t.Fatalf("model = %#v", got)
 	}
@@ -132,12 +133,12 @@ func TestLoweringMapsOnlyPublicServiceClasses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("class %s: %v", test.class, err)
 		}
-		wire := marshalParams(t, params)
+		wire := contract.JSONObject(t, params)
 		if wire["service_tier"] != test.want {
 			t.Errorf("class %s -> %#v, want %s", test.class, wire["service_tier"], test.want)
 		}
-		if strings.Contains(string(mustJSON(t, params)), "provider_default") {
-			t.Errorf("public service class leaked provider_default: %s", mustJSON(t, params))
+		if strings.Contains(string(contract.MarshalJSON(t, params)), "provider_default") {
+			t.Errorf("public service class leaked provider_default: %s", contract.MarshalJSON(t, params))
 		}
 	}
 }
@@ -173,11 +174,11 @@ func TestUntitledInlineDocumentGetsDeterministicFilename(t *testing.T) {
 		llm.DocumentPart{Bytes: []byte("%PDF-1.7"), MediaType: "application/pdf", Title: "contract.pdf"},
 		llm.DocumentPart{URL: "https://example.test/report.pdf", MediaType: "application/pdf"},
 	}}}}
-	first := mustJSON(t, mustLower(t, request))
-	if again := mustJSON(t, mustLower(t, request)); string(again) != string(first) {
+	first := contract.MarshalJSON(t, mustLower(t, request))
+	if again := contract.MarshalJSON(t, mustLower(t, request)); string(again) != string(first) {
 		t.Fatalf("lowering is not deterministic:\n%s\n%s", first, again)
 	}
-	wire := marshalParams(t, mustLower(t, request))
+	wire := contract.JSONObject(t, mustLower(t, request))
 	content := wire["input"].([]any)[0].(map[string]any)["content"].([]any)
 	want := []any{"document.pdf", "document.txt", "document.tsv", "document.odt", "document.txt", "document", "contract.pdf", nil}
 	if len(content) != len(want) {
@@ -197,28 +198,6 @@ func mustLower(t *testing.T, request llm.Request) responses.ResponseNewParams {
 		t.Fatal(err)
 	}
 	return params
-}
-
-func marshalParams(t *testing.T, params responses.ResponseNewParams) map[string]any {
-	t.Helper()
-	var wire map[string]any
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(encoded, &wire); err != nil {
-		t.Fatal(err)
-	}
-	return wire
-}
-
-func mustJSON(t *testing.T, params responses.ResponseNewParams) []byte {
-	t.Helper()
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encoded
 }
 
 func TestLoweringReasoningSummaryPreservesEffort(t *testing.T) {
@@ -250,7 +229,7 @@ func TestLoweringReasoningSummaryPreservesEffort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reasoning, ok := marshalParams(t, params)["reasoning"].(map[string]any)
+			reasoning, ok := contract.JSONObject(t, params)["reasoning"].(map[string]any)
 			if !ok {
 				t.Fatal("missing reasoning configuration")
 			}
@@ -276,7 +255,7 @@ func TestReplayToolCallDoesNotInventProviderItemID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := marshalParams(t, params)["input"].([]any)
+	input := contract.JSONObject(t, params)["input"].([]any)
 	call := input[0].(map[string]any)
 	if _, exists := call["id"]; exists {
 		t.Fatalf("invented provider item id: %#v", call)
@@ -299,7 +278,7 @@ func TestReplayAssistantHistoryUsesOutputContentTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := marshalParams(t, params)["input"].([]any)
+	input := contract.JSONObject(t, params)["input"].([]any)
 	if len(input) != 3 {
 		t.Fatalf("input = %#v", input)
 	}

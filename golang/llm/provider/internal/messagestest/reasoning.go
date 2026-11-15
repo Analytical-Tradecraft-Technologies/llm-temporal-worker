@@ -7,6 +7,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func compileReasoning(t *testing.T, compile Compile, reasoning llm.ReasoningSpec, strict bool) (map[string]any, error) {
@@ -15,7 +16,7 @@ func compileReasoning(t *testing.T, compile Compile, reasoning llm.ReasoningSpec
 	if err != nil {
 		return nil, err
 	}
-	return Wire(t, call.SDKParams), nil
+	return contract.JSONObject(t, call.SDKParams), nil
 }
 
 // ModelessReasoningNeverEnablesThinking checks that the reasoning effort and

@@ -11,6 +11,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 const constrainedOutputSchema = `{"type":"object","properties":{"name":{"type":"string","minLength":3},"age":{"type":"integer","minimum":0},"tags":{"type":"array","items":{"type":"string"},"maxItems":2}},"required":["name"]}`
@@ -140,7 +141,7 @@ func TestStructuredOutputRejectsUnrepresentableSchemasAtCompile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := marshalWire(t, call.SDKParams)["output_config"].(map[string]any)["format"].(map[string]any)["schema"].(map[string]any)
+	schema := contract.JSONObject(t, call.SDKParams)["output_config"].(map[string]any)["format"].(map[string]any)["schema"].(map[string]any)
 	if schema["additionalProperties"] != false {
 		t.Fatalf("best-effort schema = %#v", schema)
 	}

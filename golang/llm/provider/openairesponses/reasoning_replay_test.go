@@ -10,6 +10,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
@@ -43,7 +44,7 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replaying lifted output: %v", err)
 	}
-	wire := marshalParams(t, params)
+	wire := contract.JSONObject(t, params)
 	found := false
 	for _, raw := range wire["input"].([]any) {
 		if item, ok := raw.(map[string]any); ok && item["type"] == "reasoning" {
@@ -51,7 +52,7 @@ func TestLiftedReasoningOutputReplaysAsReasoningInput(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("reasoning item missing from replayed input: %s", mustJSON(t, params))
+		t.Fatalf("reasoning item missing from replayed input: %s", contract.MarshalJSON(t, params))
 	}
 
 	for _, foreign := range []llm.ProviderState{

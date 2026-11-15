@@ -8,6 +8,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/compaction"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
 )
 
 // Reasoning models always emit a reasoning item before the message. The
@@ -34,10 +35,7 @@ func TestCompactionSummaryIgnoresLiftedReasoning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{Request: request, Query: provider.CapabilityQuery{EndpointID: "openai-prod", Family: provider.FamilyOpenAIResponses, Model: request.Model}, Strict: true})
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := adaptertest.CompileStrict(t, adapter, "openai-prod", provider.FamilyOpenAIResponses, request)
 			result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 			if err != nil {
 				t.Fatal(err)

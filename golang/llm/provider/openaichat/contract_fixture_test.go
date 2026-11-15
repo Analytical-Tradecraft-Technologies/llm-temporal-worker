@@ -7,18 +7,17 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
-	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/contracttest"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/streamtest"
 )
 
@@ -61,14 +60,7 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 	for _, profile := range chatFixtureProfiles(t) {
 		t.Run(profile.id, func(t *testing.T) {
 			request := loadChatFixtureRequest(t, profile, "request.semantic.json")
-			normalized, err := llm.NormalizeRequest(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-			if err != nil {
-				t.Fatal(err)
-			}
+			normalized, serviceClass := contract.NormalizeRequest(t, request)
 			tier, err := profile.profile.providerTier(serviceClass)
 			if err != nil {
 				t.Fatal(err)
@@ -81,10 +73,7 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotWire, err := json.Marshal(params)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotWire := contract.MarshalJSON(t, params)
 			assertCanonicalChatFixture(t, gotWire, profile, "request.wire.json")
 
 			response := loadChatFixtureResponse(t, profile, "response.completed.json")
@@ -92,10 +81,7 @@ func TestChatContractFixturesMatchCurrentLoweringAndLifting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotSemantic, err := json.Marshal(lifted)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotSemantic := contract.MarshalJSON(t, lifted)
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
 		})
 	}
@@ -178,10 +164,7 @@ func TestChatContractFixturesCoverUsageClassesLossDiagnosticsAndContinuation(t *
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotUsage, err := json.Marshal(lifted)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotUsage := contract.MarshalJSON(t, lifted)
 			assertCanonicalChatFixture(t, gotUsage, profile, "usage-cost.semantic.json")
 
 			assertChatFixtureCompileError(t, profile, "strict-loss.semantic.json", "strict-loss.wire.json")
@@ -228,18 +211,7 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			call, err := adapter.Compile(context.Background(), provider.CompileInput{
-				Request: request,
-				Query: provider.CapabilityQuery{
-					EndpointID: profile.endpoint,
-					Family:     provider.FamilyOpenAIChat,
-					Model:      request.Model,
-				},
-				Strict: true,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			call := adaptertest.CompileStrict(t, adapter, profile.endpoint, provider.FamilyOpenAIChat, request)
 			result, err := adapter.Invoke(context.Background(), call, provider.NopObserver{})
 			if err != nil {
 				t.Fatal(err)
@@ -252,10 +224,7 @@ func TestChatContractFixturesUseIndependentProfileTransports(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCanonicalChatFixture(t, body, profile, "request.wire.json")
-			gotSemantic, err := json.Marshal(result.Response)
-			if err != nil {
-				t.Fatal(err)
-			}
+			gotSemantic := contract.MarshalJSON(t, result.Response)
 			assertCanonicalChatFixture(t, gotSemantic, profile, "response.semantic.json")
 			assertChatFixtureAuth(t, profile, got)
 		})
@@ -368,54 +337,27 @@ func chatFixtureCall(profile chatFixtureProfile, request llm.Request, serviceCla
 
 func loadChatFixtureRequest(t *testing.T, profile chatFixtureProfile, name string) llm.Request {
 	t.Helper()
-	var request llm.Request
-	if err := json.Unmarshal(readChatFixture(t, profile, name), &request); err != nil {
-		t.Fatal(err)
-	}
-	return request
+	return contract.DecodeJSON[llm.Request](t, readChatFixture(t, profile, name))
 }
 
 func loadChatFixtureResponse(t *testing.T, profile chatFixtureProfile, name string) openai.ChatCompletion {
 	t.Helper()
-	var response openai.ChatCompletion
-	if err := json.Unmarshal(readChatFixture(t, profile, name), &response); err != nil {
-		t.Fatal(err)
-	}
-	return response
+	return contract.DecodeJSON[openai.ChatCompletion](t, readChatFixture(t, profile, name))
 }
 
 func loadChatFixtureMetadata(t *testing.T, profile chatFixtureProfile) contracttest.Metadata {
 	t.Helper()
-	var metadata contracttest.Metadata
-	if err := yaml.Unmarshal(readChatFixture(t, profile, "metadata.yaml"), &metadata); err != nil {
-		t.Fatal(err)
-	}
-	return metadata
+	return contract.DecodeMetadata(t, readChatFixture(t, profile, "metadata.yaml"))
 }
 
 func readChatFixture(t *testing.T, profile chatFixtureProfile, name string) []byte {
 	t.Helper()
-	path := filepath.Join("testdata", "contracts", profile.path, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return contract.ReadFixture(t, filepath.Join("testdata", "contracts", profile.path, name))
 }
 
 func assertCanonicalChatFixture(t *testing.T, got []byte, profile chatFixtureProfile, name string) {
 	t.Helper()
-	gotCanonical, err := llm.CanonicalJSON(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCanonical, err := llm.CanonicalJSON(readChatFixture(t, profile, name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(gotCanonical, wantCanonical) {
-		t.Fatalf("%s/%s mismatch\n got: %s\nwant: %s", profile.id, name, gotCanonical, wantCanonical)
-	}
+	contract.AssertCanonicalJSON(t, got, readChatFixture(t, profile, name), profile.id+"/"+name)
 }
 
 func assertChatFixtureClassFacts(t *testing.T, profile chatFixtureProfile) {
@@ -548,10 +490,7 @@ func assertChatFixtureClassifiedError(t *testing.T, profile chatFixtureProfile) 
 	if mapped.Code != provider.CodeProviderRateLimited || mapped.Dispatch != provider.DispatchRejected || mapped.Provider.RequestID != fixture.RequestID {
 		t.Fatalf("%s mapped error = %#v", profile.id, mapped)
 	}
-	encoded, err := json.Marshal(mapped)
-	if err != nil {
-		t.Fatal(err)
-	}
+	encoded := contract.MarshalJSON(t, mapped)
 	if strings.Contains(string(encoded), fixture.Message) {
 		t.Fatalf("%s classified error leaked fixture body", profile.id)
 	}

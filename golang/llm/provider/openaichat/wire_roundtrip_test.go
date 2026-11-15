@@ -174,14 +174,7 @@ func captureWireBody(t *testing.T, profile wireAuditProfile, request llm.Request
 // into the SDK parameter type.
 func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Request) map[string]any {
 	t.Helper()
-	normalized, err := llm.NormalizeRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serviceClass, err := llm.NormalizeServiceClass(normalized.ServiceClass)
-	if err != nil {
-		t.Fatal(err)
-	}
+	normalized, serviceClass := contract.NormalizeRequest(t, request)
 	tier, err := profile.profile.providerTier(serviceClass)
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +187,7 @@ func intendedWireBody(t *testing.T, profile wireAuditProfile, request llm.Reques
 	if err != nil {
 		t.Fatal(err)
 	}
-	return marshalWire(t, requestMap)
+	return contract.JSONObject(t, requestMap)
 }
 
 func wireAuditCases() []contract.WireAuditCase {

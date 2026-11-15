@@ -7,6 +7,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // A model turn with text between its tool calls, as Anthropic lifts it,
@@ -31,7 +32,7 @@ func TestCompileCoalescesInterleavedModelTurnIntoOneAssistantMessage(t *testing.
 		if err != nil {
 			t.Fatalf("strict=%t: %v", strict, err)
 		}
-		messages := marshalWire(t, call.SDKParams.(openaiChatParams))["messages"].([]any)
+		messages := contract.JSONObject(t, call.SDKParams.(openaiChatParams))["messages"].([]any)
 		if len(messages) != 5 {
 			t.Fatalf("strict=%t messages = %#v", strict, messages)
 		}

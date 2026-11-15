@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestStreamingCapabilityCannotOutrunAdapterPort(t *testing.T) {
@@ -42,45 +42,15 @@ func TestCompileMapsOnlyTheThreePublicBedrockServiceClasses(t *testing.T) {
 		{class: llm.ServiceClassStandard, tier: "default"},
 		{class: llm.ServiceClassPriority, tier: "priority"},
 	} {
-		call, err := adapter.Compile(context.Background(), provider.CompileInput{
-			Request: llm.Request{OperationKey: "tier-" + string(test.class), Model: "claude-contract", ServiceClass: test.class},
-			Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"}, Strict: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+		call := adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockMessages, llm.Request{OperationKey: "tier-" + string(test.class), Model: "claude-contract", ServiceClass: test.class})
 		if call.Metadata.ProviderTier != test.tier {
 			t.Fatalf("class %q provider tier = %q, want %q", test.class, call.Metadata.ProviderTier, test.tier)
 		}
 		// The tier travels as an InvokeModel header, never in the Anthropic body.
-		wire := marshalBedrockWire(t, call.SDKParams)
+		wire := contract.JSONObject(t, call.SDKParams)
 		if tier, present := wire["service_tier"]; present {
 			t.Fatalf("class %q wire body carried service_tier %#v", test.class, tier)
 		}
-	}
-}
-
-func TestCompileStrictRejectsMixedInstructionLevels(t *testing.T) {
-	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
-	_, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{
-			OperationKey: "bedrock-strict-instructions",
-			Model:        "claude-contract",
-			Portability:  llm.PortabilityStrict,
-			Instructions: []llm.Instruction{
-				{Level: llm.InstructionLevelPolicy, Text: "policy"},
-				{Level: llm.InstructionLevelApplication, Text: "application"},
-			},
-		},
-		Query:  provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
-		Strict: true,
-	})
-	var mapped *provider.Error
-	if !errors.As(err, &mapped) {
-		t.Fatalf("compile error = %T %v, want provider error", err, err)
-	}
-	if mapped.Code != provider.CodeUnsupportedCapability || mapped.Phase != provider.PhaseCompile || mapped.Dispatch != provider.DispatchNotDispatched || !strings.Contains(mapped.SafeMessage, "instruction hierarchy") {
-		t.Fatalf("compile error = %#v, want strict instruction hierarchy rejection", mapped)
 	}
 }
 
@@ -157,13 +127,7 @@ func TestInvokeUsesBedrockMiddlewareOnceAndLiftsAWSRequestID(t *testing.T) {
 
 func TestBedrockCallSerializationDoesNotContainResolvedCredentials(t *testing.T) {
 	adapter := &Adapter{endpointID: "bedrock-prod", profile: mustBedrockProfile(t, "")}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: "bedrock-credentials", Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"}, Strict: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	call := adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockMessages, llm.Request{OperationKey: "bedrock-credentials", Model: "claude-contract"})
 	encoded, err := json.Marshal(call)
 	if err != nil {
 		t.Fatal(err)
@@ -225,15 +189,7 @@ func compileBedrockProdCall(t *testing.T, client *Client, baseURL, operationKey 
 	if err != nil {
 		t.Fatal(err)
 	}
-	call, err := adapter.Compile(context.Background(), provider.CompileInput{
-		Request: llm.Request{OperationKey: operationKey, Model: "claude-contract"},
-		Query:   provider.CapabilityQuery{EndpointID: "bedrock-prod", Family: provider.FamilyBedrockMessages, Model: "claude-contract"},
-		Strict:  true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return adapter, call
+	return adapter, adaptertest.CompileStrict(t, adapter, "bedrock-prod", provider.FamilyBedrockMessages, llm.Request{OperationKey: operationKey, Model: "claude-contract"})
 }
 
 func mustBedrockProfile(t *testing.T, baseURL string) Profile {
@@ -250,24 +206,7 @@ func mustBedrockProfile(t *testing.T, baseURL string) Profile {
 	return validated
 }
 
-func marshalBedrockWire(t *testing.T, value any) map[string]any {
-	t.Helper()
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result map[string]any
-	if err := json.Unmarshal(encoded, &result); err != nil {
-		t.Fatal(err)
-	}
-	return result
-}
-
 func mustReadBedrockFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("testdata/contracts/bedrock-anthropic/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return contract.ReadFixture(t, "testdata/contracts/bedrock-anthropic/"+name)
 }

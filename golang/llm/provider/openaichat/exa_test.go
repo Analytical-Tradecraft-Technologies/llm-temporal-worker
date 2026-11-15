@@ -13,6 +13,7 @@ import (
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/adaptertest"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 func TestExaUsesAPIKeyExtraBodyCitationsAndExactCost(t *testing.T) {
@@ -133,7 +134,7 @@ func TestExaCompilesFollowUpAfterCitationResponse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile follow-up turn: %v", err)
 			}
-			wire := marshalWire(t, call.SDKParams)
+			wire := contract.JSONObject(t, call.SDKParams)
 			messages := wire["messages"].([]any)
 			roles := make([]string, 0, len(messages))
 			for _, message := range messages {
@@ -164,7 +165,7 @@ func TestLowerSkipsReferenceInsideToolExchange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lower replayed references: %v", err)
 	}
-	wire := marshalWire(t, params)
+	wire := contract.JSONObject(t, params)
 	messages := wire["messages"].([]any)
 	if len(messages) != 3 {
 		t.Fatalf("messages = %#v", messages)

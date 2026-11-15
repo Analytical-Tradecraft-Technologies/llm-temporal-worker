@@ -8,6 +8,7 @@ import (
 
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm"
 	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider"
+	"github.com/Analytical-Tradecraft-Technologies/llm-temporal-worker/golang/llm/provider/internal/contract"
 )
 
 // The endpoint's configured provider value is what routing and pricing key the
@@ -27,7 +28,7 @@ func TestCompileSendsTheConfiguredProviderTier(t *testing.T) {
 	if !ok {
 		t.Fatalf("SDK params type = %T", call.SDKParams)
 	}
-	if got := marshalParams(t, params)["service_tier"]; got != "auto" || call.Metadata.ProviderTier != "auto" {
+	if got := contract.JSONObject(t, params)["service_tier"]; got != "auto" || call.Metadata.ProviderTier != "auto" {
 		t.Fatalf("service_tier = %#v, metadata tier = %q; want the configured auto", got, call.Metadata.ProviderTier)
 	}
 }
