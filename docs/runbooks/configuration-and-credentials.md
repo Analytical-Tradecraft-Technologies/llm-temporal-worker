@@ -66,9 +66,25 @@ must accept both until every replica uses the new one.
      Issue the new key at the provider, update the Kubernetes Secret behind
      the variable, and do a rolling restart of the Deployment. Revoke the old
      key only after every replica has restarted.
-  2. `aws_default_chain` or `azure_default_credential`: the SDK credential
-     chain refreshes its own temporary credentials. Rotate the role or
-     identity in the cloud provider; no worker action is needed.
+  2. `aws_default_chain` or `azure_default_credential`: the worker builds the
+     SDK default chain (`LoadDefaultConfig` for AWS,
+     `NewDefaultAzureCredential` for Azure), and what to do depends on which
+     source the chain picked in the pod.
+     - Refreshable workload or managed identity (for AWS: a web-identity
+       token file such as IRSA, EKS Pod Identity, or the container or instance
+       role; for Azure: workload identity or managed identity). The SDK
+       fetches fresh temporary credentials itself. Rotate the role or identity
+       in the cloud provider; no worker action is needed.
+     - Environment-backed static credentials (for AWS:
+       `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`; for Azure:
+       `AZURE_CLIENT_SECRET` with its client and tenant IDs). The chain reads
+       them from the process environment when it is built, and they do not
+       change when the Kubernetes Secret behind them changes. Treat them like
+       `bearer_env`: issue the new key, update the Secret, do a rolling
+       restart of the Deployment, and revoke the old key only after every
+       replica has restarted.
+     If you cannot tell which source a pod uses, assume it is
+     environment-backed and restart before revoking.
   3. File secrets (`kind: file`) that are reloadable, such as
      `state.redis.username` and `state.redis.password`: update the mounted
      Secret, wait until the kubelet has projected the new file into every pod
